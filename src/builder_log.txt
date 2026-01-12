@@ -1,8 +1,0 @@
-  ΓÇó electron-builder  version=26.0.12 os=10.0.26200
-  ΓÇó loaded configuration  file=D:\NanobananaProStudio\V8\electron-builder.yml
-  ΓÇó executing @electron/rebuild  electronVersion=39.2.7 arch=x64 buildFromSource=false appDir=./
-  ΓÇó installing native dependencies  arch=x64
-  ΓÇó completed installing native dependencies
-  ΓÇó packaging       platform=win32 arch=x64 electron=39.2.7 appOutDir=dist\1.0.0\win-unpacked
-  ΓÇó updating asar integrity executable resource  executablePath=dist\1.0.0\win-unpacked\NANO BANANA CAST DIRECTOR STUDIO.exe
-  Γ¿» image D:\NanobananaProStudio\V8\build\icon.ico must be at least 256x256
