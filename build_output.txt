@@ -1,0 +1,13 @@
+
+> nano-banana-studio@1.0.0 build
+> tsc -b && vite build
+
+[36mvite v7.3.0 [32mbuilding client environment for production...[36m[39m
+[32mΓ£ô[39m 0 modules transformed.
+Γ£ù Build failed in 6ms
+error during build:
+Could not resolve entry module "index.html".
+    at getRollupError (file:///D:/NanobananaProStudio/NBStoryBoard/node_modules/rollup/dist/es/shared/parseAst.js:401:41)
+    at error (file:///D:/NanobananaProStudio/NBStoryBoard/node_modules/rollup/dist/es/shared/parseAst.js:397:42)
+    at ModuleLoader.loadEntryModule (file:///D:/NanobananaProStudio/NBStoryBoard/node_modules/rollup/dist/es/shared/node-entry.js:21682:20)
+    at async Promise.all (index 0)

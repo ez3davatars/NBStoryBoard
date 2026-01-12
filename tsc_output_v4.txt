@@ -1,0 +1,7 @@
+src/renderer/components/SceneCanvas.tsx(8,8): error TS6133: 'CloseIcon' is declared but its value is never read.
+src/renderer/components/SceneCanvas.tsx(11,3): error TS6133: 'Settings' is declared but its value is never read.
+src/renderer/components/SceneCanvas.tsx(15,3): error TS6133: 'Maximize' is declared but its value is never read.
+src/renderer/components/SceneCanvas.tsx(17,3): error TS6133: 'Trash2' is declared but its value is never read.
+src/renderer/components/SceneCanvas.tsx(20,18): error TS6133: 'PlayIcon' is declared but its value is never read.
+src/renderer/components/SceneCanvas.tsx(22,15): error TS6133: 'DownloadIcon' is declared but its value is never read.
+src/renderer/components/SceneCanvas.tsx(290,9): error TS6133: 'handleWipeDirector' is declared but its value is never read.

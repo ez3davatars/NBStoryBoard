@@ -1,0 +1,27 @@
+
+> nano-banana-studio@1.0.0 build:desktop
+> electron-vite build
+
+[36mvite v7.3.0 [32mbuilding ssr environment for production...[36m[39m
+transforming...
+[32mΓ£ô[39m 2 modules transformed.
+rendering chunks...
+[2mout/main/[22m[36mindex.js  [39m[1m[2m4.31 kB[22m[1m[22m
+[32mΓ£ô built in 79ms[39m
+[36mvite v7.3.0 [32mbuilding ssr environment for production...[36m[39m
+transforming...
+[32mΓ£ô[39m 2 modules transformed.
+rendering chunks...
+[2mout/preload/[22m[36mindex.mjs  [39m[1m[2m2.63 kB[22m[1m[22m
+[32mΓ£ô built in 14ms[39m
+[36mvite v7.3.0 [32mbuilding client environment for production...[36m[39m
+[32mΓ£ô[39m 0 modules transformed.
+Γ£ù Build failed in 12ms
+error during build:
+[vite:build-html] Failed to resolve /src/renderer/main.tsx from D:/Nanobanana Pro Studio/V8/index.html
+file: D:/Nanobanana Pro Studio/V8/index.html
+    at file:///D:/Nanobanana%20Pro%20Studio/V8/node_modules/vite/dist/node/chunks/config.js:23918:64
+    at async Promise.all (index 0)
+    at async Object.handler (file:///D:/Nanobanana%20Pro%20Studio/V8/node_modules/vite/dist/node/chunks/config.js:24015:5)
+    at async transform (file:///D:/Nanobanana%20Pro%20Studio/V8/node_modules/rollup/dist/es/shared/node-entry.js:21234:16)
+    at async ModuleLoader.addModuleSource (file:///D:/Nanobanana%20Pro%20Studio/V8/node_modules/rollup/dist/es/shared/node-entry.js:21448:36)

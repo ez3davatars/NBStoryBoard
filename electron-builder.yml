@@ -1,0 +1,36 @@
+appId: com.nanobanana.studio
+productName: NANO BANANA CAST DIRECTOR STUDIO
+directories:
+  output: out/dist/${version}
+  buildResources: build
+files:
+  - out/**/*
+  - index.html
+  - src/renderer/**/*
+  - package.json
+  - resources/**/*
+win:
+  forceCodeSigning: false
+  target:
+    - nsis
+  icon: build/EZ256.ico
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  shortcutName: Nano Banana Studio
+  createDesktopShortcut: true
+  installerIcon: build/EZ256.ico
+  uninstallerIcon: build/EZ256.ico
+  installerHeaderIcon: build/EZ256.ico
+mac:
+  target:
+    - dmg
+    - zip
+  category: public.app-category.video
+  icon: build/icon.icns
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Video
+  icon: build/icon.png

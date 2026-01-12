@@ -1,0 +1,15 @@
+src/renderer/components/ProductionConsole.tsx(14,27): error TS6196: 'ReferenceSlot' is declared but never used.
+src/renderer/components/PropAccessoryStudio.tsx(1,8): error TS6133: 'React' is declared but its value is never read.
+src/renderer/components/PropAccessoryStudio.tsx(3,12): error TS6133: 'Upload' is declared but its value is never read.
+src/renderer/components/PropAccessoryStudio.tsx(27,25): error TS6133: 'setApplyInvertBg' is declared but its value is never read.
+src/renderer/components/PropAccessoryStudio.tsx(45,13): error TS6133: 'finalUrl' is declared but its value is never read.
+src/renderer/components/SceneCanvas.tsx(10,3): error TS6133: 'Settings' is declared but its value is never read.
+src/renderer/components/SceneCanvas.tsx(11,3): error TS6133: 'FlipHorizontal' is declared but its value is never read.
+src/renderer/components/SceneCanvas.tsx(12,3): error TS6133: 'FlipVertical' is declared but its value is never read.
+src/renderer/components/SceneCanvas.tsx(38,3): error TS6133: 'mergeNegatives' is declared but its value is never read.
+src/renderer/components/SceneCanvas.tsx(39,3): error TS6133: 'SCENE_LOCK_NEGATIVE_TOKENS' is declared but its value is never read.
+src/renderer/components/SceneCanvas.tsx(281,9): error TS6133: 'handleWipeDirector' is declared but its value is never read.
+src/renderer/components/SceneCanvas.tsx(522,16): error TS2552: Cannot find name 'SettingsIcon'. Did you mean 'Settings'?
+src/renderer/components/SceneCanvas.tsx(582,18): error TS2304: Cannot find name 'UploadIcon'.
+src/renderer/components/SceneCanvas.tsx(672,18): error TS2304: Cannot find name 'MaximizeIcon'.
+src/renderer/components/SceneCanvas.tsx(863,19): error TS2304: Cannot find name 'TrashIcon'.

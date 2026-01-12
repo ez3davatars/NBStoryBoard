@@ -1,0 +1,22 @@
+
+> nano-banana-studio@1.0.0 build:win
+> npm run build:desktop && electron-builder --win
+
+
+> nano-banana-studio@1.0.0 build:desktop
+> electron-vite build
+
+[36mvite v7.3.0 [32mbuilding ssr environment for production...[36m[39m
+transforming...
+[32mΓ£ô[39m 2 modules transformed.
+rendering chunks...
+[2mout/main/[22m[36mindex.js  [39m[1m[2m4.31 kB[22m[1m[22m
+[32mΓ£ô built in 82ms[39m
+[36mvite v7.3.0 [32mbuilding ssr environment for production...[36m[39m
+transforming...
+[32mΓ£ô[39m 1 modules transformed.
+rendering chunks...
+[2mout/preload/[22m[36mindex.mjs  [39m[1m[2m0.04 kB[22m[1m[22m
+[32mΓ£ô built in 12ms[39m
+[36mvite v7.3.0 [32mbuilding client environment for production...[36m[39m
+[32mΓ£ô[39m 0 modules transformed.

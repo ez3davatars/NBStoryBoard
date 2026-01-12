@@ -1,0 +1,9 @@
+  ΓÇó electron-builder  version=26.0.12 os=10.0.26200
+  Γ¿» ENOENT: no such file or directory, open 'D:\NanobananaProStudio\V8\electron-builder.fixed.yml'  failedTask=build stackTrace=Error: ENOENT: no such file or directory, open 'D:\NanobananaProStudio\V8\electron-builder.fixed.yml'
+    at open (node:internal/fs/promises:633:25)
+    at Object.readFile (node:internal/fs/promises:1237:14)
+    at readConfig (D:\NanobananaProStudio\V8\node_modules\app-builder-lib\src\util\config\load.ts:17:16)
+    at getConfig (D:\NanobananaProStudio\V8\node_modules\app-builder-lib\src\util\config\config.ts:43:34)
+    at Packager.validateConfig (D:\NanobananaProStudio\V8\node_modules\app-builder-lib\src\packager.ts:361:27)
+    at Packager.build (D:\NanobananaProStudio\V8\node_modules\app-builder-lib\src\packager.ts:392:5)
+    at executeFinally (D:\NanobananaProStudio\V8\node_modules\builder-util\src\promise.ts:12:14)

@@ -1,0 +1,135 @@
+  ΓÇó electron-builder  version=26.0.12 os=10.0.26200
+  ΓÇó loaded configuration  file=d:\NanobananaProStudio\V8\src\electron-builder.fixed.yml
+  ΓÇó executing @electron/rebuild  electronVersion=39.2.7 arch=x64 buildFromSource=false appDir=D:\NanobananaProStudio\V8
+  ΓÇó installing native dependencies  arch=x64
+  ΓÇó completed installing native dependencies
+  ΓÇó packaging       platform=win32 arch=x64 electron=39.2.7 appOutDir=D:\NanobananaProStudio\V8\dist\1.0.0\win-unpacked
+  ΓÇó updating asar integrity executable resource  executablePath=D:\NanobananaProStudio\V8\dist\1.0.0\win-unpacked\NANO BANANA CAST DIRECTOR STUDIO.exe
+  ΓÇó downloading     url=https://github.com/electron-userland/electron-builder-binaries/releases/download/winCodeSign-2.6.0/winCodeSign-2.6.0.7z size=5.6 MB parts=1
+  ΓÇó downloaded      url=https://github.com/electron-userland/electron-builder-binaries/releases/download/winCodeSign-2.6.0/winCodeSign-2.6.0.7z duration=841ms
+  Γ¿» cannot execute  cause=exit status 2
+                    out=
+    7-Zip (a) 21.07 (x64) : Copyright (c) 1999-2021 Igor Pavlov : 2021-12-26
+    
+    Scanning the drive for archives:
+    1 file, 5635384 bytes (5504 KiB)
+    
+    Extracting archive: C:\Users\clone\AppData\Local\electron-builder\Cache\winCodeSign\526964631.7z
+    --
+    Path = C:\Users\clone\AppData\Local\electron-builder\Cache\winCodeSign\526964631.7z
+    Type = 7z
+    Physical Size = 5635384
+    Headers Size = 1492
+    Method = LZMA2:24m LZMA:20 BCJ2
+    Solid = +
+    Blocks = 2
+    
+    
+    Sub items Errors: 2
+    
+    Archives with Errors: 1
+    
+    Sub items Errors: 2
+    
+                    errorOut=ERROR: Cannot create symbolic link : A required privilege is not held by the client. : C:\Users\clone\AppData\Local\electron-builder\Cache\winCodeSign\526964631\darwin\10.12\lib\libcrypto.dylib
+    ERROR: Cannot create symbolic link : A required privilege is not held by the client. : C:\Users\clone\AppData\Local\electron-builder\Cache\winCodeSign\526964631\darwin\10.12\lib\libssl.dylib
+    
+                    command='D:\NanobananaProStudio\V8\node_modules\7zip-bin\win\x64\7za.exe' x -snld -bd 'C:\Users\clone\AppData\Local\electron-builder\Cache\winCodeSign\526964631.7z' '-oC:\Users\clone\AppData\Local\electron-builder\Cache\winCodeSign\526964631'
+                    workingDir=C:\Users\clone\AppData\Local\electron-builder\Cache\winCodeSign
+  ΓÇó Above command failed, retrying 3 more times
+  ΓÇó downloading     url=https://github.com/electron-userland/electron-builder-binaries/releases/download/winCodeSign-2.6.0/winCodeSign-2.6.0.7z size=5.6 MB parts=1
+  ΓÇó downloaded      url=https://github.com/electron-userland/electron-builder-binaries/releases/download/winCodeSign-2.6.0/winCodeSign-2.6.0.7z duration=809ms
+  Γ¿» cannot execute  cause=exit status 2
+                    out=
+    7-Zip (a) 21.07 (x64) : Copyright (c) 1999-2021 Igor Pavlov : 2021-12-26
+    
+    Scanning the drive for archives:
+    1 file, 5635384 bytes (5504 KiB)
+    
+    Extracting archive: C:\Users\clone\AppData\Local\electron-builder\Cache\winCodeSign\227092307.7z
+    --
+    Path = C:\Users\clone\AppData\Local\electron-builder\Cache\winCodeSign\227092307.7z
+    Type = 7z
+    Physical Size = 5635384
+    Headers Size = 1492
+    Method = LZMA2:24m LZMA:20 BCJ2
+    Solid = +
+    Blocks = 2
+    
+    
+    Sub items Errors: 2
+    
+    Archives with Errors: 1
+    
+    Sub items Errors: 2
+    
+                    errorOut=ERROR: Cannot create symbolic link : A required privilege is not held by the client. : C:\Users\clone\AppData\Local\electron-builder\Cache\winCodeSign\227092307\darwin\10.12\lib\libcrypto.dylib
+    ERROR: Cannot create symbolic link : A required privilege is not held by the client. : C:\Users\clone\AppData\Local\electron-builder\Cache\winCodeSign\227092307\darwin\10.12\lib\libssl.dylib
+    
+                    command='D:\NanobananaProStudio\V8\node_modules\7zip-bin\win\x64\7za.exe' x -snld -bd 'C:\Users\clone\AppData\Local\electron-builder\Cache\winCodeSign\227092307.7z' '-oC:\Users\clone\AppData\Local\electron-builder\Cache\winCodeSign\227092307'
+                    workingDir=C:\Users\clone\AppData\Local\electron-builder\Cache\winCodeSign
+  ΓÇó Above command failed, retrying 3 more times
+  ΓÇó downloading     url=https://github.com/electron-userland/electron-builder-binaries/releases/download/winCodeSign-2.6.0/winCodeSign-2.6.0.7z size=5.6 MB parts=1
+  ΓÇó downloaded      url=https://github.com/electron-userland/electron-builder-binaries/releases/download/winCodeSign-2.6.0/winCodeSign-2.6.0.7z duration=856ms
+  Γ¿» cannot execute  cause=exit status 2
+                    out=
+    7-Zip (a) 21.07 (x64) : Copyright (c) 1999-2021 Igor Pavlov : 2021-12-26
+    
+    Scanning the drive for archives:
+    1 file, 5635384 bytes (5504 KiB)
+    
+    Extracting archive: C:\Users\clone\AppData\Local\electron-builder\Cache\winCodeSign\355697295.7z
+    --
+    Path = C:\Users\clone\AppData\Local\electron-builder\Cache\winCodeSign\355697295.7z
+    Type = 7z
+    Physical Size = 5635384
+    Headers Size = 1492
+    Method = LZMA2:24m LZMA:20 BCJ2
+    Solid = +
+    Blocks = 2
+    
+    
+    Sub items Errors: 2
+    
+    Archives with Errors: 1
+    
+    Sub items Errors: 2
+    
+                    errorOut=ERROR: Cannot create symbolic link : A required privilege is not held by the client. : C:\Users\clone\AppData\Local\electron-builder\Cache\winCodeSign\355697295\darwin\10.12\lib\libcrypto.dylib
+    ERROR: Cannot create symbolic link : A required privilege is not held by the client. : C:\Users\clone\AppData\Local\electron-builder\Cache\winCodeSign\355697295\darwin\10.12\lib\libssl.dylib
+    
+                    command='D:\NanobananaProStudio\V8\node_modules\7zip-bin\win\x64\7za.exe' x -snld -bd 'C:\Users\clone\AppData\Local\electron-builder\Cache\winCodeSign\355697295.7z' '-oC:\Users\clone\AppData\Local\electron-builder\Cache\winCodeSign\355697295'
+                    workingDir=C:\Users\clone\AppData\Local\electron-builder\Cache\winCodeSign
+  ΓÇó Above command failed, retrying 3 more times
+  ΓÇó downloading     url=https://github.com/electron-userland/electron-builder-binaries/releases/download/winCodeSign-2.6.0/winCodeSign-2.6.0.7z size=5.6 MB parts=1
+  ΓÇó downloaded      url=https://github.com/electron-userland/electron-builder-binaries/releases/download/winCodeSign-2.6.0/winCodeSign-2.6.0.7z duration=863ms
+  Γ¿» cannot execute  cause=exit status 2
+                    out=
+    7-Zip (a) 21.07 (x64) : Copyright (c) 1999-2021 Igor Pavlov : 2021-12-26
+    
+    Scanning the drive for archives:
+    1 file, 5635384 bytes (5504 KiB)
+    
+    Extracting archive: C:\Users\clone\AppData\Local\electron-builder\Cache\winCodeSign\451846439.7z
+    --
+    Path = C:\Users\clone\AppData\Local\electron-builder\Cache\winCodeSign\451846439.7z
+    Type = 7z
+    Physical Size = 5635384
+    Headers Size = 1492
+    Method = LZMA2:24m LZMA:20 BCJ2
+    Solid = +
+    Blocks = 2
+    
+    
+    Sub items Errors: 2
+    
+    Archives with Errors: 1
+    
+    Sub items Errors: 2
+    
+                    errorOut=ERROR: Cannot create symbolic link : A required privilege is not held by the client. : C:\Users\clone\AppData\Local\electron-builder\Cache\winCodeSign\451846439\darwin\10.12\lib\libcrypto.dylib
+    ERROR: Cannot create symbolic link : A required privilege is not held by the client. : C:\Users\clone\AppData\Local\electron-builder\Cache\winCodeSign\451846439\darwin\10.12\lib\libssl.dylib
+    
+                    command='D:\NanobananaProStudio\V8\node_modules\7zip-bin\win\x64\7za.exe' x -snld -bd 'C:\Users\clone\AppData\Local\electron-builder\Cache\winCodeSign\451846439.7z' '-oC:\Users\clone\AppData\Local\electron-builder\Cache\winCodeSign\451846439'
+                    workingDir=C:\Users\clone\AppData\Local\electron-builder\Cache\winCodeSign
+  ΓÇó Above command failed, retrying 3 more times
