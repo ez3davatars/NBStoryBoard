@@ -5,10 +5,9 @@ directories:
   buildResources: build
 files:
   - out/**/*
-  - index.html
-  - src/renderer/**/*
-  - package.json
   - resources/**/*
+  - package.json
+
 win:
   forceCodeSigning: false
   target:

@@ -21,9 +21,14 @@
     "build:linux": "npm run build:desktop && electron-builder --linux"
   },
   "dependencies": {
+    "@mediapipe/camera_utils": "^0.3.1675466862",
+    "@mediapipe/drawing_utils": "^0.3.1675466124",
+    "@mediapipe/face_mesh": "^0.4.1633559619",
+    "framer-motion": "^12.26.1",
     "lucide-react": "^0.562.0",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "react-webcam": "^7.2.0"
   },
   "devDependencies": {
     "@electron-toolkit/preload": "^3.0.2",

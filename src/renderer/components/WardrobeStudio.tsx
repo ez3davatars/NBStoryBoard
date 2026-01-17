@@ -426,13 +426,28 @@ const WardrobeStudio = () => {
               >
                 <img src={item.url} className="w-full h-full object-cover group-hover:scale-110 transition-transform" />
                 <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-                    <button 
-                        onClick={(e) => { e.stopPropagation(); dispatch({ type: 'SET_INSPECT_IMAGE', payload: item.url }); }}
-                        className="bg-blue-500/80 hover:bg-blue-500 text-white p-1.5 rounded-full shadow-lg"
+                    {/* FIX: No nested <button> inside <button>. Use a div with role="button". */}
+                    <div
+                        role="button"
+                        tabIndex={0}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          dispatch({ type: 'SET_INSPECT_IMAGE', payload: item.url });
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            dispatch({ type: 'SET_INSPECT_IMAGE', payload: item.url });
+                          }
+                        }}
+                        className="bg-blue-500/80 hover:bg-blue-500 text-white p-1.5 rounded-full shadow-lg cursor-pointer"
                         title="Inspect Large"
                     >
                         <Maximize className="w-3.5 h-3.5" />
-                    </button>
+                    </div>
+
                     <span className="text-[8px] font-bold text-white uppercase truncate absolute bottom-2 left-2 right-2 text-center">{item.name}</span>
                 </div>
               </button>

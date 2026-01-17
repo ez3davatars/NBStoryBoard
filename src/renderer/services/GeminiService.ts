@@ -211,5 +211,89 @@ export const GeminiService = {
        console.error("JSON Parse Error on:", rawText);
        throw new Error("Gemini failed to return valid JSON. Please try again.");
      }
+  },
+
+
+  /**
+   * NanoBanana-style local edit using a binary mask.
+   * - baseImageUrl: the image to edit
+   * - maskDataUrl: black/white mask (white = edit, black = protect)
+   * - instruction: what to do in the masked region
+   *
+   * Note: This uses Gemini image-capable models. If you pass Imagen model, call-site should route to a Gemini model.
+   */
+  async editImageWithMask(
+    baseImageUrl: string,
+    maskDataUrl: string,
+    instruction: string,
+    apiKey: string,
+    model: string,
+    referenceImages: { url: string; label: string }[] = [],
+    options: { aspectRatio?: string } = {}
+  ): Promise<string> {
+    const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+
+    const base = GeminiService._extractInlineData(baseImageUrl);
+    const mask = GeminiService._extractInlineData(maskDataUrl);
+
+    const parts: any[] = [];
+
+    // 1) Base image and edit mask
+    parts.push({ inlineData: { mimeType: base.mimeType, data: base.data } });
+    parts.push({ inlineData: { mimeType: mask.mimeType, data: mask.data } });
+
+    // 2) Optional reference images
+    for (const ref of referenceImages) {
+      const r = GeminiService._extractInlineData(ref.url);
+      parts.push({ inlineData: { mimeType: r.mimeType, data: r.data } });
+      parts.push({ text: `[REF] ${ref.label}` });
+    }
+
+    // 3) Instruction prompt
+    const ar = options.aspectRatio ? `Target aspect ratio: ${options.aspectRatio}.` : '';
+    parts.push({
+      text: `
+You are a precision image editor.
+
+[IMAGE 1] is the BASE IMAGE.
+[IMAGE 2] is the EDIT MASK (WHITE = allowed to change, BLACK = must not change).
+
+Edit ONLY the WHITE regions. Preserve everything else exactly: identity, lighting, composition, camera, background, and unmasked pixels.
+
+Instruction: ${instruction}
+${ar}
+
+Hard constraints:
+- No new objects outside the mask.
+- No morphing of faces/hair/body.
+- No style drift outside the mask.
+- No extra text/watermarks.
+`
+    });
+
+    const response = await fetch(`${baseUrl}?key=${apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts }],
+        generationConfig: { temperature: 0.2 }
+      })
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      let cleanMsg = errText;
+      try { cleanMsg = JSON.parse(errText).error?.message || cleanMsg; } catch {}
+      throw new Error(`Gemini Mask Edit Error: ${cleanMsg}`);
+    }
+
+    const result = await response.json();
+    const imgData =
+      result.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData)?.inlineData?.data;
+
+    if (!imgData) throw new Error('No edited image returned from Gemini.');
+
+    return `data:image/png;base64,${imgData}`;
   }
+
 };

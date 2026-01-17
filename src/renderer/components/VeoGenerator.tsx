@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { 
   Clapperboard, Trash2, MonitorPlay, Image as ImageIcon, 
   X, Lock, Unlock, Sparkles, RotateCw, Film, Copy, ArrowRight, Download 
@@ -16,7 +16,54 @@ const VeoGenerator = () => {
   const [analysisSpec, setAnalysisSpec] = useState<any>(null); // Store the parsed JSON bible
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [strictCharacterAds, setStrictCharacterAds] = useState(true);
+  const [continuityLockEnabled, setContinuityLockEnabled] = useState(true);
+  const [noExtraObjects, setNoExtraObjects] = useState(true);
+  const [noMorph, setNoMorph] = useState(true);
   const [activeSlot, setActiveSlot] = useState<1 | 2>(1);
+
+
+// --- Shot Sync (from AppContext Shot List) ---
+const activeShot = useMemo(() => {
+  const shots = (state as any).shots as any[] | undefined;
+  const activeShotId = (state as any).activeShotId as string | undefined;
+  if (!shots || !activeShotId) return null;
+  return shots.find((s) => s.id === activeShotId) || null;
+}, [state]);
+
+const loadFramesFromActiveShot = () => {
+  if (!activeShot) return;
+
+  const startUrl = activeShot.startFrameUrl as string | undefined;
+  const endUrl = activeShot.endFrameUrl as string | undefined;
+
+  if (startUrl) {
+    dispatch({ type: 'SET_STORYBOARD_SOURCE', payload: { url: startUrl } });
+  }
+  if (endUrl) {
+    dispatch({ type: 'SET_STORYBOARD_END_SOURCE', payload: { url: endUrl } });
+  }
+
+  dispatch({
+    type: 'ADD_LOG',
+    payload: {
+      message: `Loaded frames from Active Shot: ${activeShot.name || activeShot.id}`,
+      type: 'success'
+    }
+  });
+};
+
+// Auto-load frames if user has an active shot and both slots are empty.
+useEffect(() => {
+  if (!activeShot) return;
+  if (state.storyboardSource || state.storyboardEndSource) return;
+
+  const startUrl = activeShot.startFrameUrl as string | undefined;
+  const endUrl = activeShot.endFrameUrl as string | undefined;
+
+  if (startUrl) dispatch({ type: 'SET_STORYBOARD_SOURCE', payload: { url: startUrl } });
+  if (endUrl) dispatch({ type: 'SET_STORYBOARD_END_SOURCE', payload: { url: endUrl } });
+}, [activeShot, state.storyboardSource, state.storyboardEndSource, dispatch]);
+
 
  const ANGLES = [
   {
@@ -92,7 +139,10 @@ const VeoGenerator = () => {
   };
 
   const runSmartAnalyze = async () => {
-    if (!state.storyboardSource && !state.storyboardEndSource) return;
+    // Prefer Active Shot frames; fallback to manually loaded storyboard slots
+    const startUrl = (activeShot?.startFrameUrl as string | undefined) ?? state.storyboardSource?.url;
+    const endUrl = (activeShot?.endFrameUrl as string | undefined) ?? state.storyboardEndSource?.url;
+    if (!startUrl && !endUrl) return;
     setIsAnalyzing(true);
     setAnalysisResult('');
     setAnalysisSpec(null);
@@ -141,13 +191,13 @@ const VeoGenerator = () => {
           
           CRITICAL: "lockedTraits" must list physical features that MUST NOT MORPH.
         `;
-        frames.push({ url: state.storyboardSource.url, label: "START_FRAME" });
-        frames.push({ url: state.storyboardEndSource.url, label: "END_FRAME" });
+        frames.push({ url: startUrl!, label: "START_FRAME" });
+        frames.push({ url: endUrl!, label: "END_FRAME" });
       } else {
         // Single frame logic could also be updated to JSON, but focusing on Dual Frame per request.
         // For consistency/types, we will keep single frame as text for now or implement a tailored JSON schema later if requested.
         // Reducing scope to Dual Frame as primary request.
-        const source = state.storyboardSource || state.storyboardEndSource;
+        const sourceUrl = startUrl || endUrl;
         prompt = `
             Analyze this master cinematic frame. Return a JSON object with:
             {
@@ -159,7 +209,7 @@ const VeoGenerator = () => {
                 "frame2Description": "Same as frame 1"
             }
         `;
-        frames.push({ url: source!.url, label: "MASTER_REFERENCE" });
+        frames.push({ url: sourceUrl as string, label: "MASTER_REFERENCE" });
       }
 
       // 2. Call Gemini with Strict JSON
@@ -203,7 +253,15 @@ const VeoGenerator = () => {
       // Import dynamically to avoid top-level issues if needed, or assume standard import
       const { buildVeo31Prompt } = await import('../promptEngine/PromptBuilder');
       
-      const { prompt: finalPrompt, negatives } = buildVeo31Prompt(veoSpec);
+      const { prompt: finalPrompt, negatives } = buildVeo31Prompt(veoSpec, {
+        continuityLock: continuityLockEnabled,
+        noExtraObjects,
+        noMorph,
+        lockEnvironment: true,
+        lockLighting: true,
+        lockLens: true,
+        lockStyle: true,
+      });
       
       const displayOutput = `${finalPrompt}\n\nNEGATIVE_PROMPT: ${negatives}`;
 
@@ -412,6 +470,41 @@ const VeoGenerator = () => {
                     </div>
                 </div>
 
+
+{/* Shot Sync (optional) */}
+{activeShot && (
+  <div className="mt-4 p-3 bg-black/40 rounded-xl border border-white/5 flex items-center justify-between gap-3">
+    <div className="min-w-0">
+      <div className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Active Shot</div>
+      <div className="text-[10px] font-mono text-gray-300 truncate">
+        {activeShot.name || activeShot.id}
+      </div>
+      <div className="text-[9px] font-mono text-gray-600">
+        Start: {activeShot.startFrameUrl ? 'Set' : '—'} • End: {activeShot.endFrameUrl ? 'Set' : '—'}
+      </div>
+    </div>
+    <button
+      onClick={loadFramesFromActiveShot}
+      className="px-3 py-2 bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white font-bold text-[9px] uppercase tracking-widest rounded-xl transition-all border border-white/5 whitespace-nowrap"
+      title="Load start/end frames from the active shot (created in SceneCanvas / Production Console)"
+    >
+      Load Frames
+    </button>
+    <button
+      onClick={async () => {
+        if (!activeShot) return;
+        loadFramesFromActiveShot();
+        // Run analysis immediately (uses Active Shot URLs directly)
+        await runSmartAnalyze();
+      }}
+      className="px-3 py-2 bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 hover:text-blue-200 font-bold text-[9px] uppercase tracking-widest rounded-xl transition-all border border-blue-500/20 whitespace-nowrap"
+      title="Generate prompt from Active Shot (loads frames + runs Smart Analyze)"
+    >
+      Generate
+    </button>
+  </div>
+)}
+
                 <div className="space-y-4 pt-2">
                     <div className="flex items-center justify-between p-3 bg-black/40 rounded-xl border border-white/5">
                         <div className="flex flex-col">
@@ -426,9 +519,45 @@ const VeoGenerator = () => {
                         </button>
                     </div>
 
+                    <div className="p-3 bg-black/40 rounded-xl border border-white/5 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex flex-col">
+                          <span className="text-[10px] font-black text-gray-300 uppercase tracking-widest">Continuity Lock</span>
+                          <span className="text-[9px] text-gray-600 font-mono">Anti-morph + no drift</span>
+                        </div>
+                        <button
+                          onClick={() => setContinuityLockEnabled(!continuityLockEnabled)}
+                          className={`p-2 rounded-lg border transition-all ${continuityLockEnabled ? 'bg-blue-500/20 border-blue-500/30 text-blue-300' : 'bg-gray-800 border-gray-700 text-gray-500'}`}
+                          title="Toggle continuity lock block injection"
+                        >
+                          {continuityLockEnabled ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}
+                        </button>
+                      </div>
+
+                      <div className="flex items-center justify-between">
+                        <span className="text-[9px] font-bold text-gray-500 uppercase tracking-widest">No Extra Objects</span>
+                        <button
+                          onClick={() => setNoExtraObjects(!noExtraObjects)}
+                          className={`px-3 py-1 rounded-lg text-[9px] font-bold uppercase border transition-all ${noExtraObjects ? 'bg-blue-500/10 border-blue-500/20 text-blue-200' : 'bg-gray-900 border-gray-700 text-gray-500'}`}
+                        >
+                          {noExtraObjects ? 'ON' : 'OFF'}
+                        </button>
+                      </div>
+
+                      <div className="flex items-center justify-between">
+                        <span className="text-[9px] font-bold text-gray-500 uppercase tracking-widest">No Morphing</span>
+                        <button
+                          onClick={() => setNoMorph(!noMorph)}
+                          className={`px-3 py-1 rounded-lg text-[9px] font-bold uppercase border transition-all ${noMorph ? 'bg-blue-500/10 border-blue-500/20 text-blue-200' : 'bg-gray-900 border-gray-700 text-gray-500'}`}
+                        >
+                          {noMorph ? 'ON' : 'OFF'}
+                        </button>
+                      </div>
+                    </div>
+
                     <button 
                         onClick={runSmartAnalyze}
-                        disabled={(!state.storyboardSource && !state.storyboardEndSource) || isAnalyzing}
+                        disabled={(!(activeShot?.startFrameUrl || state.storyboardSource) && !(activeShot?.endFrameUrl || state.storyboardEndSource)) || isAnalyzing}
                         className="w-full py-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-black text-xs uppercase tracking-[0.2em] rounded-xl shadow-lg shadow-blue-500/20 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3 border border-white/10"
                     >
                         {isAnalyzing ? <RotateCw className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}

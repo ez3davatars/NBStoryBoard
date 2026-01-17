@@ -16,6 +16,7 @@ import {
   AppContext 
 } from './context/AppContext';
 import CastingForge from './components/CastingForge';
+import NanoCastingDirector from './components/NanoCastingDirector';
 
 import { 
   Settings, 
@@ -189,6 +190,18 @@ const ImageInspector = () => {
 const App = () => {
   const { state, dispatch } = useAppContext();
 
+ useEffect(() => {
+    console.log('[NBStoryBoard] VITE_APP_ENV =', import.meta.env.VITE_APP_ENV ?? '(undefined)');
+  }, []);
+
+  // Master Storyboard Toggle Redirect
+  useEffect(() => {
+    if (!state.isStoryboardEnabled && state.view === 'veo') {
+      dispatch({ type: 'SET_VIEW', payload: 'staging' });
+      dispatch({ type: 'ADD_LOG', payload: { message: "Storyboard is disabled.", type: 'info' } });
+    }
+  }, [state.isStoryboardEnabled, state.view, dispatch]);
+
   // Settings Modal State
   const [showSettings, setShowSettings] = useState(false);
   const [tempKey, setTempKey] = useState(state.apiKey);
@@ -319,19 +332,25 @@ const App = () => {
             </div>
             <div className="flex flex-col gap-0.5">
               <h1 className="font-black text-xl tracking-tight leading-none flex items-center gap-2 whitespace-nowrap">
-                <span className="text-white">NANO</span>
-                <span className="text-yellow-500">BANANA</span>
                 <span className="text-white">CAST DIRECTOR</span>
                 <span className="text-yellow-500">STUDIO</span>
               </h1>
-              <p className="text-[10px] font-black text-zinc-500 tracking-[0.3em] uppercase opacity-60">
-                CAST · WARDROBE · STAGE · ACTION
-              </p>
+              <div className="flex items-center gap-2">
+                <p className="text-[10px] font-black text-zinc-500 tracking-[0.3em] uppercase opacity-60">
+                  CAST · WARDROBE · STAGE · ACTION
+                </p>
+                <div className="h-px w-4 bg-zinc-800"></div>
+                <span className="text-[9px] text-zinc-600 font-bold uppercase tracking-wider">
+                  powered by <span className="text-zinc-500">Nanobanana Pro</span>
+                </span>
+              </div>
             </div>
           </div>
 
           <nav className="flex bg-[#09090b] p-1 rounded-lg border border-[#27272a]">
-            {(['casting', 'wardrobe', 'props', 'staging', 'production', 'veo'] as ViewMode[]).map(mode => (
+            {(['casting', 'nano_cast', 'wardrobe', 'props', 'staging', 'production', 'veo'] as ViewMode[])
+            .filter(mode => mode !== 'veo' || state.isStoryboardEnabled)
+            .map(mode => (
               <button
                 key={mode}
                 onClick={() => dispatch({ type: 'SET_VIEW', payload: mode })}
@@ -342,7 +361,7 @@ const App = () => {
                     STORYBOARD
                     <Clapperboard className={`w-3.5 h-3.5 ${state.view === 'veo' ? 'text-yellow-500' : 'text-yellow-600/50'}`} />
                   </>
-                ) : mode === 'casting' ? 'CAST' : mode === 'staging' ? 'STAGING' : mode === 'props' ? 'PROPS' : mode}
+                ) : mode === 'casting' ? 'CAST' : mode === 'nano_cast' ? 'NANO CAST' : mode === 'staging' ? 'STAGING' : mode === 'props' ? 'PROPS' : mode}
               </button>
             ))}
           </nav>
@@ -355,6 +374,7 @@ const App = () => {
         {/* Main Content Area */}
         <main className="flex-grow overflow-hidden relative">
           {state.view === 'casting' && <CastingForge />}
+          {state.view === 'nano_cast' && <NanoCastingDirector />}
           {state.view === 'wardrobe' && <WardrobeStudio />}
           {state.view === 'props' && <PropAccessoryStudio />}
           {state.view === 'staging' && <SceneCanvas />}

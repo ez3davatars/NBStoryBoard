@@ -13,6 +13,36 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+
+  /* Semantic Palette: NanoBanana Pro (Gold/Blue/Dark) */
+  --color-bg: #09090b; /* Zinc 950 - Deepest Black */
+  --color-surface: #18181b; /* Zinc 900 - Surface */
+  --color-surface-2: #27272a; /* Zinc 800 - Highlight Surface */
+  --color-border: #3f3f46; /* Zinc 700 */
+  
+  --color-fg: #fafafa; /* Zinc 50 */
+  --color-muted: #a1a1aa; /* Zinc 400 */
+
+  --color-accent: #facc15; /* Yellow 400 - Banana Gold (Primary) */
+  --color-accent-2: #3b82f6; /* Blue 500 - Electric Blue (Secondary) */
+
+  --color-success: #22c55e;
+  --color-warning: #f59e0b;
+  --color-danger: #ef4444;
+}
+
+@theme {
+  --color-bg: var(--color-bg);
+  --color-surface: var(--color-surface);
+  --color-surface-2: var(--color-surface-2);
+  --color-border: var(--color-border);
+  --color-fg: var(--color-fg);
+  --color-muted: var(--color-muted);
+  --color-accent: var(--color-accent);
+  --color-accent-2: var(--color-accent-2);
+  --color-success: var(--color-success);
+  --color-warning: var(--color-warning);
+  --color-danger: var(--color-danger);
 }
 
 a {
@@ -119,12 +149,33 @@ button:focus-visible {
   height: 8px;
 }
 ::-webkit-scrollbar-track {
-  background: #18181b; 
+  background: #18181b;
 }
 ::-webkit-scrollbar-thumb {
-  background: #eab308; 
+  background: #eab308;
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #ca8a04; 
+  background: #ca8a04;
+}
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+@keyframes scan {
+  0%, 100% { top: 0%; opacity: 0; }
+  10% { opacity: 1; }
+  50% { top: 100%; opacity: 1; }
+  90% { opacity: 1; }
+}
+
+/* Custom Utilities */
+.animate-bounce-x {
+    animation: bounce-x 1s infinite;
+}
+
+@keyframes bounce-x {
+    0%, 100% { transform: translateX(0); }
+    50% { transform: translateX(25%); }
 }

@@ -2,6 +2,13 @@
 /// <reference lib="dom" />
 /// <reference lib="dom.iterable" />
 
+interface ImportMetaEnv {
+  readonly VITE_APP_ENV?: 'dev' | 'prod' | 'staging';
+}
+
+interface ImportMeta {
+  readonly env: ImportMetaEnv;
+}
 
 declare module '*.png' {
   const value: string;

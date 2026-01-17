@@ -42,7 +42,7 @@ const CastingForge = () => {
   const [matteErosion, setMatteErosion] = useState(2); 
   const [processedPreviewUrl, setProcessedPreviewUrl] = useState<string | null>(null);
   const [activeHandle, setActiveHandle] = useState<string | null>(null);
-  const [targetAngle, setTargetAngle] = useState<'side' | 'back' | '3/4 left' | '3/4 right' | null>(null);
+  const [targetAngle, setTargetAngle] = useState<'front' | 'back' | 'left side' | 'right side' | '3/4 left' | '3/4 right' | null>(null);
   const [showTurnaround, setShowTurnaround] = useState(false);
   
   const imgRef = useRef<HTMLImageElement>(null);
@@ -263,6 +263,7 @@ const CastingForge = () => {
 
       const logMessage = state.lastCastedImage ? "Character stylized" : "Character generated";
       dispatch({ type: 'ADD_LOG', payload: { message: logMessage, type: 'success' } });
+      dispatch({ type: 'SET_LAST_CASTED_PROMPT', payload: '' }); // Clear input as requested
     } catch (e: any) {
       dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });
     } finally {
@@ -285,7 +286,9 @@ const CastingForge = () => {
         dispatch({ type: 'ADD_LOG', payload: { message: `Generating isolated ${targetAngle} view...`, type: 'info' } });
         
         let anglePrompt = "";
-        if (targetAngle === 'side') anglePrompt = "FULL BODY LEFT PROFILE VIEW. Facing profile left at a sharp 90-degree angle.";
+        if (targetAngle === 'left side') anglePrompt = "FULL BODY LEFT PROFILE VIEW. Facing profile left at a sharp 90-degree angle.";
+        if (targetAngle === 'right side') anglePrompt = "FULL BODY RIGHT PROFILE VIEW. Facing profile right at a sharp 90-degree angle.";
+        if (targetAngle === 'front') anglePrompt = "FULL BODY FRONT VIEW. Facing directly forward.";
         if (targetAngle === 'back') anglePrompt = "FULL BODY BACK VIEW. Seen directly from behind at a 180-degree angle.";
         if (targetAngle === '3/4 left') anglePrompt = "FULL BODY THREE-QUARTER FRONT-LEFT VIEW. Facing at a 45-degree angle to the left.";
         if (targetAngle === '3/4 right') anglePrompt = "FULL BODY THREE-QUARTER FRONT-RIGHT VIEW. Facing at a 45-degree angle to the right.";
@@ -665,7 +668,16 @@ const CastingForge = () => {
           
           {/* Source Material */}
           <div className="bg-[#18181b] p-6 rounded-xl border border-gray-800 shadow-xl shrink-0">
-            <h2 className="text-sm font-bold text-gray-400 uppercase mb-4 tracking-wider">1. Source Material</h2>
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-sm font-bold text-gray-400 uppercase tracking-wider">1. Source Material</h2>
+              <button 
+                onClick={() => dispatch({ type: 'SET_LAST_CASTED_PROMPT', payload: '' })}
+                className="text-xs text-gray-600 hover:text-white transition-colors flex items-center gap-1 uppercase font-bold"
+                title="Clear Text"
+              >
+                <Eraser className="w-3 h-3" /> Clear
+              </button>
+            </div>
             <textarea 
               className="w-full bg-[#09090b] border border-[#27272a] p-3 rounded-lg text-sm text-gray-200 focus:border-yellow-500 focus:outline-none transition-colors h-24 resize-none mb-4"
               placeholder="Describe your character..."
@@ -712,7 +724,7 @@ const CastingForge = () => {
                       <div className="mb-4">
                           <label className="text-[10px] text-gray-500 block mb-2 uppercase font-bold">Select Angle to Generate</label>
                           <div className="grid grid-cols-2 gap-2">
-                              {['side', 'back', '3/4 left', '3/4 right'].map((view: any) => (
+                              {['front', 'back', 'left side', 'right side', '3/4 left', '3/4 right'].map((view: any) => (
                                   <button
                                       key={view}
                                       onClick={() => setTargetAngle(targetAngle === view ? null : view)}

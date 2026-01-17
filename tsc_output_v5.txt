@@ -1,1 +1,0 @@
-src/renderer/components/SceneCanvas.tsx(285,9): error TS6133: 'handleWipeDirector' is declared but its value is never read.

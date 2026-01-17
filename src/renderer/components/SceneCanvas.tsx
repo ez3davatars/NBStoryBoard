@@ -23,7 +23,13 @@ import {
   Link2,
   UserPlus,
   FlipHorizontal,
-  FlipVertical
+  FlipVertical,
+  Layers,
+  ArrowUp,
+  ArrowDown,
+  ArrowUpToLine,
+  ArrowDownToLine,
+  GripVertical
 } from 'lucide-react';
 
 
@@ -98,8 +104,51 @@ const PropertyField = ({ label, value, onChange, icon: Icon, type = "text", plac
 const SceneCanvas = () => {
   const { state, dispatch } = useAppContext();
   const stageRef = useRef<HTMLDivElement>(null);
+  // Region Edit Job Runner (Cancel/Status)
+  const [isRegionEditRunning, setIsRegionEditRunning] = useState(false);
+  const cancelRegionEditRef = useRef(false);
+
+  const requestCancelRegionEdit = () => {
+    cancelRegionEditRef.current = true;
+    dispatch({
+      type: 'ADD_LOG',
+      payload: {
+        type: 'info',
+        message: 'Cancel requested. The current layer will finish, then the queue will stop.',
+      },
+    });
+  };
+
   
-  // DRAG STATE FOR CANVAS ITEMS
+  
+  // UNDO/REDO keybinds (Ctrl/Cmd+Z, Ctrl/Cmd+Y)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      const tag = t?.tagName?.toLowerCase();
+      const inField = tag === 'input' || tag === 'textarea' || (t as any)?.isContentEditable;
+      if (inField) return;
+      const key = e.key.toLowerCase();
+      const mod = e.ctrlKey || e.metaKey;
+      if (!mod) return;
+      if (key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        dispatch({ type: 'UNDO' } as any);
+      } else if (key === 'y' || (key === 'z' && e.shiftKey)) {
+        e.preventDefault();
+        dispatch({ type: 'REDO' } as any);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    
+    // CLEANUP: Clear masks when leaving Staging to prevent bleed
+    return () => {
+        window.removeEventListener('keydown', onKeyDown);
+        dispatch({ type: 'CLEAR_ALL_REGION_MASKS' });
+        dispatch({ type: 'SET_REGION_PROTECT_MASK', payload: { maskDataUrl: null } });
+    };
+  }, [dispatch]);
+// DRAG STATE FOR CANVAS ITEMS
   const [dragItem, setDragItem] = useState<{id: string, type: 'token' | 'annotation', startX: number, startY: number, initialX: number, initialY: number} | null>(null);
   const [resizeItem, setResizeItem] = useState<{
     id: string, 
@@ -113,12 +162,410 @@ const SceneCanvas = () => {
     initialY: number,
     initialScaleX: number,
     initialScaleY: number,
-    uniformScale?: boolean
+    uniformScale?: boolean,
+    anchorX?: number,
+    anchorY?: number
+  } | null>(null);
+  const [draggedLayerId, setDraggedLayerId] = useState<string | null>(null);
+  const [rotateItem, setRotateItem] = useState<{
+    id: string,
+    type: 'token' | 'annotation',
+    centerX: number,
+    centerY: number,
+    startAngle: number,
+    initialRotation: number
   } | null>(null);
 
   // --- V3-STYLE REFERENCE STACK (integrated) ---
   const refFileInputs = useRef<Record<number, HTMLInputElement | null>>({});
   const [bgPrompt, setBgPrompt] = useState('');
+  // --- SHOTS (Storyboard) ---
+  // Shots live in AppContext so SceneCanvas / Veo / Production stay in sync.
+  const [newShotName, setNewShotName] = useState('');
+  const [activeShotNameDraft, setActiveShotNameDraft] = useState('');
+
+  const shots = (state as any).shots as any[] | undefined;
+  const activeShotId = (state as any).activeShotId as string | null | undefined;
+  const activeShot = shots?.find(s => s.id === activeShotId) || null;
+
+  useEffect(() => {
+    setActiveShotNameDraft(activeShot?.name || '');
+  }, [activeShotId]);
+
+
+  // --- REGION EDIT (Mask / Brush) ---
+  const regionEdit = (state as any).regionEdit as any;
+  const activeLayer = regionEdit?.layers?.find((l: any) => l.id === regionEdit.activeLayerId) || regionEdit?.layers?.[0] || null;
+
+  const maskCanvasRef = useRef<HTMLCanvasElement>(null);
+  const maskIsDownRef = useRef(false);
+  const lastPtRef = useRef<{ x: number; y: number } | null>(null);
+
+  // --- PROTECTION MASK (Face / Hair / Subject lock) ---
+  const [protectEnabled, setProtectEnabled] = useState(true);
+  const [protectMaskUrl, setProtectMaskUrl] = useState<string | null>(null);
+  const [rawProtectMaskUrl, setRawProtectMaskUrl] = useState<string | null>(null);
+  const [protectErosion, setProtectErosion] = useState(0); 
+  const [protectStatus, setProtectStatus] = useState<'idle' | 'generating' | 'ready' | 'error'>('idle');
+
+  const loadDataUrlImage = (url: string): Promise<HTMLImageElement> =>
+    new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('Failed to load image'));
+      img.src = url;
+    });
+  // Erode (shrink) a white mask by radius pixels
+  const erodeMask = async (srcUrl: string, radius: number): Promise<string> => {
+    if (radius === 0) return srcUrl;
+    
+    const img = await loadDataUrlImage(srcUrl);
+    const canvas = document.createElement('canvas');
+    canvas.width = img.width;
+    canvas.height = img.height;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return srcUrl;
+
+    ctx.drawImage(img, 0, 0);
+    const id = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const d = id.data;
+    const w = canvas.width;
+    const h = canvas.height;
+    const result = new Uint8ClampedArray(d);
+
+    for (let y = radius; y < h - radius; y++) {
+      for (let x = radius; x < w - radius; x++) {
+        const idx = (y * w + x) * 4;
+        let minVal = 255;
+        // Search neighborhood
+        for (let ky = -radius; ky <= radius; ky++) {
+          for (let kx = -radius; kx <= radius; kx++) {
+            const nIdx = ((y + ky) * w + (x + kx)) * 4;
+            // Use Red channel as luminance
+            if (d[nIdx] < minVal) minVal = d[nIdx];
+            if (minVal === 0) break;
+          }
+          if (minVal === 0) break;
+        }
+        result[idx] = result[idx+1] = result[idx+2] = minVal;
+      }
+    }
+    
+    const newId = new ImageData(result, w, h);
+    ctx.putImageData(newId, 0, 0);
+    return canvas.toDataURL();
+  };
+
+  useEffect(() => {
+    if (rawProtectMaskUrl) {
+      if (protectErosion === 0) {
+        setProtectMaskUrl(rawProtectMaskUrl);
+      } else {
+        const timer = setTimeout(() => {
+           erodeMask(rawProtectMaskUrl, protectErosion).then(setProtectMaskUrl);
+        }, 300); // Debounce slider
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [rawProtectMaskUrl, protectErosion]);
+
+  // Subtract a protection mask (white = protected) from an edit mask (white = edit)
+  const subtractProtectionMask = async (editMask: string, protectionMask: string): Promise<string> => {
+    const editImg = await loadDataUrlImage(editMask);
+    const protImg = await loadDataUrlImage(protectionMask);
+
+    const w = Math.max(editImg.width, protImg.width) || 1;
+    const h = Math.max(editImg.height, protImg.height) || 1;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return editMask;
+
+    // Draw edit mask
+    ctx.clearRect(0, 0, w, h);
+    ctx.drawImage(editImg, 0, 0, w, h);
+    const editData = ctx.getImageData(0, 0, w, h);
+
+    // Draw protection mask
+    ctx.clearRect(0, 0, w, h);
+    ctx.drawImage(protImg, 0, 0, w, h);
+    const protData = ctx.getImageData(0, 0, w, h);
+
+    const ed = editData.data;
+    const pd = protData.data;
+
+    // If protection pixel is "white enough", erase edit pixel
+    for (let i = 0; i < ed.length; i += 4) {
+      const protLum = (pd[i] + pd[i + 1] + pd[i + 2]) / 3;
+      if (protLum > 128) {
+        ed[i] = 0; ed[i + 1] = 0; ed[i + 2] = 0; ed[i + 3] = 255;
+      }
+    }
+
+    ctx.putImageData(editData, 0, 0);
+    return canvas.toDataURL('image/png');
+  };
+
+  const generateFaceProtectionMask = async () => {
+    if (!state.apiKey) {
+      dispatch({ type: 'ADD_LOG', payload: { message: 'API Key required for protection mask.', type: 'error' } } as any);
+      return;
+    }
+    setProtectStatus('generating');
+    try {
+      const captured = await captureStage();
+      if (!captured) throw new Error('Stage capture returned empty.');
+
+      // Pick a Gemini image model for mask generation
+      const maskModel = (state.model && String(state.model).includes('gemini')) ? state.model : 'gemini-2.5-flash-image';
+
+      const prompt =
+        "FACE + HAIR PROTECTION MASK: Create a pure black & white segmentation mask where ONLY the subject's face and hair are PURE WHITE (#FFFFFF). Everything else MUST be PURE BLACK (#000000). No gray. No gradients. No background. Use clean edges.";
+
+      const res = await GeminiService.generateImage(
+        prompt,
+        state.apiKey,
+        maskModel as any,
+        [{ url: captured, label: 'Base Frame' }],
+        { aspectRatio: state.director.aspectRatio }
+      );
+
+      setRawProtectMaskUrl(res);
+      setProtectMaskUrl(res); // Initial set (erosion 0)
+      setProtectStatus('ready');
+      dispatch({ type: 'ADD_LOG', payload: { message: 'Protection mask generated (face/hair).', type: 'success' } } as any);
+    } catch (e: any) {
+      setProtectStatus('error');
+      dispatch({ type: 'ADD_LOG', payload: { message: `Protection mask failed: ${e?.message || e}`, type: 'error' } } as any);
+    }
+  };
+
+  const ensureMaskCanvasSize = () => {
+    const canvas = maskCanvasRef.current;
+    const stage = stageRef.current;
+    if (!canvas || !stage) return;
+    const w = Math.max(1, Math.floor(stage.clientWidth));
+    const h = Math.max(1, Math.floor(stage.clientHeight));
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      // fill black base
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.fillStyle = 'black';
+        ctx.fillRect(0, 0, w, h);
+      }
+      // reload active layer mask if exists
+      if (activeLayer?.maskDataUrl) {
+        void loadMaskToCanvas(activeLayer.maskDataUrl);
+      }
+    }
+  };
+
+  const loadMaskToCanvas = async (dataUrl: string) => {
+    const canvas = maskCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const img = new Image();
+    img.onload = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      // ensure black background
+      ctx.fillStyle = 'black';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    };
+    img.src = dataUrl;
+  };
+
+  const commitMaskToState = () => {
+    const canvas = maskCanvasRef.current;
+    if (!canvas || !activeLayer) return;
+    const dataUrl = canvas.toDataURL('image/png');
+    dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: activeLayer.id, updates: { maskDataUrl: dataUrl } } } as any);
+  };
+
+  useEffect(() => {
+    // keep canvas sized and synced when toggling mask mode or switching layers
+    ensureMaskCanvasSize();
+    if (activeLayer?.maskDataUrl) {
+      void loadMaskToCanvas(activeLayer.maskDataUrl);
+    } else {
+      // clear to black
+      const c = maskCanvasRef.current;
+      const ctx = c?.getContext('2d');
+      if (c && ctx) {
+        ctx.fillStyle = 'black';
+        ctx.fillRect(0, 0, c.width, c.height);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [regionEdit?.isMaskMode, regionEdit?.activeLayerId]);
+
+  useEffect(() => {
+    const onResize = () => ensureMaskCanvasSize();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const getCanvasPoint = (e: React.PointerEvent) => {
+    const canvas = maskCanvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+    return { x, y };
+  };
+
+  const drawStroke = (from: {x:number;y:number}, to: {x:number;y:number}) => {
+    const canvas = maskCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const brushSize = Number(regionEdit?.brushSize ?? 40);
+    const softness = Math.min(1, Math.max(0, Number(regionEdit?.brushSoftness ?? 0.35)));
+
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = brushSize;
+
+    const isErase = regionEdit?.mode === 'erase';
+    const color = isErase ? 'black' : 'white';
+
+    // soft edge via shadow blur
+    ctx.shadowBlur = brushSize * softness;
+    ctx.shadowColor = color;
+
+    ctx.strokeStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(from.x, from.y);
+    ctx.lineTo(to.x, to.y);
+    ctx.stroke();
+    ctx.restore();
+  };
+
+  const handleMaskPointerDown = (e: React.PointerEvent) => {
+    if (!regionEdit?.isMaskMode) return;
+    e.preventDefault();
+    e.stopPropagation();
+    ensureMaskCanvasSize();
+    maskIsDownRef.current = true;
+    const pt = getCanvasPoint(e);
+    lastPtRef.current = pt;
+    // dot
+    drawStroke(pt, pt);
+  };
+
+  const handleMaskPointerMove = (e: React.PointerEvent) => {
+    if (!regionEdit?.isMaskMode) return;
+    if (!maskIsDownRef.current) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const pt = getCanvasPoint(e);
+    const last = lastPtRef.current || pt;
+    drawStroke(last, pt);
+    lastPtRef.current = pt;
+  };
+
+  const handleMaskPointerUp = (e: React.PointerEvent) => {
+    if (!regionEdit?.isMaskMode) return;
+    if (!maskIsDownRef.current) return;
+    e.preventDefault();
+    e.stopPropagation();
+    maskIsDownRef.current = false;
+    lastPtRef.current = null;
+    commitMaskToState();
+  };
+
+  const clearActiveMask = () => {
+    if (!activeLayer) return;
+    dispatch({ type: 'CLEAR_REGION_LAYER_MASK', payload: { id: activeLayer.id } } as any);
+    const c = maskCanvasRef.current;
+    const ctx = c?.getContext('2d');
+    if (c && ctx) {
+      ctx.fillStyle = 'black';
+      ctx.fillRect(0, 0, c.width, c.height);
+    }
+  };
+
+  const applyRegionEditQueue = async () => {
+    if (!state.apiKey) {
+      dispatch({ type: 'ADD_LOG', payload: { message: 'API Key required for Region Edit.', type: 'error' } } as any);
+      return;
+    }
+    if (!regionEdit?.layers?.some((l: any) => l.enabled && l.maskDataUrl && (l.prompt || '').trim())) {
+      dispatch({ type: 'ADD_LOG', payload: { message: 'No enabled mask layers with both mask + prompt.', type: 'error' } } as any);
+      return;
+    }
+
+    cancelRegionEditRef.current = false;
+    setIsRegionEditRunning(true);
+    dispatch({ type: 'SET_PROCESSING', payload: true } as any);
+    try {
+      const editModel = state.model === 'imagen-4.0-generate-001' ? 'gemini-2.5-flash-image' : state.model;
+
+      const captured = await captureStage();
+      if (!captured) throw new Error('Stage capture returned empty.');
+
+      let base: string = captured;
+
+      const layers = (regionEdit.layers as any[]).filter((l: any) => l.enabled);
+
+      // mark queued
+      for (const layer of layers) {
+        if (cancelRegionEditRef.current) {
+          dispatch({ type: 'ADD_LOG', payload: { message: 'Region Edit cancelled.', type: 'info' } } as any);
+          break;
+        }
+        dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: layer.id, updates: { status: 'running', lastError: null } } } as any);
+        dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: layer.id, updates: { status: 'queued', lastError: null } } } as any);
+      }
+
+      for (const layer of layers) {
+        if (cancelRegionEditRef.current) {
+          dispatch({ type: 'ADD_LOG', payload: { message: 'Region Edit cancelled.', type: 'info' } } as any);
+          break;
+        }
+        dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: layer.id, updates: { status: 'running', lastError: null } } } as any);
+        const mask: string | null = layer.maskDataUrl ?? null;
+        const promptText: string = String(layer.prompt || '').trim();
+        if (!mask || !promptText) {
+          dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: layer.id, updates: { status: 'idle' } } } as any);
+          continue;
+        }
+
+        dispatch({ type: 'ADD_LOG', payload: { message: `Applying ${layer.name}...`, type: 'info' } } as any);
+
+        let maskToSend: string = mask;
+        if (protectEnabled && protectMaskUrl) {
+          maskToSend = await subtractProtectionMask(mask, protectMaskUrl);
+        }
+
+        base = await GeminiService.editImageWithMask(
+          base,
+          maskToSend,
+          promptText,
+          state.apiKey,
+          editModel,
+          [],
+          { aspectRatio: state.director.aspectRatio }
+        );
+      }
+
+      dispatch({ type: 'SET_RESULT_IMAGE', payload: base } as any);
+      dispatch({ type: 'ADD_LOG', payload: { message: 'Region Edit complete.', type: 'success' } } as any);
+    } catch (e: any) {
+      dispatch({ type: 'ADD_LOG', payload: { message: `Region Edit failed: ${e?.message || e}`, type: 'error' } } as any);
+    } finally {
+      setIsRegionEditRunning(false);
+      dispatch({ type: 'SET_PROCESSING', payload: false } as any);
+    }
+  };
 
   const [dragOverRefSlot, setDragOverRefSlot] = useState<number | null>(null);
   const [inspectRefIndex, setInspectRefIndex] = useState<number | null>(null);
@@ -377,6 +824,7 @@ const SceneCanvas = () => {
 
   // --- DRAG & RESIZE LOGIC ---
   const handleStageMouseMove = (e: React.MouseEvent) => {
+    if ((state as any).regionEdit?.isMaskMode) return;
     if (dragItem) {
       const dx = e.clientX - dragItem.startX;
       const dy = e.clientY - dragItem.startY;
@@ -444,15 +892,40 @@ const SceneCanvas = () => {
       const ny = newTop + (nh * ay);
 
       if (resizeItem.type === 'token') {
-        const newScaleX = resizeItem.initialScaleX * (nw / resizeItem.initialW);
-        const newScaleY = resizeItem.initialScaleY * (nh / resizeItem.initialH);
-        dispatch({ type: 'UPDATE_TOKEN', payload: { id: resizeItem.id, width: nw, height: nh, x: nx, y: ny, scaleX: newScaleX, scaleY: newScaleY } });
+        // IMPORTANT: drag-resize should change width/height only.
+        // Scale is reserved for intentional scaling + flips; resizing while also modifying
+        // scale causes "double scaling" drift.
+        dispatch({
+          type: 'UPDATE_TOKEN',
+          payload: {
+            id: resizeItem.id,
+            width: nw,
+            height: nh,
+            x: nx,
+            y: ny,
+            scaleX: resizeItem.initialScaleX,
+            scaleY: resizeItem.initialScaleY,
+          }
+        });
       } else {
         // Annotations strictly standard top-left for now so passing ax=0, ay=0 effectively
         // Actually annotations use center rotation but left/top position.
         // Let's keep annotation logic simple or just use the same math with 0,0 anchors if not present.
          dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: resizeItem.id, width: nw, height: nh, x: newLeft, y: newTop } });
          // Note: Annotations x/y are Top-Left currently in renderer.
+      }
+    } else if (rotateItem) {
+      const dx = e.clientX - rotateItem.centerX;
+      const dy = e.clientY - rotateItem.centerY;
+      const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+      // Delta from start click
+      const delta = angle - rotateItem.startAngle;
+      const newRot = (rotateItem.initialRotation + delta + 360) % 360; // Normalize 0-360
+
+      if (rotateItem.type === 'token') {
+          dispatch({ type: 'UPDATE_TOKEN', payload: { id: rotateItem.id, rotation: newRot } });
+      } else {
+          dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: rotateItem.id, rotation: newRot } });
       }
     }
   };
@@ -461,6 +934,7 @@ const SceneCanvas = () => {
   const handleStageMouseUp = () => {
     setDragItem(null);
     setResizeItem(null);
+    setRotateItem(null);
   };
 
   const deleteSelection = () => {
@@ -697,6 +1171,58 @@ const SceneCanvas = () => {
     }
 
     return canvas.toDataURL('image/png');
+  };
+
+  // --- SHOT HELPERS ---
+  const addShotFromStage = () => {
+    dispatch({ type: 'ADD_SHOT_FROM_STAGE', payload: { name: newShotName.trim() || undefined } } as any);
+    setNewShotName('');
+  };
+
+  const saveActiveShot = () => {
+    if (!activeShotId) {
+      dispatch({ type: 'ADD_LOG', payload: { message: 'No active shot selected.', type: 'error' } } as any);
+      return;
+    }
+    dispatch({ type: 'SAVE_ACTIVE_SHOT' } as any);
+    dispatch({ type: 'ADD_LOG', payload: { message: 'Shot snapshot saved.', type: 'success' } } as any);
+  };
+
+  const setActiveShot = (id: string) => {
+    dispatch({ type: 'SET_ACTIVE_SHOT', payload: { id } } as any);
+  };
+
+  const duplicateShot = (id: string) => {
+    dispatch({ type: 'DUPLICATE_SHOT', payload: { id } } as any);
+  };
+
+  const removeShot = (id: string) => {
+    dispatch({ type: 'REMOVE_SHOT', payload: { id } } as any);
+  };
+
+  const renameActiveShot = () => {
+    if (!activeShotId) return;
+    const name = activeShotNameDraft.trim();
+    if (!name) return;
+    dispatch({ type: 'UPDATE_SHOT_META', payload: { id: activeShotId, updates: { name } } } as any);
+  };
+
+  const captureAndSetShotFrame = async (which: 'start' | 'end') => {
+    if (!activeShotId) {
+      dispatch({ type: 'ADD_LOG', payload: { message: 'No active shot selected.', type: 'error' } } as any);
+      return;
+    }
+    dispatch({ type: 'SET_PROCESSING', payload: true } as any);
+    try {
+      const dataUrl = await captureStage();
+      if (!dataUrl) throw new Error('Stage capture returned empty.');
+      dispatch({ type: 'SET_SHOT_FRAME', payload: { id: activeShotId, which, url: dataUrl } } as any);
+      dispatch({ type: 'ADD_LOG', payload: { message: `Saved ${which.toUpperCase()} frame from stage.`, type: 'success' } } as any);
+    } catch (e: any) {
+      dispatch({ type: 'ADD_LOG', payload: { message: `Failed to capture ${which} frame: ${e?.message || e}`, type: 'error' } } as any);
+    } finally {
+      dispatch({ type: 'SET_PROCESSING', payload: false } as any);
+    }
   };
 
   // --- BACKGROUND GENERATION ---
@@ -1132,10 +1658,24 @@ const SceneCanvas = () => {
                 <span className="text-xs font-bold uppercase tracking-[0.5em]">Empty Stage</span>
               </div>
             )}
+
+          {/* Region Edit Mask Overlay */}
+          {(state as any).regionEdit?.isMaskMode && (
+            <canvas
+              ref={maskCanvasRef}
+              className="absolute inset-0 z-[55] opacity-40"
+              style={{ pointerEvents: 'auto' }}
+              onPointerDown={handleMaskPointerDown}
+              onPointerMove={handleMaskPointerMove}
+              onPointerUp={handleMaskPointerUp}
+              onPointerLeave={handleMaskPointerUp}
+            />
+          )}
+
           </div>
 
           {/* Tokens Layer */}
-          {state.tokens.sort((a, b) => a.zIndex - b.zIndex).map(token => (
+          {[...state.tokens].sort((a, b) => a.zIndex - b.zIndex).map(token => (
             <div
               key={token.id}
               className={`absolute cursor-move group/token ${state.selection === token.id ? 'ring-2 ring-yellow-500 ring-offset-2 ring-offset-[#09090b] z-50' : ''}`}
@@ -1149,6 +1689,7 @@ const SceneCanvas = () => {
                 zIndex: token.zIndex
               }}
               onMouseDown={(e) => {
+                if ((state as any).regionEdit?.isMaskMode) return;
                 e.stopPropagation();
                 dispatch({ type: 'SELECT_ITEM', payload: { id: token.id, type: 'token' } });
                 setDragItem({
@@ -1214,7 +1755,7 @@ const SceneCanvas = () => {
           ))}
 
           {/* Annotations Layer */}
-          {state.annotations.map(note => (
+          {[...state.annotations].sort((a, b) => a.zIndex - b.zIndex).map(note => (
              <div
                 key={note.id}
                 className={`absolute cursor-move group/note ${state.selection === note.id ? 'z-50' : ''}`}
@@ -1227,6 +1768,7 @@ const SceneCanvas = () => {
                   transform: `rotate(${note.rotation}deg)`
                 }}
                 onMouseDown={(e) => {
+                  if ((state as any).regionEdit?.isMaskMode) return;
                   e.stopPropagation();
                   dispatch({ type: 'SELECT_ITEM', payload: { id: note.id, type: 'annotation' } });
                   setDragItem({
@@ -1277,10 +1819,41 @@ const SceneCanvas = () => {
                           initialY: note.y,
                           initialScaleX: 1, // Annotations don't strictly use scale property for sizing yet, but required by type
                           initialScaleY: 1,
-                          uniformScale: false
+                          uniformScale: false,
+                          anchorX: 0,
+                          anchorY: 0
                         });
                       }}
                     />
+                )}
+                {/* Rotation Handle (Top Center) */}
+                {state.selection === note.id && (
+                   <div
+                     className="absolute left-1/2 -top-6 -translate-x-1/2 w-5 h-5 bg-white border border-blue-500 rounded-full flex items-center justify-center cursor-grabbing shadow-lg z-50 group/rotate"
+                     onMouseDown={(e) => {
+                        e.stopPropagation();
+                        const stage = stageRef.current;
+                        if (!stage) return;
+                        const rect = stage.getBoundingClientRect();
+                        // Note x,y is relative to stage top-left.
+                        // Center = rect.left + note.x + width/2
+                        const cx = rect.left + note.x + (note.width / 2);
+                        const cy = rect.top + note.y + (note.height / 2);
+                        
+                        const angle = Math.atan2(e.clientY - cy, e.clientX - cx) * (180 / Math.PI);
+                        
+                        setRotateItem({
+                          id: note.id,
+                          type: 'annotation',
+                          centerX: cx,
+                          centerY: cy,
+                          startAngle: angle,
+                          initialRotation: note.rotation
+                        });
+                     }}
+                   >
+                     <RotateCw className="w-3 h-3 text-blue-500 group-hover/rotate:animate-spin" />
+                   </div>
                 )}
              </div>
           ))}
@@ -1334,15 +1907,26 @@ const SceneCanvas = () => {
                  </div>
                  <span className="text-[8px] font-bold text-gray-500 uppercase group-hover:text-purple-400">Add Path</span>
                </button>
+
+               <div className="h-px w-full bg-white/10 my-1" />
+
+               <button 
+                onClick={() => {
+                    if (confirm('Are you sure you want to clear the entire stage?')) {
+                        dispatch({ type: 'CLEAR_STAGE' });
+                    }
+                }}
+                className="flex flex-col items-center gap-1 group bg-black/80 p-2 rounded-xl border border-white/5 backdrop-blur-md shadow-lg hover:bg-black transition-colors"
+                title="Clear Everything"
+               >
+                 <div className="p-2 bg-red-500/10 rounded-lg group-hover:bg-red-500/20 transition-colors">
+                   <TrashIcon className="w-4 h-4 text-red-500" />
+                 </div>
+                 <span className="text-[8px] font-bold text-gray-500 uppercase group-hover:text-red-500">Clear</span>
+               </button>
           </div>
 
           <div className="flex items-center gap-2">
-            <button 
-              onClick={() => dispatch({ type: 'CLEAR_STAGE' })}
-              className="px-4 py-2 hover:bg-gray-800 text-gray-400 hover:text-white rounded text-[10px] font-bold uppercase transition-colors"
-            >
-              Reset Stage
-            </button>
             <button 
               onClick={downloadCanvas}
               className="bg-yellow-500 hover:bg-yellow-400 text-black px-6 py-2.5 rounded-lg flex items-center gap-2 text-xs font-bold uppercase tracking-widest transition-all shadow-lg shadow-yellow-900/20 active:scale-95"
@@ -1356,6 +1940,572 @@ const SceneCanvas = () => {
       {/* 3. RIGHT SIDEBAR: GLOBAL SPECS, ANCHOR, & REFERENCES */}
       <div className="w-[400px] flex flex-col gap-4 overflow-y-auto pl-2 custom-scrollbar">
         
+        {/* Stage 00: Shots (Conditional) */}
+        {state.isStoryboardEnabled && (
+        <div className="bg-[#09090b] border border-[#27272a] rounded-xl p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <Clapperboard className="w-4 h-4 text-yellow-500" />
+              <h3 className="text-xs font-bold text-gray-500 uppercase">Shots</h3>
+            </div>
+            <span className="text-[10px] text-gray-600 font-mono">
+              {shots?.length ?? 0}
+            </span>
+          </div>
+
+          <div className="flex gap-2 mb-3">
+            <input
+              value={newShotName}
+              onChange={(e) => setNewShotName(e.target.value)}
+              placeholder="New shot name (optional)"
+              className="flex-1 bg-[#18181b] border border-[#27272a] rounded px-2 py-1 text-[10px] text-gray-300 outline-none focus:border-yellow-500"
+            />
+            <button
+              onClick={addShotFromStage}
+              className="bg-yellow-500 hover:bg-yellow-400 text-black px-3 py-2 rounded text-[10px] font-bold uppercase tracking-wider"
+              title="Create a new shot from the current stage"
+            >
+              Add
+            </button>
+          </div>
+
+          <div className="flex gap-2 mb-3">
+            <button
+              onClick={saveActiveShot}
+              disabled={!activeShotId}
+              className="flex-1 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] text-gray-300 hover:text-white text-[10px] py-2 rounded font-bold uppercase tracking-wider disabled:opacity-50"
+              title="Save current stage into active shot"
+            >
+              Save Shot
+            </button>
+            <button
+              onClick={() => captureAndSetShotFrame('start')}
+              disabled={!activeShotId}
+              className="flex-1 bg-blue-600 hover:bg-blue-500 text-white text-[10px] py-2 rounded font-bold uppercase tracking-wider disabled:opacity-50"
+              title="Capture stage as Start Frame for active shot"
+            >
+              Start
+            </button>
+            <button
+              onClick={() => captureAndSetShotFrame('end')}
+              disabled={!activeShotId}
+              className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] py-2 rounded font-bold uppercase tracking-wider disabled:opacity-50"
+              title="Capture stage as End Frame for active shot"
+            >
+              End
+            </button>
+          </div>
+
+          {activeShotId && (
+            <div className="mb-3 space-y-2">
+              <label className="text-[9px] uppercase font-bold text-gray-500 block">Active Shot Name</label>
+              <div className="flex gap-2">
+                <input
+                  value={activeShotNameDraft}
+                  onChange={(e) => setActiveShotNameDraft(e.target.value)}
+                  onBlur={renameActiveShot}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      renameActiveShot();
+                    }
+                  }}
+                  className="flex-1 bg-[#18181b] border border-[#27272a] rounded px-2 py-1 text-[10px] text-yellow-400 outline-none focus:border-yellow-500"
+                />
+                <button
+                  onClick={renameActiveShot}
+                  className="px-3 py-2 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] rounded text-[10px] font-bold uppercase text-gray-300"
+                  title="Rename active shot"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-2 max-h-48 overflow-y-auto custom-scrollbar pr-1">
+            {(shots ?? []).map((s: any) => {
+              const active = s.id === activeShotId;
+              return (
+                <div
+                  key={s.id}
+                  className={`flex items-center gap-2 p-2 rounded border transition-colors ${
+                    active ? 'border-yellow-500 bg-yellow-500/5' : 'border-[#27272a] bg-[#0b0b0d] hover:bg-[#18181b]'
+                  }`}
+                >
+                  <button
+                    onClick={() => setActiveShot(s.id)}
+                    className="flex-1 text-left"
+                    title="Load this shot into the stage"
+                  >
+                    <div className="text-[10px] font-bold text-gray-200 truncate">{s.name}</div>
+                    <div className="text-[9px] text-gray-600 font-mono">
+                      {s.startFrameUrl ? 'S' : '-'} / {s.endFrameUrl ? 'E' : '-'}
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={() => duplicateShot(s.id)}
+                    className="p-1.5 bg-black/30 hover:bg-white/5 rounded text-gray-400 hover:text-white transition-colors"
+                    title="Duplicate shot"
+                  >
+                    <Link2 className="w-3.5 h-3.5" />
+                  </button>
+
+                  <button
+                    onClick={() => removeShot(s.id)}
+                    className="p-1.5 bg-black/30 hover:bg-red-500/20 rounded text-gray-400 hover:text-red-400 transition-colors"
+                    title="Delete shot"
+                  >
+                    <TrashIcon className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              );
+            })}
+
+            {(shots ?? []).length === 0 && (
+              <div className="text-[10px] text-gray-600 italic py-2 border border-dashed border-gray-800 rounded text-center">
+                No shots yet. Add one from the current stage.
+              </div>
+            )}
+          </div>
+        </div>
+        )}
+
+
+        {/* Stage 00.5: Region Edit (NanoBanana-style) */}
+        <div className="bg-[#09090b] border border-[#27272a] rounded-xl p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-blue-400" />
+              <h3 className="text-xs font-bold text-gray-500 uppercase">Region Edit</h3>
+            </div>
+
+            <button
+              onClick={() => dispatch({ type: 'SET_REGION_EDIT', payload: { isMaskMode: !(state as any).regionEdit?.isMaskMode } } as any)}
+              className={`px-3 py-1.5 rounded text-[10px] font-bold uppercase tracking-wider border transition-colors ${
+                (state as any).regionEdit?.isMaskMode
+                  ? 'bg-blue-600 border-blue-400 text-white'
+                  : 'bg-[#18181b] border-[#27272a] text-yellow-500 hover:text-white'
+              }`}
+              title="Toggle mask paint mode"
+            >
+              {(state as any).regionEdit?.isMaskMode ? 'Mask ON' : 'Mask OFF'}
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2 mb-3">
+            <button
+              onClick={() => dispatch({ type: 'SET_REGION_EDIT', payload: { mode: 'paint' } } as any)}
+              className={`flex-1 py-2 rounded text-[10px] font-bold uppercase border ${
+                (state as any).regionEdit?.mode === 'paint'
+                  ? 'bg-blue-600 text-white border-blue-600'
+                  : 'bg-[#18181b] text-accent border-[#27272a] hover:bg-[#27272a]'
+              }`}
+            >
+              Paint
+            </button>
+            <button
+              onClick={() => dispatch({ type: 'SET_REGION_EDIT', payload: { mode: 'erase' } } as any)}
+              className={`flex-1 py-2 rounded text-[10px] font-bold uppercase border ${
+                (state as any).regionEdit?.mode === 'erase'
+                  ? 'bg-blue-600 text-white border-blue-600'
+                  : 'bg-[#18181b] text-accent border-[#27272a] hover:bg-[#27272a]'
+              }`}
+            >
+              Erase
+            </button>
+          </div>
+
+          {/* Layer list */}
+          <div className="space-y-2 mb-3">
+            {((state as any).regionEdit?.layers || []).map((l: any) => {
+              const active = l.id === (state as any).regionEdit?.activeLayerId;
+              return (
+                <div
+                  key={l.id}
+                  className={`flex items-center gap-2 p-2 rounded border ${
+                    active ? 'border-blue-500 bg-blue-500/5' : 'border-[#27272a] bg-[#0b0b0d]'
+                  }`}
+                >
+                  <button
+                    className="flex-1 text-left"
+                    onClick={() => dispatch({ type: 'SET_REGION_ACTIVE_LAYER', payload: { id: l.id } } as any)}
+                    title="Select layer to paint"
+                  >
+                    <div className="text-[10px] font-bold text-gray-200">{l.name}</div>
+                    <div className="text-[9px] text-gray-600 font-mono">
+                      {l.maskDataUrl ? 'MASK' : '--'} {l.prompt?.trim() ? ' / TXT' : ''}
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={() =>
+                      dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: l.id, updates: { enabled: !l.enabled } } } as any)
+                    }
+                    className={`px-2 py-1 rounded text-[9px] font-bold uppercase border ${
+                      l.enabled ? 'bg-emerald-500/20 border-emerald-500/30 text-emerald-300' : 'bg-[#18181b] border-[#27272a] text-gray-400'
+                    }`}
+                    title="Include layer in Apply Queue"
+                  >
+                    {l.enabled ? 'ON' : 'OFF'}
+                  </button>
+
+                  <button
+                    onClick={() => dispatch({ type: 'CLEAR_REGION_LAYER_MASK', payload: { id: l.id } } as any)}
+                    className="p-1.5 bg-black/30 hover:bg-red-500/20 rounded text-gray-400 hover:text-red-400 transition-colors"
+                    title="Clear this mask"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Brush controls */}
+          <div className="space-y-3 mb-3">
+            <div className="flex items-center justify-between text-[10px] text-gray-500 uppercase font-bold">
+              <span>Brush Size</span>
+              <span className="text-blue-400 font-mono">{(state as any).regionEdit?.brushSize ?? 40}px</span>
+            </div>
+            <input
+              type="range"
+              min={5}
+              max={200}
+              value={(state as any).regionEdit?.brushSize ?? 40}
+              onChange={(e) => dispatch({ type: 'SET_REGION_EDIT', payload: { brushSize: parseInt(e.target.value) } } as any)}
+              className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
+            />
+
+            <div className="flex items-center justify-between text-[10px] text-gray-500 uppercase font-bold">
+              <span>Edge Softness</span>
+              <span className="text-blue-400 font-mono">{((state as any).regionEdit?.brushSoftness ?? 0.35).toFixed(2)}</span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={(state as any).regionEdit?.brushSoftness ?? 0.35}
+              onChange={(e) => dispatch({ type: 'SET_REGION_EDIT', payload: { brushSoftness: parseFloat(e.target.value) } } as any)}
+              className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
+            />
+          </div>
+
+          
+          {/* Protection Mask (Face/Hair Lock) */}
+          <div className="space-y-2 mb-3">
+            <div className="flex items-center justify-between gap-2">
+              <label className="text-[10px] uppercase font-bold text-gray-500 flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={protectEnabled}
+                  onChange={(e) => setProtectEnabled(e.target.checked)}
+                  className="w-4 h-4 accent-blue-500 rounded border-white/10 bg-black"
+                />
+                Protect Face/Hair
+              </label>
+
+              <button
+                onClick={generateFaceProtectionMask}
+                disabled={!state.apiKey || protectStatus === 'generating'}
+                className="px-3 py-1.5 rounded text-[9px] font-bold uppercase tracking-wider border transition-colors disabled:opacity-50 bg-[#18181b] border-[#27272a] text-yellow-500 hover:bg-[#27272a]"
+                title="Generate a face/hair protection mask (white = protected)"
+              >
+                {protectStatus === 'generating' ? 'Generating…' : protectMaskUrl ? 'Regen' : 'Generate'}
+              </button>
+            </div>
+
+            {protectMaskUrl && (
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-2">
+                  <div className="w-12 h-12 rounded border border-[#27272a] bg-black overflow-hidden relative group">
+                    <img src={protectMaskUrl} className="w-full h-full object-contain opacity-90" alt="Protection Mask" />
+                    {state.isProcessing && <div className="absolute inset-0 bg-black/50 flex items-center justify-center"><RotateCw className="w-4 h-4 text-white animate-spin"/></div>}
+                  </div>
+                  <div className="flex-1 space-y-1">
+                     <div className="flex items-center justify-between">
+                        <span className="text-[9px] text-gray-500 font-bold uppercase">Shrink Mask</span>
+                        <span className="text-[9px] text-yellow-500 font-mono">{protectErosion}px</span>
+                     </div>
+                     <input 
+                        type="range" 
+                        min={0} max={20} step={1} 
+                        value={protectErosion} 
+                        onChange={(e) => setProtectErosion(parseInt(e.target.value))}
+                        className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-yellow-500"
+                        title="Erode mask to remove white halo"
+                     />
+                  </div>
+                  <button
+                    onClick={() => {
+                      setProtectMaskUrl(null);
+                      setRawProtectMaskUrl(null); // Clear raw too
+                      setProtectStatus('idle');
+                    }}
+                    className="self-start mt-2 px-2 py-1 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] rounded text-[8px] font-bold uppercase text-red-500"
+                    title="Clear protection mask"
+                  >
+                    Clear
+                  </button>
+                  <span className="text-[9px] text-gray-600 ml-auto self-start mt-2">{protectStatus.toUpperCase()}</span>
+                </div>
+              </div>
+            )}
+
+            <p className="text-[9px] text-gray-600 mt-2 leading-relaxed">
+              When enabled, protected (white) pixels are automatically removed from every edit mask before applying.
+            </p>
+          </div>
+
+{/* Prompt */}
+          <div className="space-y-2 mb-3">
+            <label className="text-[10px] uppercase font-bold text-gray-500">Layer Instruction</label>
+            <textarea
+              value={activeLayer?.prompt || ''}
+              onChange={(e) =>
+                activeLayer &&
+                dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: activeLayer.id, updates: { prompt: e.target.value } } } as any)
+              }
+              className="w-full bg-[#18181b] border border-[#27272a] rounded p-2 text-[10px] text-gray-300 resize-none focus:border-blue-500 outline-none"
+              rows={3}
+              placeholder="e.g. Remove the IV line. Match lighting. No new objects."
+            />
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { label: 'Remove', text: 'Remove the object in the masked area. Clean seamless fill. Match surrounding texture and lighting.' },
+                { label: 'Replace', text: 'Replace the masked area with: (describe). Match perspective, lighting, and realism.' },
+                { label: 'Relight', text: 'Relight the masked area to match scene lighting. Preserve identity and realism.' },
+              ].map((p) => (
+                <button
+                  key={p.label}
+                  onClick={() =>
+                    activeLayer &&
+                    dispatch({
+                      type: 'UPDATE_REGION_LAYER',
+                      payload: { id: activeLayer.id, updates: { prompt: (activeLayer.prompt || '') ? `${activeLayer.prompt}\n${p.text}` : p.text } },
+                    } as any)
+                  }
+                  className="bg-[#18181b] border border-[#27272a] hover:bg-[#27272a] text-gray-300 text-[9px] py-2 rounded uppercase font-bold"
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex gap-2">
+            <button
+              onClick={clearActiveMask}
+              disabled={!activeLayer}
+              className="flex-1 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] text-gray-300 hover:text-white text-[10px] py-2 rounded font-bold uppercase tracking-wider disabled:opacity-50"
+            >
+              Clear Active
+            </button>
+            <button
+              onClick={() => dispatch({ type: 'CLEAR_ALL_REGION_MASKS' } as any)}
+              className="flex-1 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] text-gray-300 hover:text-white text-[10px] py-2 rounded font-bold uppercase tracking-wider"
+            >
+              Clear All
+            </button>
+          </div>
+
+          <div className="flex gap-2 mt-3">
+            <button
+              onClick={applyRegionEditQueue}
+              disabled={state.isProcessing || !state.apiKey || isRegionEditRunning}
+              className="flex-1 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-black text-[10px] uppercase tracking-[0.25em] py-3 rounded-xl shadow-lg shadow-blue-500/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Apply Enabled Layers
+            </button>
+            <button
+              onClick={requestCancelRegionEdit}
+              disabled={!isRegionEditRunning}
+              className="px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest border border-red-500/30 bg-red-500/10 text-red-300 hover:bg-red-500/20 disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Stops after current layer finishes"
+            >
+              Cancel
+            </button>
+          </div>
+
+          <p className="text-[9px] text-gray-600 mt-2 leading-relaxed">
+            Paint white to define the edit region. Apply runs each enabled layer sequentially.
+          </p>
+        </div>
+
+        {/* Stage 00.7: Stage Hierarchy (Layers) */}
+        <div className="bg-[#09090b] border border-[#27272a] rounded-xl p-4">
+          <div className="flex items-center justify-between mb-3">
+             <div className="flex items-center gap-2">
+                 <Layers className="w-4 h-4 text-orange-400" />
+                 <h3 className="text-xs font-bold text-gray-500 uppercase">Stage Layers</h3>
+             </div>
+             <span className="text-[10px] text-gray-600 font-mono">
+               {state.tokens.length + state.annotations.length} Items
+             </span>
+          </div>
+
+          <div className="space-y-1 max-h-48 overflow-y-auto custom-scrollbar pr-1 mb-2">
+            {[...state.tokens.map(t => ({...t, type: 'token'})), ...state.annotations.map(a => ({...a, type: 'annotation'}))]
+              .sort((a: any, b: any) => b.zIndex - a.zIndex)
+              .map((layer: any) => {
+                const isSelected = state.selection === layer.id;
+                const isDragging = draggedLayerId === layer.id;
+                
+                return (
+                  <div 
+                    key={layer.id}
+                    draggable
+                    onDragStart={(e) => {
+                      setDraggedLayerId(layer.id);
+                      e.dataTransfer.effectAllowed = 'move';
+                      // Create a ghost image if needed, but default is usually fine
+                    }}
+                    onDragOver={(e) => {
+                       e.preventDefault(); // Must allow drop
+                       e.dataTransfer.dropEffect = 'move';
+                    }}
+                    onDrop={(e) => {
+                       e.preventDefault();
+                       if (!draggedLayerId || draggedLayerId === layer.id) return;
+                       
+                       // Capture current state of full list sorted by Z
+                       const allLayers = [...state.tokens.map(t => ({...t, type: 'token'})), ...state.annotations.map(a => ({...a, type: 'annotation'}))]
+                          .sort((a: any, b: any) => b.zIndex - a.zIndex);
+                       
+                       const fromIndex = allLayers.findIndex(l => l.id === draggedLayerId);
+                       const toIndex = allLayers.findIndex(l => l.id === layer.id);
+                       
+                       if (fromIndex === -1 || toIndex === -1) return;
+                       
+                       // Reorder array
+                       const item = allLayers[fromIndex];
+                       allLayers.splice(fromIndex, 1);
+                       allLayers.splice(toIndex, 0, item);
+                       
+                       // Re-assign Z-indices based on new order (Top of list = High Z)
+                       // Max Z is list length
+                       const maxZ = allLayers.length;
+                       allLayers.forEach((l, idx) => {
+                          const newZ = maxZ - idx;
+                          if (l.zIndex !== newZ) {
+                              if (l.type === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: l.id, zIndex: newZ } });
+                              else dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: l.id, zIndex: newZ } });
+                          }
+                       });
+                       
+                       setDraggedLayerId(null);
+                    }}
+                    onDragEnd={() => setDraggedLayerId(null)}
+                    className={`flex items-center gap-2 p-1.5 rounded border transition-colors cursor-grab active:cursor-grabbing group ${isSelected ? 'bg-orange-500/10 border-orange-500/50' : 'bg-[#18181b] border-[#27272a] hover:bg-[#27272a]'} ${isDragging ? 'opacity-40 border-dashed border-orange-500' : ''}`}
+                    onClick={(e) => {
+                       e.stopPropagation();
+                       dispatch({ type: 'SELECT_ITEM', payload: { id: layer.id, type: layer.type } });
+                    }}
+                  >
+                     <div className="text-gray-600 group-hover:text-gray-400 cursor-grab active:cursor-grabbing">
+                        <GripVertical className="w-3 h-3" />
+                     </div>
+                     <div className={`p-1 rounded ${isSelected ? 'bg-orange-500 text-black' : 'bg-gray-800 text-gray-400'}`}>
+                       {layer.type === 'token' && <UserPlus className="w-3 h-3" />}
+                       {layer.type === 'annotation' && layer.type === 'note' && <StickyNote className="w-3 h-3" />}
+                       {layer.type === 'annotation' && layer.type === 'zone' && <BoxSelect className="w-3 h-3" />}
+                       {layer.type === 'annotation' && layer.type === 'arrow' && <MoveUpRight className="w-3 h-3" />}
+                    </div>
+                    <span className={`text-[9px] font-bold uppercase truncate flex-1 ${isSelected ? 'text-orange-400' : 'text-gray-400'}`}>
+                      {layer.tag || layer.text || layer.type}
+                    </span>
+                    <span className="text-[9px] font-mono text-gray-600 mr-2">Z:{layer.zIndex}</span>
+                    
+                    {isSelected && (
+                       <div className="flex items-center gap-1">
+                          <button
+                             onClick={(e) => {
+                               e.stopPropagation();
+                               if (layer.type === 'token') dispatch({ type: 'REMOVE_TOKEN', payload: layer.id });
+                               else dispatch({ type: 'REMOVE_ANNOTATION', payload: layer.id });
+                             }}
+                             className="p-1 hover:bg-red-500/20 text-gray-500 hover:text-red-400 rounded transition-colors"
+                          >
+                             <TrashIcon className="w-3 h-3" />
+                          </button>
+                       </div>
+                    )}
+                  </div>
+                );
+            })}
+             {state.tokens.length === 0 && state.annotations.length === 0 && (
+                <div className="text-[10px] text-gray-600 italic text-center py-4 border border-dashed border-gray-800 rounded">
+                  Stage is empty. Add cast or notes.
+                </div>
+             )}
+          </div>
+          
+          <div className="grid grid-cols-4 gap-1 pt-2 border-t border-[#27272a]">
+             <button
+                disabled={!state.selection}
+                onClick={() => {
+                   if(!state.selection) return;
+                   const all = [...state.tokens, ...state.annotations];
+                   const maxZ = Math.max(...all.map(i => i.zIndex));
+                   const type = state.selectionType;
+                   if (type === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: state.selection, zIndex: maxZ + 1 } });
+                   else dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: state.selection, zIndex: maxZ + 1 } });
+                }}
+                className="bg-[#18181b] hover:bg-orange-500/20 text-gray-400 hover:text-orange-400 border border-[#27272a] rounded p-1.5 flex items-center justify-center disabled:opacity-30"
+                title="Bring to Front"
+             >
+                <ArrowUpToLine className="w-3.5 h-3.5" />
+             </button>
+             <button
+                disabled={!state.selection}
+                onClick={() => {
+                   if(!state.selection) return;
+                   const item = [...state.tokens, ...state.annotations].find(i => i.id === state.selection);
+                   if (!item) return;
+                   const type = state.selectionType;
+                   if (type === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: state.selection, zIndex: item.zIndex + 1 } });
+                   else dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: state.selection, zIndex: item.zIndex + 1 } });
+                }}
+                className="bg-[#18181b] hover:bg-orange-500/20 text-gray-400 hover:text-orange-400 border border-[#27272a] rounded p-1.5 flex items-center justify-center disabled:opacity-30"
+                title="Bring Forward"
+             >
+                <ArrowUp className="w-3.5 h-3.5" />
+             </button>
+             <button
+                disabled={!state.selection}
+                onClick={() => {
+                   if(!state.selection) return;
+                   const item = [...state.tokens, ...state.annotations].find(i => i.id === state.selection);
+                   if (!item) return;
+                   const type = state.selectionType;
+                   if (type === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: state.selection, zIndex: item.zIndex - 1 } });
+                   else dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: state.selection, zIndex: item.zIndex - 1 } });
+                }}
+                className="bg-[#18181b] hover:bg-orange-500/20 text-gray-400 hover:text-orange-400 border border-[#27272a] rounded p-1.5 flex items-center justify-center disabled:opacity-30"
+                title="Send Backward"
+             >
+                <ArrowDown className="w-3.5 h-3.5" />
+             </button>
+             <button
+                disabled={!state.selection}
+                onClick={() => {
+                   if(!state.selection) return;
+                   const all = [...state.tokens, ...state.annotations];
+                   const minZ = Math.min(...all.map(i => i.zIndex));
+                   const type = state.selectionType;
+                   if (type === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: state.selection, zIndex: minZ - 1 } });
+                   else dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: state.selection, zIndex: minZ - 1 } });
+                }}
+                className="bg-[#18181b] hover:bg-orange-500/20 text-gray-400 hover:text-orange-400 border border-[#27272a] rounded p-1.5 flex items-center justify-center disabled:opacity-30"
+                title="Send to Back"
+             >
+                <ArrowDownToLine className="w-3.5 h-3.5" />
+             </button>
+          </div>
+        </div>
+
         {/* Stage 01: Canvas Specs */}
         <div className="bg-[#09090b] border border-[#27272a] rounded-xl p-4">
            <div className="flex items-center justify-between mb-3">

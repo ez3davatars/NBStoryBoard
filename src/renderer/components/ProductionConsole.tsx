@@ -1,15 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   RotateCw, MonitorPlay, Maximize, ImagePlus, Download, 
-  BoxSelect, Clapperboard, Trash2, Image as ImageIcon 
+  BoxSelect, Clapperboard, Trash2, Image as ImageIcon, User
 } from 'lucide-react';
-import { useAppContext } from '../context/AppContext';
+import { useAppContext, APP_SCHEMA_VERSION } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
+import { StorageService } from '../services/StorageService';
 import { 
   buildMasterStyleKeywords, 
   mergeNegatives, 
   SCENE_LOCK_NEGATIVE_TOKENS,
-  getActiveReferenceSlots
+  getActiveReferenceSlots,
+  compileV3DirectorPrompt
 } from '../utils/promptHelpers';
 import type { StageToken, WhitelistProfile, CastMember } from '../context/AppContext';
 
@@ -40,6 +42,374 @@ const ProductionConsole: React.FC = () => {
   const STAGE_H = 540;
   const RENDER_SCALE = 2; // Scales 960x540 to 1920x1080 for Pro Renders
   // Uses state.model from context
+
+  // Shots (storyboard) support (added in AppContext)
+  const activeShot = React.useMemo(() => {
+    if (!('shots' in state) || !('activeShotId' in state)) return null as any;
+    const shots = (state as any).shots as any[];
+    const id = (state as any).activeShotId as string | null;
+    if (!id) return null;
+    return shots.find(s => s.id === id) || null;
+  }, [state]);
+
+  const sanitizeName = (name: string) =>
+    name.replace(/[^a-z0-9-_ ]/gi, '').trim().replace(/\s+/g, '_').slice(0, 50) || 'Shot';
+
+  const writeFileToDir = async (dir: FileSystemDirectoryHandle, filename: string, blob: Blob) => {
+    const handle = await dir.getFileHandle(filename, { create: true });
+    const writable = await handle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+  };
+
+  const writeDataUrlPng = async (dir: FileSystemDirectoryHandle, filename: string, dataUrl: string) => {
+    const res = await fetch(dataUrl);
+    const blob = await res.blob();
+    await writeFileToDir(dir, filename, blob);
+  };
+
+  const writeTextFile = async (dir: FileSystemDirectoryHandle, filename: string, text: string) => {
+    await writeFileToDir(dir, filename, new Blob([text], { type: 'text/plain' }));
+  };
+
+const redactStateForDiagnostics = () => {
+  const { apiKey, saveDirectoryHandle, ...rest } = state as any;
+  return {
+    ...rest,
+    apiKey: apiKey ? `REDACTED_${String(apiKey).length}` : '',
+    hasSaveDirectory: Boolean(saveDirectoryHandle),
+  };
+};
+
+const handleExportDiagnostics = async () => {
+  if (!state.saveDirectoryHandle) {
+    dispatch({ type: 'ADD_LOG', payload: { message: 'No save directory selected (Settings).', type: 'error' } });
+    return;
+  }
+  try {
+    const root = await state.saveDirectoryHandle.getDirectoryHandle('Diagnostics', { create: true });
+    const folderName = `DIAG-${Date.now()}`;
+    const dir = await root.getDirectoryHandle(folderName, { create: true });
+
+    const schemaLocal = localStorage.getItem('nano_schema_version') || '';
+    const schemaStored = await StorageService.load<number>('nano_schema_version', 0);
+
+    const diag = {
+      app: 'NBStoryBoard',
+      createdAt: new Date().toISOString(),
+      appSchemaVersion: APP_SCHEMA_VERSION,
+      schemaLocalStorage: schemaLocal,
+      schemaStorageService: schemaStored,
+      userAgent: navigator.userAgent,
+      view: state.view,
+      activeShotId: (state as any).activeShotId ?? null,
+      shotCount: (state as any).shots?.length ?? 0,
+      note: 'State snapshot is redacted (apiKey removed).',
+      state: redactStateForDiagnostics(),
+      logs: state.logs?.slice(-200) ?? [],
+    };
+
+    await writeFileToDir(dir, 'diagnostics.json', new Blob([JSON.stringify(diag, null, 2)], { type: 'application/json' }));
+    await writeTextFile(dir, 'logs.txt', (state.logs || []).slice(-200).map(l => `${l.timestamp} [${l.type}] ${l.message}`).join('\n'));
+
+    dispatch({ type: 'ADD_LOG', payload: { message: `Diagnostics exported: Diagnostics/${folderName}`, type: 'success' } });
+  } catch (e: any) {
+    dispatch({ type: 'ADD_LOG', payload: { message: `Diagnostics export failed: ${e?.message || e}`, type: 'error' } });
+  }
+};
+
+const verifyFilesExist = async (dir: FileSystemDirectoryHandle, required: string[]) => {
+  const missing: string[] = [];
+  for (const name of required) {
+    try {
+      await dir.getFileHandle(name);
+    } catch {
+      missing.push(name);
+    }
+  }
+  return missing;
+};
+
+
+  // Export Region Edit assets (masks/prompts/outputs) into a shot folder
+  const exportRegionEditAssets = async (shotDir: FileSystemDirectoryHandle, regionEdit: any) => {
+    try {
+      if (!regionEdit) return;
+
+      const regionDir = await shotDir.getDirectoryHandle('region_edit', { create: true });
+
+      // Protection mask (white = protected)
+      if (regionEdit.protectMaskDataUrl) {
+        await writeDataUrlPng(regionDir, 'protect_mask.png', regionEdit.protectMaskDataUrl);
+      }
+      await writeTextFile(regionDir, 'protect_enabled.txt', String(Boolean(regionEdit.protectEnabled)));
+
+      // Queue JSON snapshot
+      await writeFileToDir(
+        regionDir,
+        'queue.json',
+        new Blob([JSON.stringify(regionEdit, null, 2)], { type: 'application/json' })
+      );
+
+      // Per-layer assets
+      const layers: any[] = Array.isArray(regionEdit.layers) ? regionEdit.layers : [];
+      const outDir = await regionDir.getDirectoryHandle('outputs', { create: true });
+
+      for (const layer of layers) {
+        const id = String(layer.id || '').toUpperCase();
+        const safeId = id && ['A','B','C'].includes(id) ? id : 'X';
+
+        // prompt
+        await writeTextFile(regionDir, `prompt_${safeId}.txt`, layer.prompt || '');
+
+        // mask
+        if (layer.maskDataUrl) {
+          await writeDataUrlPng(regionDir, `mask_${safeId}.png`, layer.maskDataUrl);
+        }
+
+        // output
+        if (layer.lastOutputUrl) {
+          await writeDataUrlPng(outDir, `out_${safeId}.png`, layer.lastOutputUrl);
+        }
+      }
+    } catch (e: any) {
+      dispatch({ type: 'ADD_LOG', payload: { message: `Region edit export warning: ${e?.message || e}`, type: 'error' } });
+    }
+  };
+
+  const handleSaveActiveShot = () => {
+    if (!activeShot) {
+      dispatch({ type: 'ADD_LOG', payload: { message: 'No active shot selected.', type: 'error' } });
+      return;
+    }
+    dispatch({ type: 'SAVE_ACTIVE_SHOT', payload: { touchUpdatedAt: true } } as any);
+    dispatch({ type: 'ADD_LOG', payload: { message: `Saved snapshot for shot: ${activeShot.name}`, type: 'success' } });
+  };
+
+  const handleSetShotFrame = (which: 'start' | 'end') => {
+    if (!activeShot) {
+      dispatch({ type: 'ADD_LOG', payload: { message: 'No active shot selected.', type: 'error' } });
+      return;
+    }
+    if (!state.resultImage) {
+      dispatch({ type: 'ADD_LOG', payload: { message: 'No result image to set as a frame.', type: 'error' } });
+      return;
+    }
+    dispatch({ type: 'SET_SHOT_FRAME', payload: { id: activeShot.id, which, url: state.resultImage } } as any);
+    dispatch({ type: 'ADD_LOG', payload: { message: `Set ${which.toUpperCase()} frame for shot: ${activeShot.name}`, type: 'success' } });
+  };
+
+  const handleExportActiveShotPack = async () => {
+    if (!activeShot) {
+      dispatch({ type: 'ADD_LOG', payload: { message: 'No active shot selected.', type: 'error' } });
+      return;
+    }
+    if (!state.saveDirectoryHandle) {
+      dispatch({ type: 'ADD_LOG', payload: { message: 'No save directory selected (Settings).', type: 'error' } });
+      return;
+    }
+
+    dispatch({ type: 'SET_PROCESSING', payload: true });
+    try {
+      // Ensure snapshot is current
+      dispatch({ type: 'SAVE_ACTIVE_SHOT', payload: { touchUpdatedAt: true } } as any);
+
+      const root = await state.saveDirectoryHandle.getDirectoryHandle('ShotPacks', { create: true });
+      const folderName = `SHOT-${Date.now()}-${sanitizeName(activeShot.name)}`;
+      const shotDir = await root.getDirectoryHandle(folderName, { create: true });
+
+      // Build pack metadata from current state (so it's always up-to-date)
+      const pack = {
+        app: 'NBStoryBoard',
+        exportedAt: new Date().toISOString(),
+        shot: {
+          id: activeShot.id,
+          name: activeShot.name,
+          createdAt: activeShot.createdAt,
+          updatedAt: Date.now(),
+          notes: activeShot.notes || '',
+        },
+        render: {
+          strictMode,
+          model: state.model,
+          aspectRatio: state.director.aspectRatio,
+        },
+        director: state.director,
+        anchorDNA,
+        compiledPrompt,
+        stage: {
+          backgroundUrl: state.backgroundUrl || null,
+          tokens: state.tokens.map(t => ({
+            id: t.id,
+            tag: t.tag,
+            castId: t.castId,
+            x: t.x, y: t.y, width: t.width, height: t.height,
+            rotation: t.rotation,
+            scaleX: t.scaleX, scaleY: t.scaleY,
+            anchorX: t.anchorX, anchorY: t.anchorY,
+            zIndex: t.zIndex,
+            actionNote: t.actionNote || '',
+            intelligence: t.intelligence || '',
+          })),
+          annotations: state.annotations,
+          referenceSlots: state.referenceSlots,
+        },
+        frames: {
+          start: ((activeShot as any).startFrameUrl ?? null) as string | null,
+          end: ((activeShot as any).endFrameUrl ?? null) as string | null,
+          lastResult: state.resultImage || null,
+        }
+      };
+
+      await writeFileToDir(shotDir, 'shot.json', new Blob([JSON.stringify(pack, null, 2)], { type: 'application/json' }));
+      await writeFileToDir(shotDir, 'prompt.txt', new Blob([compiledPrompt || ''], { type: 'text/plain' }));
+
+      // Save images (best-effort)
+      if (state.backgroundUrl) await writeDataUrlPng(shotDir, 'background.png', state.backgroundUrl);
+      if ((activeShot as any).startFrameUrl) await writeDataUrlPng(shotDir, 'start.png', (activeShot as any).startFrameUrl);
+      if ((activeShot as any).endFrameUrl) await writeDataUrlPng(shotDir, 'end.png', (activeShot as any).endFrameUrl);
+      if (state.resultImage) await writeDataUrlPng(shotDir, 'last_result.png', state.resultImage);
+
+      // Save active references + token cutouts used
+      const refsDir = await shotDir.getDirectoryHandle('refs', { create: true });
+      const activeRefs = getActiveReferenceSlots(state.referenceSlots);
+      for (const r of activeRefs) {
+        if (!r.url) continue;
+        await writeDataUrlPng(refsDir, `ref_${r.index}.png`, r.url);
+      }
+
+      const tokensDir = await shotDir.getDirectoryHandle('tokens', { create: true });
+      for (const t of state.tokens) {
+        if (!t.url) continue;
+        await writeDataUrlPng(tokensDir, `token_${sanitizeName(t.tag || t.id)}.png`, t.url);
+      }
+
+      // Region edit assets (masks/prompts/outputs)
+      await exportRegionEditAssets(shotDir, state.regionEdit);
+
+      // Export integrity check
+      const required = ['shot.json','prompt.txt'];
+      if (state.backgroundUrl) required.push('background.png');
+      if ((activeShot as any).startFrameUrl) required.push('start.png');
+      if ((activeShot as any).endFrameUrl) required.push('end.png');
+      const missing = await verifyFilesExist(shotDir, required);
+      if (missing.length > 0) {
+        dispatch({ type: 'ADD_LOG', payload: { message: `Shot Pack exported with missing files: ${missing.join(', ')}`, type: 'error' } });
+      } else {
+        dispatch({ type: 'ADD_LOG', payload: { message: `Shot Pack exported: ShotPacks/${folderName}`, type: 'success' } });
+      }
+    } catch (e: any) {
+      dispatch({ type: 'ADD_LOG', payload: { message: `Shot Pack export failed: ${e.message || e}`, type: 'error' } });
+    } finally {
+      dispatch({ type: 'SET_PROCESSING', payload: false });
+    }
+  };
+  const handleExportAllShotPacks = async () => {
+    if (!state.saveDirectoryHandle) {
+      dispatch({ type: 'ADD_LOG', payload: { message: 'No save directory selected (Settings).', type: 'error' } });
+      return;
+    }
+    const shots = state.shots || [];
+    if (shots.length === 0) {
+      dispatch({ type: 'ADD_LOG', payload: { message: 'No shots available to export.', type: 'error' } });
+      return;
+    }
+
+    dispatch({ type: 'SET_PROCESSING', payload: true });
+    try {
+      const root = await state.saveDirectoryHandle.getDirectoryHandle('ShotPacks', { create: true });
+      const batchName = `BATCH-${Date.now()}`;
+      const batchDir = await root.getDirectoryHandle(batchName, { create: true });
+
+      const manifest: any = {
+        app: 'NBStoryBoard',
+        exportedAt: new Date().toISOString(),
+        batch: batchName,
+        shotCount: shots.length,
+        shots: [] as any[],
+      };
+
+      for (let i = 0; i < shots.length; i++) {
+        const shot = shots[i];
+        const shotName = sanitizeName(shot.name || `Shot_${i + 1}`);
+        const folderName = `SHOT-${String(i + 1).padStart(2, '0')}-${shotName}`;
+        const shotDir = await batchDir.getDirectoryHandle(folderName, { create: true });
+
+        const promptForShot = compileV3DirectorPrompt(shot.director, shot.referenceSlots, shot.tokens);
+
+        const pack = {
+          app: 'NBStoryBoard',
+          exportedAt: new Date().toISOString(),
+          shot: {
+            id: shot.id,
+            name: shot.name,
+            createdAt: shot.createdAt,
+            updatedAt: shot.updatedAt,
+            notes: shot.notes || '',
+            index: i + 1,
+          },
+          director: shot.director,
+          anchorDNA: {
+            environment: shot.director.environment,
+            lighting: shot.director.lighting,
+            camera: shot.director.camera,
+          },
+          compiledPrompt: promptForShot,
+          stage: {
+            backgroundUrl: shot.backgroundUrl || null,
+            tokens: shot.tokens,
+            annotations: shot.annotations,
+            referenceSlots: shot.referenceSlots,
+          },
+          frames: {
+            start: shot.startFrameUrl ?? null,
+            end: shot.endFrameUrl ?? null,
+          }
+        };
+
+        await writeFileToDir(shotDir, 'shot.json', new Blob([JSON.stringify(pack, null, 2)], { type: 'application/json' }));
+        await writeFileToDir(shotDir, 'prompt.txt', new Blob([promptForShot || ''], { type: 'text/plain' }));
+
+        if (shot.backgroundUrl) await writeDataUrlPng(shotDir, 'background.png', shot.backgroundUrl);
+        if (shot.startFrameUrl) await writeDataUrlPng(shotDir, 'start.png', shot.startFrameUrl);
+        if (shot.endFrameUrl) await writeDataUrlPng(shotDir, 'end.png', shot.endFrameUrl);
+
+        const refsDir = await shotDir.getDirectoryHandle('refs', { create: true });
+        const activeRefs = getActiveReferenceSlots(shot.referenceSlots);
+        for (const r of activeRefs) {
+          if (!r.url) continue;
+          await writeDataUrlPng(refsDir, `ref_${r.index}.png`, r.url);
+        }
+
+        const tokensDir = await shotDir.getDirectoryHandle('tokens', { create: true });
+        for (const t of shot.tokens) {
+          if (!t.url) continue;
+          const tag = t.tag || t.id;
+          await writeDataUrlPng(tokensDir, `token_${sanitizeName(tag)}.png`, t.url);
+        }
+
+        // Region edit assets for this shot (if present)
+        await exportRegionEditAssets(shotDir, (shot as any).regionEdit);
+
+        manifest.shots.push({
+          id: shot.id,
+          name: shot.name,
+          folder: `ShotPacks/${batchName}/${folderName}`,
+          startFrame: !!shot.startFrameUrl,
+          endFrame: !!shot.endFrameUrl,
+        });
+      }
+
+      await writeFileToDir(batchDir, 'manifest.json', new Blob([JSON.stringify(manifest, null, 2)], { type: 'application/json' }));
+
+      dispatch({ type: 'ADD_LOG', payload: { message: `Exported ALL shot packs: ShotPacks/${batchName}`, type: 'success' } });
+    } catch (e: any) {
+      dispatch({ type: 'ADD_LOG', payload: { message: `Export ALL shot packs failed: ${e.message || e}`, type: 'error' } });
+    } finally {
+      dispatch({ type: 'SET_PROCESSING', payload: false });
+    }
+  };
+
 
 
   const safeParseJson = (raw: string): any | null => {
@@ -860,6 +1230,70 @@ const ProductionConsole: React.FC = () => {
             </div>
           </div>
 
+          {/* SHOT PACK CONTROLS (Storyboarding) - Conditional */}
+          {state.isStoryboardEnabled && (
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-8 bg-[#09090b] border border-gray-800 rounded-xl p-4">
+            <div className="text-xs font-bold text-gray-400 uppercase">
+              Active Shot: <span className="text-gray-200">{activeShot ? activeShot.name : 'None'}</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={handleSaveActiveShot}
+                disabled={!activeShot || state.isProcessing}
+                className="text-[10px] bg-gradient-to-r from-gray-700 to-gray-800 hover:from-gray-600 hover:to-gray-700 text-white px-4 py-2 rounded-lg font-black tracking-wider uppercase transition-all disabled:opacity-50 active:scale-95 border border-gray-600/50"
+                title="Save the current stage snapshot into the active shot"
+              >
+                Save Shot Snapshot
+              </button>
+
+              <button
+                onClick={() => handleSetShotFrame('start')}
+                disabled={!activeShot || !state.resultImage || state.isProcessing}
+                className="text-[10px] bg-gradient-to-r from-blue-700 to-blue-800 hover:from-blue-600 hover:to-blue-700 text-white px-4 py-2 rounded-lg font-black tracking-wider uppercase transition-all disabled:opacity-50 active:scale-95 border border-blue-600/50"
+                title="Set current result image as the START keyframe for the active shot"
+              >
+                Set Start Frame
+              </button>
+
+              <button
+                onClick={() => handleSetShotFrame('end')}
+                disabled={!activeShot || !state.resultImage || state.isProcessing}
+                className="text-[10px] bg-gradient-to-r from-indigo-700 to-indigo-800 hover:from-indigo-600 hover:to-indigo-700 text-white px-4 py-2 rounded-lg font-black tracking-wider uppercase transition-all disabled:opacity-50 active:scale-95 border border-indigo-600/50"
+                title="Set current result image as the END keyframe for the active shot"
+              >
+                Set End Frame
+              </button>
+
+              <button
+                onClick={handleExportActiveShotPack}
+                disabled={!activeShot || state.isProcessing}
+                className="text-[10px] bg-gradient-to-r from-yellow-600 to-orange-600 hover:from-yellow-500 hover:to-orange-500 text-black px-4 py-2 rounded-lg font-black tracking-wider uppercase transition-all disabled:opacity-50 active:scale-95 border border-white/10"
+                title="Export a Veo-ready pack (frames, prompt, refs, tokens) to your selected save directory"
+              >
+                Export Shot Pack
+              </button>
+
+
+              <button
+                onClick={handleExportAllShotPacks}
+                disabled={!state.saveDirectoryHandle || state.shots.length === 0 || state.isProcessing}
+                className="text-[10px] bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-black px-4 py-2 rounded-lg font-black tracking-wider uppercase transition-all disabled:opacity-50 active:scale-95 border border-white/10"
+                title="Export ALL shots as packs (writes manifest.json + per-shot folders)"
+              >
+                Export All Shot Packs
+              </button>
+              <button
+                onClick={handleExportDiagnostics}
+                disabled={!state.saveDirectoryHandle}
+                className="text-[10px] bg-white/10 hover:bg-white/20 text-white font-black uppercase tracking-[0.2em] px-4 py-3 rounded-xl shadow-lg transition-all disabled:opacity-50 active:scale-95 border border-white/10"
+                title="Export redacted diagnostics bundle for support"
+              >
+                Export Diagnostics
+              </button>
+            </div>
+          </div>
+          )}
+
           <div className="grid grid-cols-2 gap-8">
             <div className="space-y-6">
 
@@ -986,10 +1420,24 @@ const ProductionConsole: React.FC = () => {
 
                       <button 
                         onClick={() => {
+                          dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: state.resultImage! });
+                          dispatch({ type: 'SET_VIEW', payload: 'casting' });
+                          dispatch({ type: 'ADD_LOG', payload: { message: "Sent to Casting Forge", type: 'success' } });
+                        }}
+                        className="w-16 h-16 bg-purple-500/20 hover:bg-purple-500 text-purple-500 hover:text-white rounded-2xl transition-all transform hover:scale-110 flex items-center justify-center border border-purple-500/30 shadow-[0_0_15px_rgba(168,85,247,0.2)]"
+                        title="Send to Casting Forge"
+                      >
+                        <User className="w-10 h-10 stroke-[3]" size={40} />
+                      </button>
+
+                      {state.isStoryboardEnabled && (
+                      <button 
+                        onClick={() => {
                           dispatch({ 
                             type: 'SET_STORYBOARD_SOURCE', 
                             payload: { url: state.resultImage!, dna: compiledPrompt } 
                           });
+                          if (activeShot) dispatch({ type: 'SET_SHOT_FRAME', payload: { id: activeShot.id, which: 'start', url: state.resultImage! } } as any);
                           dispatch({ type: 'ADD_LOG', payload: { message: "Sent to Start Plate", type: 'success' } });
                           dispatch({ type: 'SET_VIEW', payload: 'veo' });
                         }}
@@ -999,13 +1447,16 @@ const ProductionConsole: React.FC = () => {
                         <Clapperboard className="w-6 h-6" />
                         START
                       </button>
+                      )}
 
+                      {state.isStoryboardEnabled && (
                       <button 
                         onClick={() => {
                           dispatch({ 
                             type: 'SET_STORYBOARD_END_SOURCE', 
                             payload: { url: state.resultImage!, dna: compiledPrompt } 
                           });
+                          if (activeShot) dispatch({ type: 'SET_SHOT_FRAME', payload: { id: activeShot.id, which: 'end', url: state.resultImage! } } as any);
                           dispatch({ type: 'ADD_LOG', payload: { message: "Sent to End Plate", type: 'success' } });
                           dispatch({ type: 'SET_VIEW', payload: 'veo' });
                         }}
@@ -1015,6 +1466,7 @@ const ProductionConsole: React.FC = () => {
                         <Clapperboard className="w-6 h-6" />
                         END
                       </button>
+                      )}
 
                       <button 
                         onClick={() => dispatch({ type: 'SET_RESULT_IMAGE', payload: null })}

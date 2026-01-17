@@ -156,3 +156,30 @@ export const compileV3DirectorPrompt = (director: DirectorSettings, slots: Refer
 
   return out.trim();
 };
+
+
+// --- CONTINUITY LOCK BLOCK (Veo/NanoBanana) ---
+export type ContinuityLockOptions = {
+  identityLocks?: string[];
+  lockEnvironment?: boolean;
+  lockLighting?: boolean;
+  lockLens?: boolean;
+  lockStyle?: boolean;
+  noExtraObjects?: boolean;
+  noMorph?: boolean;
+};
+
+export const buildContinuityLockBlock = (opts: ContinuityLockOptions = {}): string => {
+  const lines: string[] = [];
+  const identity = (opts.identityLocks || []).filter(Boolean).join(', ');
+  lines.push('CONTINUITY LOCK (HARD):');
+  lines.push('- Preserve character identity across all frames. No facial/hair/body morphing.');
+  if (identity) lines.push(`- Locked Identity Traits: ${identity}.`);
+  if (opts.lockEnvironment) lines.push('- Keep environment/setting consistent. No background changes.');
+  if (opts.lockLighting) lines.push('- Keep lighting direction, exposure, and color temperature consistent.');
+  if (opts.lockLens) lines.push('- Keep camera/lens language consistent unless explicitly instructed.');
+  if (opts.lockStyle) lines.push('- Keep visual style and color palette consistent. No style drift.');
+  if (opts.noExtraObjects) lines.push('- Do NOT add extra objects, text, watermarks, logos, or random people.');
+  if (opts.noMorph) lines.push('- Do NOT duplicate limbs/heads, do NOT change anatomy, do NOT change clothing unexpectedly.');
+  return lines.join('\n');
+};
