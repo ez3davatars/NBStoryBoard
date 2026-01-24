@@ -1,17 +1,18 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  RotateCw, MonitorPlay, Maximize, ImagePlus, Download, 
+import {
+  RotateCw, MonitorPlay, Maximize, ImagePlus, Download,
   BoxSelect, Clapperboard, Trash2, Image as ImageIcon, User
 } from 'lucide-react';
 import { useAppContext, APP_SCHEMA_VERSION } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
 import { StorageService } from '../services/StorageService';
-import { 
-  buildMasterStyleKeywords, 
-  mergeNegatives, 
+import {
+  buildMasterStyleKeywords,
+  mergeNegatives,
   SCENE_LOCK_NEGATIVE_TOKENS,
   getActiveReferenceSlots,
-  compileV3DirectorPrompt
+  compileV3DirectorPrompt,
+  buildContinuityLockBlock
 } from '../utils/promptHelpers';
 import type { StageToken, WhitelistProfile, CastMember } from '../context/AppContext';
 
@@ -72,63 +73,63 @@ const ProductionConsole: React.FC = () => {
     await writeFileToDir(dir, filename, new Blob([text], { type: 'text/plain' }));
   };
 
-const redactStateForDiagnostics = () => {
-  const { apiKey, saveDirectoryHandle, ...rest } = state as any;
-  return {
-    ...rest,
-    apiKey: apiKey ? `REDACTED_${String(apiKey).length}` : '',
-    hasSaveDirectory: Boolean(saveDirectoryHandle),
-  };
-};
-
-const handleExportDiagnostics = async () => {
-  if (!state.saveDirectoryHandle) {
-    dispatch({ type: 'ADD_LOG', payload: { message: 'No save directory selected (Settings).', type: 'error' } });
-    return;
-  }
-  try {
-    const root = await state.saveDirectoryHandle.getDirectoryHandle('Diagnostics', { create: true });
-    const folderName = `DIAG-${Date.now()}`;
-    const dir = await root.getDirectoryHandle(folderName, { create: true });
-
-    const schemaLocal = localStorage.getItem('nano_schema_version') || '';
-    const schemaStored = await StorageService.load<number>('nano_schema_version', 0);
-
-    const diag = {
-      app: 'NBStoryBoard',
-      createdAt: new Date().toISOString(),
-      appSchemaVersion: APP_SCHEMA_VERSION,
-      schemaLocalStorage: schemaLocal,
-      schemaStorageService: schemaStored,
-      userAgent: navigator.userAgent,
-      view: state.view,
-      activeShotId: (state as any).activeShotId ?? null,
-      shotCount: (state as any).shots?.length ?? 0,
-      note: 'State snapshot is redacted (apiKey removed).',
-      state: redactStateForDiagnostics(),
-      logs: state.logs?.slice(-200) ?? [],
+  const redactStateForDiagnostics = () => {
+    const { apiKey, saveDirectoryHandle, ...rest } = state as any;
+    return {
+      ...rest,
+      apiKey: apiKey ? `REDACTED_${String(apiKey).length}` : '',
+      hasSaveDirectory: Boolean(saveDirectoryHandle),
     };
+  };
 
-    await writeFileToDir(dir, 'diagnostics.json', new Blob([JSON.stringify(diag, null, 2)], { type: 'application/json' }));
-    await writeTextFile(dir, 'logs.txt', (state.logs || []).slice(-200).map(l => `${l.timestamp} [${l.type}] ${l.message}`).join('\n'));
-
-    dispatch({ type: 'ADD_LOG', payload: { message: `Diagnostics exported: Diagnostics/${folderName}`, type: 'success' } });
-  } catch (e: any) {
-    dispatch({ type: 'ADD_LOG', payload: { message: `Diagnostics export failed: ${e?.message || e}`, type: 'error' } });
-  }
-};
-
-const verifyFilesExist = async (dir: FileSystemDirectoryHandle, required: string[]) => {
-  const missing: string[] = [];
-  for (const name of required) {
-    try {
-      await dir.getFileHandle(name);
-    } catch {
-      missing.push(name);
+  const handleExportDiagnostics = async () => {
+    if (!state.saveDirectoryHandle) {
+      dispatch({ type: 'ADD_LOG', payload: { message: 'No save directory selected (Settings).', type: 'error' } });
+      return;
     }
-  }
-  return missing;
-};
+    try {
+      const root = await state.saveDirectoryHandle.getDirectoryHandle('Diagnostics', { create: true });
+      const folderName = `DIAG-${Date.now()}`;
+      const dir = await root.getDirectoryHandle(folderName, { create: true });
+
+      const schemaLocal = localStorage.getItem('nano_schema_version') || '';
+      const schemaStored = await StorageService.load<number>('nano_schema_version', 0);
+
+      const diag = {
+        app: 'NBStoryBoard',
+        createdAt: new Date().toISOString(),
+        appSchemaVersion: APP_SCHEMA_VERSION,
+        schemaLocalStorage: schemaLocal,
+        schemaStorageService: schemaStored,
+        userAgent: navigator.userAgent,
+        view: state.view,
+        activeShotId: (state as any).activeShotId ?? null,
+        shotCount: (state as any).shots?.length ?? 0,
+        note: 'State snapshot is redacted (apiKey removed).',
+        state: redactStateForDiagnostics(),
+        logs: state.logs?.slice(-200) ?? [],
+      };
+
+      await writeFileToDir(dir, 'diagnostics.json', new Blob([JSON.stringify(diag, null, 2)], { type: 'application/json' }));
+      await writeTextFile(dir, 'logs.txt', (state.logs || []).slice(-200).map(l => `${l.timestamp} [${l.type}] ${l.message}`).join('\n'));
+
+      dispatch({ type: 'ADD_LOG', payload: { message: `Diagnostics exported: Diagnostics/${folderName}`, type: 'success' } });
+    } catch (e: any) {
+      dispatch({ type: 'ADD_LOG', payload: { message: `Diagnostics export failed: ${e?.message || e}`, type: 'error' } });
+    }
+  };
+
+  const verifyFilesExist = async (dir: FileSystemDirectoryHandle, required: string[]) => {
+    const missing: string[] = [];
+    for (const name of required) {
+      try {
+        await dir.getFileHandle(name);
+      } catch {
+        missing.push(name);
+      }
+    }
+    return missing;
+  };
 
 
   // Export Region Edit assets (masks/prompts/outputs) into a shot folder
@@ -157,7 +158,7 @@ const verifyFilesExist = async (dir: FileSystemDirectoryHandle, required: string
 
       for (const layer of layers) {
         const id = String(layer.id || '').toUpperCase();
-        const safeId = id && ['A','B','C'].includes(id) ? id : 'X';
+        const safeId = id && ['A', 'B', 'C'].includes(id) ? id : 'X';
 
         // prompt
         await writeTextFile(regionDir, `prompt_${safeId}.txt`, layer.prompt || '');
@@ -288,7 +289,7 @@ const verifyFilesExist = async (dir: FileSystemDirectoryHandle, required: string
       await exportRegionEditAssets(shotDir, state.regionEdit);
 
       // Export integrity check
-      const required = ['shot.json','prompt.txt'];
+      const required = ['shot.json', 'prompt.txt'];
       if (state.backgroundUrl) required.push('background.png');
       if ((activeShot as any).startFrameUrl) required.push('start.png');
       if ((activeShot as any).endFrameUrl) required.push('end.png');
@@ -642,10 +643,10 @@ const verifyFilesExist = async (dir: FileSystemDirectoryHandle, required: string
     if (refs.length === 0 && !state.director.replaceAnchorSubjects && !state.director.negativePrompt) return '';
 
     const lines: string[] = [];
-    const totalRefs = mode === 'strict' 
-      ? refs.length + state.tokens.length 
+    const totalRefs = mode === 'strict'
+      ? refs.length + state.tokens.length
       : refs.length;
-      
+
     lines.push(`[System: Processing ${totalRefs} Reference Image(s) using strategy: ${state.director.mergeStrategy}. Primary fidelity on Ref 1-6.]`);
 
     // V3 priority: Marker Protocol > Spatial Layout > Replace Anchor Subjects
@@ -719,8 +720,15 @@ const verifyFilesExist = async (dir: FileSystemDirectoryHandle, required: string
       const t = r.token;
       const p = r.profile;
 
-      const nx = (t.x / STAGE_W).toFixed(3);
-      const ny = (t.y / STAGE_H).toFixed(3);
+      // Correct for Anchor Point (t.x/t.y is the anchor, e.g. center/bottom)
+      // We need Top-Left for BBOX
+      const ax = t.anchorX ?? 0.5;
+      const ay = t.anchorY ?? 0.8;
+      const tlx = t.x - (t.width * ax);
+      const tly = t.y - (t.height * ay);
+
+      const nx = (tlx / STAGE_W).toFixed(3);
+      const ny = (tly / STAGE_H).toFixed(3);
       const nw = (t.width / STAGE_W).toFixed(3);
       const nh = (t.height / STAGE_H).toFixed(3);
 
@@ -729,7 +737,7 @@ const verifyFilesExist = async (dir: FileSystemDirectoryHandle, required: string
       return [
         `REGION ${r.region}:`,
         `- BBOX_NORM: x=${nx}, y=${ny}, w=${nw}, h=${nh}`,
-        `- BBOX_ABS: x=${Math.round(t.x * RENDER_SCALE)}px, y=${Math.round(t.y * RENDER_SCALE)}px, w=${Math.round(t.width * RENDER_SCALE)}px, h=${Math.round(t.height * RENDER_SCALE)}px`,
+        `- BBOX_ABS: x=${Math.round(tlx * RENDER_SCALE)}px, y=${Math.round(tly * RENDER_SCALE)}px, w=${Math.round(t.width * RENDER_SCALE)}px, h=${Math.round(t.height * RENDER_SCALE)}px`,
         `- TRANSFORM: rotation_deg=${t.rotation}, flipX=${flip}, zIndex=${t.zIndex}`,
         `- USE_REFERENCE: IMAGE labeled "REGION ${r.region} REFERENCE"`,
         `- ALLOWED_IDENTITY: ${p.identity || "none"}`,
@@ -738,6 +746,7 @@ const verifyFilesExist = async (dir: FileSystemDirectoryHandle, required: string
         `- STYLE_LOCK: ${p.style || "none"}`,
         `- ACTION: ${t.actionNote || "maintain anchor pose"}`,
         `- INTELLIGENCE: ${t.intelligence || "none"}`,
+        `- FACE_FIDELITY: MAXIMUM. Do not denoise or simplify facial features. Use pixel details from "REGION ${r.region} REFERENCE".`,
         `- HARD_RULES: SURGICAL ASPECT RATIO LOCK. Use the exact proportions from your REGION ${r.region} REFERENCE cutout. Ignore the silhouette shape in the ANCHOR PLATE if it appears stretched or squashed. If the BBOX_ABS is a different shape than the reference image, do NOT stretch the character to fit. Maintain natural human proportions and fill any empty BBOX space with pixels from the CLEAN BACKGROUND PLATE.`
       ].join("\n");
     }).join("\n\n");
@@ -754,12 +763,19 @@ const verifyFilesExist = async (dir: FileSystemDirectoryHandle, required: string
       ? `TEXT_LAYER: Render "${state.director.textRender.trim()}"${state.director.textStyle.trim() ? ` in style of ${state.director.textStyle.trim()}` : ''}.`
       : "";
 
-
+    // Create strong continuity lock for strict mode
+    const continuityBlock = buildContinuityLockBlock({
+      identityLocks: ["ALL ACTORS"],
+      lockStyle: true,
+      noMorph: true,
+      noExtraObjects: true
+    });
 
     const rules = [
       refStackBlock ? `### REFERENCE CONSISTENCY STACK:\n${refStackBlock}\n` : "",
       masterStyleLine,
       safetyLine,
+      continuityBlock,
       sceneBriefLine,
       knowledgeLine,
       filmLine,
@@ -878,13 +894,13 @@ const verifyFilesExist = async (dir: FileSystemDirectoryHandle, required: string
       const t = r.token;
       const img = await loadImage(t.url);
 
-      const ax = (t.anchorX ?? 50) / 100 * t.width;
-      const ay = (t.anchorY ?? 50) / 100 * t.height;
+      const ax = (t.anchorX ?? 0.5) * t.width;
+      const ay = (t.anchorY ?? 0.8) * t.height;
 
       // START: Object-Contain Logic to match SceneCanvas (Pro-Scale)
       const imgRatio = img.width / img.height;
       const boxRatio = t.width / t.height;
-      
+
       let drawW = t.width;
       let drawH = t.height;
       let offX = 0;
@@ -910,7 +926,7 @@ const verifyFilesExist = async (dir: FileSystemDirectoryHandle, required: string
       ctx.translate(t.x + ax, t.y + ay);
       ctx.rotate((t.rotation * Math.PI) / 180);
       ctx.scale(t.scaleX, t.scaleY || 1);
-      
+
       ctx.drawImage(img, -ax + offX, -ay + offY, drawW, drawH);
       ctx.restore();
 
@@ -1179,7 +1195,7 @@ const verifyFilesExist = async (dir: FileSystemDirectoryHandle, required: string
                     onChange={(e) => setAutoAnchorDNA(e.target.checked)}
                     className="accent-yellow-500"
                   />
-                   Auto
+                  Auto
                 </label>
 
                 <button
@@ -1232,66 +1248,66 @@ const verifyFilesExist = async (dir: FileSystemDirectoryHandle, required: string
 
           {/* SHOT PACK CONTROLS (Storyboarding) - Conditional */}
           {state.isStoryboardEnabled && (
-          <div className="flex flex-wrap items-center justify-between gap-3 mb-8 bg-[#09090b] border border-gray-800 rounded-xl p-4">
-            <div className="text-xs font-bold text-gray-400 uppercase">
-              Active Shot: <span className="text-gray-200">{activeShot ? activeShot.name : 'None'}</span>
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-8 bg-[#09090b] border border-gray-800 rounded-xl p-4">
+              <div className="text-xs font-bold text-gray-400 uppercase">
+                Active Shot: <span className="text-gray-200">{activeShot ? activeShot.name : 'None'}</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={handleSaveActiveShot}
+                  disabled={!activeShot || state.isProcessing}
+                  className="text-[10px] bg-gradient-to-r from-gray-700 to-gray-800 hover:from-gray-600 hover:to-gray-700 text-white px-4 py-2 rounded-lg font-black tracking-wider uppercase transition-all disabled:opacity-50 active:scale-95 border border-gray-600/50"
+                  title="Save the current stage snapshot into the active shot"
+                >
+                  Save Shot Snapshot
+                </button>
+
+                <button
+                  onClick={() => handleSetShotFrame('start')}
+                  disabled={!activeShot || !state.resultImage || state.isProcessing}
+                  className="text-[10px] bg-gradient-to-r from-blue-700 to-blue-800 hover:from-blue-600 hover:to-blue-700 text-white px-4 py-2 rounded-lg font-black tracking-wider uppercase transition-all disabled:opacity-50 active:scale-95 border border-blue-600/50"
+                  title="Set current result image as the START keyframe for the active shot"
+                >
+                  Set Start Frame
+                </button>
+
+                <button
+                  onClick={() => handleSetShotFrame('end')}
+                  disabled={!activeShot || !state.resultImage || state.isProcessing}
+                  className="text-[10px] bg-gradient-to-r from-indigo-700 to-indigo-800 hover:from-indigo-600 hover:to-indigo-700 text-white px-4 py-2 rounded-lg font-black tracking-wider uppercase transition-all disabled:opacity-50 active:scale-95 border border-indigo-600/50"
+                  title="Set current result image as the END keyframe for the active shot"
+                >
+                  Set End Frame
+                </button>
+
+                <button
+                  onClick={handleExportActiveShotPack}
+                  disabled={!activeShot || state.isProcessing}
+                  className="text-[10px] bg-gradient-to-r from-yellow-600 to-orange-600 hover:from-yellow-500 hover:to-orange-500 text-black px-4 py-2 rounded-lg font-black tracking-wider uppercase transition-all disabled:opacity-50 active:scale-95 border border-white/10"
+                  title="Export a Veo-ready pack (frames, prompt, refs, tokens) to your selected save directory"
+                >
+                  Export Shot Pack
+                </button>
+
+
+                <button
+                  onClick={handleExportAllShotPacks}
+                  disabled={!state.saveDirectoryHandle || state.shots.length === 0 || state.isProcessing}
+                  className="text-[10px] bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-black px-4 py-2 rounded-lg font-black tracking-wider uppercase transition-all disabled:opacity-50 active:scale-95 border border-white/10"
+                  title="Export ALL shots as packs (writes manifest.json + per-shot folders)"
+                >
+                  Export All Shot Packs
+                </button>
+                <button
+                  onClick={handleExportDiagnostics}
+                  disabled={!state.saveDirectoryHandle}
+                  className="text-[10px] bg-white/10 hover:bg-white/20 text-white font-black uppercase tracking-[0.2em] px-4 py-3 rounded-xl shadow-lg transition-all disabled:opacity-50 active:scale-95 border border-white/10"
+                  title="Export redacted diagnostics bundle for support"
+                >
+                  Export Diagnostics
+                </button>
+              </div>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                onClick={handleSaveActiveShot}
-                disabled={!activeShot || state.isProcessing}
-                className="text-[10px] bg-gradient-to-r from-gray-700 to-gray-800 hover:from-gray-600 hover:to-gray-700 text-white px-4 py-2 rounded-lg font-black tracking-wider uppercase transition-all disabled:opacity-50 active:scale-95 border border-gray-600/50"
-                title="Save the current stage snapshot into the active shot"
-              >
-                Save Shot Snapshot
-              </button>
-
-              <button
-                onClick={() => handleSetShotFrame('start')}
-                disabled={!activeShot || !state.resultImage || state.isProcessing}
-                className="text-[10px] bg-gradient-to-r from-blue-700 to-blue-800 hover:from-blue-600 hover:to-blue-700 text-white px-4 py-2 rounded-lg font-black tracking-wider uppercase transition-all disabled:opacity-50 active:scale-95 border border-blue-600/50"
-                title="Set current result image as the START keyframe for the active shot"
-              >
-                Set Start Frame
-              </button>
-
-              <button
-                onClick={() => handleSetShotFrame('end')}
-                disabled={!activeShot || !state.resultImage || state.isProcessing}
-                className="text-[10px] bg-gradient-to-r from-indigo-700 to-indigo-800 hover:from-indigo-600 hover:to-indigo-700 text-white px-4 py-2 rounded-lg font-black tracking-wider uppercase transition-all disabled:opacity-50 active:scale-95 border border-indigo-600/50"
-                title="Set current result image as the END keyframe for the active shot"
-              >
-                Set End Frame
-              </button>
-
-              <button
-                onClick={handleExportActiveShotPack}
-                disabled={!activeShot || state.isProcessing}
-                className="text-[10px] bg-gradient-to-r from-yellow-600 to-orange-600 hover:from-yellow-500 hover:to-orange-500 text-black px-4 py-2 rounded-lg font-black tracking-wider uppercase transition-all disabled:opacity-50 active:scale-95 border border-white/10"
-                title="Export a Veo-ready pack (frames, prompt, refs, tokens) to your selected save directory"
-              >
-                Export Shot Pack
-              </button>
-
-
-              <button
-                onClick={handleExportAllShotPacks}
-                disabled={!state.saveDirectoryHandle || state.shots.length === 0 || state.isProcessing}
-                className="text-[10px] bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-black px-4 py-2 rounded-lg font-black tracking-wider uppercase transition-all disabled:opacity-50 active:scale-95 border border-white/10"
-                title="Export ALL shots as packs (writes manifest.json + per-shot folders)"
-              >
-                Export All Shot Packs
-              </button>
-              <button
-                onClick={handleExportDiagnostics}
-                disabled={!state.saveDirectoryHandle}
-                className="text-[10px] bg-white/10 hover:bg-white/20 text-white font-black uppercase tracking-[0.2em] px-4 py-3 rounded-xl shadow-lg transition-all disabled:opacity-50 active:scale-95 border border-white/10"
-                title="Export redacted diagnostics bundle for support"
-              >
-                Export Diagnostics
-              </button>
-            </div>
-          </div>
           )}
 
           <div className="grid grid-cols-2 gap-8">
@@ -1307,7 +1323,7 @@ const verifyFilesExist = async (dir: FileSystemDirectoryHandle, required: string
 
                   {/* Background Slot */}
                   {state.backgroundUrl ? (
-                    <div 
+                    <div
                       className="inline-block relative group w-16 h-16 flex-shrink-0 cursor-pointer"
                       onClick={() => dispatch({ type: 'SET_INSPECT_IMAGE', payload: state.backgroundUrl! })}
                     >
@@ -1326,14 +1342,14 @@ const verifyFilesExist = async (dir: FileSystemDirectoryHandle, required: string
                   {/* Token Slots */}
                   {state.tokens.length > 0 ? (
                     state.tokens.map(t => (
-                      <div 
-                        key={t.id} 
+                      <div
+                        key={t.id}
                         className="inline-block relative group w-16 h-16 flex-shrink-0 cursor-pointer"
                         onClick={() => dispatch({ type: 'SET_INSPECT_IMAGE', payload: t.url })}
                       >
                         <img src={t.url} className="w-full h-full object-contain bg-black rounded border border-green-500/50" />
                         <div className="absolute inset-0 bg-green-500/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                            <Maximize className="w-4 h-4 text-white" />
+                          <Maximize className="w-4 h-4 text-white" />
                         </div>
                         <div className="absolute -top-2 -right-2 bg-green-500 text-black text-[9px] font-bold px-1.5 rounded-full">{t.tag}</div>
                       </div>
@@ -1367,18 +1383,18 @@ const verifyFilesExist = async (dir: FileSystemDirectoryHandle, required: string
                 {state.resultImage ? (
                   <>
                     <img src={state.resultImage} className="w-full h-full object-contain" />
-                    
-                    {/* Pro Utility Toolbar (Compact Icon-Only Design) */ }
+
+                    {/* Pro Utility Toolbar (Compact Icon-Only Design) */}
                     <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-6 backdrop-blur-[2px]">
-                      <button 
+                      <button
                         onClick={() => dispatch({ type: 'SET_INSPECT_IMAGE', payload: state.resultImage! })}
                         className="w-16 h-16 bg-blue-500/20 hover:bg-blue-600 text-blue-400 hover:text-white rounded-2xl transition-all transform hover:scale-110 flex items-center justify-center border border-blue-500/30 shadow-[0_0_15px_rgba(59,130,246,0.2)]"
                         title="Inspect Large"
                       >
                         <Maximize className="w-10 h-10 stroke-[3]" size={40} />
                       </button>
-                      
-                      <button 
+
+                      <button
                         onClick={async () => {
                           if (state.saveDirectoryHandle) {
                             try {
@@ -1406,7 +1422,7 @@ const verifyFilesExist = async (dir: FileSystemDirectoryHandle, required: string
                         <Download className="w-10 h-10 stroke-[3]" size={40} />
                       </button>
 
-                      <button 
+                      <button
                         onClick={() => {
                           dispatch({ type: 'SET_BG', payload: state.resultImage! });
                           dispatch({ type: 'SET_VIEW', payload: 'blocking' });
@@ -1418,7 +1434,7 @@ const verifyFilesExist = async (dir: FileSystemDirectoryHandle, required: string
                         <BoxSelect className="w-10 h-10 stroke-[3]" size={40} />
                       </button>
 
-                      <button 
+                      <button
                         onClick={() => {
                           dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: state.resultImage! });
                           dispatch({ type: 'SET_VIEW', payload: 'casting' });
@@ -1431,44 +1447,44 @@ const verifyFilesExist = async (dir: FileSystemDirectoryHandle, required: string
                       </button>
 
                       {state.isStoryboardEnabled && (
-                      <button 
-                        onClick={() => {
-                          dispatch({ 
-                            type: 'SET_STORYBOARD_SOURCE', 
-                            payload: { url: state.resultImage!, dna: compiledPrompt } 
-                          });
-                          if (activeShot) dispatch({ type: 'SET_SHOT_FRAME', payload: { id: activeShot.id, which: 'start', url: state.resultImage! } } as any);
-                          dispatch({ type: 'ADD_LOG', payload: { message: "Sent to Start Plate", type: 'success' } });
-                          dispatch({ type: 'SET_VIEW', payload: 'veo' });
-                        }}
-                        className="w-16 h-16 bg-blue-500/20 hover:bg-blue-600 text-blue-400 hover:text-white rounded-2xl transition-all font-black text-[9px] flex flex-col items-center justify-center border border-blue-500/30 gap-1"
-                        title="Set as Start Plate"
-                      >
-                        <Clapperboard className="w-6 h-6" />
-                        START
-                      </button>
+                        <button
+                          onClick={() => {
+                            dispatch({
+                              type: 'SET_STORYBOARD_SOURCE',
+                              payload: { url: state.resultImage!, dna: compiledPrompt }
+                            });
+                            if (activeShot) dispatch({ type: 'SET_SHOT_FRAME', payload: { id: activeShot.id, which: 'start', url: state.resultImage! } } as any);
+                            dispatch({ type: 'ADD_LOG', payload: { message: "Sent to Start Plate", type: 'success' } });
+                            dispatch({ type: 'SET_VIEW', payload: 'veo' });
+                          }}
+                          className="w-16 h-16 bg-blue-500/20 hover:bg-blue-600 text-blue-400 hover:text-white rounded-2xl transition-all font-black text-[9px] flex flex-col items-center justify-center border border-blue-500/30 gap-1"
+                          title="Set as Start Plate"
+                        >
+                          <Clapperboard className="w-6 h-6" />
+                          START
+                        </button>
                       )}
 
                       {state.isStoryboardEnabled && (
-                      <button 
-                        onClick={() => {
-                          dispatch({ 
-                            type: 'SET_STORYBOARD_END_SOURCE', 
-                            payload: { url: state.resultImage!, dna: compiledPrompt } 
-                          });
-                          if (activeShot) dispatch({ type: 'SET_SHOT_FRAME', payload: { id: activeShot.id, which: 'end', url: state.resultImage! } } as any);
-                          dispatch({ type: 'ADD_LOG', payload: { message: "Sent to End Plate", type: 'success' } });
-                          dispatch({ type: 'SET_VIEW', payload: 'veo' });
-                        }}
-                        className="w-16 h-16 bg-indigo-500/20 hover:bg-indigo-600 text-indigo-400 hover:text-white rounded-2xl transition-all font-black text-[9px] flex flex-col items-center justify-center border border-indigo-500/30 gap-1"
-                        title="Set as End Plate"
-                      >
-                        <Clapperboard className="w-6 h-6" />
-                        END
-                      </button>
+                        <button
+                          onClick={() => {
+                            dispatch({
+                              type: 'SET_STORYBOARD_END_SOURCE',
+                              payload: { url: state.resultImage!, dna: compiledPrompt }
+                            });
+                            if (activeShot) dispatch({ type: 'SET_SHOT_FRAME', payload: { id: activeShot.id, which: 'end', url: state.resultImage! } } as any);
+                            dispatch({ type: 'ADD_LOG', payload: { message: "Sent to End Plate", type: 'success' } });
+                            dispatch({ type: 'SET_VIEW', payload: 'veo' });
+                          }}
+                          className="w-16 h-16 bg-indigo-500/20 hover:bg-indigo-600 text-indigo-400 hover:text-white rounded-2xl transition-all font-black text-[9px] flex flex-col items-center justify-center border border-indigo-500/30 gap-1"
+                          title="Set as End Plate"
+                        >
+                          <Clapperboard className="w-6 h-6" />
+                          END
+                        </button>
                       )}
 
-                      <button 
+                      <button
                         onClick={() => dispatch({ type: 'SET_RESULT_IMAGE', payload: null })}
                         className="w-16 h-16 bg-red-500/20 hover:bg-red-500 text-red-500 hover:text-white rounded-2xl transition-all transform hover:scale-110 flex items-center justify-center border border-red-500/30 shadow-[0_0_15px_rgba(239,68,68,0.2)]"
                         title="Delete Result"

@@ -1,4 +1,5 @@
-import { app, shell, BrowserWindow } from 'electron';
+import electron from 'electron';
+const { app, shell, BrowserWindow } = electron;
 import { join } from 'path';
 import { electronApp, optimizer, is } from '@electron-toolkit/utils';
 

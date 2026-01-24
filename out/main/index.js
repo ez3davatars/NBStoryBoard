@@ -1,11 +1,8 @@
-import { app, session, ipcMain, BrowserWindow, shell } from "electron";
-import { join } from "path";
-import __cjs_mod__ from "node:module";
-const __filename = import.meta.filename;
-const __dirname = import.meta.dirname;
-const require2 = __cjs_mod__.createRequire(import.meta.url);
+"use strict";
+const electron = require("electron");
+const path = require("path");
 const is = {
-  dev: !app.isPackaged
+  dev: !electron.app.isPackaged
 };
 const platform = {
   isWindows: process.platform === "win32",
@@ -15,23 +12,23 @@ const platform = {
 const electronApp = {
   setAppUserModelId(id) {
     if (platform.isWindows)
-      app.setAppUserModelId(is.dev ? process.execPath : id);
+      electron.app.setAppUserModelId(is.dev ? process.execPath : id);
   },
   setAutoLaunch(auto) {
     if (platform.isLinux)
       return false;
     const isOpenAtLogin = () => {
-      return app.getLoginItemSettings().openAtLogin;
+      return electron.app.getLoginItemSettings().openAtLogin;
     };
     if (isOpenAtLogin() !== auto) {
-      app.setLoginItemSettings({ openAtLogin: auto });
+      electron.app.setLoginItemSettings({ openAtLogin: auto });
       return isOpenAtLogin() === auto;
     } else {
       return true;
     }
   },
   skipProxy() {
-    return session.defaultSession.setProxy({ mode: "direct" });
+    return electron.session.defaultSession.setProxy({ mode: "direct" });
   }
 };
 const optimizer = {
@@ -74,8 +71,8 @@ const optimizer = {
     });
   },
   registerFramelessWindowIpc() {
-    ipcMain.on("win:invoke", (event, action) => {
-      const win = BrowserWindow.fromWebContents(event.sender);
+    electron.ipcMain.on("win:invoke", (event, action) => {
+      const win = electron.BrowserWindow.fromWebContents(event.sender);
       if (win) {
         if (action === "show") {
           win.show();
@@ -97,15 +94,16 @@ const optimizer = {
     });
   }
 };
+const { app, shell, BrowserWindow } = electron;
 function createWindow() {
   const mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
     show: false,
     autoHideMenuBar: true,
-    icon: join(__dirname, "../../resources/icon.ico"),
+    icon: path.join(__dirname, "../../resources/icon.ico"),
     webPreferences: {
-      preload: join(__dirname, "../preload/index.js"),
+      preload: path.join(__dirname, "../preload/index.js"),
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false
@@ -121,7 +119,7 @@ function createWindow() {
   if (is.dev && process.env["ELECTRON_RENDERER_URL"]) {
     mainWindow.loadURL(process.env["ELECTRON_RENDERER_URL"]);
   } else {
-    mainWindow.loadFile(join(__dirname, "../renderer/index.html"));
+    mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"));
   }
 }
 app.whenReady().then(() => {

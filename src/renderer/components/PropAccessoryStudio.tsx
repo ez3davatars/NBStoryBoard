@@ -157,6 +157,9 @@ const PropAccessoryStudio = () => {
   const scanProps = async () => {
     if (!state.saveDirectoryHandle) return;
     try {
+      // @ts-ignore
+      if ((await state.saveDirectoryHandle.queryPermission({ mode: 'read' })) !== 'granted') return;
+
       const propsHandle = await state.saveDirectoryHandle.getDirectoryHandle('props', { create: true });
       const items: PropItem[] = [];
       // @ts-ignore
@@ -186,40 +189,40 @@ const PropAccessoryStudio = () => {
   useEffect(() => {
     scanProps();
   }, [state.saveDirectoryHandle]);
-// --- Reference Slot quick-bind (Shift+Click power-user shortcut) ---
-const bindToFirstEmptyRefSlot = (url: string, name: string) => {
-  const slots: any[] = (state as any).referenceSlots || [];
-  if (!slots.length) {
-    dispatch({ type: 'ADD_LOG', payload: { message: 'No reference slots available to bind.', type: 'error' } });
-    return;
-  }
-  const slot = slots.find((s) => !s.url) ?? slots[0];
-  const index = typeof slot.index === 'number' ? slot.index : 0;
+  // --- Reference Slot quick-bind (Shift+Click power-user shortcut) ---
+  const bindToFirstEmptyRefSlot = (url: string, name: string) => {
+    const slots: any[] = (state as any).referenceSlots || [];
+    if (!slots.length) {
+      dispatch({ type: 'ADD_LOG', payload: { message: 'No reference slots available to bind.', type: 'error' } });
+      return;
+    }
+    const slot = slots.find((s) => !s.url) ?? slots[0];
+    const index = typeof slot.index === 'number' ? slot.index : 0;
 
-  dispatch({
-    type: 'UPDATE_REF_SLOT',
-    payload: {
-      index,
-      updates: {
-        url,
-        name,
-        active: true,
-        status: 'ready',
-        analysis: '',
+    dispatch({
+      type: 'UPDATE_REF_SLOT',
+      payload: {
+        index,
+        updates: {
+          url,
+          name,
+          active: true,
+          status: 'ready',
+          analysis: '',
+        },
       },
-    },
-  });
+    });
 
-  dispatch({
-    type: 'ADD_LOG',
-    payload: { message: `Bound to Reference Slot ${index + 1}: ${name}`, type: 'success' },
-  });
-};
+    dispatch({
+      type: 'ADD_LOG',
+      payload: { message: `Bound to Reference Slot ${index + 1}: ${name}`, type: 'success' },
+    });
+  };
 
-const getFinalAppliedUrl = (): string | null => {
-  const freshUrl = runApplyIsolation();
-  return freshUrl || processedApplyUrl || appliedImage || null;
-};
+  const getFinalAppliedUrl = (): string | null => {
+    const freshUrl = runApplyIsolation();
+    return freshUrl || processedApplyUrl || appliedImage || null;
+  };
 
   const saveToProps = async (imageUrl: string, prompt: string) => {
     if (!state.saveDirectoryHandle) return;
@@ -305,7 +308,7 @@ const getFinalAppliedUrl = (): string | null => {
           { aspectRatio: '1:1' }
         );
         setApplyMask(maskRes);
-      } catch {}
+      } catch { }
     } catch (e: any) {
       dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });
     } finally {
@@ -518,15 +521,15 @@ const getFinalAppliedUrl = (): string | null => {
                   {appliedImage && (
                     <div className="absolute bottom-10 left-1/2 -translate-x-1/2 flex gap-4 z-30">
                       <button onClick={(e) => {
-                                    if ((e as any).shiftKey) {
-                                      const finalUrl = getFinalAppliedUrl();
-                                      if (finalUrl) {
-                                        bindToFirstEmptyRefSlot(finalUrl, `${selectedCharacter?.name || 'Subject'} + Prop Result`);
-                                      }
-                                      return;
-                                    }
-                                    handleAddToCast();
-                                  }} className="w-14 h-14 bg-emerald-500/20 text-emerald-500 rounded-xl flex items-center justify-center border border-emerald-500/30"><UserPlus className="w-6 h-6" /></button>
+                        if ((e as any).shiftKey) {
+                          const finalUrl = getFinalAppliedUrl();
+                          if (finalUrl) {
+                            bindToFirstEmptyRefSlot(finalUrl, `${selectedCharacter?.name || 'Subject'} + Prop Result`);
+                          }
+                          return;
+                        }
+                        handleAddToCast();
+                      }} className="w-14 h-14 bg-emerald-500/20 text-emerald-500 rounded-xl flex items-center justify-center border border-emerald-500/30"><UserPlus className="w-6 h-6" /></button>
                       <button onClick={() => { const l = document.createElement('a'); l.href = processedApplyUrl || appliedImage!; l.download = "applied-prop.png"; l.click(); }} className="w-14 h-14 bg-white/10 text-white rounded-xl flex items-center justify-center border border-white/20"><Download className="w-6 h-6" /></button>
                       <button onClick={() => setAppliedImage(null)} className="w-14 h-14 bg-red-500/20 text-red-500 rounded-xl flex items-center justify-center border border-red-500/30"><X className="w-6 h-6" /></button>
                       <button onClick={handleSaveToActors} className="w-14 h-14 bg-indigo-500/20 text-indigo-500 rounded-xl flex items-center justify-center border border-indigo-500/30"><Save className="w-6 h-6" /></button>

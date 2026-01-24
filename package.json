@@ -6,7 +6,6 @@
   "private": true,
   "version": "1.0.0",
   "main": "./out/main/index.js",
-  "type": "module",
   "scripts": {
     "dev": "electron-vite dev --config src/electron.vite.config.ts",
     "build": "tsc -b && electron-vite build --config src/electron.vite.config.ts",
