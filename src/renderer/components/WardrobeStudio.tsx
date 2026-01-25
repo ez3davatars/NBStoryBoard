@@ -62,39 +62,30 @@ const WardrobeStudio = () => {
 
           let maskData = tempCtx?.getImageData(0, 0, canvas.width, canvas.height);
 
-          // SMOOTH EROSION (BLUR + THRESHOLD)
           if (matteErosion > 0 && maskData) {
-            // 1. Blur to create a gradient for "level" adjustment
-            const chokeCanvas = document.createElement('canvas');
-            chokeCanvas.width = canvas.width;
-            chokeCanvas.height = canvas.height;
-            const chokeCtx = chokeCanvas.getContext('2d');
+            const originalData = new Uint8ClampedArray(maskData.data);
+            const width = canvas.width;
+            const height = canvas.height;
+            const eroded = maskData.data;
+            const radius = matteErosion;
 
-            if (chokeCtx) {
-              // Use the value as blur radius
-              chokeCtx.filter = `blur(${matteErosion}px)`;
-              chokeCtx.drawImage(maskImg, 0, 0, canvas.width, canvas.height);
-
-              // 2. Hard threshold (Leveled Choke)
-              // Thresholding high (> 128) erodes the mask.
-              const d = chokeCtx.getImageData(0, 0, canvas.width, canvas.height);
-              for (let i = 0; i < d.data.length; i += 4) {
-                // Threshold at 50% luminance. 
-                // As blur increases, the 50% boundary moves inward if original was white on black?
-                // Actually, Gaussian blur is centered, so 50% stays at the edge. 
-                // To ERODE, we must threshold HIGHER (e.g. require > 200 brightness).
-                // Heuristic: Base threshold 128 + dynamic. 
-                // Let's force a High Threshold (200) to ensure shrinkage.
-                const lum = d.data[i];
-                if (lum < 180) { // Aggressive cutoff
-                  d.data[i] = d.data[i + 1] = d.data[i + 2] = 0;
-                } else {
-                  // Keep it white (binary mask)
-                  d.data[i] = d.data[i + 1] = d.data[i + 2] = 255;
+            for (let y = radius; y < height - radius; y++) {
+              for (let x = radius; x < width - radius; x++) {
+                const idx = (y * width + x) * 4;
+                let minLuminance = 255;
+                for (let dy = -radius; dy <= radius; dy++) {
+                  for (let dx = -radius; dx <= radius; dx++) {
+                    const nIdx = ((y + dy) * width + (x + dx)) * 4;
+                    const lum = (originalData[nIdx] + originalData[nIdx + 1] + originalData[nIdx + 2]) / 3;
+                    if (lum < minLuminance) minLuminance = lum;
+                    if (minLuminance === 0) break;
+                  }
+                  if (minLuminance === 0) break;
                 }
+                eroded[idx] = eroded[idx + 1] = eroded[idx + 2] = minLuminance;
               }
-              tempCtx?.putImageData(d, 0, 0);
             }
+            tempCtx?.putImageData(maskData, 0, 0);
           }
 
           // APPLY MASK SOFTENING (Blur the mask itself for smooth edges)
@@ -351,24 +342,12 @@ const WardrobeStudio = () => {
          [IMAGE 2] is the standalone COSTUME to fit.
          
          OBJECTIVE: Apply the costume from [IMAGE 2] onto the subject in [IMAGE 1].
-         
-         CRITICAL RULES:
-         1. **STRICT BIOMETRIC MATCH (PRIORITY #1)**: The generated face MUST be an exact copy of the subject in [IMAGE 1]. 
-            - If [IMAGE 1] is a REFERENCE SHEET (multiple angles), USE THE FRONT VIEW FACE as the absolute source of truth.
-            - Do NOT generate a random/generic actor.
-         2. **STRICT FRONT VIEW POSE**: The generated character MUST BE standing in a static FRONT VIEW pose.
-            - NO side profiles. NO dynamic action poses.
-            - This is required for the auto-masking system to function.
-         3. **SINGLE ACTOR ONLY**: Generate EXACTLY ONE full-body character.
-            - NEGATIVE CONSTRAINTS: NO floating heads. NO extra faces. NO grid layouts. NO reference sheet formatting. NO background artifacts.
-            - Do NOT mimic the layout of [IMAGE 1]. Use [IMAGE 1] ONLY for facial data.
-         4. **IDENTITY PRESERVATION**: Maintain the subject's exact facial features, skin tone, and body proportions.
-         5. **ANATOMY**: Hands and feet MUST be visible (unless covered by long sleeves/hemline).
-            - HANDS: Must match the face's skin tone perfectly.
-            - FEET: If legs are visible, generate appropriate footwear matching the costume's style (e.g., boots for armor, shoes for suits). If the dress/robe is floor-length, feet may be covered.
-         6. **LIGHTING**: Match studio lighting to the subject.
-         7. ${tryOnNote || "Clean professional studio execution."}
-         8. **ISOLATION**: Use a solid Neon Green background (#39FF14).`,
+         CRITICAL CONSTRAINTS:
+         1. MAINTAIN the subject's exact facial identity, hairstyle, and body proportions from [IMAGE 1].
+         2. FULLY REPLACE their current clothing with the outfit in [IMAGE 2].
+         3. Adjust the fit to match their pose and lighting naturally.
+         4. ${tryOnNote || "Clean studio execution."}
+         5. Use a solid Neon Green background (#39FF14) for perfect subject isolation.`,
         state.apiKey,
         state.model,
         [
@@ -643,9 +622,9 @@ const WardrobeStudio = () => {
               </div>
             </div>
           ) : (
-            <div className="max-w-[1600px] mx-auto grid grid-cols-12 gap-6">
-              {/* COL 1: SELECTOR COLUMN */}
-              <div className="col-span-3 space-y-6">
+            <div className="max-w-6xl mx-auto grid grid-cols-12 gap-8">
+              {/* SELECTOR COLUMN */}
+              <div className="col-span-4 space-y-6">
                 <div className="bg-[#18181b] p-6 rounded-2xl border border-gray-800 shadow-xl">
                   <h3 className="text-xs font-black text-gray-400 uppercase mb-4 tracking-widest">1. Selected Subject</h3>
                   <div className="grid grid-cols-4 gap-2 mb-6 h-32 overflow-y-auto p-2">
@@ -691,12 +670,8 @@ const WardrobeStudio = () => {
               </div>
 
               {/* RESULT COLUMN */}
-
-              {/* COL 2: RESULT COLUMN (Center Stage) */}
-              <div className="col-span-6">
-                <div
-                  className="aspect-square bg-black rounded-3xl border border-gray-800 shadow-2xl flex items-center justify-center overflow-hidden relative group border-4 border-[#18181b]"
-                >
+              <div className="col-span-8">
+                <div className="aspect-square bg-black rounded-3xl border border-gray-800 shadow-2xl flex items-center justify-center overflow-hidden relative group border-4 border-[#18181b]">
                   {fittedImage ? (
                     <>
                       <img
@@ -726,178 +701,89 @@ const WardrobeStudio = () => {
                     </div>
                   </div>
 
-                </div>
+                  {fittedImage && (
+                    <div className="absolute top-6 right-6 flex flex-col gap-3 z-20 bg-black/60 p-4 rounded-3xl border border-white/10 backdrop-blur-md shadow-2xl">
+                      <div className="flex items-center justify-between gap-6">
+                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={removeTryOnBg}
+                            onChange={(e) => setRemoveTryOnBg(e.target.checked)}
+                            className="w-4 h-4 accent-blue-500 rounded"
+                          />
+                          <Eraser className="w-3.5 h-3.5" /> Remove BG
+                        </label>
 
-                {fittedImage && (
-                  <div className="mt-4 flex justify-center gap-3">
-                    <button
-                      onClick={handleAddToCast}
-                      className="w-14 h-14 bg-emerald-500/20 hover:bg-emerald-500 text-emerald-500 hover:text-white rounded-xl transition-all transform hover:scale-110 flex items-center justify-center border border-emerald-500/30 shadow-[0_0_15px_rgba(16,185,129,0.2)]"
-                      title="Add to Cast Library"
-                    >
-                      <UserPlus className="w-6 h-6 stroke-[2.5]" />
-                    </button>
-                    <button
-                      onClick={() => downloadImage(processedTryOnUrl || fittedImage!, `fitted-${selectedCharacter?.name || 'character'}.png`)}
-                      className="w-14 h-14 bg-white/10 hover:bg-white text-white hover:text-black rounded-xl transition-all transform hover:scale-110 flex items-center justify-center border border-white/20 shadow-[0_0_15px_rgba(255,255,255,0.1)]"
-                      title="Download Transparent PNG"
-                    >
-                      <Download className="w-6 h-6 stroke-[2.5]" />
-                    </button>
-                    <button
-                      onClick={() => setFittedImage(null)}
-                      className="w-14 h-14 bg-red-500/20 hover:bg-red-500 text-red-500 hover:text-white rounded-xl transition-all transform hover:scale-110 flex items-center justify-center border border-red-500/30 shadow-[0_0_15px_rgba(239,68,68,0.2)]"
-                      title="Discard Result"
-                    >
-                      <X className="w-6 h-6 stroke-[3]" />
-                    </button>
-                    <button
-                      onClick={handleSaveFittedToActors}
-                      className="w-14 h-14 bg-indigo-500/20 hover:bg-indigo-500 text-indigo-500 hover:text-white rounded-xl transition-all transform hover:scale-110 flex items-center justify-center border border-indigo-500/30 shadow-[0_0_15px_rgba(99,102,241,0.2)]"
-                      title="Save to Global Actor Library (Disk)"
-                    >
-                      <Save className="w-6 h-6 stroke-[2.5]" />
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {/* COL 3: SETTINGS SIDEBAR */}
-              <div className="col-span-3 space-y-6">
-                {fittedImage ? (
-                  <div className="bg-[#18181b] p-6 rounded-2xl border border-gray-800 shadow-xl space-y-6">
-                    <h3 className="text-xs font-black text-gray-400 uppercase tracking-widest flex items-center gap-2">
-                      <Sparkles className="w-4 h-4 text-blue-500" /> Image Controls
-                    </h3>
-
-                    <div className="space-y-4">
-                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-2 cursor-pointer p-3 bg-black/20 rounded-lg border border-white/5 hover:bg-black/40 transition-colors">
-                        <input
-                          type="checkbox"
-                          checked={removeTryOnBg}
-                          onChange={(e) => setRemoveTryOnBg(e.target.checked)}
-                          className="w-4 h-4 accent-blue-500 rounded"
-                        />
-                        <Eraser className="w-3.5 h-3.5" /> Remove Background
-                      </label>
-
-                      {tryOnMask && (
-                        <div className="flex flex-col gap-2 p-3 bg-black/20 rounded-lg border border-white/5">
-                          <div className="flex items-center justify-between">
-                            <label className="text-[9px] font-black text-blue-400 uppercase tracking-widest flex items-center gap-2 cursor-pointer">
-                              <input
-                                type="checkbox"
-                                checked={tryOnAiMaskActive}
-                                onChange={(e) => setTryOnAiMaskActive(e.target.checked)}
-                                className="w-3.5 h-3.5 accent-blue-500 rounded"
-                              />
-                              <Sparkles className="w-3 h-3" /> AI Masking
-                            </label>
-                            <button
-                              onClick={async () => {
-                                if (!fittedImage || !state.apiKey) return;
-                                setTryOnMask(null);
-                                dispatch({ type: 'ADD_LOG', payload: { message: "Regenerating fusion mask...", type: 'info' } });
-                                try {
-                                  const maskRes = await GeminiService.generateImage(
-                                    `DIGITAL CHARACTER SEGMENTATION MASK: Create a pure black and white silhouette of the character in [IMAGE 1].
-                                             The entire character silhouette (skin, hair, clothes) MUST be PURE WHITE (#FFFFFF).
-                                             The background MUST be PURE BLACK (#000000).
-                                             Film-grade precision, no gradients, no shadows.`,
-                                    state.apiKey,
-                                    state.model,
-                                    [{ url: fittedImage, label: "Reference" }],
-                                    { aspectRatio: '1:1' }
-                                  );
-                                  setTryOnMask(maskRes);
-                                  dispatch({ type: 'ADD_LOG', payload: { message: "Mask regenerated successfully", type: 'success' } });
-                                } catch (maskErr: any) {
-                                  dispatch({ type: 'ADD_LOG', payload: { message: `Mask regeneration failed: ${maskErr.message}`, type: 'error' } });
-                                }
-                              }}
-                              className="text-gray-500 hover:text-white transition-colors p-1"
-                              title="Regenerate Mask"
-                            >
-                              <RefreshCcw className="w-3 h-3" />
-                            </button>
-                          </div>
-
-                          {tryOnAiMaskActive && (
-                            <>
-                              {!tryOnMask ? (
-                                <div className="h-24 flex flex-col items-center justify-center gap-2 bg-white/5 rounded-lg my-1 animate-pulse">
-                                  <RefreshCcw className="w-4 h-4 text-blue-400 animate-spin" />
-                                  <span className="text-[8px] uppercase font-bold text-blue-300">Generating Mask...</span>
-                                </div>
-                              ) : (
-                                <div className="space-y-3 pt-2">
-                                  <div className="space-y-1">
-                                    <div className="flex items-center justify-between text-[9px] font-bold text-blue-400/60 uppercase tracking-wider">
-                                      <span>Matte Contraction</span>
-                                      <span>{matteErosion}px</span>
-                                    </div>
-                                    <input
-                                      type="range"
-                                      min="0" max="10"
-                                      step="0.1"
-                                      value={matteErosion}
-                                      onChange={(e) => setMatteErosion(parseFloat(e.target.value))}
-                                      className="w-full h-1 bg-blue-900/30 rounded-lg appearance-none cursor-pointer"
-                                    />
-                                  </div>
-
-                                  <div className="space-y-1">
-                                    <div className="flex items-center justify-between text-[9px] font-bold text-blue-400/60 uppercase tracking-wider">
-                                      <span>Mask Softening</span>
-                                    </div>
-                                    <input
-                                      type="range"
-                                      min="0" max="10"
-                                      step="0.5"
-                                      value={tryOnMaskSoftening}
-                                      onChange={(e) => setTryOnMaskSoftening(parseFloat(e.target.value))}
-                                      className="w-full h-1 bg-blue-900/30 rounded-lg appearance-none cursor-pointer"
-                                    />
-                                  </div>
-                                </div>
-                              )}
-                            </>
-                          )}
-                        </div>
-                      )}
+                        {tryOnMask && (
+                          <label className="text-[9px] font-black text-blue-400 uppercase tracking-widest flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={tryOnAiMaskActive}
+                              onChange={(e) => setTryOnAiMaskActive(e.target.checked)}
+                              className="w-3.5 h-3.5 accent-blue-500 rounded"
+                            />
+                            <Sparkles className="w-3 h-3" /> AI Masking
+                          </label>
+                        )}
+                      </div>
 
                       {removeTryOnBg && (
-                        <div className="space-y-4 pt-4 border-t border-gray-800">
-                          <div className="space-y-1">
-                            <div className="flex items-center justify-between text-[9px] font-bold text-gray-500 uppercase tracking-wider">
-                              <span>Tolerance</span>
-                              <span>{tryOnTolerance}%</span>
-                            </div>
-                            <input
-                              type="range"
-                              min="1" max="100"
-                              value={tryOnTolerance}
-                              onChange={(e) => setTryOnTolerance(parseInt(e.target.value))}
-                              className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                            />
+                        <div className="space-y-3 pt-2 border-t border-white/5">
+                          <div className="flex items-center justify-between text-[9px] font-bold text-gray-500 uppercase tracking-wider">
+                            <span>Tolerance</span>
+                            <span>{tryOnTolerance}%</span>
                           </div>
+                          <input
+                            type="range"
+                            min="1" max="100"
+                            value={tryOnTolerance}
+                            onChange={(e) => setTryOnTolerance(parseInt(e.target.value))}
+                            className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                          />
 
-                          <div className="space-y-1">
-                            <div className="flex items-center justify-between text-[9px] font-bold text-green-400/60 uppercase tracking-wider">
-                              <span>Spill Suppression</span>
-                              <span>{tryOnSpillSuppression}%</span>
-                            </div>
-                            <input
-                              type="range"
-                              min="0" max="100"
-                              value={tryOnSpillSuppression}
-                              onChange={(e) => setTryOnSpillSuppression(parseInt(e.target.value))}
-                              className="w-full h-1 bg-green-900/30 rounded-lg appearance-none cursor-pointer"
-                            />
+                          {tryOnMask && tryOnAiMaskActive && (
+                            <>
+                              <div className="flex items-center justify-between text-[9px] font-bold text-blue-400/60 uppercase tracking-wider pt-1">
+                                <span>Matte Contraction</span>
+                                <span>{matteErosion}px</span>
+                              </div>
+                              <input
+                                type="range"
+                                min="0" max="10"
+                                step="1"
+                                value={matteErosion}
+                                onChange={(e) => setMatteErosion(parseInt(e.target.value))}
+                                className="w-full h-1 bg-blue-900/30 rounded-lg appearance-none cursor-pointer"
+                              />
+
+                              <div className="flex items-center justify-between text-[9px] font-bold text-blue-400/60 uppercase tracking-wider pt-1">
+                                <span>Mask Softening</span>
+                                <span>{tryOnMaskSoftening}px</span>
+                              </div>
+                              <input
+                                type="range"
+                                min="0" max="10"
+                                step="0.5"
+                                value={tryOnMaskSoftening}
+                                onChange={(e) => setTryOnMaskSoftening(parseFloat(e.target.value))}
+                                className="w-full h-1 bg-blue-900/30 rounded-lg appearance-none cursor-pointer"
+                              />
+                            </>
+                          )}
+
+                          <div className="flex items-center justify-between text-[9px] font-bold text-green-400/60 uppercase tracking-wider pt-1">
+                            <span>Spill Suppression</span>
+                            <span>{tryOnSpillSuppression}%</span>
                           </div>
-
-                          <div className="flex items-center justify-between pt-2">
-                            <label className="text-[9px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-2 cursor-pointer hover:text-gray-200 transition-colors">
+                          <input
+                            type="range"
+                            min="0" max="100"
+                            value={tryOnSpillSuppression}
+                            onChange={(e) => setTryOnSpillSuppression(parseInt(e.target.value))}
+                            className="w-full h-1 bg-green-900/30 rounded-lg appearance-none cursor-pointer"
+                          />
+                          <div className="flex items-center justify-between pt-2 border-t border-white/5 mt-2">
+                            <label className="text-[9px] font-black text-gray-500 uppercase tracking-widest flex items-center gap-2 cursor-pointer hover:text-gray-300 transition-colors pt-2">
                               <input
                                 type="checkbox"
                                 checked={tryOnInvertBg}
@@ -906,19 +792,48 @@ const WardrobeStudio = () => {
                               />
                               Invert Matte
                             </label>
-                            <div className="w-10 h-10 bg-black/60 border border-white/5 rounded-lg overflow-hidden shadow-inner flex items-center justify-center">
+                            <div className="w-10 h-10 bg-black/60 border border-white/5 rounded-xl overflow-hidden shadow-inner flex items-center justify-center mt-2">
                               <canvas ref={tryOnCanvasRef} className="max-w-full max-h-full object-contain scale-150" />
                             </div>
                           </div>
                         </div>
                       )}
                     </div>
-                  </div>
-                ) : (
-                  <div className="h-full border border-dashed border-gray-800 rounded-2xl flex items-center justify-center">
-                    <span className="text-[10px] uppercase font-bold text-gray-700 tracking-widest">Controls Inactive</span>
-                  </div>
-                )}
+                  )}
+
+                  {fittedImage && (
+                    <div className="absolute bottom-10 left-1/2 -translate-x-1/2 flex gap-4 z-30 bg-black/40 backdrop-blur-2xl border border-white/10 p-2 rounded-2xl shadow-2xl animate-in slide-in-from-bottom-8 duration-500">
+                      <button
+                        onClick={handleAddToCast}
+                        className="w-14 h-14 bg-emerald-500/20 hover:bg-emerald-500 text-emerald-500 hover:text-white rounded-xl transition-all transform hover:scale-110 flex items-center justify-center border border-emerald-500/30 shadow-[0_0_15px_rgba(16,185,129,0.2)]"
+                        title="Add to Cast Library"
+                      >
+                        <UserPlus className="w-6 h-6 stroke-[2.5]" />
+                      </button>
+                      <button
+                        onClick={() => downloadImage(processedTryOnUrl || fittedImage!, `fitted-${selectedCharacter?.name || 'character'}.png`)}
+                        className="w-14 h-14 bg-white/10 hover:bg-white text-white hover:text-black rounded-xl transition-all transform hover:scale-110 flex items-center justify-center border border-white/20 shadow-[0_0_15px_rgba(255,255,255,0.1)]"
+                        title="Download Transparent PNG"
+                      >
+                        <Download className="w-6 h-6 stroke-[2.5]" />
+                      </button>
+                      <button
+                        onClick={() => setFittedImage(null)}
+                        className="w-14 h-14 bg-red-500/20 hover:bg-red-500 text-red-500 hover:text-white rounded-xl transition-all transform hover:scale-110 flex items-center justify-center border border-red-500/30 shadow-[0_0_15px_rgba(239,68,68,0.2)]"
+                        title="Discard Result"
+                      >
+                        <X className="w-6 h-6 stroke-[3]" />
+                      </button>
+                      <button
+                        onClick={handleSaveFittedToActors}
+                        className="w-14 h-14 bg-indigo-500/20 hover:bg-indigo-500 text-indigo-500 hover:text-white rounded-xl transition-all transform hover:scale-110 flex items-center justify-center border border-indigo-500/30 shadow-[0_0_15px_rgba(99,102,241,0.2)]"
+                        title="Save to Global Actor Library (Disk)"
+                      >
+                        <Save className="w-6 h-6 stroke-[2.5]" />
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           )}

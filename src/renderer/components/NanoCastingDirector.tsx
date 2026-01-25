@@ -7,10 +7,11 @@ import {
     Scan, Target, User, Layers, Share2,
     ChevronRight, RefreshCw, Cpu, Aperture, CheckCircle2, UserPlus, Upload, Sliders,
     Swords, Zap, Shield, Ghost, Camera as CameraIcon, Ban, RotateCcw,
-    EyeOff, Shirt, Sparkles, LayoutTemplate, Download, X
+    EyeOff, Shirt, Sparkles, LayoutTemplate, Download, X, MoreHorizontal, ChevronDown, ImagePlus
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
+
 
 const REFERENCE_SHEET_PROMPT = `Create a professional, 8k resolution character reference sheet based strictly on the uploaded reference image. Use a clean, neutral plain background.
 CRITICAL COMPOSITION RULES:
@@ -21,6 +22,45 @@ CRITICAL COMPOSITION RULES:
 - Lighting must be studio-neutral with no harsh shadows obscuring details.
 - Output must be crisp, production-ready, and free of artifacts.
 `;
+
+const REF_SHEET_STYLES = {
+    family_3d: {
+        id: 'family_3d',
+        label: 'Family 3D Animation',
+        keywords: "premium family-friendly 3D animation, soft subsurface scattering, clean stylized materials, expressive facial features, high-end CG render, smooth shading, gentle rim light, cinematic depth",
+        lighting: "Golden hour, cinematic bounce light"
+    },
+    premium_cg: {
+        id: 'premium_cg',
+        label: 'Premium CG Realism',
+        keywords: "photorealistic CG, exact facial structure preservation, highly detailed skin pores, 85mm lens look, f/1.8 depth of field, cinematic natural lighting, sharp focus, biometric fidelity",
+        lighting: "High-contrast studio lighting"
+    },
+    exact_studio: {
+        id: 'exact_studio',
+        label: 'Exact Likeness Studio',
+        keywords: "ultra-realistic studio portrait, 1:1 identity replication, strict facial feature preservation, highly detailed skin texture, raw photography look, 85mm lens, sharp focus, identity locked",
+        lighting: "Professional studio lighting"
+    },
+    retro_cel: {
+        id: 'retro_cel',
+        label: 'Retro Cel Anime',
+        keywords: "90s retro anime aesthetic, cel shading, hand-drawn ink lines, limited animation feel, vintage film grain, soft pastel palette, nostalgic Japanese animation look",
+        lighting: "Soft diffused daylight"
+    },
+    graphic_noir: {
+        id: 'graphic_noir',
+        label: 'Graphic Noir',
+        keywords: "modern graphic novel style, heavy ink outlines, halftone dot patterns, high contrast, dramatic shadows, bold dynamic lines",
+        lighting: "Hard noir shadows"
+    },
+    cyberpunk_neon: {
+        id: 'cyberpunk_neon',
+        label: 'Cyberpunk Neon',
+        keywords: "futuristic techwear, neon glow, wet pavement reflections, volumetric fog, teal and orange palette, cinematic cyberpunk lighting",
+        lighting: "Neon-drenched night"
+    }
+};
 
 // Types for Phases
 type Phase = 1 | 2 | 3 | 4 | 5;
@@ -104,6 +144,10 @@ const NanoCastingDirector = () => {
     const [showRefSheet, setShowRefSheet] = useState(false);
     const [refSheetUrl, setRefSheetUrl] = useState<string | null>(null);
     const [refLayout, setRefLayout] = useState<'form_focus' | 'face_focus' | 'split_focus'>('form_focus');
+    const [refStyle, setRefStyle] = useState<keyof typeof REF_SHEET_STYLES>('family_3d');
+    const [identitySource, setIdentitySource] = useState<'biometric' | 'generated'>('biometric');
+    const [sheetContent, setSheetContent] = useState<'full' | 'head'>('full');
+    const [bodyWeight, setBodyWeight] = useState<'light' | 'medium' | 'heavy' | 'athletic'>('medium');
 
     // --- DIRECTOR CONTROLS ---
     const [showSettings, setShowSettings] = useState(false);
@@ -515,6 +559,26 @@ const NanoCastingDirector = () => {
     // New: Pack Mode State
     const [generatePackMode] = useState(true);
 
+    // Auto-select Identity Source based on availability
+    useEffect(() => {
+        const hasBiometrics = capturedAngles.center && capturedAngles.left && capturedAngles.right;
+        const hasPortrait = !!finalCharacterUrl;
+
+        // If currently on biometric but missing data, try to switch
+        if (identitySource === 'biometric' && !hasBiometrics && hasPortrait) {
+            setIdentitySource('generated');
+        }
+        // If currently on generated but missing data, try to switch
+        else if (identitySource === 'generated' && !hasPortrait && hasBiometrics) {
+            setIdentitySource('biometric');
+        }
+        // Initial Default priority
+        else if (!identitySource) {
+            if (hasBiometrics) setIdentitySource('biometric');
+            else if (hasPortrait) setIdentitySource('generated');
+        }
+    }, [capturedAngles, finalCharacterUrl, identitySource]);
+
     // --- TOAST NOTIFICATIONS ---
     const [notification, setNotification] = useState<string | null>(null);
     const showToast = (message: string) => {
@@ -568,8 +632,8 @@ const NanoCastingDirector = () => {
             const styleObj = styleMatrix[selectedStyle as keyof typeof styleMatrix] || styleMatrix.pixar;
             const archetypeObj = bodyArchetypes.find(b => b.id === selectedBody) || bodyArchetypes[0];
 
-            // STRICTNESS CHECK: If the style is one of the realistic ones, we force extreme adherence to reference
-            const isStrictLikeness = ['hyper_real', 'exact_studio', 'cyberpunk'].includes(selectedStyle || '');
+            // STRICTNESS CHECK: If the style is one of the realistic ones OR Identity Lock is maximized (>= 80%)
+            const isStrictLikeness = ['hyper_real', 'exact_studio', 'cyberpunk'].includes(selectedStyle || '') || directorControls.identityStrength >= 80;
             const strictnessInstruction = isStrictLikeness
                 ? "CRITICAL_STRICTNESS: The face in the generated image MUST BE AN EXACT BIOMETRIC MATCH to the reference. Do not blend faces. Do not 'beautify' if it changes structure. PRESERVE IDENTITY ABOVE ALL ELSE. Treat the reference image as the absolute truth."
                 : "";
@@ -718,27 +782,88 @@ const NanoCastingDirector = () => {
     }, [finalCharacterUrl, dispatch]);
 
     const handleGenerateRefSheet = async () => {
-        if (!finalCharacterUrl || !state.apiKey) return;
+        // Validation check based on Identity Source
+        if (identitySource === 'biometric') {
+            // Note: Up/Down are optional
+            if (!capturedAngles.center || !capturedAngles.left || !capturedAngles.right) {
+                showToast("Requires: Center + Left + Right");
+                return;
+            }
+        } else {
+            if (!finalCharacterUrl) {
+                showToast("Requires: Generate a portrait first");
+                return;
+            }
+        }
+
+        if (!state.apiKey) return;
 
         dispatch({ type: 'SET_PROCESSING', payload: true });
         dispatch({ type: 'ADD_LOG', payload: { message: "Generating Character Reference Sheet...", type: 'info' } });
 
         try {
-            let finalPrompt = REFERENCE_SHEET_PROMPT;
+            const styleConfig = REF_SHEET_STYLES[refStyle];
+
+            let finalPrompt = `${REFERENCE_SHEET_PROMPT}\n\n`;
+            finalPrompt += `STYLE PROTOCOL: ${styleConfig.label}\n`;
+            finalPrompt += `VISUAL KEYWORDS: ${styleConfig.keywords}\n`;
+            finalPrompt += `LIGHTING: ${styleConfig.lighting}\n\n`;
+
+            // V2: Body Type (First, to establish base)
+            let bodyInstruction = `BODY TYPE: ${bodyWeight.toUpperCase()} BUILD. (CRITICAL: Do not let body build influence facial features. Face must remain distinct from body archetype).`;
+            if (bodyWeight === 'light') {
+                bodyInstruction += " EXTRA CAUTION: Do not make the face gaunt, sunken, or narrow. Preserve the original jawline width and cheek fullness from the reference.";
+            } else if (bodyWeight === 'heavy') {
+                bodyInstruction += " EXTRA CAUTION: Do not excessively bloat the face or alter the underlying bone structure. Preserve the subject's original facial identity, jawline definition, and eye shape.";
+            }
+            finalPrompt += bodyInstruction + "\n\n";
+
+            // V2: Dynamic Director Overrides
+            const outfitPrompt = directorControls.outfit ? `OUTFIT: ${directorControls.outfit}` : "OUTFIT: Basic simple clothing";
+            finalPrompt += `DIRECTOR OVERRIDES: Age ${directorControls.age}, ${outfitPrompt}.\n`;
+
+            // Strictness Check (Matches handleOrchestration logic + Biometric Override)
+            const isStrictLikeness = ['hyper_real', 'exact_studio', 'cyberpunk'].includes(refStyle || '') || directorControls.identityStrength >= 80 || identitySource === 'biometric';
+            if (isStrictLikeness) {
+                finalPrompt += "CRITICAL_STRICTNESS: The face MUST BE AN EXACT BIOMETRIC MATCH to the references. PRESERVE IDENTITY ABOVE ALL ELSE. Allow for dissonance between body build and facial structure if necessary.\n\n";
+            }
+
+            if (sheetContent === 'head') {
+                finalPrompt += "CONTENT SCOPE: HEAD ONLY. Do not generate full body figures. Focus exclusively on facial rotation and expression.\n";
+            }
 
             if (refLayout === 'form_focus') {
-                finalPrompt += " [LAYOUT A - CLASSIC]: Split canvas horizontally. Top 65% height: ROW OF EXACTLY 3 Full Body views (Front, Side, Back). Bottom 35% height: Grid of EXACTLY 4 Headshots. Ensure headshots are MACRO-DETAILED and hyper-sharp.";
+                if (sheetContent === 'head') {
+                    finalPrompt += " [LAYOUT A - CLASSIC HEADS]: Split canvas horizontally. Top 50%: Front & Side profile close-ups. Bottom 50%: 3/4 view and Back view heads.";
+                } else {
+                    finalPrompt += " [LAYOUT A - CLASSIC]: Split canvas horizontally. Top 65% height: ROW OF EXACTLY 3 Full Body views (Front, Side, Back). Bottom 35% height: Grid of EXACTLY 4 Headshots. Ensure headshots are MACRO-DETAILED and hyper-sharp.";
+                }
             } else if (refLayout === 'face_focus') {
-                finalPrompt += " [LAYOUT B - FACE FIRST]: Split canvas horizontally. Top 55% height: Row of EXACTLY 4 Large Headshots (Front, Left, Right, Back). Bottom 45% height: Row of EXACTLY 3 Full Body views. Headshots must maintain perfect identity.";
+                finalPrompt += " [LAYOUT B - FACE FIRST]: Split canvas horizontally. Top 55% height: Row of EXACTLY 4 Large Headshots (Front, Left, Right, Back). Bottom 45% height: " + (sheetContent === 'head' ? "Row of Expression Variants (Happy, Neutral, Angry)." : "Row of EXACTLY 3 Full Body views.");
             } else if (refLayout === 'split_focus') {
-                finalPrompt += " [LAYOUT C - STUDIO]: Split canvas vertically. Left 45% width: Vertical stack of EXACTLY 3 Full Body views (Front, Side, Back). DO NOT ADD A FOURTH VIEW. Right 55% width: 2x2 Grid of Large Headshots. Highest possible facial resolution.";
+                finalPrompt += " [LAYOUT C - STUDIO]: Split canvas vertically. " + (sheetContent === 'head' ? "Left 50%: Large Front facing potrait. Right 50%: Grid of side/angle headshots." : "Left 45% width: Vertical stack of EXACTLY 3 Full Body views (Front, Side, Back). Right 55% width: 2x2 Grid of Large Headshots.");
+            }
+
+            // Prepare Image References based on Source
+            const imageRefs: { url: string; label: string }[] = [];
+            if (identitySource === 'biometric') {
+                const angles: (keyof typeof capturedAngles)[] = ['center', 'left', 'right', 'up', 'down'];
+                for (const angle of angles) {
+                    const blobUrl = capturedAngles[angle];
+                    if (blobUrl) {
+                        const b64 = await getBase64FromBlobUrl(blobUrl);
+                        imageRefs.push({ url: b64, label: `Reference: ${angle}` });
+                    }
+                }
+            } else {
+                imageRefs.push({ url: finalCharacterUrl!, label: 'Character Reference' });
             }
 
             const res = await GeminiService.generateImage(
                 finalPrompt,
                 state.apiKey,
                 state.model.includes('imagen') ? 'imagen-4.0-generate-001' : 'gemini-3-pro-image-preview', // Force high-reasoning model if available
-                [{ url: finalCharacterUrl, label: 'Character Reference' }],
+                imageRefs,
                 { aspectRatio: '16:9' }
             );
             setRefSheetUrl(res);
@@ -954,7 +1079,7 @@ const NanoCastingDirector = () => {
                                         <div className="space-y-6 animate-in fade-in slide-in-from-left-4 duration-300">
                                             <div className="space-y-2">
                                                 <label className="text-xs text-accent uppercase tracking-widest font-black flex justify-between">
-                                                    <span>Identity Lock</span>
+                                                    <span>Identity Lock <span className={directorControls.identityStrength >= 80 ? "text-emerald-500" : "text-muted"}>{directorControls.identityStrength >= 80 ? "(STRICT)" : ""}</span></span>
                                                     <span className="text-white">{directorControls.identityStrength}%</span>
                                                 </label>
                                                 <input
@@ -964,6 +1089,7 @@ const NanoCastingDirector = () => {
                                                     className="w-full accent-accent h-2 rounded-full appearance-none cursor-pointer bg-surface-2"
                                                 />
                                             </div>
+
 
                                             <div className="space-y-2">
                                                 <label className="text-xs text-accent uppercase tracking-widest font-black flex justify-between">
@@ -1050,7 +1176,7 @@ const NanoCastingDirector = () => {
                                                     <button
                                                         onClick={generateWardrobe}
                                                         disabled={isProcessing}
-                                                        className="bg-accent hover:bg-yellow-400 text-black py-2 rounded-lg text-[10px] font-black uppercase tracking-wider"
+                                                        className="!bg-yellow-500 hover:!bg-yellow-400 !text-black py-2 rounded-lg text-[10px] font-black uppercase tracking-wider shadow-lg shadow-yellow-500/20"
                                                     >
                                                         Generate & Fit
                                                     </button>
@@ -1129,6 +1255,17 @@ const NanoCastingDirector = () => {
                                     {/* TOGGLE HEADER */}
                                     {/* TOGGLE HEADER */}
                                     <div className="absolute top-4 right-4 z-20 flex items-center gap-4">
+
+                                        {/* Controls Button */}
+                                        <button
+                                            onClick={() => {
+                                                setSidebarMode('director');
+                                                setShowSettings(true);
+                                            }}
+                                            className="px-5 py-2 rounded-full border border-accent/30 bg-black/80 text-accent font-black uppercase tracking-wider text-xs flex items-center gap-2 hover:bg-accent hover:text-black transition-all shadow-[0_0_15px_rgba(250,204,21,0.15)]"
+                                        >
+                                            <Sliders className="w-3 h-3" /> Controls
+                                        </button>
 
                                         {/* Camera Toggle */}
                                         <button
@@ -1369,7 +1506,9 @@ const NanoCastingDirector = () => {
                                             {capturedAngles[label] && <CheckCircle2 className="w-4 h-4 text-success" />}
                                         </div>
                                     ))}
-                                    <div className="mt-auto">
+                                    <div className="mt-auto space-y-2">
+                                        {/* EXPORT OPTIONS */}
+
                                         <button
                                             onClick={resetScan}
                                             className="w-full py-4 mb-2 bg-danger hover:bg-red-600 text-accent shadow-lg shadow-danger/20 font-black uppercase tracking-widest transition-all text-xs rounded-lg flex items-center justify-center gap-2"
@@ -1381,7 +1520,7 @@ const NanoCastingDirector = () => {
                                             onClick={() => setPhase(2)}
                                             className={`w-full py-4 font-black uppercase tracking-widest transition-all text-xs rounded-lg flex items-center justify-center gap-2 ${isPhaseLocked(2)
                                                 ? 'bg-surface-2 text-muted cursor-not-allowed'
-                                                : 'bg-accent hover:bg-cyan-400 text-black shadow-lg shadow-accent/20'
+                                                : '!bg-yellow-500 hover:!bg-yellow-400 !text-black shadow-lg shadow-yellow-500/20'
                                                 }`}
                                         >
                                             Processing Matrix <ChevronRight className="w-4 h-4" />
@@ -1586,15 +1725,15 @@ const NanoCastingDirector = () => {
                         {phase === 5 && finalCharacterUrl && (
                             <motion.div
                                 key="phase5"
-                                initial={{ opacity: 0, scale: 0.9 }}
+                                initial={{ opacity: 0, scale: 0.95 }}
                                 animate={{ opacity: 1, scale: 1 }}
-                                className="h-full flex gap-8 items-center justify-center p-12"
+                                className="h-full flex gap-8 items-start justify-center p-8 lg:p-12"
                             >
-                                <div className="h-full aspect-[2/3] relative rounded-xl overflow-hidden border-2 border-accent shadow-2xl group">
+                                {/* LEFT: PORTRAIT CARD */}
+                                <div className="h-full aspect-[2/3] relative rounded-2xl overflow-hidden border-2 border-accent shadow-2xl group shrink-0">
                                     <img src={finalCharacterUrl} className="w-full h-full object-cover" />
                                     <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent opacity-80"></div>
 
-                                    {/* ID CARD */}
                                     <div className="absolute bottom-6 left-6 right-6 font-mono text-xs">
                                         <div className="flex justify-between items-end border-b border-white/20 pb-2 mb-2">
                                             <div>
@@ -1613,87 +1752,200 @@ const NanoCastingDirector = () => {
                                     </div>
                                 </div>
 
-                                <div className="w-96 flex flex-col gap-4">
-                                    <h3 className="text-2xl font-black text-fg uppercase italic tracking-tighter">
-                                        Reconstruction <span className="text-accent">Complete</span>
-                                    </h3>
-                                    <p className="text-xs text-muted mb-8 leading-relaxed">
-                                        Neural synthesis successful. Subject has been re-topologized and is ready for integration into the storyboard matrix.
-                                        {generatePackMode && " Full variation pack generated."}
-                                    </p>
+                                {/* RIGHT: CONTROL PANEL (3 ZONES) */}
+                                <div className="w-[400px] flex flex-col h-full overflow-y-auto pr-1">
+                                    <div className="mb-6">
+                                        <h3 className="text-2xl font-black text-fg uppercase italic tracking-tighter">
+                                            Reconstruction <span className="text-accent">Complete</span>
+                                        </h3>
+                                        <p className="text-xs text-muted leading-relaxed">
+                                            Neural synthesis successful. Subject ready for matrix integration.
+                                        </p>
+                                    </div>
 
-                                    <div className="grid grid-cols-2 gap-3">
-                                        <button
-                                            onClick={() => addToCast(false)}
-                                            className="col-span-1 py-4 bg-surface-2 hover:bg-surface text-accent font-black uppercase tracking-widest text-xs rounded-xl transition-all shadow-lg shadow-accent/10 border border-accent flex flex-col items-center gap-1 group-hover:scale-[1.02]"
-                                        >
-                                            <UserPlus className="w-5 h-5" />
-                                            {generatePackMode ? "Add Pack" : "Add Actor"}
-                                        </button>
+                                    <div className="flex flex-col gap-6 flex-1">
+                                        {/* ZONE 1: PRIMARY ACTIONS */}
+                                        <div className="flex flex-col gap-3">
+                                            <div className="grid grid-cols-[1fr_auto] gap-2">
+                                                <button
+                                                    onClick={() => addToCast(false)}
+                                                    className="py-4 bg-surface-2 hover:bg-surface text-accent hover:text-white font-black uppercase tracking-widest text-xs rounded-xl transition-all shadow-lg shadow-accent/10 border border-accent flex items-center justify-center gap-2 group hover:scale-[1.02]"
+                                                >
+                                                    <UserPlus className="w-4 h-4" />
+                                                    {generatePackMode ? "Add Pack" : "Add Actor"}
+                                                </button>
+                                                <button
+                                                    onClick={handleRegenerate}
+                                                    className="px-4 bg-surface-2 hover:bg-surface text-fg font-bold uppercase tracking-widest text-xs rounded-xl transition-all border border-border hover:border-accent flex items-center justify-center"
+                                                    title="Regenerate"
+                                                >
+                                                    <RotateCcw className="w-4 h-4 text-accent-2" />
+                                                </button>
+                                            </div>
 
-                                        <button
-                                            // Call distinct handler to ensure state preservation
-                                            onClick={handleRegenerate}
-                                            className="col-span-1 py-4 bg-surface-2 hover:bg-surface text-fg font-bold uppercase tracking-widest text-xs rounded-xl transition-all border border-border hover:border-accent flex flex-col items-center gap-1"
-                                        >
-                                            <RotateCcw className="w-5 h-5 text-accent-2" />
-                                            Regenerate
-                                        </button>
-
-                                        <button
-                                            onClick={downloadPoster}
-                                            className="col-span-1 py-3 bg-bg border border-border text-muted hover:text-fg hover:border-accent text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2"
-                                        >
-                                            <Share2 className="w-3 h-3" /> Save Poster
-                                        </button>
-                                        <button
-                                            onClick={() => {
-                                                setShowSettings(true);
-                                                setSidebarMode('wardrobe');
-                                            }}
-                                            className="col-span-1 py-3 bg-bg border border-border text-muted hover:text-accent hover:border-accent/30 text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2"
-                                        >
-                                            <Layers className="w-3 h-3" /> Wardrobe V2
-                                        </button>
-
-                                        {/* Reference Sheet Section */}
-                                        <div className="col-span-2 pt-2 border-t border-border mt-2 space-y-2">
+                                            {/* Secondary Actions Row */}
                                             <div className="flex gap-2">
+                                                <div className="relative group w-full">
+                                                    <button className="w-full py-2 bg-transparent hover:bg-surface border border-dashed border-border hover:border-accent/50 text-muted hover:text-fg text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2">
+                                                        <MoreHorizontal className="w-4 h-4" /> More Actions
+                                                    </button>
+
+                                                    {/* Hover Menu */}
+                                                    <div className="absolute top-full left-0 right-0 pt-2 opacity-0 translate-y-2 pointer-events-none group-hover:opacity-100 group-hover:translate-y-0 group-hover:pointer-events-auto transition-all z-50">
+                                                        <div className="bg-[#18181b] border border-border rounded-xl shadow-2xl p-1 flex flex-col gap-1">
+                                                            <button
+                                                                onClick={() => {
+                                                                    setSidebarMode('director');
+                                                                    setShowSettings(true);
+                                                                }}
+                                                                className="w-full py-2 px-3 text-left hover:bg-surface-2 text-muted hover:text-fg text-[10px] font-bold uppercase tracking-widest rounded-lg transition-all flex items-center gap-2"
+                                                            >
+                                                                <Sliders className="w-3 h-3" /> Director Controls
+                                                            </button>
+                                                            <button
+                                                                onClick={downloadPoster}
+                                                                className="w-full py-2 px-3 text-left hover:bg-surface-2 text-muted hover:text-fg text-[10px] font-bold uppercase tracking-widest rounded-lg transition-all flex items-center gap-2"
+                                                            >
+                                                                <Share2 className="w-3 h-3" /> Save Poster
+                                                            </button>
+                                                            <button
+                                                                onClick={() => {
+                                                                    setShowSettings(true);
+                                                                    setSidebarMode('wardrobe');
+                                                                }}
+                                                                className="w-full py-2 px-3 text-left hover:bg-surface-2 text-muted hover:text-fg text-[10px] font-bold uppercase tracking-widest rounded-lg transition-all flex items-center gap-2"
+                                                            >
+                                                                <Shirt className="w-3 h-3" /> Wardrobe V2
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* ZONE 2: REFERENCE SHEET STUDIO */}
+                                        <div className="bg-[#09090b] rounded-2xl border border-white/10 p-4 space-y-4 shadow-lg">
+                                            <h4 className="text-xs font-black text-white uppercase tracking-widest flex items-center gap-2 border-b border-white/5 pb-2">
+                                                <LayoutTemplate className="w-3.5 h-3.5 text-blue-400" /> Reference Sheet
+                                            </h4>
+
+                                            {/* Layout Selector */}
+                                            <div className="flex bg-black rounded-lg p-1 border border-white/10">
                                                 {[
-                                                    { id: 'form_focus', label: 'Form Focus' },
-                                                    { id: 'face_focus', label: 'Face Focus' },
-                                                    { id: 'split_focus', label: 'Split Focus' }
+                                                    { id: 'form_focus', label: 'Form' },
+                                                    { id: 'face_focus', label: 'Face' },
+                                                    { id: 'split_focus', label: 'Split' }
                                                 ].map((l) => (
                                                     <button
                                                         key={l.id}
                                                         onClick={() => setRefLayout(l.id as any)}
-                                                        className={`flex-1 py-2 rounded text-[9px] font-bold uppercase transition-all border ${refLayout === l.id
-                                                            ? 'bg-accent/20 border-accent text-accent shadow-[0_0_10px_rgba(250,204,21,0.2)]'
-                                                            : 'bg-surface-2 border-border text-muted hover:border-white/50'
+                                                        className={`flex-1 py-1.5 rounded-md text-[9px] font-bold uppercase transition-all ${refLayout === l.id
+                                                            ? 'bg-blue-600 text-white shadow-lg'
+                                                            : 'text-muted hover:text-white hover:bg-white/5'
                                                             }`}
                                                     >
                                                         {l.label}
                                                     </button>
                                                 ))}
                                             </div>
+
+                                            {/* Style Selector Dropdown */}
+                                            <div className="space-y-1">
+                                                <label className="text-[9px] font-bold text-muted uppercase tracking-widest pl-1">Style Preset</label>
+                                                <div className="relative">
+                                                    <select
+                                                        value={refStyle}
+                                                        onChange={(e) => setRefStyle(e.target.value as any)}
+                                                        className="w-full appearance-none bg-black border border-white/10 rounded-xl px-3 py-2 text-[10px] font-bold uppercase text-white outline-none focus:border-blue-500 transition-colors cursor-pointer"
+                                                    >
+                                                        {Object.values(REF_SHEET_STYLES).map((s) => (
+                                                            <option key={s.id} value={s.id}>{s.label}</option>
+                                                        ))}
+                                                    </select>
+                                                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-3 h-3 text-muted pointer-events-none" />
+                                                </div>
+                                            </div>
+
+                                            {/* Advanced Settings Accordion */}
+                                            <details className="group">
+                                                <summary className="list-none flex items-center justify-between cursor-pointer py-2 border-t border-white/5 text-[9px] font-bold text-muted uppercase tracking-widest hover:text-white transition-colors">
+                                                    <span>Advanced Settings</span>
+                                                    <ChevronDown className="w-3 h-3 transition-transform group-open:rotate-180" />
+                                                </summary>
+                                                <div className="space-y-3 pt-2 animate-in slide-in-from-top-2 duration-200">
+                                                    {/* Body Weight */}
+                                                    <div className="space-y-1">
+                                                        <label className="text-[8px] text-muted/60 uppercase tracking-widest font-bold">Body Structure</label>
+                                                        <div className="flex bg-black rounded-lg p-1 border border-white/5">
+                                                            {['light', 'athletic', 'medium', 'heavy'].map((w) => (
+                                                                <button
+                                                                    key={w}
+                                                                    onClick={() => setBodyWeight(w as any)}
+                                                                    className={`flex-1 py-1 rounded text-[8px] font-bold uppercase transition-all ${bodyWeight === w
+                                                                        ? 'bg-white/10 text-white'
+                                                                        : 'text-muted hover:text-white'
+                                                                        }`}
+                                                                >
+                                                                    {w}
+                                                                </button>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Identity Source */}
+                                                    <div className="space-y-1">
+                                                        <label className="text-[8px] text-muted/60 uppercase tracking-widest font-bold">Identity Source</label>
+                                                        <div className="flex bg-black rounded-lg p-1 border border-white/5">
+                                                            <button
+                                                                onClick={() => setIdentitySource('biometric')}
+                                                                className={`flex-1 py-1 rounded text-[8px] font-bold uppercase transition-all ${identitySource === 'biometric' ? 'bg-white/10 text-blue-400' : 'text-muted'}`}
+                                                            >
+                                                                Biometric (Scans)
+                                                            </button>
+                                                            <button
+                                                                onClick={() => setIdentitySource('generated')}
+                                                                className={`flex-1 py-1 rounded text-[8px] font-bold uppercase transition-all ${identitySource === 'generated' ? 'bg-white/10 text-blue-400' : 'text-muted'}`}
+                                                            >
+                                                                Generated (Portrait)
+                                                            </button>
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Sheet Content */}
+                                                    <div className="space-y-1">
+                                                        <label className="text-[8px] text-muted/60 uppercase tracking-widest font-bold">Scope</label>
+                                                        <div className="flex bg-black rounded-lg p-1 border border-white/5">
+                                                            <button onClick={() => setSheetContent('full')} className={`flex-1 py-1 rounded text-[8px] font-bold uppercase ${sheetContent === 'full' ? 'bg-white/10 text-white' : 'text-muted'}`}>Full Sheet</button>
+                                                            <button onClick={() => setSheetContent('head')} className={`flex-1 py-1 rounded text-[8px] font-bold uppercase ${sheetContent === 'head' ? 'bg-white/10 text-white' : 'text-muted'}`}>Head Only</button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </details>
+
                                             <button
                                                 onClick={handleGenerateRefSheet}
-                                                disabled={isProcessing}
-                                                className="w-full py-3 bg-bg border border-border text-muted hover:text-accent hover:border-accent text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2 group relative"
+                                                disabled={isProcessing || (identitySource === 'biometric' && (!capturedAngles.center || !capturedAngles.left || !capturedAngles.right)) || (identitySource === 'generated' && !finalCharacterUrl)}
+                                                className={`w-full py-3 bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all shadow-lg shadow-blue-900/40 flex items-center justify-center gap-2 ${(identitySource === 'biometric' && (!capturedAngles.center || !capturedAngles.left || !capturedAngles.right)) || (identitySource === 'generated' && !finalCharacterUrl)
+                                                    ? 'opacity-50 grayscale cursor-not-allowed'
+                                                    : ''
+                                                    }`}
                                             >
-                                                <LayoutTemplate className="w-3 h-3" />
+                                                <ImagePlus className="w-3.5 h-3.5" />
                                                 Generate Reference Sheet
-                                                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 p-3 bg-gray-900 border border-gray-700 rounded-lg shadow-xl text-[10px] text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 normal-case text-left">
-                                                    <strong className="text-white block mb-1">Production Note:</strong>
-                                                    High-Fidelity AI Synthesis: Identity & layout are strictly enforced, but minor variations may occur. Always review for production use.
-                                                </div>
                                             </button>
+
+                                            {/* Validation Messages */}
+                                            {identitySource === 'biometric' && (!capturedAngles.center || !capturedAngles.left || !capturedAngles.right) && (
+                                                <div className="text-center text-[9px] text-red-400 font-bold uppercase tracking-widest bg-red-500/10 py-1 rounded">Requires Center + Left + Right Scans</div>
+                                            )}
                                         </div>
                                     </div>
-                                    <div className="mt-8 border-t border-border pt-4">
+
+                                    {/* ZONE 3: FOOTER */}
+                                    <div className="mt-8 pt-4 border-t border-white/5">
                                         <button
                                             onClick={resetScan}
-                                            className="w-full py-3 text-muted hover:text-danger text-xs font-bold uppercase tracking-widest transition-colors flex items-center justify-center gap-2"
+                                            className="w-full py-2 text-muted hover:text-white text-[10px] font-bold uppercase tracking-widest transition-colors flex items-center justify-center gap-2 opacity-50 hover:opacity-100"
                                         >
                                             <RefreshCw className="w-3 h-3" />
                                             Initialize New Subject
