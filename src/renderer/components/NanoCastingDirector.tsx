@@ -11,7 +11,6 @@ import {
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
-import { exportBiometricReferenceSheet } from '../services/BiometricSheetService';
 
 const REFERENCE_SHEET_PROMPT = `Create a professional, 8k resolution character reference sheet based strictly on the uploaded reference image. Use a clean, neutral plain background.
 CRITICAL COMPOSITION RULES:
@@ -22,45 +21,6 @@ CRITICAL COMPOSITION RULES:
 - Lighting must be studio-neutral with no harsh shadows obscuring details.
 - Output must be crisp, production-ready, and free of artifacts.
 `;
-
-const REF_SHEET_STYLES = {
-    family_3d: {
-        id: 'family_3d',
-        label: 'Family 3D Animation',
-        keywords: "premium family-friendly 3D animation, soft subsurface scattering, clean stylized materials, expressive facial features, high-end CG render, smooth shading, gentle rim light, cinematic depth",
-        lighting: "Golden hour, cinematic bounce light"
-    },
-    premium_cg: {
-        id: 'premium_cg',
-        label: 'Premium CG Realism',
-        keywords: "photorealistic CG, exact facial structure preservation, highly detailed skin pores, 85mm lens look, f/1.8 depth of field, cinematic natural lighting, sharp focus, biometric fidelity",
-        lighting: "High-contrast studio lighting"
-    },
-    exact_studio: {
-        id: 'exact_studio',
-        label: 'Exact Likeness Studio',
-        keywords: "ultra-realistic studio portrait, 1:1 identity replication, strict facial feature preservation, highly detailed skin texture, raw photography look, 85mm lens, sharp focus, identity locked",
-        lighting: "Professional studio lighting"
-    },
-    retro_cel: {
-        id: 'retro_cel',
-        label: 'Retro Cel Anime',
-        keywords: "90s retro anime aesthetic, cel shading, hand-drawn ink lines, limited animation feel, vintage film grain, soft pastel palette, nostalgic Japanese animation look",
-        lighting: "Soft diffused daylight"
-    },
-    graphic_noir: {
-        id: 'graphic_noir',
-        label: 'Graphic Noir',
-        keywords: "modern graphic novel style, heavy ink outlines, halftone dot patterns, high contrast, dramatic shadows, bold dynamic lines",
-        lighting: "Hard noir shadows"
-    },
-    cyberpunk_neon: {
-        id: 'cyberpunk_neon',
-        label: 'Cyberpunk Neon',
-        keywords: "futuristic techwear, neon glow, wet pavement reflections, volumetric fog, teal and orange palette, cinematic cyberpunk lighting",
-        lighting: "Neon-drenched night"
-    }
-};
 
 // Types for Phases
 type Phase = 1 | 2 | 3 | 4 | 5;
@@ -144,10 +104,6 @@ const NanoCastingDirector = () => {
     const [showRefSheet, setShowRefSheet] = useState(false);
     const [refSheetUrl, setRefSheetUrl] = useState<string | null>(null);
     const [refLayout, setRefLayout] = useState<'form_focus' | 'face_focus' | 'split_focus'>('form_focus');
-    const [refStyle, setRefStyle] = useState<keyof typeof REF_SHEET_STYLES>('family_3d');
-    const [identitySource, setIdentitySource] = useState<'biometric' | 'generated'>('biometric');
-    const [sheetContent, setSheetContent] = useState<'full' | 'head'>('full');
-    const [bodyWeight, setBodyWeight] = useState<'light' | 'medium' | 'heavy' | 'athletic'>('medium');
 
     // --- DIRECTOR CONTROLS ---
     const [showSettings, setShowSettings] = useState(false);
@@ -559,26 +515,6 @@ const NanoCastingDirector = () => {
     // New: Pack Mode State
     const [generatePackMode] = useState(true);
 
-    // Auto-select Identity Source based on availability
-    useEffect(() => {
-        const hasBiometrics = capturedAngles.center && capturedAngles.left && capturedAngles.right;
-        const hasPortrait = !!finalCharacterUrl;
-
-        // If currently on biometric but missing data, try to switch
-        if (identitySource === 'biometric' && !hasBiometrics && hasPortrait) {
-            setIdentitySource('generated');
-        }
-        // If currently on generated but missing data, try to switch
-        else if (identitySource === 'generated' && !hasPortrait && hasBiometrics) {
-            setIdentitySource('biometric');
-        }
-        // Initial Default priority
-        else if (!identitySource) {
-            if (hasBiometrics) setIdentitySource('biometric');
-            else if (hasPortrait) setIdentitySource('generated');
-        }
-    }, [capturedAngles, finalCharacterUrl, identitySource]);
-
     // --- TOAST NOTIFICATIONS ---
     const [notification, setNotification] = useState<string | null>(null);
     const showToast = (message: string) => {
@@ -782,73 +718,27 @@ const NanoCastingDirector = () => {
     }, [finalCharacterUrl, dispatch]);
 
     const handleGenerateRefSheet = async () => {
-        // Validation check based on Identity Source
-        if (identitySource === 'biometric') {
-            // Note: Up/Down are optional
-            if (!capturedAngles.center || !capturedAngles.left || !capturedAngles.right) {
-                showToast("Requires: Center + Left + Right");
-                return;
-            }
-        } else {
-            if (!finalCharacterUrl) {
-                showToast("Requires: Generate a portrait first");
-                return;
-            }
-        }
-
-        if (!state.apiKey) return;
+        if (!finalCharacterUrl || !state.apiKey) return;
 
         dispatch({ type: 'SET_PROCESSING', payload: true });
         dispatch({ type: 'ADD_LOG', payload: { message: "Generating Character Reference Sheet...", type: 'info' } });
 
         try {
-            const styleConfig = REF_SHEET_STYLES[refStyle];
-
-            let finalPrompt = `${REFERENCE_SHEET_PROMPT}\n\n`;
-            finalPrompt += `STYLE PROTOCOL: ${styleConfig.label}\n`;
-            finalPrompt += `VISUAL KEYWORDS: ${styleConfig.keywords}\n`;
-            finalPrompt += `LIGHTING: ${styleConfig.lighting}\n\n`;
-
-            // V2: Strict Modesty & Body Weight
-            finalPrompt += "IMPORTANT: Subject must be fully clothed. Basic T-shirt and pants minimum. No nudity.\n";
-            finalPrompt += `BODY TYPE: ${bodyWeight.toUpperCase()} BUILD. Ensure consistent body mass across all views.\n\n`;
-
-            if (sheetContent === 'head') {
-                finalPrompt += "CONTENT SCOPE: HEAD ONLY. Do not generate full body figures. Focus exclusively on facial rotation and expression.\n";
-            }
+            let finalPrompt = REFERENCE_SHEET_PROMPT;
 
             if (refLayout === 'form_focus') {
-                if (sheetContent === 'head') {
-                    finalPrompt += " [LAYOUT A - CLASSIC HEADS]: Split canvas horizontally. Top 50%: Front & Side profile close-ups. Bottom 50%: 3/4 view and Back view heads.";
-                } else {
-                    finalPrompt += " [LAYOUT A - CLASSIC]: Split canvas horizontally. Top 65% height: ROW OF EXACTLY 3 Full Body views (Front, Side, Back). Bottom 35% height: Grid of EXACTLY 4 Headshots. Ensure headshots are MACRO-DETAILED and hyper-sharp.";
-                }
+                finalPrompt += " [LAYOUT A - CLASSIC]: Split canvas horizontally. Top 65% height: ROW OF EXACTLY 3 Full Body views (Front, Side, Back). Bottom 35% height: Grid of EXACTLY 4 Headshots. Ensure headshots are MACRO-DETAILED and hyper-sharp.";
             } else if (refLayout === 'face_focus') {
-                finalPrompt += " [LAYOUT B - FACE FIRST]: Split canvas horizontally. Top 55% height: Row of EXACTLY 4 Large Headshots (Front, Left, Right, Back). Bottom 45% height: " + (sheetContent === 'head' ? "Row of Expression Variants (Happy, Neutral, Angry)." : "Row of EXACTLY 3 Full Body views.");
+                finalPrompt += " [LAYOUT B - FACE FIRST]: Split canvas horizontally. Top 55% height: Row of EXACTLY 4 Large Headshots (Front, Left, Right, Back). Bottom 45% height: Row of EXACTLY 3 Full Body views. Headshots must maintain perfect identity.";
             } else if (refLayout === 'split_focus') {
-                finalPrompt += " [LAYOUT C - STUDIO]: Split canvas vertically. " + (sheetContent === 'head' ? "Left 50%: Large Front facing potrait. Right 50%: Grid of side/angle headshots." : "Left 45% width: Vertical stack of EXACTLY 3 Full Body views (Front, Side, Back). Right 55% width: 2x2 Grid of Large Headshots.");
-            }
-
-            // Prepare Image References based on Source
-            const imageRefs: { url: string; label: string }[] = [];
-            if (identitySource === 'biometric') {
-                const angles: (keyof typeof capturedAngles)[] = ['center', 'left', 'right', 'up', 'down'];
-                for (const angle of angles) {
-                    const blobUrl = capturedAngles[angle];
-                    if (blobUrl) {
-                        const b64 = await getBase64FromBlobUrl(blobUrl);
-                        imageRefs.push({ url: b64, label: `Reference: ${angle}` });
-                    }
-                }
-            } else {
-                imageRefs.push({ url: finalCharacterUrl!, label: 'Character Reference' });
+                finalPrompt += " [LAYOUT C - STUDIO]: Split canvas vertically. Left 45% width: Vertical stack of EXACTLY 3 Full Body views (Front, Side, Back). DO NOT ADD A FOURTH VIEW. Right 55% width: 2x2 Grid of Large Headshots. Highest possible facial resolution.";
             }
 
             const res = await GeminiService.generateImage(
                 finalPrompt,
                 state.apiKey,
                 state.model.includes('imagen') ? 'imagen-4.0-generate-001' : 'gemini-3-pro-image-preview', // Force high-reasoning model if available
-                imageRefs,
+                [{ url: finalCharacterUrl, label: 'Character Reference' }],
                 { aspectRatio: '16:9' }
             );
             setRefSheetUrl(res);
@@ -1160,7 +1050,7 @@ const NanoCastingDirector = () => {
                                                     <button
                                                         onClick={generateWardrobe}
                                                         disabled={isProcessing}
-                                                        className="!bg-yellow-500 hover:!bg-yellow-400 !text-black py-2 rounded-lg text-[10px] font-black uppercase tracking-wider shadow-lg shadow-yellow-500/20"
+                                                        className="bg-accent hover:bg-yellow-400 text-black py-2 rounded-lg text-[10px] font-black uppercase tracking-wider"
                                                     >
                                                         Generate & Fit
                                                     </button>
@@ -1479,32 +1369,7 @@ const NanoCastingDirector = () => {
                                             {capturedAngles[label] && <CheckCircle2 className="w-4 h-4 text-success" />}
                                         </div>
                                     ))}
-                                    <div className="mt-auto space-y-2">
-                                        {/* EXPORT OPTIONS */}
-                                        {capturedAngles.center && capturedAngles.left && capturedAngles.right && capturedAngles.up && capturedAngles.down && (
-                                            <button
-                                                onClick={async () => {
-                                                    try {
-                                                        showToast("Generating High-Res Sheet...");
-                                                        const res = await exportBiometricReferenceSheet({
-                                                            subjectId: `NANO-${Date.now().toString().slice(-6)}`,
-                                                            captures: capturedAngles as any
-                                                        });
-                                                        if (res.warning) {
-                                                            showToast(res.warning);
-                                                        } else {
-                                                            showToast("Export Complete (4K)");
-                                                        }
-                                                    } catch (e: any) {
-                                                        showToast("Export Failed: " + e.message);
-                                                    }
-                                                }}
-                                                className="w-full py-3 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 hover:text-emerald-300 border border-emerald-500/30 rounded-lg text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 transition-all"
-                                            >
-                                                <LayoutTemplate className="w-3 h-3" />
-                                                Biometric Reference Sheet (Free)
-                                            </button>
-                                        )}
+                                    <div className="mt-auto">
                                         <button
                                             onClick={resetScan}
                                             className="w-full py-4 mb-2 bg-danger hover:bg-red-600 text-accent shadow-lg shadow-danger/20 font-black uppercase tracking-widest transition-all text-xs rounded-lg flex items-center justify-center gap-2"
@@ -1516,7 +1381,7 @@ const NanoCastingDirector = () => {
                                             onClick={() => setPhase(2)}
                                             className={`w-full py-4 font-black uppercase tracking-widest transition-all text-xs rounded-lg flex items-center justify-center gap-2 ${isPhaseLocked(2)
                                                 ? 'bg-surface-2 text-muted cursor-not-allowed'
-                                                : '!bg-yellow-500 hover:!bg-yellow-400 !text-black shadow-lg shadow-yellow-500/20'
+                                                : 'bg-accent hover:bg-cyan-400 text-black shadow-lg shadow-accent/20'
                                                 }`}
                                         >
                                             Processing Matrix <ChevronRight className="w-4 h-4" />
@@ -1748,11 +1613,11 @@ const NanoCastingDirector = () => {
                                     </div>
                                 </div>
 
-                                <div className="w-[420px] flex flex-col gap-4">
+                                <div className="w-96 flex flex-col gap-4">
                                     <h3 className="text-2xl font-black text-fg uppercase italic tracking-tighter">
                                         Reconstruction <span className="text-accent">Complete</span>
                                     </h3>
-                                    <p className="text-xs text-muted mb-6 leading-relaxed">
+                                    <p className="text-xs text-muted mb-8 leading-relaxed">
                                         Neural synthesis successful. Subject has been re-topologized and is ready for integration into the storyboard matrix.
                                         {generatePackMode && " Full variation pack generated."}
                                     </p>
@@ -1811,112 +1676,18 @@ const NanoCastingDirector = () => {
                                                     </button>
                                                 ))}
                                             </div>
-
-                                            {/* Style Preset Selector - Clean Grid */}
-                                            <div className="flex flex-col gap-1 mt-3">
-                                                <div className="text-[9px] text-muted uppercase tracking-widest font-bold">Style Configuration</div>
-                                                <div className="grid grid-cols-2 gap-1.5 p-2 bg-black/40 rounded-lg border border-white/5">
-                                                    {Object.values(REF_SHEET_STYLES).map((s) => (
-                                                        <button
-                                                            key={s.id}
-                                                            onClick={() => setRefStyle(s.id as any)}
-                                                            className={`px-2 py-1.5 rounded text-[9px] font-bold uppercase transition-all text-left whitespace-nowrap overflow-hidden text-ellipsis ${refStyle === s.id
-                                                                ? 'bg-accent text-black shadow-lg shadow-accent/20'
-                                                                : 'bg-white/5 text-muted hover:bg-white/10 hover:text-white'
-                                                                }`}
-                                                        >
-                                                            {s.label}
-                                                        </button>
-                                                    ))}
-                                                </div>
-                                            </div>
-
-                                            {/* Body Weight Control */}
-                                            <div className="flex flex-col gap-1 mt-2">
-                                                <div className="text-[9px] text-muted uppercase tracking-widest font-bold">Body Structure</div>
-                                                <div className="flex bg-black/50 p-1 rounded-lg border border-white/5">
-                                                    {['light', 'athletic', 'medium', 'heavy'].map((w) => (
-                                                        <button
-                                                            key={w}
-                                                            onClick={() => setBodyWeight(w as any)}
-                                                            className={`flex-1 py-1 rounded-md text-[9px] font-bold uppercase transition-all ${bodyWeight === w
-                                                                ? 'bg-surface border border-accent/50 text-accent shadow-sm'
-                                                                : 'text-muted hover:text-white'
-                                                                }`}
-                                                        >
-                                                            {w}
-                                                        </button>
-                                                    ))}
-                                                </div>
-                                            </div>
-
-                                            {/* Identity Source & Sheet Content Container */}
-                                            <div className="grid grid-cols-2 gap-2 mt-2">
-                                                {/* Identity Source */}
-                                                <div className="flex flex-col gap-1">
-                                                    <div className="text-[9px] text-muted uppercase tracking-widest font-bold">Identity Source</div>
-                                                    <div className="flex bg-black/50 p-1 rounded-lg border border-white/5">
-                                                        <button
-                                                            onClick={() => setIdentitySource('biometric')}
-                                                            className={`flex-1 py-1 rounded-md text-[9px] font-bold uppercase transition-all ${identitySource === 'biometric' ? 'bg-surface border border-accent/50 text-accent shadow-[0_0_10px_rgba(250,204,21,0.1)]' : 'text-muted hover:text-white'}`}
-                                                        >
-                                                            Biometric
-                                                        </button>
-                                                        <button
-                                                            onClick={() => setIdentitySource('generated')}
-                                                            className={`flex-1 py-1 rounded-md text-[9px] font-bold uppercase transition-all ${identitySource === 'generated' ? 'bg-surface border border-accent/50 text-accent shadow-[0_0_10px_rgba(250,204,21,0.1)]' : 'text-muted hover:text-white'}`}
-                                                        >
-                                                            Generated
-                                                        </button>
-                                                    </div>
-                                                    <div className="text-[8px] text-muted/50 font-mono">
-                                                        {identitySource === 'biometric' ? "Uses captured angles (L/C/R)" : "Uses generated portrait"}
-                                                    </div>
-                                                </div>
-
-                                                {/* Sheet Content */}
-                                                <div className="flex flex-col gap-1">
-                                                    <div className="text-[9px] text-muted uppercase tracking-widest font-bold">Sheet Content</div>
-                                                    <div className="flex bg-black/50 p-1 rounded-lg border border-white/5">
-                                                        <button
-                                                            onClick={() => setSheetContent('full')}
-                                                            className={`flex-1 py-1 rounded-md text-[9px] font-bold uppercase transition-all ${sheetContent === 'full' ? 'bg-surface border border-accent/50 text-accent' : 'text-muted hover:text-white'}`}
-                                                        >
-                                                            Full Sheet
-                                                        </button>
-                                                        <button
-                                                            onClick={() => setSheetContent('head')}
-                                                            className={`flex-1 py-1 rounded-md text-[9px] font-bold uppercase transition-all ${sheetContent === 'head' ? 'bg-surface border border-accent/50 text-accent' : 'text-muted hover:text-white'}`}
-                                                        >
-                                                            Head Only
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                            </div>
-
                                             <button
                                                 onClick={handleGenerateRefSheet}
-                                                disabled={isProcessing || (identitySource === 'biometric' && (!capturedAngles.center || !capturedAngles.left || !capturedAngles.right)) || (identitySource === 'generated' && !finalCharacterUrl)}
-                                                className={`w-full py-3 bg-bg border border-border text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2 group relative ${(identitySource === 'biometric' && (!capturedAngles.center || !capturedAngles.left || !capturedAngles.right)) || (identitySource === 'generated' && !finalCharacterUrl)
-                                                    ? 'opacity-50 cursor-not-allowed border-danger/30 text-danger'
-                                                    : 'text-muted hover:text-accent hover:border-accent'
-                                                    }`}
+                                                disabled={isProcessing}
+                                                className="w-full py-3 bg-bg border border-border text-muted hover:text-accent hover:border-accent text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2 group relative"
                                             >
                                                 <LayoutTemplate className="w-3 h-3" />
                                                 Generate Reference Sheet
                                                 <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 p-3 bg-gray-900 border border-gray-700 rounded-lg shadow-xl text-[10px] text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 normal-case text-left">
                                                     <strong className="text-white block mb-1">Production Note:</strong>
-                                                    High-Fidelity AI Synthesis: Identity & layout are strictly enforced.
+                                                    High-Fidelity AI Synthesis: Identity & layout are strictly enforced, but minor variations may occur. Always review for production use.
                                                 </div>
                                             </button>
-
-                                            {/* Status Message */}
-                                            {identitySource === 'biometric' && (!capturedAngles.center || !capturedAngles.left || !capturedAngles.right) && (
-                                                <div className="text-center text-[9px] text-danger font-bold uppercase tracking-widest">Requires: Center + Left + Right</div>
-                                            )}
-                                            {identitySource === 'generated' && !finalCharacterUrl && (
-                                                <div className="text-center text-[9px] text-danger font-bold uppercase tracking-widest">Requires: Generate a portrait first</div>
-                                            )}
                                         </div>
                                     </div>
                                     <div className="mt-8 border-t border-border pt-4">

@@ -22,6 +22,7 @@ Before you can yell "Action!", you need to power up the studio.
 1.  Navigate to the **NANO CAST** tab.
 2.  **Phase 1: Biometric Acquisition**
     *   **Biometric Acquisition**: Capture or upload **Center**, **Left**, and **Right** angles of the face.
+    *   **Camera Control**: Use the **Eye/EyeOff** icon toggle to enable or disable the live webcam feed.
     *   **Precision Controls**: Click **CONTROLS** in the header to fine-tune the synthesis:
         *   **Identity Lock**: Controls how strictly the AI matches the reference face (higher = more literal).
         *   **Stylization**: Balances the intensity of the art style vs. raw likeness.
@@ -31,7 +32,7 @@ Before you can yell "Action!", you need to power up the studio.
     *   Choose a body type (e.g., *The Titan*, *The Scout*, *The Guardian*).
     *   This determines the physical build of your digital actor.
 4.  **Phase 3: Style Synthesis**
-    *   Select the art style for this actor (e.g., *Family 3D Animation*, *Premium CG Realism*, *Cyberpunk V2*).
+    *   Select the art style for this actor (e.g., *Exact Likeness Studio*, *Retro Cel Anime*, *Graphic Noir*, *Cyberpunk Neon*).
 6.  **Phase 5: Digital Reconstruction**
     *   Review the generated "Gold Standard" actor.
     *   **Save to Cast**: Adds them to your local library for use in scenes.
@@ -43,13 +44,13 @@ The Reference Sheet Generator produces professional, technical turnarounds of yo
 ### 📐 Three Layout Modes
 1.  **Form Focus (Layout A)**:
     *   **Best For**: General 3D modeling and costume design.
-    *   **Structure**: Top 65% height has 3 Full Body views (Front, Side, Back). Bottom 35% height has a 2x2 grid of headshots.
+    *   **Structure**: Top 65% height: Row of 3 Full Body views (Front, Side, Back). Bottom 35% height: Grid of 4 Headshots.
 2.  **Face Focus (Layout B)**:
     *   **Best For**: Facial rigging, identity precision, and skin texture.
-    *   **Structure**: Top 55% height has 4 headshots. Bottom 45% height has 2 full body views.
+    *   **Structure**: Top 55% height: Row of 4 Large Headshots. Bottom 45% height: Row of 3 Full Body views.
 3.  **Split Focus (Layout C)**:
     *   **Best For**: Marketing assets and compact studio overviews.
-    *   **Structure**: Vertical split. Left 45% width is a stack of 3 full body views. Right 55% width is a headshot grid.
+    *   **Structure**: Vertical split. Left 45% width: Stack of 3 Full Body views. Right 55% width: 2x2 Grid of Large Headshots.
 
 ### 🚀 How to Generate
 *   **In Casting Forge**: Navigate to the **Source Material** section, scroll to **3. Reference Sheet**, select your layout, and click **Generate Reference Sheet**.
@@ -72,7 +73,7 @@ All sheets are generated with strict **High-Fidelity Engine** guards:
 
 1.  Navigate to **WARDROBE**.
 2.  You can view assets saved during previous sessions.
-3.  Use the **Generator** (if available in your version) to describe and create new persistent clothing items (e.g., "Neon flight jacket", "Victorian dress").
+3.  Use the **Generator** (if available) to describe new items (e.g., "Neon flight jacket"). Click **'Generate & Fit'** to create and preview.
 4.  **Virtual Try-On**: Select any actor from your cast library and any item from your wardrobe to see them wear it. *Note: Once a costume is generated, it is a persistent asset that can be worn by ANY actor in your cast.*
 
 ---
