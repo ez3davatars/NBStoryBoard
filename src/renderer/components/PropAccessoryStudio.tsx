@@ -344,6 +344,32 @@ const PropAccessoryStudio = () => {
     }
   };
 
+  const regenerateMask = async () => {
+    if (!appliedImage || !state.apiKey) return;
+    dispatch({ type: 'SET_PROCESSING', payload: true });
+    dispatch({ type: 'ADD_LOG', payload: { message: "Regenerating AI Mask...", type: 'info' } });
+
+    // Clear existing mask first
+    setApplyMask(null);
+    setApplyAiMaskActive(true);
+
+    try {
+      const maskRes = await GeminiService.generateImage(
+        "DIGITAL CHARACTER SEGMENTATION MASK: Create a precise black and white silhouette of the character and the prop. \nRULES:\n1. White = Character, Clothing, and Prop.\n2. Black = Background.\n3. CRITICAL: Do NOT mask out the shirt or clothing. The entire subject must be White.",
+        state.apiKey,
+        state.model,
+        [{ url: appliedImage, label: "Reference" }],
+        { aspectRatio: '1:1' }
+      );
+      setApplyMask(maskRes);
+      dispatch({ type: 'ADD_LOG', payload: { message: "AI Mask refreshed.", type: 'success' } });
+    } catch (e: any) {
+      dispatch({ type: 'ADD_LOG', payload: { message: "Mask generation failed.", type: 'error' } });
+    } finally {
+      dispatch({ type: 'SET_PROCESSING', payload: false });
+    }
+  };
+
   const handleApply = async () => {
     if (!selectedCharacter || !selectedProp || !state.apiKey) return;
     setRemoveApplyBg(false);
@@ -373,9 +399,11 @@ const PropAccessoryStudio = () => {
       );
       setAppliedImage(res);
       dispatch({ type: 'ADD_LOG', payload: { message: "Prop integrated. Creating character edge mask...", type: 'info' } });
+
+      // Inline generation for the first run, using same prompt logic as regenerate
       try {
         const maskRes = await GeminiService.generateImage(
-          "DIGITAL CHARACTER SEGMENTATION MASK: Create a pure black and white silhouette of the character and the integrated prop. White = Subject, Black = Background.",
+          "DIGITAL CHARACTER SEGMENTATION MASK: Create a precise black and white silhouette of the character and the prop. \nRULES:\n1. White = Character, Clothing, and Prop.\n2. Black = Background.\n3. CRITICAL: Do NOT mask out the shirt or clothing. The entire subject must be White.",
           state.apiKey,
           state.model,
           [{ url: res, label: "Reference" }],
@@ -410,6 +438,7 @@ const PropAccessoryStudio = () => {
       }
     });
   };
+
 
   const handleSaveToActors = async () => {
     const freshUrl = runApplyIsolation();
@@ -448,7 +477,7 @@ const PropAccessoryStudio = () => {
 
   return (
     <div className="h-full bg-[#0f0f11] flex overflow-hidden">
-      <div className="w-80 border-r border-gray-800 bg-[#18181b] flex flex-col shadow-xl">
+      <div className="w-96 border-r border-gray-800 bg-[#18181b] flex flex-col shadow-xl">
         <div className="p-4 border-b border-gray-800 flex justify-between items-center">
           <h2 className="text-sm font-black text-white tracking-widest uppercase">Prop Library</h2>
           <div className="flex gap-1.5">
@@ -542,131 +571,202 @@ const PropAccessoryStudio = () => {
               </div>
             </div>
           ) : (
-            <div className="max-w-6xl mx-auto grid grid-cols-12 gap-8">
-              <div className="col-span-4 space-y-6">
-                <div className="bg-[#18181b] p-6 rounded-2xl border border-gray-800">
+            <div className="w-full grid grid-cols-12 gap-8 h-full">
+              {/* LEFT COLUMN: Inputs (Split into 2 cards) */}
+              <div className="col-span-3 flex flex-col gap-6 h-full overflow-hidden">
+                {/* Card A: Clean Selections */}
+                <div className="bg-[#18181b] p-6 rounded-2xl border border-gray-800 shrink-0">
                   <h3 className="text-xs font-black text-gray-400 uppercase mb-4 tracking-widest">1. Subject</h3>
-                  <div className="grid grid-cols-4 gap-2 mb-6 h-32 overflow-y-auto">
+                  <div className="grid grid-cols-4 gap-2 mb-6 h-32 overflow-y-auto custom-scrollbar">
                     {state.cast.map(c => (
                       <button key={c.id} onClick={() => setSelectedCharacter(c)} className={`aspect-square rounded-lg border-2 overflow-hidden transition-all ${selectedCharacter?.id === c.id ? 'border-blue-500 shadow-[0_0_0_2px_rgba(59,130,246,0.3)] scale-95' : 'border-gray-800 hover:border-gray-600'}`}><img src={c.url} className="w-full h-full object-cover" /></button>
                     ))}
                   </div>
                   <h3 className="text-xs font-black text-gray-400 uppercase mb-4 tracking-widest border-t border-gray-800 pt-6">2. Active Prop</h3>
-                  <div className="aspect-square bg-[#09090b] rounded-xl border border-gray-800 mb-6 flex items-center justify-center overflow-hidden">
-                    {selectedProp ? <img src={selectedProp.url} className="w-full h-full object-contain" /> : <Package className="w-10 h-10 opacity-10" />}
+                  <div className="h-48 bg-[#09090b] rounded-xl border border-gray-800 flex items-center justify-center overflow-hidden">
+                    {selectedProp ? <img src={selectedProp.url} className="w-full h-full object-contain p-2" /> : <Package className="w-10 h-10 opacity-10" />}
                   </div>
-                  <h3 className="text-xs font-black text-gray-400 uppercase mb-4 tracking-widest border-t border-gray-800 pt-6">3. Placement Notes</h3>
-                  <textarea className="w-full bg-[#09090b] border border-[#27272a] p-3 rounded-lg text-xs text-gray-300 h-20 mb-4 focus:border-blue-500 focus:outline-none" placeholder="Where should the prop be?..." value={applyNote} onChange={(e) => setApplyNote(e.target.value)} />
-                  <button onClick={handleApply} disabled={state.isProcessing || !selectedCharacter || !selectedProp} className="w-full bg-blue-600 text-white py-4 rounded-xl font-black text-[10px] uppercase tracking-widest shadow-xl active:scale-95 disabled:opacity-50">Apply to Character</button>
+                </div>
+
+                {/* Card B: Action Area */}
+                <div className="bg-[#18181b] p-6 rounded-2xl border border-gray-800 flex-grow flex flex-col min-h-0">
+                  <h3 className="text-xs font-black text-gray-400 uppercase mb-4 tracking-widest">3. Placement Notes</h3>
+                  <textarea className="w-full bg-[#09090b] border border-[#27272a] p-3 rounded-lg text-xs text-gray-300 flex-grow mb-4 focus:border-blue-500 focus:outline-none resize-none min-h-[80px]" placeholder="Where should the prop be?..." value={applyNote} onChange={(e) => setApplyNote(e.target.value)} />
+                  <button onClick={handleApply} disabled={state.isProcessing || !selectedCharacter || !selectedProp} className="w-full bg-blue-600 hover:bg-blue-500 text-white py-4 rounded-xl font-black text-[10px] uppercase tracking-widest shadow-xl active:scale-95 disabled:opacity-50 transition-all">Apply to Character</button>
                 </div>
               </div>
 
-              <div className="col-span-8">
-                <div className="aspect-square bg-black rounded-3xl border border-gray-800 flex items-center justify-center overflow-hidden relative">
-                  {appliedImage ? (
-                    <>
-                      <img ref={applyImgRef} src={appliedImage} className={processedApplyUrl ? 'hidden' : 'w-full h-full object-cover'} />
-                      {processedApplyUrl && <img src={processedApplyUrl} className="w-full h-full object-cover" />}
-                      <canvas ref={applyCanvasRef} className="hidden" />
-                      {applyMask && <img ref={applyMaskImgRef} src={applyMask} className="hidden" />}
-                    </>
-                  ) : (
-                    <Package className="w-24 h-24 opacity-10" />
-                  )}
+              {/* CENTER COLUMN: Spacious Stage */}
+              <div className="col-span-6 flex flex-col items-center">
+                <div className="w-full h-[calc(100vh-260px)] min-h-[560px] max-h-[820px] bg-black rounded-3xl border border-gray-800 relative flex flex-col overflow-hidden shadow-2xl">
+                  {/* Stage Header */}
+                  <div className="h-14 border-b border-gray-800 bg-white/5 flex items-center justify-between px-6 shrink-0 backdrop-blur-md">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-2 h-2 rounded-full ${appliedImage ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]' : 'bg-gray-600'}`} />
+                      <span className="text-xs font-black uppercase tracking-widest text-gray-400">Preview Stage</span>
+                    </div>
 
-                  {appliedImage && (
-                    <div className="absolute top-6 right-6 flex flex-col gap-3 z-20 bg-black/60 p-4 rounded-3xl border border-white/10 backdrop-blur-md">
-                      <div className="flex items-center justify-between gap-6">
-                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-2 cursor-pointer">
-                          <input type="checkbox" checked={removeApplyBg} onChange={(e) => setRemoveApplyBg(e.target.checked)} className="w-4 h-4 accent-blue-500 rounded" />
-                          <Eraser className="w-3.5 h-3.5" /> Remove BG
-                        </label>
-                        {applyMask && (
-                          <label className="text-[9px] font-black text-blue-400 uppercase tracking-widest flex items-center gap-2 cursor-pointer">
-                            <input type="checkbox" checked={applyAiMaskActive} onChange={(e) => setApplyAiMaskActive(e.target.checked)} className="w-3.5 h-3.5 accent-blue-500 rounded" />
-                            <Sparkles className="w-3 h-3" /> AI Masking
-                          </label>
-                        )}
+                    {/* Header Actions (Moved from floating toolbar) */}
+                    {appliedImage && (
+                      <div className="flex items-center gap-2 animate-in fade-in duration-300">
+                        <button onClick={(e) => {
+                          if ((e as any).shiftKey) {
+                            const finalUrl = getFinalAppliedUrl();
+                            if (finalUrl) bindToFirstEmptyRefSlot(finalUrl, `${selectedCharacter?.name || 'Subject'} + Prop Result`);
+                            return;
+                          }
+                          handleAddToCast();
+                        }} className="h-8 px-3 bg-emerald-500/20 text-emerald-500 rounded-lg flex items-center gap-2 border border-emerald-500/30 hover:bg-emerald-500/30 transition-all text-[10px] uppercase font-bold tracking-wider hover:scale-105 active:scale-95"><UserPlus className="w-3.5 h-3.5" /> Add to Cast</button>
+
+                        <div className="h-4 w-px bg-gray-700 mx-2" />
+
+                        <button onClick={handleSaveToActors} className="p-1.5 hover:bg-indigo-500/20 text-gray-400 hover:text-indigo-400 rounded-lg transition-colors" title="Save to Actors"><Save className="w-4 h-4" /></button>
+                        <button onClick={() => { const l = document.createElement('a'); l.href = processedApplyUrl || appliedImage!; l.download = "applied-prop.png"; l.click(); }} className="p-1.5 hover:bg-white/10 text-gray-400 hover:text-white rounded-lg transition-colors" title="Download"><Download className="w-4 h-4" /></button>
+                        <button onClick={() => setAppliedImage(null)} className="p-1.5 hover:bg-red-500/20 text-gray-400 hover:text-red-400 rounded-lg transition-colors" title="Clear Stage"><X className="w-4 h-4" /></button>
                       </div>
+                    )}
+                  </div>
 
-                      {removeApplyBg && (
-                        <div className="space-y-3 pt-2">
-                          <div className="flex items-center justify-between text-[9px] font-bold text-gray-500 uppercase tracking-wider"><span>Tolerance</span><span>{applyTolerance}%</span></div>
-                          <input type="range" min="1" max="100" value={applyTolerance} onChange={(e) => setApplyTolerance(parseInt(e.target.value))} className="w-full h-1 bg-gray-700 rounded-lg appearance-none" />
-                          {applyMask && applyAiMaskActive && (
-                            <>
-                              <div className="flex items-center justify-between text-[9px] font-bold text-blue-400/60 uppercase pt-1"><span>Matte Contraction</span><span>{matteErosion}px</span></div>
-                              <input type="range" min="0" max="10" step="1" value={matteErosion} onChange={(e) => setMatteErosion(parseInt(e.target.value))} className="w-full h-1 bg-blue-900/30 rounded-lg appearance-none" />
-                              <div className="flex items-center justify-between text-[9px] font-bold text-blue-400/60 uppercase pt-1"><span>Mask Softening</span><span>{applyMaskSoftening}px</span></div>
-                              <input type="range" min="0" max="10" step="0.5" value={applyMaskSoftening} onChange={(e) => setApplyMaskSoftening(parseFloat(e.target.value))} className="w-full h-1 bg-blue-900/30 rounded-lg appearance-none" />
-                            </>
-                          )}
-                          <div className="flex items-center justify-between text-[9px] font-bold text-green-400/60 uppercase pt-1"><span>Spill Suppression</span><span>{applySpillSuppression}%</span></div>
-                          <input type="range" min="0" max="100" value={applySpillSuppression} onChange={(e) => setApplySpillSuppression(parseInt(e.target.value))} className="w-full h-1 bg-green-900/30 rounded-lg appearance-none" />
-                        </div>
+                  {/* Stage Content */}
+                  <div className="flex-grow relative w-full flex items-center justify-center p-8 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-gray-900/50 to-black">
+                    {appliedImage ? (
+                      <div className="relative w-full h-full flex items-center justify-center">
+                        <img ref={applyImgRef} src={appliedImage} className={processedApplyUrl ? 'hidden' : 'max-w-full max-h-full object-contain drop-shadow-2xl'} />
+                        {processedApplyUrl && <img src={processedApplyUrl} className="max-w-full max-h-full object-contain drop-shadow-2xl" />}
+                        <canvas ref={applyCanvasRef} className="hidden" />
+                        {applyMask && <img ref={applyMaskImgRef} src={applyMask} className="hidden" />}
+                      </div>
+                    ) : (
+                      <div className="flex flex-col items-center gap-4 text-gray-800 select-none pointer-events-none">
+                        <Package className="w-24 h-24 opacity-10" />
+                        <span className="text-xs font-black uppercase tracking-widest opacity-20">Select Subject & Prop</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* RIGHT COLUMN: Magic Tools (Preserved) */}
+              <div className="col-span-3 space-y-6">
+                {appliedImage ? (
+                  <div className="bg-[#18181b] p-6 rounded-2xl border border-gray-800 space-y-6 animate-in slide-in-from-right-4 duration-300">
+                    <h3 className="text-xs font-black text-gray-400 uppercase tracking-widest flex items-center gap-2">
+                      <Sparkles className="w-3 h-3 text-blue-500" /> Magic Tools
+                    </h3>
+
+                    <div className="space-y-4">
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center justify-between cursor-pointer p-3 bg-black/40 rounded-lg border border-white/5 hover:border-white/10 transition-colors">
+                        <span className="flex items-center gap-2"><Eraser className="w-3.5 h-3.5" /> Remove Background</span>
+                        <input type="checkbox" checked={removeApplyBg} onChange={(e) => setRemoveApplyBg(e.target.checked)} className="w-4 h-4 accent-blue-500 rounded" />
+                      </label>
+
+                      {applyMask && (
+                        <label className="text-[10px] font-black text-blue-400 uppercase tracking-widest flex items-center justify-between cursor-pointer p-3 bg-blue-500/10 rounded-lg border border-blue-500/20">
+                          <span className="flex items-center gap-2"><Sparkles className="w-3 h-3" /> AI Masking</span>
+                          <input type="checkbox" checked={applyAiMaskActive} onChange={(e) => setApplyAiMaskActive(e.target.checked)} className="w-3.5 h-3.5 accent-blue-500 rounded" />
+                        </label>
                       )}
                     </div>
-                  )}
 
-                  {appliedImage && (
-                    <div className="absolute bottom-10 left-1/2 -translate-x-1/2 flex gap-4 z-30">
-                      <button onClick={(e) => {
-                        if ((e as any).shiftKey) {
-                          const finalUrl = getFinalAppliedUrl();
-                          if (finalUrl) {
-                            bindToFirstEmptyRefSlot(finalUrl, `${selectedCharacter?.name || 'Subject'} + Prop Result`);
-                          }
-                          return;
-                        }
-                        handleAddToCast();
-                      }} className="w-14 h-14 bg-emerald-500/20 text-emerald-500 rounded-xl flex items-center justify-center border border-emerald-500/30"><UserPlus className="w-6 h-6" /></button>
-                      <button onClick={() => { const l = document.createElement('a'); l.href = processedApplyUrl || appliedImage!; l.download = "applied-prop.png"; l.click(); }} className="w-14 h-14 bg-white/10 text-white rounded-xl flex items-center justify-center border border-white/20"><Download className="w-6 h-6" /></button>
-                      <button onClick={() => setAppliedImage(null)} className="w-14 h-14 bg-red-500/20 text-red-500 rounded-xl flex items-center justify-center border border-red-500/30"><X className="w-6 h-6" /></button>
-                      <button onClick={handleSaveToActors} className="w-14 h-14 bg-indigo-500/20 text-indigo-500 rounded-xl flex items-center justify-center border border-indigo-500/30"><Save className="w-6 h-6" /></button>
+                    {removeApplyBg && (
+                      <div className="space-y-4 pt-2 border-t border-gray-800">
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between text-[9px] font-bold text-gray-500 uppercase tracking-wider"><span>Tolerance</span><span>{applyTolerance}%</span></div>
+                          <input type="range" min="1" max="100" value={applyTolerance} onChange={(e) => setApplyTolerance(parseInt(e.target.value))} className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer" />
+                        </div>
+
+                        {applyMask && applyAiMaskActive && (
+                          <>
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between text-[9px] font-bold text-blue-400/60 uppercase"><span>Matte Contraction</span><span>{matteErosion}px</span></div>
+                              <input type="range" min="0" max="10" step="1" value={matteErosion} onChange={(e) => setMatteErosion(parseInt(e.target.value))} className="w-full h-1 bg-blue-900/30 rounded-lg appearance-none cursor-pointer" />
+                            </div>
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between text-[9px] font-bold text-blue-400/60 uppercase"><span>Mask Softening</span><span>{applyMaskSoftening}px</span></div>
+                              <input type="range" min="0" max="10" step="0.5" value={applyMaskSoftening} onChange={(e) => setApplyMaskSoftening(parseFloat(e.target.value))} className="w-full h-1 bg-blue-900/30 rounded-lg appearance-none cursor-pointer" />
+                            </div>
+                          </>
+                        )}
+
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between text-[9px] font-bold text-green-400/60 uppercase"><span>Spill Suppression</span><span>{applySpillSuppression}%</span></div>
+                          <input type="range" min="0" max="100" value={applySpillSuppression} onChange={(e) => setApplySpillSuppression(parseInt(e.target.value))} className="w-full h-1 bg-green-900/30 rounded-lg appearance-none cursor-pointer" />
+                        </div>
+
+                        {/* Mask Reset Action */}
+                        <div className="pt-4 border-t border-gray-800">
+                          <button
+                            onClick={() => {
+                              setApplyTolerance(10);
+                              setMatteErosion(0);
+                              setApplyMaskSoftening(1.0);
+                              setApplySpillSuppression(50);
+                              setApplyAiMaskActive(true);
+                              regenerateMask();
+                            }}
+                            disabled={state.isProcessing}
+                            className="w-full py-3 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed text-[10px] font-bold uppercase tracking-widest text-gray-400 rounded-lg transition-all flex items-center justify-center gap-2 group hover:text-white"
+                          >
+                            <RefreshCcw className={`w-3 h-3 ${state.isProcessing ? 'animate-spin' : 'group-hover:rotate-180 transition-transform duration-500'}`} />
+                            {state.isProcessing ? 'Regenerating...' : 'Reset Mask Settings'}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="h-full border-l border-gray-800 border-dashed rounded-2xl flex items-center justify-center">
+                    <div className="text-center opacity-30">
+                      <Sparkles className="w-12 h-12 mx-auto mb-2" />
+                      <p className="text-[10px] uppercase font-black tracking-widest">Tools awaiting image</p>
                     </div>
-                  )}
-                </div>
-
-                {/* DELETE CONFIRMATION MODAL */}
-
+                  </div>
+                )}
               </div>
+
+              {/* DELETE CONFIRMATION MODAL */}
+
             </div>
+
           )}
         </div>
       </div>
 
+
       {/* DELETE CONFIRMATION MODAL */}
       <AnimatePresence>
-        {confirmDelete && (
-          <div className="fixed inset-0 z-[3000] bg-black/80 backdrop-blur-sm flex items-center justify-center p-8 animate-in fade-in duration-200">
-            <div className="bg-[#18181b] border border-gray-700 p-6 rounded-2xl shadow-2xl max-w-sm w-full relative overflow-hidden">
-              <h3 className="text-lg font-black text-white uppercase tracking-wider mb-2">Delete Prop?</h3>
-              <p className="text-sm text-gray-400 mb-6">
-                Are you sure you want to delete <span className="text-white font-bold">{confirmDelete.name}</span>? This cannot be undone.
-              </p>
-              <div className="flex justify-end gap-3">
-                <button
-                  onClick={() => setConfirmDelete(null)}
-                  className="px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider text-gray-400 hover:text-white hover:bg-gray-800 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    executeDelete();
-                  }}
-                  className="px-4 py-2 rounded-lg text-xs font-black uppercase tracking-wider bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-900/20"
-                >
-                  Delete Forever
-                </button>
+        {
+          confirmDelete && (
+            <div className="fixed inset-0 z-[3000] bg-black/80 backdrop-blur-sm flex items-center justify-center p-8 animate-in fade-in duration-200">
+              <div className="bg-[#18181b] border border-gray-700 p-6 rounded-2xl shadow-2xl max-w-sm w-full relative overflow-hidden">
+                <h3 className="text-lg font-black text-white uppercase tracking-wider mb-2">Delete Prop?</h3>
+                <p className="text-sm text-gray-400 mb-6">
+                  Are you sure you want to delete <span className="text-white font-bold">{confirmDelete.name}</span>? This cannot be undone.
+                </p>
+                <div className="flex justify-end gap-3">
+                  <button
+                    onClick={() => setConfirmDelete(null)}
+                    className="px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider text-gray-400 hover:text-white hover:bg-gray-800 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      executeDelete();
+                    }}
+                    className="px-4 py-2 rounded-lg text-xs font-black uppercase tracking-wider bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-900/20"
+                  >
+                    Delete Forever
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
-        )}
-      </AnimatePresence>
-    </div>
+          )
+        }
+      </AnimatePresence >
+    </div >
 
   );
 };
