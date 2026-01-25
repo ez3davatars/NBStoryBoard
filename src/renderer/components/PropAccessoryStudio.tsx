@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
+import { AnimatePresence } from 'framer-motion';
 import {
   Package, RefreshCcw, Maximize, Sparkles,
-  Download, UserPlus, X, Eraser, Save
+  Download, UserPlus, X, Eraser, Save, Upload, Trash2
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
@@ -29,6 +30,7 @@ const PropAccessoryStudio = () => {
   const applyImgRef = useRef<HTMLImageElement>(null);
   const applyMaskImgRef = useRef<HTMLImageElement>(null);
   const applyCanvasRef = useRef<HTMLCanvasElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [processedApplyUrl, setProcessedApplyUrl] = useState<string | null>(null);
 
   const runApplyIsolation = (): string | null => {
@@ -164,7 +166,7 @@ const PropAccessoryStudio = () => {
       const items: PropItem[] = [];
       // @ts-ignore
       for await (const entry of (propsHandle as any).values()) {
-        if (entry.kind === 'file' && entry.name.endsWith('.png')) {
+        if (entry.kind === 'file' && /\.(png|jpg|jpeg|webp)$/i.test(entry.name)) {
           const file = await entry.getFile();
           const reader = new FileReader();
           const dataUrl = await new Promise<string>((resolve) => {
@@ -183,6 +185,77 @@ const PropAccessoryStudio = () => {
       dispatch({ type: 'SET_PROP_ITEMS', payload: items.sort((a, b) => b.timestamp - a.timestamp) });
     } catch (e: any) {
       dispatch({ type: 'ADD_LOG', payload: { message: `Props scan failed: ${e.message}`, type: 'error' } });
+    }
+  };
+
+
+
+  const [confirmDelete, setConfirmDelete] = useState<PropItem | null>(null);
+
+  const executeDelete = async () => {
+    if (!confirmDelete) return;
+    const item = confirmDelete;
+
+    try {
+      if (state.saveDirectoryHandle) {
+        try {
+          const propsHandle = await state.saveDirectoryHandle.getDirectoryHandle('props', { create: false });
+          await propsHandle.removeEntry(item.id);
+        } catch (e) { console.warn("Disk delete failed or not found", e); }
+      }
+
+      // Update State
+      const newItems = state.propItems.filter(p => p.id !== item.id);
+      dispatch({ type: 'SET_PROP_ITEMS', payload: newItems });
+      if (selectedProp?.id === item.id) setSelectedProp(null);
+      dispatch({ type: 'ADD_LOG', payload: { message: `Deleted prop: ${item.name}`, type: 'success' } });
+
+    } catch (e: any) {
+      dispatch({ type: 'ADD_LOG', payload: { message: `Delete failed: ${e.message}`, type: 'error' } });
+    } finally {
+      setConfirmDelete(null);
+    }
+  };
+
+  const handleUploadProp = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0 || !state.saveDirectoryHandle) return;
+    const file = e.target.files[0];
+
+    try {
+      // DUPLICATE CHECK
+      if (state.propItems.some(p => p.id.includes(file.name) || p.name === file.name.split('.')[0])) {
+        alert("Item already exists in library.");
+        return;
+      }
+
+      const propsHandle = await state.saveDirectoryHandle.getDirectoryHandle('props', { create: true });
+      const safeName = `Custom-Prop-${Date.now()}-${file.name.replace(/[^a-z0-9.]/gi, '_')}`;
+      const fileHandle = await propsHandle.getFileHandle(safeName, { create: true });
+      const writable = await fileHandle.createWritable();
+      await writable.write(file);
+      await writable.close();
+
+      // Read for immediate display
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result as string;
+        const newItem: PropItem = {
+          id: safeName,
+          url: dataUrl,
+          name: file.name.split('.')[0].substring(0, 20),
+          prompt: "User Upload",
+          timestamp: Date.now()
+        };
+        dispatch({ type: 'ADD_PROP_ITEM', payload: newItem });
+        dispatch({ type: 'ADD_LOG', payload: { message: `Uploaded: ${file.name}`, type: 'success' } });
+      };
+      reader.readAsDataURL(file);
+
+    } catch (err: any) {
+      dispatch({ type: 'ADD_LOG', payload: { message: `Upload failed: ${err.message}`, type: 'error' } });
+    } finally {
+      // Reset input
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -284,11 +357,12 @@ const PropAccessoryStudio = () => {
          
          OBJECTIVE: Integrate the prop from [IMAGE 2] into the scene with the subject in [IMAGE 1].
          CRITICAL CONSTRAINTS:
-         1. MAINTAIN the subject's exact identity and appearance from [IMAGE 1].
-         2. Integrate the prop naturally (e.g. held in hand, worn, or placed nearby).
-         3. Adjust the prop's lighting and perspective to match the subject perfectly.
-         4. ${applyNote || "Clean professional placement."}
-         5. Use a solid Neon Green background (#39FF14) for perfect subject isolation.`,
+         1. CRITICAL: The output must contain EXACTLY ONE HUMAN SUBJECT. Do not add any other people, background characters, or onlookers. SOLO PORTRAIT.
+         2. PROP FIDELITY: The prop in [IMAGE 2] must be copied EXACTLY. Do not change its color, shape, texture, or style. 1:1 REPLICATION of the prop object.
+         3. Integrate the prop naturally (e.g. held in hand, worn, or placed nearby).
+         4. Adjust the prop's lighting and perspective to match the subject perfectly.
+         5. ${applyNote || "Clean professional placement."}
+         6. Use a solid Neon Green background (#39FF14) for perfect subject isolation.`,
         state.apiKey,
         state.model,
         [
@@ -378,6 +452,16 @@ const PropAccessoryStudio = () => {
         <div className="p-4 border-b border-gray-800 flex justify-between items-center">
           <h2 className="text-sm font-black text-white tracking-widest uppercase">Prop Library</h2>
           <div className="flex gap-1.5">
+            <input
+              type="file"
+              ref={fileInputRef}
+              className="hidden"
+              accept="image/png,image/jpeg,image/webp"
+              onChange={handleUploadProp}
+            />
+            <button onClick={() => fileInputRef.current?.click()} className="p-1.5 hover:bg-gray-700 rounded transition-colors text-gray-400" title="Upload Prop">
+              <Upload className="w-3.5 h-3.5" />
+            </button>
             <button onClick={scanProps} className="p-1.5 hover:bg-gray-700 rounded transition-colors text-gray-400">
               <RefreshCcw className="w-3.5 h-3.5" />
             </button>
@@ -386,7 +470,7 @@ const PropAccessoryStudio = () => {
 
         <div className="flex-grow overflow-y-auto p-4 grid grid-cols-2 gap-2">
           {state.propItems.map(item => (
-            <button
+            <div
               key={item.id}
               onClick={(e) => {
                 if ((e as any).shiftKey) {
@@ -395,14 +479,12 @@ const PropAccessoryStudio = () => {
                 }
                 setSelectedProp(item);
               }}
-              className={`aspect-square rounded-lg border overflow-hidden transition-all group relative ${selectedProp?.id === item.id ? 'border-blue-500 border-2' : 'border-gray-800 hover:border-gray-600'}`}
+              className={`aspect-square rounded-lg border overflow-hidden transition-all group relative cursor-pointer ${selectedProp?.id === item.id ? 'border-blue-500 border-2' : 'border-gray-800 hover:border-gray-600'}`}
             >
               <img src={item.url} className="w-full h-full object-cover" />
-              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                {/* FIX: avoid nested <button> inside <button> */}
-                <div
-                  role="button"
-                  tabIndex={0}
+
+              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                <button
                   onClick={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
@@ -415,13 +497,21 @@ const PropAccessoryStudio = () => {
                       dispatch({ type: 'SET_INSPECT_IMAGE', payload: item.url });
                     }
                   }}
-                  className="bg-blue-500/80 p-1.5 rounded-full cursor-pointer hover:bg-blue-500"
+                  className="bg-blue-500/80 hover:bg-blue-500 text-white p-1.5 rounded-full shadow-lg"
                   title="Inspect Large"
                 >
-                  <Maximize className="w-3.5 h-3.5 text-white" />
-                </div>
+                  <Maximize className="w-3.5 h-3.5" />
+                </button>
+
+                <button
+                  onClick={(e) => { e.stopPropagation(); setConfirmDelete(item); }}
+                  className="bg-red-500/80 hover:bg-red-500 text-white p-1.5 rounded-full shadow-lg transition-transform hover:scale-110"
+                  title="Delete Prop"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
               </div>
-            </button>
+            </div>
           ))}
         </div>
       </div>
@@ -458,7 +548,7 @@ const PropAccessoryStudio = () => {
                   <h3 className="text-xs font-black text-gray-400 uppercase mb-4 tracking-widest">1. Subject</h3>
                   <div className="grid grid-cols-4 gap-2 mb-6 h-32 overflow-y-auto">
                     {state.cast.map(c => (
-                      <button key={c.id} onClick={() => setSelectedCharacter(c)} className={`aspect-square rounded border ${selectedCharacter?.id === c.id ? 'border-blue-500 ring-1 ring-blue-500' : 'border-gray-800'}`}><img src={c.url} className="w-full h-full object-cover" /></button>
+                      <button key={c.id} onClick={() => setSelectedCharacter(c)} className={`aspect-square rounded-lg border-2 overflow-hidden transition-all ${selectedCharacter?.id === c.id ? 'border-blue-500 shadow-[0_0_0_2px_rgba(59,130,246,0.3)] scale-95' : 'border-gray-800 hover:border-gray-600'}`}><img src={c.url} className="w-full h-full object-cover" /></button>
                     ))}
                   </div>
                   <h3 className="text-xs font-black text-gray-400 uppercase mb-4 tracking-widest border-t border-gray-800 pt-6">2. Active Prop</h3>
@@ -536,12 +626,48 @@ const PropAccessoryStudio = () => {
                     </div>
                   )}
                 </div>
+
+                {/* DELETE CONFIRMATION MODAL */}
+
               </div>
             </div>
           )}
         </div>
       </div>
+
+      {/* DELETE CONFIRMATION MODAL */}
+      <AnimatePresence>
+        {confirmDelete && (
+          <div className="fixed inset-0 z-[3000] bg-black/80 backdrop-blur-sm flex items-center justify-center p-8 animate-in fade-in duration-200">
+            <div className="bg-[#18181b] border border-gray-700 p-6 rounded-2xl shadow-2xl max-w-sm w-full relative overflow-hidden">
+              <h3 className="text-lg font-black text-white uppercase tracking-wider mb-2">Delete Prop?</h3>
+              <p className="text-sm text-gray-400 mb-6">
+                Are you sure you want to delete <span className="text-white font-bold">{confirmDelete.name}</span>? This cannot be undone.
+              </p>
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={() => setConfirmDelete(null)}
+                  className="px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider text-gray-400 hover:text-white hover:bg-gray-800 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    executeDelete();
+                  }}
+                  className="px-4 py-2 rounded-lg text-xs font-black uppercase tracking-wider bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-900/20"
+                >
+                  Delete Forever
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
+
   );
 };
 

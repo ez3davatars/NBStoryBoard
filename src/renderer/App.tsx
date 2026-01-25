@@ -421,7 +421,7 @@ const App = () => {
 
         {/* Settings Modal */}
         {showSettings && (
-          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[100] flex items-center justify-center">
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[4000] flex items-center justify-center">
             <div className="bg-[#18181b] border border-gray-700 p-6 rounded-xl w-96 shadow-2xl animate-in fade-in zoom-in duration-200">
               <h2 className="text-lg font-bold text-white mb-4">Configuration</h2>
               <div className="space-y-4">
@@ -444,11 +444,14 @@ const App = () => {
                     <button
                       onClick={async () => {
                         try {
+                          console.log("Requesting directory handle...");
                           const handle = await (window as any).showDirectoryPicker();
+                          console.log("Directory handle received:", handle);
                           dispatch({ type: 'SET_SAVE_DIRECTORY', payload: handle });
                           await StorageService.save('nano_save_handle', handle);
                           dispatch({ type: 'ADD_LOG', payload: { message: `Save folder set: ${handle.name}`, type: 'success' } });
                         } catch (e: any) {
+                          console.error("Directory picker error:", e);
                           if (e.name !== 'AbortError') {
                             dispatch({ type: 'ADD_LOG', payload: { message: `Failed to set folder: ${e.message}`, type: 'error' } });
                           }
