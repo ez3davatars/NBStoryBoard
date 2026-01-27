@@ -71,6 +71,7 @@ export interface StageToken {
   profile?: WhitelistProfile;
   uniformScale: boolean;
   zIndex: number;
+  visible?: boolean;
 }
 
 export interface StageAnnotation {
@@ -84,7 +85,10 @@ export interface StageAnnotation {
   scaleX: number;
   scaleY: number;
   text?: string;
+  color?: string;
+  thickness?: number;
   zIndex: number;
+  visible?: boolean;
 }
 
 export type RefSlotStatus = 'empty' | 'loading' | 'analyzed' | 'error' | 'ready' | 'analyzing';
@@ -156,7 +160,7 @@ export interface RegionEditLayer {
   name: string;
   enabled: boolean;
   maskDataUrl: string | null;
-  prompt: string;  lastOutputUrl?: string | null;
+  prompt: string; lastOutputUrl?: string | null;
   status?: 'idle' | 'queued' | 'running' | 'success' | 'error';
   lastError?: string | null;
 
@@ -236,7 +240,7 @@ export interface AppState {
   actorLibrary: CastMember[];
   propItems: PropItem[];
 
-  
+
   regionEdit: RegionEditState;
 
   historyPast: HistorySnapshot[];
@@ -312,7 +316,7 @@ export type Action =
   | { type: 'UNDO' }
   | { type: 'REDO' }
   | { type: 'SET_STORYBOARD_ENABLED'; payload: boolean }
-;
+  ;
 
 // --- HELPERS ---
 
@@ -365,14 +369,14 @@ const applySnapshot = (s: AppState, snap: HistorySnapshot): AppState => ({
 const shouldRecordHistory = (type: Action['type']) => {
   const set = new Set<Action['type']>([
     'SET_BG',
-    'ADD_TOKEN','UPDATE_TOKEN','REMOVE_TOKEN',
-    'ADD_ANNOTATION','UPDATE_ANNOTATION','REMOVE_ANNOTATION',
-    'UPDATE_REF_SLOT','CLEAR_REF_SLOTS',
+    'ADD_TOKEN', 'UPDATE_TOKEN', 'REMOVE_TOKEN',
+    'ADD_ANNOTATION', 'UPDATE_ANNOTATION', 'REMOVE_ANNOTATION',
+    'UPDATE_REF_SLOT', 'CLEAR_REF_SLOTS',
     'SET_DIRECTOR',
     'CLEAR_STAGE',
-    'SET_REGION_EDIT','SET_REGION_ACTIVE_LAYER','UPDATE_REGION_LAYER','CLEAR_REGION_LAYER_MASK','CLEAR_ALL_REGION_MASKS',
-    'SET_SHOTS','ADD_SHOT_FROM_STAGE','DUPLICATE_SHOT','REMOVE_SHOT','SET_ACTIVE_SHOT','SAVE_ACTIVE_SHOT','UPDATE_SHOT_META','SET_SHOT_FRAME',
-    'SET_STORYBOARD_SOURCE','SET_STORYBOARD_END_SOURCE','SET_STORYBOARD_GENERATIONS','UPDATE_STORYBOARD_GENERATION',
+    'SET_REGION_EDIT', 'SET_REGION_ACTIVE_LAYER', 'UPDATE_REGION_LAYER', 'CLEAR_REGION_LAYER_MASK', 'CLEAR_ALL_REGION_MASKS',
+    'SET_SHOTS', 'ADD_SHOT_FROM_STAGE', 'DUPLICATE_SHOT', 'REMOVE_SHOT', 'SET_ACTIVE_SHOT', 'SAVE_ACTIVE_SHOT', 'UPDATE_SHOT_META', 'SET_SHOT_FRAME',
+    'SET_STORYBOARD_SOURCE', 'SET_STORYBOARD_END_SOURCE', 'SET_STORYBOARD_GENERATIONS', 'UPDATE_STORYBOARD_GENERATION',
     'SET_RESULT_IMAGE'
   ]);
   return set.has(type);
@@ -397,7 +401,7 @@ const defaultDirector: DirectorSettings = {
   replaceAnchorSubjects: false,
   globalReplaceTarget: '',
   spatialLayout: '',
-  markerType: '',
+  markerType: 'Colored Bounding Boxes',
   negativePrompt:
     'worst quality, low quality, normal quality, lowres, monochrome, grayscale, watermark, signature, username, error, blurry, jpeg artifacts, cropped, duplicate, out of frame, ugly, morbid, mutilated, out of focus, dehydration, long neck, bad anatomy, bad proportions, extra limbs, cloned face, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, deformed, disfigured, mutation, mutated hands, mutated fingers, long body, tiling, poorly drawn hands, poorly drawn face, disfigured face, skin spots, acnes, skin blemishes, bad reflections, overexposed, underexposed, harsh lighting, unrealistic lighting',
   sceneLock: false,
@@ -434,16 +438,16 @@ const DEFAULT_REGION_EDIT: RegionEditState = {
   protectEnabled: false,
   protectMaskDataUrl: null,
   layers: [
-    { id: 'A', name: 'Mask A', enabled: true, maskDataUrl: null, prompt: '' , lastOutputUrl: null, status: 'idle', lastError: null },
-    { id: 'B', name: 'Mask B', enabled: false, maskDataUrl: null, prompt: '' , lastOutputUrl: null, status: 'idle', lastError: null },
-    { id: 'C', name: 'Mask C', enabled: false, maskDataUrl: null, prompt: '' , lastOutputUrl: null, status: 'idle', lastError: null },
+    { id: 'A', name: 'Mask A', enabled: true, maskDataUrl: null, prompt: '', lastOutputUrl: null, status: 'idle', lastError: null },
+    { id: 'B', name: 'Mask B', enabled: false, maskDataUrl: null, prompt: '', lastOutputUrl: null, status: 'idle', lastError: null },
+    { id: 'C', name: 'Mask C', enabled: false, maskDataUrl: null, prompt: '', lastOutputUrl: null, status: 'idle', lastError: null },
   ],
 };
 
 export const initialState: AppState = {
   apiKey: localStorage.getItem('nano_api_key') || '',
   model: getInitialModel(),
-  view: 'forge',
+  view: 'casting',
   cast: [],
   tokens: loadJson<StageToken[]>('nano_tokens', []),
   annotations: loadJson<StageAnnotation[]>('nano_annotations', []),
@@ -489,7 +493,7 @@ export const reducer = (state: AppState, action: Action): AppState => {
   }
 
   switch (action.type) {
-    
+
     case 'UNDO': {
       if (!state.historyPast || state.historyPast.length === 0) return state;
       const past = [...state.historyPast];
@@ -504,7 +508,7 @@ export const reducer = (state: AppState, action: Action): AppState => {
       const past = [...(state.historyPast || []), snapshotOf(state)].slice(-MAX_HISTORY);
       return applySnapshot({ ...state, historyPast: past, historyFuture: future }, snap);
     }
-case 'SET_VIEW':
+    case 'SET_VIEW':
       return { ...state, view: action.payload };
     case 'SET_API_KEY':
       return { ...state, apiKey: action.payload };
@@ -602,12 +606,12 @@ case 'SET_VIEW':
         ...state,
         storyboardGenerations: state.storyboardGenerations.map(g => (g.id === action.payload.id ? { ...g, ...action.payload } : g)),
       };
-    
-    
+
+
     case 'SET_STORYBOARD_ENABLED':
       // ADMIN LOCK: Prevent changes via action
-      return state; 
-      // return { ...state, isStoryboardEnabled: action.payload };
+      return state;
+    // return { ...state, isStoryboardEnabled: action.payload };
 
     case 'SET_LAST_CASTED_IMAGE':
       return { ...state, lastCastedImage: action.payload };
@@ -629,8 +633,24 @@ case 'SET_VIEW':
       return { ...state, actorLibrary: state.actorLibrary.filter(a => a.id !== action.payload) };
     case 'REMOVE_ACTOR_LIBRARY_BY_URL':
       return { ...state, actorLibrary: state.actorLibrary.filter(a => a.url !== action.payload) };
-    case 'UPDATE_ACTOR_LIBRARY':
-      return { ...state, actorLibrary: state.actorLibrary.map(a => (a.id === action.payload.id ? { ...a, ...action.payload.updates } : a)) };
+    case 'UPDATE_ACTOR_LIBRARY': {
+      const { id, updates } = action.payload;
+      const targetActor = state.actorLibrary.find(a => a.id === id);
+      let nextCast = state.cast;
+      let nextTokens = state.tokens;
+
+      if (targetActor && updates.name) {
+        nextCast = state.cast.map(c => c.url === targetActor.url ? { ...c, name: updates.name! } : c);
+        nextTokens = state.tokens.map(t => t.url === targetActor.url ? { ...t, tag: updates.name! } : t);
+      }
+
+      return {
+        ...state,
+        actorLibrary: state.actorLibrary.map(a => (a.id === id ? { ...a, ...updates } : a)),
+        cast: nextCast,
+        tokens: nextTokens
+      };
+    }
     case 'SET_ACTOR_LIBRARY':
       return { ...state, actorLibrary: action.payload };
 

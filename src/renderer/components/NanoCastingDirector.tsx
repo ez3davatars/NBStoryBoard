@@ -88,11 +88,7 @@ const SCOPE_COST: Record<BodyScope, { gpu: string; note: string }> = {
     full: { gpu: 'high', note: 'Higher compute cost' }
 };
 
-const WARDROBE_SCOPE_RULES: Record<BodyScope, string[]> = {
-    head: ['headwear', 'glasses', 'earrings'],
-    torso: ['tops', 'jackets', 'armor', 'headwear', 'glasses'],
-    full: ['full_outfit', 'dress', 'uniform', 'tops', 'pants', 'shoes']
-};
+
 
 
 // Types for Phases
@@ -171,17 +167,17 @@ const NanoCastingDirector = () => {
     const styleMatrix = {
         pixar: {
             id: 'pixar', label: 'Family 3D Animation',
-            keywords: "3D Disney-Pixar animation style, subsurface scattering, rim lighting, soft textures, Octane Render, masterpiece 3D, expressive features.",
+            keywords: "3D Disney-Pixar animation style, stylized proportions, big eyes, soft shapes, vibrant colors, exaggerated features, cute, charming, subsurface scattering, rim lighting, soft textures, Octane Render, masterpiece 3D.",
             lighting: "Golden hour, cinematic bounce light"
         },
         hyper_real: {
             id: 'hyper_real', label: 'Premium CG Realism',
-            keywords: "Photorealistic 8k, raw photo, exact facial structure preservation, highly detailed skin pores, 85mm lens, f/1.8, cinematic natural lighting, sharp focus, masterpiece, biometric fidelity.",
+            keywords: "Photorealistic 8k, raw photo, exact facial structure preservation, 3d scan, photogrammetry, highly detailed skin pores, 85mm lens, f/1.8, cinematic natural lighting, sharp focus, masterpiece, biometric fidelity.",
             lighting: "High-contrast studio lighting"
         },
         retro_anime: {
             id: 'retro_anime', label: 'Retro Cel Anime',
-            keywords: "90s retro anime aesthetic, cel-shaded, hand-drawn ink lines, Studio Ghibli vibes, vintage film grain, soft pastel palette.",
+            keywords: "90s retro anime aesthetic, large eyes, simplified nose, dynamic hair, cel-shaded, hand-drawn ink lines, Studio Ghibli vibes, vintage film grain, soft pastel palette.",
             lighting: "Soft diffused daylight"
         },
         comic_book: {
@@ -604,21 +600,31 @@ const NanoCastingDirector = () => {
     };
 
     const generateWardrobe = async () => {
-        if (!wardrobePrompt || !state.apiKey) return;
+        if (!state.apiKey) return;
+        if (!wardrobePrompt && !selectedWardrobeItem) return;
+
         setIsProcessing(true);
         setProgress({ phase: 'wardrobe', percent: 0, detail: "Weaving digital fabric..." });
 
         try {
-            // 1. Generate Outfit
-            setProgress({ phase: 'wardrobe', percent: 30, detail: "Synthesizing garment geometry..." });
-            const garment = await GeminiService.generateImage(
-                `Professional standalone apparel photography: ${wardrobePrompt}. 
-                 Film quality, solid white background, isolated garment.`,
-                state.apiKey,
-                state.model,
-                [],
-                { aspectRatio: '1:1' }
-            );
+            let garment = "";
+
+            // 1. Determine Garment Source
+            if (selectedWardrobeItem) {
+                // Use selected item from library
+                garment = selectedWardrobeItem.url;
+            } else {
+                // Generate new from prompt
+                setProgress({ phase: 'wardrobe', percent: 30, detail: "Synthesizing garment geometry..." });
+                garment = await GeminiService.generateImage(
+                    `Professional standalone apparel photography: ${wardrobePrompt}. 
+                     Film quality, solid white background, isolated garment.`,
+                    state.apiKey,
+                    state.model,
+                    [],
+                    { aspectRatio: '1:1' }
+                );
+            }
 
             // 2. Try-On (Simulated by sending garment + current character to Gemini)
             if (finalCharacterUrl) {
@@ -656,6 +662,7 @@ const NanoCastingDirector = () => {
 
     // New: Pack Mode State
     const [generatePackMode] = useState(true);
+    const [selectedWardrobeItem, setSelectedWardrobeItem] = useState<any | null>(null);
 
     // --- TOAST NOTIFICATIONS ---
     const [notification, setNotification] = useState<string | null>(null);
@@ -710,11 +717,19 @@ const NanoCastingDirector = () => {
             const styleObj = styleMatrix[selectedStyle as keyof typeof styleMatrix] || styleMatrix.pixar;
             const archetypeObj = bodyArchetypes.find(b => b.id === selectedBody) || bodyArchetypes[0];
 
-            // STRICTNESS CHECK: If the style is one of the realistic ones, we force extreme adherence to reference
-            const isStrictLikeness = ['hyper_real', 'exact_studio', 'cyberpunk'].includes(selectedStyle || '');
-            const strictnessInstruction = isStrictLikeness
-                ? "CRITICAL_STRICTNESS: The face in the generated image MUST BE AN EXACT BIOMETRIC MATCH to the Identity Reference images. Do not blend faces. Do not 'beautify' if it changes structure. PRESERVE IDENTITY ABOVE ALL ELSE. Treat the reference images as the absolute truth."
-                : "";
+            // STRICTNESS CHECK: Differentiate between Realistic (Geometric Lock) and Stylized (Likeness Translation)
+            const isBiometric = identitySource === 'biometric';
+            const isRealistic = ['hyper_real', 'exact_studio', 'cyberpunk', 'premium_cg'].includes(selectedStyle || '');
+
+            let strictnessInstruction = "";
+            if (isBiometric) {
+                if (isRealistic) {
+                    strictnessInstruction = "CRITICAL_STRICTNESS: The face in the generated image MUST BE AN EXACT BIOMETRIC MATCH. PRESERVE FACIAL GEOMETRY ABOVE ALL ELSE. Apply the Material/Lighting of the style, but DO NOT ALTER THE SKULL SHAPE. Treat as 'Digital Makeup'.";
+                } else {
+                    // STYLIZED: Harmonious Adaptation
+                    strictnessInstruction = "CRITICAL_LIKENESS: HARMONIOUSLY ADAPT the face to match the [Style] aesthetic. The subject must be IMMEDIATELY RECOGNIZABLE as [IMAGE 1]. Adapt the *Form* (eyes, head shape) to the style, but PRESERVE THE IDENTITY FEATURES (Nose shape, Jawline, Eye Color). It should look like a glorious 3D render of THIS SPECIFIC PERSON.";
+                }
+            }
 
             // Capture the count of biometric images BEFORE adding the logo
             const biometricRefLimit = referenceImages.length;
@@ -942,7 +957,14 @@ const NanoCastingDirector = () => {
             const identityRefLimit = imageRefs.length;
             const identityRangeText = identityRefLimit === 1 ? "[IMAGE 1]" : `[IMAGE 1] to [IMAGE ${identityRefLimit}]`;
 
-            // B. Add Logo Reference if exists
+            // B1. Add Wardrobe Reference if exists
+            let wardrobeRefIndex = -1;
+            if (selectedWardrobeItem) {
+                imageRefs.push({ url: selectedWardrobeItem.url, label: "Costume Asset" });
+                wardrobeRefIndex = imageRefs.length;
+            }
+
+            // B2. Add Logo Reference if exists
             let logoRefIndex = -1;
             if (directorControls.logoImage) {
                 imageRefs.push({ url: directorControls.logoImage, label: "Logo Asset" });
@@ -954,10 +976,17 @@ const NanoCastingDirector = () => {
                 let safe = originalKeywords;
                 if (identitySource === 'biometric') {
                     if (style === 'family_3d' || style === 'pixar') {
-                        safe = safe.replace(/expressive features,?/gi, '').replace(/exaggerated,?/gi, '').replace(/cartoon proportions,?/gi, '');
+                        safe = safe.replace(/Disney-Pixar/gi, 'High-End 3D Render').replace(/expressive features,?/gi, '').replace(/exaggerated,?/gi, '').replace(/cartoon proportions,?/gi, '');
+                    }
+                    if (style === 'retro_anime' || style === 'retro_cel') {
+                        safe = safe.replace(/anime aesthetic/gi, 'Cel-Shaded Art Style').replace(/Studio Ghibli vibes/gi, 'Hand-drawn Animation Look');
                     }
                     if (style === 'cyberpunk' || style === 'cyberpunk_neon') {
                         safe = safe.replace(/interface overlays,?/gi, '').replace(/high-tech interface,?/gi, '');
+                    }
+                    if (style === 'hyper_real' || style === 'premium_cg' || style === 'exact_studio') {
+                        // SANITIZE REALISM: Remove "Idealized" terms that trigger generic beauty
+                        safe = safe.replace(/exact facial structure preservation,?/gi, 'raw scan data').replace(/perfect face,?/gi, '').replace(/idealized features,?/gi, '');
                     }
                 }
                 return safe;
@@ -970,32 +999,68 @@ const NanoCastingDirector = () => {
             // 3. PROMPT CONSTRUCTION
             let effectiveStylization = directorControls.stylization;
             let styleNote = "";
-            if (identitySource === 'biometric' && directorControls.identityStrength >= 90) {
-                if (effectiveStylization > 20) {
-                    effectiveStylization = 20;
-                    styleNote = " (Clamped to 20% to preserve Biometric Identity)";
-                }
+            let effectiveIdentityStrength = directorControls.identityStrength;
+
+            if (identitySource === 'biometric') {
+                // FORCE MAX IDENTITY for Biometric Scans
+                effectiveIdentityStrength = 100;
+                // Note: We removed the "Safety Clamp". Now we trust the Qualitative Tiers to handle high stylization without identity drift.
             }
 
             let finalPrompt = "";
 
-            if (identitySource === 'biometric') {
-                // --- A. IDENTITY LOCK ---
-                finalPrompt += `BIOMETRIC IDENTITY LOCK (HARD — TOP PRIORITY):\n`;
-                finalPrompt += `Use ${identityRangeText} as the ONLY source for the character's face/head.\n`;
-                finalPrompt += `The head/face is IMMUTABLE:\n`;
-                finalPrompt += `- PRIMARY DIRECTIVE: Exact match of facial hair (beard/mustache/stubble) and grooming from ${identityRangeText}. Do NOT add hair that is not there.\n`;
-                finalPrompt += `- Do NOT change skull shape, face width, jaw structure, ears, hairline, eyebrows, eyes, nose, mouth.\n`;
-                finalPrompt += `If identity does not match the references, the output is INVALID.\n\n`;
+            // 0. GLOBAL LAYOUT (MUST BE FIRST)
+            finalPrompt += `REFERENCE SHEET BACKGROUND PROTOCOL:\n`;
+            finalPrompt += `Background must be a SOLID, NEUTRAL GREY STUDIO BACKDROP. No maps, no text, no scenery, no patterns.\n\n`;
 
+            finalPrompt += `LAYOUT & COMPOSITION RULES (FRAMING PRIORITY):\n`;
+            finalPrompt += `LAYOUT & COMPOSITION RULES (FRAMING PRIORITY):\n`;
+            // USE REF_LAYOUT DIRECTLY (Decoupled from Camera Controls)
+            if (refLayout === 'form_focus') {
+                // BODY FOCUS -> Vertical Split (Image 3)
+                finalPrompt += " [LAYOUT A]: COMPOSITION: Two distinct panels separated by a clean white line. DIVIDE VERTICALLY.\n";
+                finalPrompt += " LEFT PANEL (50%): SUBJECT: 3 Full Standing Figures (Front, Side, Back). CAMERA: Long Shot (15 ft distance). LENS: 85mm. ACTION: Show subject from Head to Toe. Feet must be visible.\n";
+                finalPrompt += " RIGHT PANEL (50%): SUBJECT: 2x2 Grid of Headshots. CAMERA: Extreme Close-Up (2 ft distance). LENS: 100mm Macro.\n";
+            } else if (refLayout === 'face_focus') {
+                finalPrompt += " [LAYOUT B]: EXPRESSION SHEET. 8 Distinct Headshots. REQUIREMENT: ALL Headshots must show the COLLAR and SHOULDERS of the Costume. DO NOT show source clothing.\n";
+                finalPrompt += " FRAMING: Close-Up, but wide enough to show the Outfit's Neckline.\n";
+                finalPrompt += " EXPRESSIONS: Front, Side, Smile, Anger, Surprise, Serious, Laughing, Thinking.\n";
+                finalPrompt += " IDENTITY ANCHOR: Change the Emotion, but KEEP THE SKULL STRUCTURE. Do not morph the person. The face must remain [IMAGE 1] in every emotion.\n\n";
             } else {
+                // HYBRID -> Horizontal Split (Image 4)
+                finalPrompt += " [LAYOUT C]: COMPOSITION: Horizontal Split with a white divider line.\n";
+                finalPrompt += " UPPER SECTION (60%): SUBJECT: 3 Full Standing Figures (Front, Side, Back). CAMERA: Long Shot (15 ft distance). LENS: 85mm. ACTION: Show from Head to Toe.\n";
+                finalPrompt += " LOWER SECTION (40%): SUBJECT: Row of 5 Headshots. CAMERA: Extreme Close-Up (2 ft distance). LENS: 100mm Macro.\n";
+            }
+
+            if (identitySource !== 'biometric') {
                 // GENERATED IDENTITY
                 finalPrompt += `GENERATE CHARACTER REFERENCE SHEET:\n`;
                 finalPrompt += `Subject: ${selectedBody ? bodyArchetypes.find(b => b.id === selectedBody)?.name : "Character"}.\n`;
                 finalPrompt += `Reference: Use [IMAGE 1] as the base character.\n`;
+            } else {
+                // BIOMETRIC IDENTITY STRENGTH INJECTION
+                finalPrompt += `IDENTITY WEIGHT: ${effectiveIdentityStrength}% (CRITICAL).\n`;
             }
 
-            // --- B. BRANDING / LOGO ---
+            // --- B. COSTUME / WARDROBE ---
+
+            if (selectedWardrobeItem && wardrobeRefIndex > 0) {
+                finalPrompt += `COSTUME DIRECTIVE (HIGH PRIORITY):\n`;
+                finalPrompt += `Wear the outfit shown in [IMAGE ${wardrobeRefIndex}].\n`;
+                finalPrompt += `CRITICAL: [IMAGE ${wardrobeRefIndex}] contains the OUTFIT ONLY. IGNORE the person, face, and body in [IMAGE ${wardrobeRefIndex}].\n`;
+                finalPrompt += `Match the design, materials, and colors of the costume in [IMAGE ${wardrobeRefIndex}] exactly.\n`;
+                finalPrompt += `Fit the costume naturally to the character's body type (defined by [IMAGE 1]). Ensure the FULL COSTUME is visible in FULL BODY views. Do not crop to the face.\n`;
+                finalPrompt += `REQUIREMENT: The character must wear this costume in ALL VIEWS, including HEADSHOTS and BUSTS. Do NOT show the clothing from [IMAGE 1].\n\n`;
+
+                if (identitySource === 'biometric') {
+                    finalPrompt += `RE-ASSERTING IDENTITY LOCK:\n`;
+                    finalPrompt += `Despite the costume reference, the FACE MUST MATCH [IMAGE 1] (Biometric Scan).\n`;
+                    finalPrompt += `IMPORTANT: While maintaining facial identity, YOU MUST RESPECT THE REQUESTED LAYOUT. Do not default to a headshot. Apply the identity to the full-body character as defined by the layout.\n\n`;
+                }
+            }
+
+            // --- C. BRANDING / LOGO ---
             if (directorControls.logoImage && logoRefIndex > 0) {
                 finalPrompt += `BRANDING DIRECTIVE:\n`;
                 finalPrompt += `Apply the logo provided in [IMAGE ${logoRefIndex}] ("Logo Asset") to the character's outfit.\n`;
@@ -1005,42 +1070,160 @@ const NanoCastingDirector = () => {
             }
 
             // --- C. BODY & STYLE ---
-            finalPrompt += `STYLE PROTOCOL: ${styleConfig.label}\n`;
-            finalPrompt += `Keywords: ${safeKeywords}\n`;
-            finalPrompt += `Stylization Intensity: ${effectiveStylization}%${styleNote}.\n\n`;
+            // --- C. BODY & STYLE ---
+            const isRealisticMode = ['hyper_real', 'exact_studio', 'cyberpunk', 'premium_cg'].includes(targetStyleKey as any);
+            const isPhotoMode = targetStyleKey === 'exact_studio'; // Strict Photography
+            const isCGMode = (targetStyleKey as any) === 'hyper_real' || (targetStyleKey as any) === 'premium_cg' || (targetStyleKey as any) === 'cyberpunk'; // High-End 3D
+
+            // OVERRIDE LABEL: Differentiate Photo vs CG
+            let promptStyleLabel = styleConfig.label;
+            let promptKeywords = safeKeywords;
 
             if (identitySource === 'biometric') {
-                finalPrompt += `ADVANCED BODY SETTINGS (BODY ONLY):\n`;
-                finalPrompt += `Target Height: ${formatHeight(heightIn)}\n`;
-                const promptWeight = Math.round(weightLbs / 5) * 5;
-                finalPrompt += `Target Weight: ${promptWeight} lbs\n`;
-                finalPrompt += `Apply height/weight ONLY to the body silhouette.\n\n`;
+                if (isPhotoMode) {
+                    promptStyleLabel = "Photorealistic Source (8k Photography)";
+                }
+                if (isCGMode) {
+                    promptStyleLabel = "Stylized Realism (Feature Animation Style)";
+                    // Override keywords to prevent "Photorealistic" from bleeding in
+                    promptKeywords = "Stylized Realism, Modern Feature Animation, Stylized Surface Detail, Expressive Features, Subsurface Scattering, Cinematic Lighting, 3D Render, AAA Game Cinematic, Soft Box Lighting, Octane Render.";
+                }
             }
 
-            // --- D. LAYOUT ---
-            finalPrompt += `LAYOUT & COMPOSITION RULES:\n`;
-            const framing = directorControls.shotFraming;
-            if (framing === 'full_body') {
-                finalPrompt += " [LAYOUT A]: Split canvas horizontally. Top 65%: 3 Full Body views. Bottom 35%: 4 Headshots.";
-            } else if (framing === 'bust') {
-                finalPrompt += " [LAYOUT B]: Top 60%: 4 Headshots. Bottom 40%: Expression row.";
+            finalPrompt += `STYLE PROTOCOL: ${promptStyleLabel}\n`;
+            finalPrompt += `Keywords: ${promptKeywords}\n`;
+
+            if (isRealisticMode && identitySource === 'biometric') {
+                if (isPhotoMode) {
+                    finalPrompt += `Stylization Intensity: 0% (Biometric Lock)\n`;
+                } else {
+                    // Unlock for CG Mode to allow stylized rendering
+                    finalPrompt += `Stylization Intensity: ${effectiveStylization}%\n`;
+                    finalPrompt += `STYLIZATION SCOPE: Apply style to MATERIAL, SHADER, LIGHTING, and TEXTURE only.\n`;
+                    finalPrompt += `GEOMETRY LOCK: The 3D Mesh of the face must be an EXACT topological match to [IMAGE 1]. Do not deform features for 'appeal'.\n`;
+                }
+
+                if (isPhotoMode) {
+                    // PHOTOGRAPHY TIERS (Exact Studio)
+                    if (effectiveStylization <= 10) {
+                        finalPrompt += `LIGHTING MODE: STANDARD PORTRAIT PHOTOGRAPHY. Natural, neutral studio lighting. Accurate skin tones. No diffusion.\n\n`;
+                    } else if (effectiveStylization <= 40) {
+                        finalPrompt += `LIGHTING MODE: HIGH-END FASHION PHOTOGRAPHY. 85mm Portrait Lens. f/1.8 Aperture. Sharp Focus on Eyes. Detailed Skin Texture.\n\n`;
+                    } else {
+                        finalPrompt += `LIGHTING MODE: AWARD-WINNING EDITORIAL PHOTOGRAPHY. Dramatic Cinematic Lighting. Rembrandt lighting. Hyper-Realistic Texture. 8k Resolution.\n\n`;
+                    }
+                    // NEGATIVE CONSTRAINTS (Forbid CG/Render)
+                    finalPrompt += `NEGATIVE CONSTRAINTS: Cartoon, 3D Render, Illustration, Anime, Painting, Drawing, Plastic, Doll, Action Figure, Caricature, CGI look, stylized features.\n`;
+                } else {
+                    // CG RENDER TIERS (Premium CG / Cyberpunk) -> STYLIZED REALISM
+                    if (effectiveStylization <= 10) {
+                        finalPrompt += `RENDER QUALITY: STANDARD 3D ASSET. Clean topology. Neutral lighting. Good shape appeal.\n\n`;
+                    } else if (effectiveStylization <= 40) {
+                        finalPrompt += `RENDER QUALITY: HIGH-END GAME CINEMATIC. Blizzard Animation Style. Expressive shapes. Saturated textures. Soft lighting.\n\n`;
+                    } else {
+                        finalPrompt += `RENDER QUALITY: FEATURE FILM ANIMATION. Sony/DreamWorks Style. "Spider-Verse" detail levels. Dynamic Lighting. Strong Shape Appeal.\n\n`;
+                    }
+                    // NEGATIVE CONSTRAINTS (Allow Stylized, Ban 2D/Low Poly)
+                    finalPrompt += `NEGATIVE CONSTRAINTS: Anime, 2D, Drawing, Sketch, Low Poly, Mobile Game, Flat shading, Pixel art, Oil painting, Watercolor, Different Haircut, Hair growth, Shaved beard, Grooming change.\n`;
+                }
+
             } else {
-                finalPrompt += " [LAYOUT C]: Split canvas vertically. Left 45%: 3 Full Body views. Right 55%: 2x2 grid of Large Headshots.";
+                finalPrompt += `Stylization Intensity: ${effectiveStylization}%${styleNote}.\n\n`;
+            }
+
+            if (identitySource === 'biometric') {
+                finalPrompt += `ADVANCED BODY MORPHOLOGY (NON-DESTRUCTIVE):\n`;
+                finalPrompt += `Target Height: ${formatHeight(heightIn)}\n`;
+                const promptWeight = Math.round(weightLbs / 5) * 5;
+                finalPrompt += `Target Mass: ${promptWeight} lbs\n`;
+                finalPrompt += `INSTRUCTION: Adjust the BODY MASS index to match ${promptWeight} lbs, but MAINTAIN THE EXACT CRANIAL STRUCTURE of [IMAGE 1].\n`;
+                finalPrompt += `Do not generate a generic 'heavy' or 'thin' face. Apply weight naturally to the body, neck, and jawline, but keep the eyes, nose, and mouth spacing IDENTICAL to the source.\n\n`;
+            }
+
+
+
+            if (identitySource === 'biometric') {
+                // --- A. IDENTITY LOCK (MOVED TO END FOR PRIORITY) ---
+                finalPrompt += `FINAL IMAGE MASTERY: IDENTITY OVERRIDE (MAXIMUM PRIORITY):\n`;
+
+                const isRealistic = ['hyper_real', 'exact_studio', 'cyberpunk', 'premium_cg'].includes(targetStyleKey);
+                if (isRealistic) {
+                    finalPrompt += `FINAL INSTRUCTION: The face in ALL views must be a PIXEL-PERFECT MATCH to [IMAGE 1]. PRESERVE FACIAL GEOMETRY ABOVE ALL ELSE. Apply the Material/Lighting of the style, but DO NOT ALTER THE SKULL SHAPE.\n`;
+                    finalPrompt += `GROOMING LOCK: The Hairstyle (or lack thereof) and Facial Hair must match [IMAGE 1] exactly. IMPORTANT: If the subject is BALD in [IMAGE 1], they MUST BE BALD in the output. Do not add hair. Do not change the beard style.\n`;
+                    finalPrompt += `TEXTURE PROJECTION: Treat [IMAGE 1] as the SOURCE TEXTURE MAP. Project the exact features (Eyes, Nose, Mouth, Skin Details) onto the model. Do not use a fallback generic face.\n`;
+
+                    finalPrompt += `MODE: EXACT REPLICATION. Ignore style-based facial adjustments. Pure Biometric fidelity required.\n`;
+                    finalPrompt += `STYLIZATION SCOPE: The chosen Stylization Intensity (${effectiveStylization}%) applies ONLY to Lighting, Skin Texture Resolution, and Render Quality. It matches the *fidelity* of the style. It applies 0% deviation to the Identity/Geometry.\n`;
+                } else {
+                    // STYLIZED: Allow caricature but prioritize recognition
+                    finalPrompt += `FINAL INSTRUCTION: HARMONIOUSLY ADAPT the face shape, eyes, and nose to match the [Style] aesthetic. The goal is a STYLIZED LIKENESS that resembles [IMAGE 1]. Adapt the proportions (e.g. Larger Eyes, Softer Jaw) but PRESERVE THE IDENTITY FEATURES (Nose shape, Jawline, Eye Color).\n`;
+                }
+
+                finalPrompt += `Use ${identityRangeText} as the source for the character's SKINTONE, FACE, and HAIR ONLY. IGNORE clothing and shoulders in [IMAGE 1].\n`;
+                if (isRealistic) {
+                    finalPrompt += `Primary Directive: Exact match of facial hair (beard/mustache/stubble) and grooming from ${identityRangeText}. Do NOT add hair that is not there.\n`;
+                } else {
+                    finalPrompt += `Reference [IMAGE 1] for key features (Facial Hair, Hair Color, Eye Color). Simplify the *Skin Shading* only. DO NOT SIMPLIFY THE COSTUME DETAILS. The outfit must remain highly detailed and accurate to the reference.\n`;
+                }
             }
 
             // --- E. NEGATIVES ---
             finalPrompt += `\nNEGATIVE CONSTRAINTS:\n`;
-            finalPrompt += `different person, face swap, generic face, altered skull, incorrect facial hair, added beard, different grooming, altered hairline, extra people, text, watermarks (except branding).\n`;
+            finalPrompt += `different person, face swap, generic face, altered skull, incorrect facial hair, added beard, different grooming, altered hairline, extra people, text, watermarks, maps, cartography, vintage map, scenery, landscape, complex background.\n`;
+            finalPrompt += `cropped legs, cut off feet, cowboy shot, 3/4 shot, knees up, waist up, torso only, close up body, cropped head.\n`;
+            if (identitySource === 'biometric') {
+                finalPrompt += `generic face, random person, default avatar, face swap, extra people, text, watermarks, maps.\n`;
+                if (['hyper_real', 'exact_studio', 'cyberpunk', 'premium_cg'].includes(targetStyleKey)) {
+                    // REALISTIC: Ban caricature
+                    finalPrompt += `caricature, cartoon face, distorted proportions, big eyes, small nose, altered skull shape.\n`;
+                } else {
+                    // STYLIZED: Ban realism
+                    finalPrompt += `photorealistic, hyperrealistic, raw photo, human skin texture, realistic proportions, unstylized.\n`;
+                }
+                if (['hyper_real', 'exact_studio'].includes(selectedStyle || '')) {
+                    finalPrompt += `caricature, cartoon face, distorted proportions, big eyes, small nose, altered skull shape.\n`;
+                }
+            }
+            if (selectedWardrobeItem) {
+                finalPrompt += `face from costume image, identity from costume image, person from wardrobe ref, mixed identity, source photo clothing, mismatching clothes, casual clothes, t-shirt, polo shirt.\n`;
+            }
 
-            const res = await GeminiService.generateImage(
-                finalPrompt,
-                state.apiKey,
-                state.model.includes('imagen') ? 'imagen-4.0-generate-001' : 'gemini-3-pro-image-preview',
-                imageRefs,
-                { aspectRatio: '16:9' }
-            );
+            let res = null;
+            let attempts = 0;
+            const maxRetries = 3;
 
-            setRefSheetUrl(res);
+            // Timeout Helper
+            const timeoutPromise = (ms: number) => new Promise((_, reject) => setTimeout(() => reject(new Error('Request timed out')), ms));
+
+            while (attempts <= maxRetries) {
+                try {
+                    res = await Promise.race([
+                        GeminiService.generateImage(
+                            finalPrompt,
+                            state.apiKey,
+                            state.model.includes('imagen') ? 'imagen-4.0-generate-001' : 'gemini-3-pro-image-preview',
+                            imageRefs,
+                            { aspectRatio: '16:9' }
+                        ),
+                        timeoutPromise(45000) // 45s Timeout
+                    ]);
+                    break; // Success
+                } catch (err: any) {
+                    const isTimeout = err.message?.includes('timed out');
+                    const isOverloaded = err.message?.includes('503') || err.message?.includes('overloaded');
+
+                    if ((isTimeout || isOverloaded) && attempts < maxRetries) {
+                        attempts++;
+                        const reason = isTimeout ? "Request Packet Dropped (Timeout)" : "Server Overloaded (503)";
+                        dispatch({ type: 'ADD_LOG', payload: { message: `${reason}. Retrying attempt ${attempts}/${maxRetries}...`, type: 'info' } });
+                        await new Promise(resolve => setTimeout(resolve, 2000));
+                    } else {
+                        throw err;
+                    }
+                }
+            }
+
+            setRefSheetUrl(res as string);
             setShowRefSheet(true);
             dispatch({ type: 'ADD_LOG', payload: { message: "Reference Sheet Generated.", type: 'success' } });
         } catch (e: any) {
@@ -1394,9 +1577,9 @@ const NanoCastingDirector = () => {
                                                     <button
                                                         onClick={generateWardrobe}
                                                         disabled={isProcessing}
-                                                        className="bg-accent hover:bg-yellow-400 text-black py-2 rounded-lg text-[10px] font-black uppercase tracking-wider"
+                                                        className="bg-black border border-[#39FF14] text-[#39FF14] hover:text-[#00BFFF] hover:border-[#00BFFF] hover:shadow-[0_0_20px_rgba(0,191,255,0.6)] py-2 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all"
                                                     >
-                                                        Generate & Fit
+                                                        {selectedWardrobeItem ? "Fit Selected Item" : "Generate & Fit"}
                                                     </button>
                                                     <button
                                                         onClick={handleSaveToWardrobe}
@@ -1414,39 +1597,29 @@ const NanoCastingDirector = () => {
                                                 </h4>
                                                 <div className="grid grid-cols-3 gap-2 max-h-[400px] overflow-y-auto pr-1">
                                                     {state.wardrobeItems
-                                                        .filter(item => !bodyScope || (WARDROBE_SCOPE_RULES[bodyScope] || []).includes((item.category || 'full_outfit').toLowerCase()) || item.category === 'Nano')
-                                                        .map(item => (
-                                                            <button
-                                                                key={item.id}
-                                                                onClick={async () => {
-                                                                    if (!finalCharacterUrl || isProcessing) return;
-                                                                    // Trigger quick try-on
-                                                                    setIsProcessing(true);
-                                                                    setProgress({ phase: 'wardrobe', percent: 50, detail: `Fitting ${item.name}...` });
-                                                                    try {
-                                                                        const fitted = await GeminiService.generateImage(
-                                                                            `Virtual Try-On: Apply costume in [IMAGE 2] to subject [IMAGE 1].
-                                                                         Maintain subject identity. Match lighting.`,
-                                                                            state.apiKey,
-                                                                            state.model,
-                                                                            [
-                                                                                { url: finalCharacterUrl, label: "Subject" },
-                                                                                { url: item.url, label: "Costume" }
-                                                                            ],
-                                                                            { aspectRatio: '2:3' }
-                                                                        );
-                                                                        setFinalCharacterUrl(fitted);
-                                                                    } catch (e) { console.error(e); }
-                                                                    finally { setIsProcessing(false); setProgress({ phase: '', percent: 0, detail: "" }); }
-                                                                }}
-                                                                className="aspect-square rounded-lg border border-border overflow-hidden relative group hover:border-accent transition-all"
-                                                            >
-                                                                <img src={item.url} className="w-full h-full object-cover" />
-                                                                <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                                                                    <Shirt className="w-4 h-4 text-white" />
-                                                                </div>
-                                                            </button>
-                                                        ))}
+                                                        // Show all items regardless of scope to ensure visibility
+                                                        .map(item => {
+                                                            const isSelected = selectedWardrobeItem?.id === item.id;
+                                                            return (
+                                                                <button
+                                                                    key={item.id}
+                                                                    onClick={() => setSelectedWardrobeItem(isSelected ? null : item)}
+                                                                    className={`aspect-square rounded-lg border overflow-hidden relative group transition-all ${isSelected ? 'border-[#39FF14] shadow-[0_0_10px_rgba(57,255,20,0.4)] ring-1 ring-[#39FF14]' : 'border-border hover:border-accent'}`}
+                                                                >
+                                                                    <img src={item.url} className={`w-full h-full object-cover ${isSelected ? 'opacity-100' : 'opacity-70 group-hover:opacity-100'}`} />
+                                                                    {isSelected && (
+                                                                        <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+                                                                            <div className="bg-[#39FF14] text-black text-[9px] font-bold px-1 rounded">ACTIVE</div>
+                                                                        </div>
+                                                                    )}
+                                                                    {!isSelected && (
+                                                                        <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                                                                            <Shirt className="w-4 h-4 text-white" />
+                                                                        </div>
+                                                                    )}
+                                                                </button>
+                                                            )
+                                                        })}
                                                     {state.wardrobeItems.length === 0 && (
                                                         <div className="col-span-3 text-center py-4 opacity-50 text-[10px]">
                                                             Library Empty

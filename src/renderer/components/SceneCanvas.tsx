@@ -29,7 +29,13 @@ import {
   ArrowDown,
   ArrowUpToLine,
   ArrowDownToLine,
-  GripVertical
+  GripVertical,
+  Pipette,
+  Undo,
+  Redo,
+  Copy,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 
 
@@ -46,7 +52,6 @@ import type {
   DirectorSafety,
   DirectorMergeStrategy,
   DirectorSpatialLayout,
-  DirectorMarkerType,
   ReferenceSlot,
   CastMember,
   StageToken
@@ -56,6 +61,102 @@ import {
   compileV3DirectorPrompt,
 
 } from '../utils/promptHelpers';
+// --- HELPER FUNCTIONS ---
+const DebouncedHueSlider = ({ color, onChange }: { color: string, onChange: (color: string) => void }) => {
+  // Initialize ONLY on mount or when external color changes significantly (if needed)
+  // But to avoid "lag" from external updates while dragging, we prefer internal state.
+  const [localHue, setLocalHue] = useState(HexToHSL(color).h);
+
+  // Ref to hold the latest onChange to call it without effect dependencies
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+
+  // Ref to debounce
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    // Determine if we should sync from prop (only if not dragging?)
+    // For simplicity, we just sync when prop changes IF it doesn't match our HSL approx.
+    const propHue = HexToHSL(color).h;
+    if (Math.abs(propHue - localHue) > 5) {
+      setLocalHue(propHue);
+    }
+  }, [color]);
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newHue = parseInt(e.target.value);
+    setLocalHue(newHue); // Instant UI update for the slider handle
+
+    // Debounce the heavy global dispatch
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+
+    timeoutRef.current = setTimeout(() => {
+      const currentHSL = HexToHSL(color);
+      const newHex = HSLToHex(newHue, currentHSL.s, currentHSL.l);
+      onChangeRef.current(newHex);
+    }, 100); // 100ms throttle
+  };
+
+  return (
+    <input
+      type="range" min="0" max="360" step="1"
+      value={localHue}
+      onChange={handleChange}
+      className="w-full h-2 rounded-lg appearance-none cursor-pointer"
+      style={{ background: 'linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)' }}
+    />
+  );
+};
+const MemoizedDebouncedHueSlider = React.memo(DebouncedHueSlider);
+// Helper to get hex from HSL
+const HSLToHex = (h: number, s: number, l: number) => {
+  s /= 100;
+  l /= 100;
+  const k = (n: number) => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) =>
+    l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  const toHex = (x: number) => {
+    const hex = Math.round(x * 255).toString(16);
+    return hex.length === 1 ? '0' + hex : hex;
+  };
+  return `#${toHex(f(0))}${toHex(f(8))}${toHex(f(4))}`;
+};
+
+// Helper to get HSL from Hex
+const HexToHSL = (hex: string) => {
+  let r = 0, g = 0, b = 0;
+  if (hex.length === 4) {
+    r = parseInt('0x' + hex[1] + hex[1]);
+    g = parseInt('0x' + hex[2] + hex[2]);
+    b = parseInt('0x' + hex[3] + hex[3]);
+  } else if (hex.length === 7) {
+    r = parseInt('0x' + hex[1] + hex[2]);
+    g = parseInt('0x' + hex[3] + hex[4]);
+    b = parseInt('0x' + hex[5] + hex[6]);
+  }
+  r /= 255;
+  g /= 255;
+  b /= 255;
+  const cmin = Math.min(r, g, b),
+    cmax = Math.max(r, g, b),
+    delta = cmax - cmin;
+  let h = 0, s = 0, l = 0;
+
+  if (delta === 0) h = 0;
+  else if (cmax === r) h = ((g - b) / delta) % 6;
+  else if (cmax === g) h = (b - r) / delta + 2;
+  else h = (r - g) / delta + 4;
+
+  h = Math.round(h * 60);
+  if (h < 0) h += 360;
+  l = (cmax + cmin) / 2;
+  s = delta === 0 ? 0 : delta / (1 - Math.abs(2 * l - 1));
+  s = +(s * 100).toFixed(1);
+  l = +(l * 100).toFixed(1);
+
+  return { h, s, l };
+};
 
 // --- HELPER COMPONENTS (Moved outside to prevent re-mount focus loss) ---
 const Dropdown = ({ label, value, options, onChange, icon: Icon }: any) => (
@@ -104,6 +205,110 @@ const PropertyField = ({ label, value, onChange, icon: Icon, type = "text", plac
 const SceneCanvas = () => {
   const { state, dispatch } = useAppContext();
   const stageRef = useRef<HTMLDivElement>(null);
+  const viewportRef = useRef<HTMLDivElement>(null);
+
+  // Camera Gate: an inner viewport that always matches the selected aspect ratio.
+  // All staging (tokens, notes, masks) must live inside this gate to guarantee WYSIWYG export.
+  const [viewportBox, setViewportBox] = useState<{ x: number; y: number; w: number; h: number }>({
+    x: 0,
+    y: 0,
+    w: 1,
+    h: 1
+  });
+
+  const parseAspectRatioToNumber = (ar: DirectorAspectRatio | string | undefined): number => {
+    const raw = String(ar || '16:9');
+    const parts = raw.split(':').map((p) => Number(p));
+    if (parts.length === 2 && Number.isFinite(parts[0]) && Number.isFinite(parts[1]) && parts[1] !== 0) {
+      return parts[0] / parts[1];
+    }
+    return 16 / 9;
+  };
+
+  // Keep the camera gate centered and sized correctly even when the stage container changes.
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+
+    const update = () => {
+      const cw = Math.max(1, stage.clientWidth);
+      const ch = Math.max(1, stage.clientHeight);
+      const ratio = parseAspectRatioToNumber(state.director.aspectRatio);
+
+      let w = cw;
+      let h = w / ratio;
+
+      if (h > ch) {
+        h = ch;
+        w = h * ratio;
+      }
+
+      const x = (cw - w) / 2;
+      const y = (ch - h) / 2;
+
+      setViewportBox((prev) => {
+        const changed =
+          Math.abs(prev.x - x) > 0.5 ||
+          Math.abs(prev.y - y) > 0.5 ||
+          Math.abs(prev.w - w) > 0.5 ||
+          Math.abs(prev.h - h) > 0.5;
+
+        return changed ? { x, y, w, h } : prev;
+      });
+    };
+
+    update();
+    const obs = new ResizeObserver(update);
+    obs.observe(stage);
+    return () => obs.disconnect();
+  }, [state.director.aspectRatio]);
+
+  // Keyboard Shortcuts (Global)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore if typing in an input/textarea
+      if (
+        (e.target as HTMLElement).tagName === 'INPUT' ||
+        (e.target as HTMLElement).tagName === 'TEXTAREA' ||
+        (e.target as HTMLElement).isContentEditable
+      ) {
+        return;
+      }
+
+      // Undo: Ctrl+Z
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        dispatch({ type: 'UNDO' });
+        return;
+      }
+
+      // Redo: Ctrl+Y or Ctrl+Shift+Z
+      if (
+        ((e.ctrlKey || e.metaKey) && e.key === 'y') ||
+        ((e.ctrlKey || e.metaKey) && e.key === 'z' && e.shiftKey)
+      ) {
+        e.preventDefault();
+        dispatch({ type: 'REDO' });
+        return;
+      }
+
+      // Delete: Delete or Backspace
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (state.selection) {
+          e.preventDefault();
+          if (state.selectionType === 'token') {
+            dispatch({ type: 'REMOVE_TOKEN', payload: state.selection });
+          } else {
+            // Annotations (notes, etc)
+            dispatch({ type: 'REMOVE_ANNOTATION', payload: state.selection });
+          }
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [state.selection, state.selectionType, dispatch]);
   // Region Edit Job Runner (Cancel/Status)
   const [isRegionEditRunning, setIsRegionEditRunning] = useState(false);
   const cancelRegionEditRef = useRef(false);
@@ -150,6 +355,11 @@ const SceneCanvas = () => {
   }, [dispatch]);
   // DRAG STATE FOR CANVAS ITEMS
   const [editingAnnotationId, setEditingAnnotationId] = useState<string | null>(null);
+  const colorPickerRef = useRef<HTMLInputElement>(null);
+  const [lastCustomColor, setLastCustomColor] = useState('#ffffff');
+  const [showColorEditor, setShowColorEditor] = useState(false);
+
+
   const [dragItem, setDragItem] = useState<{ id: string, type: 'token' | 'annotation', startX: number, startY: number, initialX: number, initialY: number } | null>(null);
   const [resizeItem, setResizeItem] = useState<{
     id: string,
@@ -345,10 +555,10 @@ const SceneCanvas = () => {
 
   const ensureMaskCanvasSize = () => {
     const canvas = maskCanvasRef.current;
-    const stage = stageRef.current;
-    if (!canvas || !stage) return;
-    const w = Math.max(1, Math.floor(stage.clientWidth));
-    const h = Math.max(1, Math.floor(stage.clientHeight));
+    const viewport = viewportRef.current;
+    if (!canvas || !viewport) return;
+    const w = Math.max(1, Math.floor(viewport.clientWidth));
+    const h = Math.max(1, Math.floor(viewport.clientHeight));
     if (canvas.width !== w || canvas.height !== h) {
       canvas.width = w;
       canvas.height = h;
@@ -403,7 +613,7 @@ const SceneCanvas = () => {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [regionEdit?.isMaskMode, regionEdit?.activeLayerId]);
+  }, [regionEdit?.isMaskMode, regionEdit?.activeLayerId, viewportBox.w, viewportBox.h]);
 
   useEffect(() => {
     const onResize = () => ensureMaskCanvasSize();
@@ -951,11 +1161,14 @@ const SceneCanvas = () => {
   // --- DROP HANDLER (Main Stage) ---
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
-    const rect = stageRef.current?.getBoundingClientRect();
+    const rect = viewportRef.current?.getBoundingClientRect();
     if (!rect) return;
 
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
+
+    // Ignore drops outside the camera gate
+    if (x < 0 || y < 0 || x > rect.width || y > rect.height) return;
 
     // 1) Actor Library Drop
     const raw = e.dataTransfer.getData('application/json');
@@ -1010,20 +1223,33 @@ const SceneCanvas = () => {
   };
 
   const captureStage = async (): Promise<string | null> => {
-    if (!stageRef.current) return null;
+    if (!viewportRef.current) return null;
 
-    // 1. Setup Canvas (1920x1080 Pro Res for consistent high-quality export)
-    const TARGET_W = 1920;
-    const TARGET_H = 1080;
+    // 1. Setup Canvas based on Director aspect ratio (fixed internal long-edge for AI stability)
+    const ratio = parseAspectRatioToNumber(state.director.aspectRatio);
+    const base = 1920; // Keep this stable: captureStage() is also used as AI input across multiple tools.
+    let TARGET_W = base;
+    let TARGET_H = Math.round(base / ratio);
+    if (ratio < 1) {
+      TARGET_H = base;
+      TARGET_W = Math.round(base * ratio);
+    }
+
+    // Keep dimensions even (better encoder/model compatibility)
+    TARGET_W = Math.max(2, Math.round(TARGET_W));
+    TARGET_H = Math.max(2, Math.round(TARGET_H));
+    if (TARGET_W % 2 !== 0) TARGET_W += 1;
+    if (TARGET_H % 2 !== 0) TARGET_H += 1;
+
     const canvas = document.createElement('canvas');
     canvas.width = TARGET_W;
     canvas.height = TARGET_H;
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error("Canvas context failed");
 
-    // 2. Determine Scale Factor based on the actual DOM stage dimensions
-    // This allows WYSIWYG capture regardless of the user's screen size or zoom.
-    const rect = stageRef.current.getBoundingClientRect();
+    // 2. Determine Scale Factor based on the camera gate dimensions
+    // This guarantees WYSIWYG capture regardless of screen size or UI letterboxing.
+    const rect = viewportRef.current.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return null;
 
     const scaleX = TARGET_W / rect.width;
@@ -1226,6 +1452,8 @@ const SceneCanvas = () => {
     }
   };
 
+
+
   // --- BACKGROUND GENERATION ---
   const generateBg = async () => {
     if (!bgPrompt.trim() || !state.apiKey) return;
@@ -1245,7 +1473,7 @@ const SceneCanvas = () => {
   };
 
   const downloadCanvas = async () => {
-    if (!stageRef.current) return;
+    if (!viewportRef.current) return;
     dispatch({ type: 'SET_PROCESSING', payload: true });
     dispatch({ type: 'ADD_LOG', payload: { message: 'Composting Stage for Storyboard Capture...', type: 'info' } });
 
@@ -1277,7 +1505,58 @@ const SceneCanvas = () => {
 
 
   // --- RENDER ---
-  const selectedToken = state.tokens.find(t => t.id === state.selection);
+  const selectedToken = state.tokens.find(t => t.id === state.selection && state.selectionType === 'token');
+  const selectedAnnotation = state.annotations.find(a => a.id === state.selection && state.selectionType === 'annotation');
+
+
+  // --- STABLE CALLBACKS FOR PERFORMANCE ---
+  const handleHueChange = React.useCallback((newHex: string) => {
+    if (selectedAnnotation) {
+      dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: selectedAnnotation.id, color: newHex } });
+      setLastCustomColor(newHex);
+    }
+  }, [selectedAnnotation?.id, dispatch]);
+
+  const duplicateSelection = () => {
+    if (!state.selection || !state.selectionType) return;
+
+    if (state.selectionType === 'token') {
+      const original = state.tokens.find(t => t.id === state.selection);
+      if (!original) return;
+
+      const newId = `token-${Date.now()}`;
+      // Find max zIndex to place on top (optional, or just +1)
+      const maxZ = Math.max(...state.tokens.map(t => t.zIndex), 10);
+
+      const cloneToken: StageToken = {
+        ...original,
+        id: newId,
+        x: original.x + 40,
+        y: original.y,
+        zIndex: maxZ + 1
+      };
+      dispatch({ type: 'ADD_TOKEN', payload: cloneToken });
+      dispatch({ type: 'SELECT_ITEM', payload: { id: newId, type: 'token' } });
+
+    } else if (state.selectionType === 'annotation') {
+      const original = state.annotations.find(a => a.id === state.selection);
+      if (!original) return;
+
+      const newId = `ann-${Date.now()}`;
+      const maxZ = Math.max(...state.annotations.map(a => a.zIndex), 10);
+      const cloneAnn = {
+        ...original,
+        id: newId,
+        x: original.x + 40,
+        y: original.y,
+        zIndex: maxZ + 1
+      };
+
+      dispatch({ type: 'ADD_ANNOTATION', payload: cloneAnn });
+      dispatch({ type: 'SELECT_ITEM', payload: { id: newId, type: 'annotation' } });
+    }
+  };
+
 
   return (
     <div className="flex h-full gap-4 p-4 overflow-hidden select-none">
@@ -1631,10 +1910,287 @@ const SceneCanvas = () => {
             </div>
           </div>
         </div>
+
+        {/* ANNOTATION PROPERTIES (NEW) */}
+        {selectedAnnotation && (
+          <div className="bg-[#09090b] border border-[#27272a] rounded-xl p-4 shadow-xl shrink-0">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="p-2 bg-purple-500/10 rounded-lg">
+                <StickyNote className="w-4 h-4 text-purple-500" />
+              </div>
+              <h3 className="text-xs font-bold text-white uppercase tracking-widest">Annotation</h3>
+            </div>
+
+
+            <div className="space-y-4 animate-in fade-in slide-in-from-left-2 duration-300 relative">
+
+              {/* Shared Hidden Input for Color Modification - Visually hidden but layout-present for popover position */}
+              <input
+                ref={colorPickerRef}
+                type="color"
+                className="opacity-0 absolute top-10 left-10 w-0 h-0 pointer-events-none"
+                onChange={(e) => {
+                  const c = e.target.value;
+                  setLastCustomColor(c);
+                  dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: selectedAnnotation.id, color: c } });
+                  setShowColorEditor(false); // Close editor after system picker selection
+                }}
+              />
+
+              {/* Type Info - Show only if editor is CLOSED */}
+              {!showColorEditor && (
+                <div className="flex items-center justify-between bg-[#09090b] px-3 py-2 rounded border border-gray-800">
+                  <div className="flex flex-col">
+                    <span className="text-[9px] text-gray-500 font-bold uppercase tracking-tighter">Selected Item</span>
+                    <span className="font-mono text-[10px] text-purple-400 truncate uppercase">{selectedAnnotation.type}</span>
+                  </div>
+                  <div className="flex gap-1">
+                    <button
+                      onClick={deleteSelection}
+                      className="text-red-500 hover:text-red-400 p-1.5 bg-gray-800 hover:bg-red-900/20 rounded"
+                      title="Delete Annotation"
+                    >
+                      <TrashIcon className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* CONTROLS OR COLOR EDITOR */}
+              {showColorEditor ? (
+                <div className="bg-[#18181b] rounded-lg p-3 border border-gray-700 space-y-3 relative animate-in zoom-in-95 duration-200">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[10px] font-bold text-white uppercase tracking-wider">Color Editor</span>
+                    <button
+                      onClick={() => setShowColorEditor(false)}
+                      className="p-1 hover:bg-white/10 rounded-full text-gray-400 hover:text-white transition-colors"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+
+                  {/* Preview & Hex */}
+                  <div className="flex gap-2">
+                    <div
+                      className="w-10 h-10 rounded border border-white/20 shadow-inner"
+                      style={{ backgroundColor: selectedAnnotation.color || '#a855f7' }}
+                    />
+                    <div className="flex-1 space-y-1">
+                      <label className="text-[8px] text-gray-500 uppercase font-bold block">Hex Code</label>
+                      <input
+                        type="text"
+                        defaultValue={selectedAnnotation.color || '#a855f7'}
+                        onBlur={(e) => {
+                          const val = e.target.value;
+                          dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: selectedAnnotation.id, color: val } });
+                          setLastCustomColor(val);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            const val = e.currentTarget.value;
+                            dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: selectedAnnotation.id, color: val } });
+                            setLastCustomColor(val);
+                          }
+                        }}
+                        className="w-full bg-black border border-gray-700 rounded px-2 py-1 text-[10px] text-white font-mono uppercase focus:border-purple-500 outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[8px] text-gray-500 uppercase font-bold block">Hue Adjust</label>
+                    <MemoizedDebouncedHueSlider
+                      color={selectedAnnotation.color || '#a855f7'}
+                      onChange={handleHueChange}
+                    />
+                    {/* Replaced Hue with System Picker Button for reliability */}
+                    <button
+                      onClick={() => colorPickerRef.current?.click()}
+                      className="w-full py-1.5 bg-gray-800 hover:bg-gray-700 text-[9px] text-gray-300 rounded border border-gray-600 uppercase font-bold flex items-center justify-center gap-2"
+                    >
+                      <Pipette className="w-3 h-3" /> Open System Picker
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2">
+                    {/* We could parse Hex to RGB here for inputs, but keeping it simple with Hex + System is better for stability unless user asked for RGB specifically. User asked for "Close button" and "Position". */}
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-4 pt-2 border-t border-white/5">
+
+                  {/* 1. SIZE / SCALE */}
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-[10px] uppercase font-bold text-gray-500">
+                      <span>Size</span>
+                      <span className="text-purple-400 font-mono">{Math.round(selectedAnnotation.width)}px</span>
+                    </div>
+                    <input
+                      type="range" min="20" max="600" step="10"
+                      value={selectedAnnotation.width}
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value);
+                        // Uniform scale behavior for "Size" slider
+                        const ratio = selectedAnnotation.width / selectedAnnotation.height;
+                        // Avoid divide by zero if new item
+                        const effectiveRatio = ratio || 1;
+
+                        dispatch({
+                          type: 'UPDATE_ANNOTATION',
+                          payload: {
+                            id: selectedAnnotation.id,
+                            width: val,
+                            height: val / effectiveRatio
+                          }
+                        });
+                      }}
+                      className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-purple-500"
+                    />
+                  </div>
+
+                  {/* 2. ROTATION */}
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-[60px_1fr_50px] items-center gap-3">
+                      <span className="text-[10px] text-gray-500 uppercase font-medium">Rotate</span>
+                      <input
+                        type="range" min="-180" max="180"
+                        value={selectedAnnotation.rotation}
+                        onChange={(e) => dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: selectedAnnotation.id, rotation: parseInt(e.target.value) } })}
+                        className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-purple-500"
+                      />
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="number"
+                          value={selectedAnnotation.rotation}
+                          onChange={(e) => dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: selectedAnnotation.id, rotation: parseInt(e.target.value) || 0 } })}
+                          className="bg-black border border-gray-800 py-0.5 px-1 rounded text-[10px] text-purple-500 font-mono text-center outline-none w-full"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 3. THICKNESS (Arrows only usually, but maybe border for zones later) */}
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-[10px] uppercase font-bold text-gray-500">
+                      <span>Thickness</span>
+                      <span className="text-purple-400 font-mono">{selectedAnnotation.thickness ?? 2}px</span>
+                    </div>
+                    <input
+                      type="range" min="1" max="25" step="1"
+                      value={selectedAnnotation.thickness ?? 2}
+                      onChange={(e) => dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: selectedAnnotation.id, thickness: parseInt(e.target.value) } })}
+                      className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-purple-500"
+                    />
+                  </div>
+
+                  {/* 4. POSITION */}
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[8px] text-gray-500 uppercase font-bold block">X Position</label>
+                        <input
+                          type="number"
+                          value={Math.round(selectedAnnotation.x)}
+                          onChange={(e) => dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: selectedAnnotation.id, x: parseInt(e.target.value) } })}
+                          className="w-full bg-black border border-gray-700 rounded px-2 py-1 text-[10px] text-white font-mono focus:border-purple-500 outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[8px] text-gray-500 uppercase font-bold block">Y Position</label>
+                        <input
+                          type="number"
+                          value={Math.round(selectedAnnotation.y)}
+                          onChange={(e) => dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: selectedAnnotation.id, y: parseInt(e.target.value) } })}
+                          className="w-full bg-black border border-gray-700 rounded px-2 py-1 text-[10px] text-white font-mono focus:border-purple-500 outline-none"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 4. COLOR */}
+                  <div className="space-y-2">
+                    <span className="text-[10px] uppercase font-bold text-gray-500">Color</span>
+                    <div className="grid grid-cols-6 gap-2">
+                      {/* Presets */}
+                      {[
+                        '#a855f7', // Purple (Default)
+                        '#ef4444', // Red
+                        '#f97316', // Orange
+                        '#eab308', // Yellow
+                        '#22c55e', // Green
+                        '#3b82f6', // Blue
+                        '#ffffff', // White
+                        '#000000', // Black
+                      ].map(c => (
+                        <button
+                          key={c}
+                          onClick={() => {
+                            dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: selectedAnnotation.id, color: c } });
+                            setShowColorEditor(false); // Single click always exits editor if open (or just selects)
+                          }}
+                          onDoubleClick={(e) => {
+                            e.stopPropagation();
+                            setShowColorEditor(true);
+                            // We don't open system picker automatically anymore, we open OUR editor.
+                          }}
+                          className={`w-6 h-6 rounded-full border border-white/10 shadow-sm transition-transform hover:scale-110 ${selectedAnnotation.color === c ? 'ring-2 ring-white' : ''}`}
+                          style={{ backgroundColor: c }}
+                          title="Double-click to edit"
+                        />
+                      ))}
+
+                      {/* Custom / Recent Slot */}
+                      <button
+                        onClick={() => {
+                          dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: selectedAnnotation.id, color: lastCustomColor } });
+                          setShowColorEditor(false);
+                        }}
+                        onDoubleClick={(e) => {
+                          e.stopPropagation();
+                          setShowColorEditor(true);
+                        }}
+                        className={`w-6 h-6 rounded-full border border-white/10 shadow-sm transition-transform hover:scale-110 flex items-center justify-center overflow-hidden ${selectedAnnotation.color === lastCustomColor ? 'ring-2 ring-white' : ''}`}
+                        style={{ backgroundColor: lastCustomColor }}
+                        title="Custom Color (Double-click to edit)"
+                      >
+                        <span className="text-[8px] text-white/50 bg-black/20 w-full text-center">+</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 5. Z-INDEX DEPTH */}
+                  <div className="flex items-center justify-between pt-2">
+                    <span className="text-[10px] uppercase font-bold text-gray-500">Layer {selectedAnnotation.zIndex}</span>
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: selectedAnnotation.id, zIndex: selectedAnnotation.zIndex - 1 } })}
+                        className="p-1 px-2 bg-gray-800 rounded text-[9px] text-gray-300 hover:text-white"
+                      >
+                        Back
+                      </button>
+                      <button
+                        onClick={() => dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: selectedAnnotation.id, zIndex: selectedAnnotation.zIndex + 1 } })}
+                        className="p-1 px-2 bg-gray-800 rounded text-[9px] text-gray-300 hover:text-white"
+                      >
+                        Front
+                      </button>
+                    </div>
+                  </div>
+
+                </div>
+              )}
+              {/* End of ternary */}
+
+            </div>
+          </div>
+        )}
+
+
       </div>
+      {/* End of Left Sidebar */}
 
       {/* 2. CENTER AREA: THE STAGE */}
-      <div className="flex-1 flex flex-col gap-4 min-w-0">
+      < div className="flex-1 flex flex-col gap-4 min-w-0" >
         <div
           ref={stageRef}
           className="flex-1 bg-[#09090b] border border-[#27272a] rounded-xl relative overflow-hidden shadow-2xl group"
@@ -1644,16 +2200,28 @@ const SceneCanvas = () => {
           onMouseUp={handleStageMouseUp}
           onMouseLeave={handleStageMouseUp}
         >
-          {/* Background Layer */}
-          <div className="absolute inset-0 flex items-center justify-center bg-[radial-gradient(circle_at_center,_#111111_0%,_#000000_100%)]">
+          {/* Stage Matte (outside the camera gate) */}
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_#111111_0%,_#000000_100%)]" />
+
+          {/* Camera Gate / Viewport (this is the actual rendered frame) */}
+          <div
+            ref={viewportRef}
+            className="absolute relative bg-black overflow-hidden rounded-xl shadow-2xl ring-1 ring-white/10"
+            style={{
+              left: `${viewportBox.x}px`,
+              top: `${viewportBox.y}px`,
+              width: `${viewportBox.w}px`,
+              height: `${viewportBox.h}px`
+            }}
+          >
             {state.backgroundUrl ? (
               <img
                 src={state.backgroundUrl}
                 alt="Stage Background"
-                className="w-full h-full object-contain pointer-events-none opacity-50"
+                className="absolute inset-0 w-full h-full object-cover pointer-events-none"
               />
             ) : (
-              <div className="text-gray-800 flex flex-col items-center gap-4 opacity-20">
+              <div className="absolute inset-0 text-gray-800 flex flex-col items-center justify-center gap-4 opacity-20">
                 <Square className="w-24 h-24 stroke-[1]" />
                 <span className="text-xs font-bold uppercase tracking-[0.5em]">Empty Stage</span>
               </div>
@@ -1672,221 +2240,295 @@ const SceneCanvas = () => {
               />
             )}
 
+            {/* Tokens Layer */}
+            {[...state.tokens].filter(t => t.visible !== false).sort((a, b) => a.zIndex - b.zIndex).map(token => (
+              <div
+                key={token.id}
+                className={`absolute cursor-move group/token ${state.selection === token.id ? 'ring-2 ring-yellow-500 ring-offset-2 ring-offset-[#09090b] z-50' : ''}`}
+                style={{
+                  left: token.x - (token.width * token.anchorX),
+                  top: token.y - (token.height * token.anchorY),
+                  width: token.width,
+                  height: token.height,
+                  transformOrigin: `${token.anchorX * 100}% ${token.anchorY * 100}%`,
+                  transform: `rotate(${token.rotation}deg) scale(${token.scaleX}, ${token.scaleY})`,
+                  zIndex: token.zIndex
+                }}
+                onMouseDown={(e) => {
+                  if ((state as any).regionEdit?.isMaskMode) return;
+                  e.stopPropagation();
+                  dispatch({ type: 'SELECT_ITEM', payload: { id: token.id, type: 'token' } });
+                  setDragItem({
+                    id: token.id,
+                    type: 'token',
+                    startX: e.clientX,
+                    startY: e.clientY,
+                    initialX: token.x,
+                    initialY: token.y
+                  });
+                }}
+              >
+                <div className={`absolute inset-0 transition-all duration-500 pointer-events-none`} />
+                <img
+                  src={token.url}
+                  alt={token.tag}
+                  className={`w-full h-full object-contain pointer-events-none transition-all duration-300 ${token.intelligence ? 'drop-shadow-[0_0_8px_rgba(34,197,94,0.9)]' : ''}`}
+                />
+
+                {/* Selection Utilities */}
+                {state.selection === token.id && (
+                  <>
+                    {/* Resize Handles */}
+                    {['tl', 'tr', 'bl', 'br'].map((handle) => (
+                      <div
+                        key={handle}
+                        className={`absolute w-3 h-3 bg-white border border-blue-500 rounded-full shadow-lg z-50
+                            ${handle === 'tl' ? '-top-1.5 -left-1.5 cursor-nwse-resize' : ''}
+                            ${handle === 'tr' ? '-top-1.5 -right-1.5 cursor-nesw-resize' : ''}
+                            ${handle === 'bl' ? '-bottom-1.5 -left-1.5 cursor-nesw-resize' : ''}
+                            ${handle === 'br' ? '-bottom-1.5 -right-1.5 cursor-nwse-resize' : ''}
+                          `}
+                        onMouseDown={(e) => {
+                          e.stopPropagation();
+                          setResizeItem({
+                            id: token.id,
+                            type: 'token',
+                            handle: handle as any,
+                            startX: e.clientX,
+                            startY: e.clientY,
+                            initialW: token.width,
+                            initialH: token.height,
+                            initialX: token.x,
+                            initialY: token.y,
+                            initialScaleX: token.scaleX,
+                            initialScaleY: token.scaleY,
+                            uniformScale: token.uniformScale,
+                            // Pass anchor for resize math
+                            anchorX: token.anchorX,
+                            anchorY: token.anchorY
+                          } as any);
+                        }}
+                      />
+                    ))}
+                  </>
+                )}
+
+                {/* Label */}
+                <div className={`absolute -bottom-6 left-1/2 -translate-x-1/2 bg-black/60 px-2 py-0.5 rounded text-[8px] text-white uppercase font-bold tracking-wider pointer-events-none transition-opacity ${state.selection === token.id ? 'opacity-100' : 'opacity-0 group-hover/token:opacity-100'}`}>
+                  {token.tag}
+                </div>
+              </div>
+            ))}
+
+            {/* Annotations Layer */}
+            {[...state.annotations].filter(a => a.visible !== false).sort((a, b) => a.zIndex - b.zIndex).map(note => (
+              <div
+                key={note.id}
+                className={`absolute cursor-move group/note ${state.selection === note.id ? 'z-50' : ''}`}
+                style={{
+                  left: note.x,
+                  top: note.y,
+                  width: note.width,
+                  height: note.height,
+                  zIndex: note.zIndex,
+                  transform: `rotate(${note.rotation}deg)`
+                }}
+                onMouseDown={(e) => {
+                  if ((state as any).regionEdit?.isMaskMode) return;
+                  e.stopPropagation();
+                  dispatch({ type: 'SELECT_ITEM', payload: { id: note.id, type: 'annotation' } });
+                  setDragItem({
+                    id: note.id,
+                    type: 'annotation',
+                    startX: e.clientX,
+                    startY: e.clientY,
+                    initialX: note.x,
+                    initialY: note.y
+                  });
+                }}
+              >
+                {note.type === 'zone' && (
+                  <div className="w-full h-full border-4 border-dashed border-blue-500/50 bg-blue-500/10 flex items-center justify-center">
+                    <span className="text-blue-500 font-bold uppercase tracking-widest text-[10px] bg-black/50 px-2 py-1 rounded">
+                      Active Zone
+                    </span>
+                  </div>
+                )}
+                {note.type === 'note' && (
+                  <div className="w-full h-full flex flex-col shadow-lg border-2 border-yellow-400 bg-yellow-900/40 backdrop-blur-sm rounded-lg overflow-hidden">
+                    {/* Fixed Header Label - Outside the note content area */}
+                    <div className="bg-yellow-400 text-black px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider flex items-center justify-between shrink-0 select-none">
+                      <span>Director Note</span>
+                      <Pencil className="w-2.5 h-2.5 opacity-50" />
+                    </div>
+
+                    {/* Content Area */}
+                    <div
+                      className="flex-1 p-2 overflow-hidden bg-black/40"
+                      onDoubleClick={(e) => {
+                        e.stopPropagation();
+                        setEditingAnnotationId(note.id);
+                      }}
+                    >
+                      {editingAnnotationId === note.id ? (
+                        <textarea
+                          autoFocus
+                          className="w-full h-full bg-transparent text-yellow-100 font-bold font-mono text-[11px] resize-none outline-none leading-relaxed placeholder:text-yellow-500/30"
+                          value={note.text || ''}
+                          onChange={(e) => dispatch({
+                            type: 'UPDATE_ANNOTATION',
+                            payload: { id: note.id, text: e.target.value }
+                          })}
+                          onBlur={() => setEditingAnnotationId(null)}
+                          onMouseDown={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => e.stopPropagation()}
+                          placeholder="Type instructions..."
+                        />
+                      ) : (
+                        <p className="text-yellow-100 font-bold font-mono text-[11px] whitespace-pre-wrap leading-relaxed select-none pointer-events-none break-words min-h-[1em]">
+                          {note.text || ''}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {note.type === 'arrow' && (
+                  <div className="w-full h-full flex items-center justify-center pointer-events-none">
+                    {/* SVG Arrow using simple line math or lucide icon with stroke width */}
+                    {/* Lucide icon is fixed path, strokeWidth is prop. Color is prop. */}
+                    <MoveUpRight
+                      className="w-full h-full"
+                      strokeWidth={note.thickness ?? 2}
+                      color={note.color || '#a855f7'} // Default purple
+                      style={{ opacity: 0.9 }}
+                    />
+                  </div>
+                )}
+
+                {/* Selection Helpers */}
+                {state.selection === note.id && (
+                  <div
+                    className="absolute -right-1 -bottom-1 w-4 h-4 bg-white rounded-full cursor-nwse-resize flex items-center justify-center shadow-lg hover:scale-125 transition-transform"
+                    onMouseDown={(e) => {
+                      e.stopPropagation();
+                      setResizeItem({
+                        id: note.id,
+                        type: 'annotation',
+                        handle: 'br',
+                        startX: e.clientX,
+                        startY: e.clientY,
+                        initialW: note.width,
+                        initialH: note.height,
+                        initialX: note.x,
+                        initialY: note.y,
+                        initialScaleX: 1, // Annotations don't strictly use scale property for sizing yet, but required by type
+                        initialScaleY: 1,
+                        uniformScale: false,
+                        anchorX: 0,
+                        anchorY: 0
+                      });
+                    }}
+                  />
+                )}
+                {/* Rotation Handle (Top Center) */}
+                {state.selection === note.id && (
+                  <div
+                    className="absolute left-1/2 -top-6 -translate-x-1/2 w-5 h-5 bg-white border border-blue-500 rounded-full flex items-center justify-center cursor-grabbing shadow-lg z-50 group/rotate"
+                    onMouseDown={(e) => {
+                      e.stopPropagation();
+                      const gate = viewportRef.current;
+                      if (!gate) return;
+                      const rect = gate.getBoundingClientRect();
+                      // Note x,y is relative to the camera gate (viewport).
+                      // Center = rect.left + note.x + width/2
+                      const cx = rect.left + note.x + (note.width / 2);
+                      const cy = rect.top + note.y + (note.height / 2);
+
+                      const angle = Math.atan2(e.clientY - cy, e.clientX - cx) * (180 / Math.PI);
+
+                      setRotateItem({
+                        id: note.id,
+                        type: 'annotation',
+                        centerX: cx,
+                        centerY: cy,
+                        startAngle: angle,
+                        initialRotation: note.rotation
+                      });
+                    }}
+                  >
+                    <RotateCw className="w-3 h-3 text-blue-500 group-hover/rotate:animate-spin" />
+                  </div>
+                )}
+              </div>
+            ))}
+
           </div>
 
-          {/* Tokens Layer */}
-          {[...state.tokens].sort((a, b) => a.zIndex - b.zIndex).map(token => (
-            <div
-              key={token.id}
-              className={`absolute cursor-move group/token ${state.selection === token.id ? 'ring-2 ring-yellow-500 ring-offset-2 ring-offset-[#09090b] z-50' : ''}`}
-              style={{
-                left: token.x - (token.width * token.anchorX),
-                top: token.y - (token.height * token.anchorY),
-                width: token.width,
-                height: token.height,
-                transformOrigin: `${token.anchorX * 100}% ${token.anchorY * 100}%`,
-                transform: `rotate(${token.rotation}deg) scale(${token.scaleX}, ${token.scaleY})`,
-                zIndex: token.zIndex
-              }}
-              onMouseDown={(e) => {
-                if ((state as any).regionEdit?.isMaskMode) return;
-                e.stopPropagation();
-                dispatch({ type: 'SELECT_ITEM', payload: { id: token.id, type: 'token' } });
-                setDragItem({
-                  id: token.id,
-                  type: 'token',
-                  startX: e.clientX,
-                  startY: e.clientY,
-                  initialX: token.x,
-                  initialY: token.y
-                });
-              }}
+        </div>
+
+        {/* 2b. CANVAS TOOLBAR (Moved Horizontal Below Stage) */}
+        <div className="flex items-center justify-between gap-4 p-2 bg-[#09090b] border border-[#27272a] rounded-xl shrink-0">
+
+          {/* Left Group: History & Edit */}
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 bg-black/50 p-1 rounded-lg border border-white/5">
+              <button
+                onClick={() => dispatch({ type: 'UNDO' })}
+                className="p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded transition-colors"
+                title="Undo (Ctrl+Z)"
+              >
+                <Undo className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => dispatch({ type: 'REDO' })}
+                className="p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded transition-colors"
+                title="Redo (Ctrl+Y)"
+              >
+                <Redo className="w-4 h-4" />
+              </button>
+            </div>
+
+          </div>
+
+          {/* Center Group: Edit & Add Tools */}
+          <div className="flex items-center gap-2">
+            {/* EDIT TOOLS (Moved here) */}
+            <button
+              onClick={duplicateSelection}
+              disabled={!state.selection}
+              className={`flex flex-col items-center gap-1 group bg-black/80 p-2 rounded-xl border border-white/5 backdrop-blur-md shadow-lg transition-colors ${!state.selection ? 'opacity-50 pointer-events-none' : 'hover:bg-black'}`}
+              title="Duplicate Selection"
             >
-              <div className={`absolute inset-0 transition-all duration-500 pointer-events-none ${token.intelligence ? 'ring-2 ring-green-500/50 rounded-lg shadow-[0_0_15px_rgba(34,197,94,0.3)] animate-pulse' : ''}`} />
-              <img
-                src={token.url}
-                alt={token.tag}
-                className="w-full h-full object-contain pointer-events-none"
-              />
-
-              {/* Selection Utilities */}
-              {state.selection === token.id && (
-                <>
-                  {/* Resize Handles */}
-                  {['tl', 'tr', 'bl', 'br'].map((handle) => (
-                    <div
-                      key={handle}
-                      className={`absolute w-3 h-3 bg-white border border-blue-500 rounded-full shadow-lg z-50
-                          ${handle === 'tl' ? '-top-1.5 -left-1.5 cursor-nwse-resize' : ''}
-                          ${handle === 'tr' ? '-top-1.5 -right-1.5 cursor-nesw-resize' : ''}
-                          ${handle === 'bl' ? '-bottom-1.5 -left-1.5 cursor-nesw-resize' : ''}
-                          ${handle === 'br' ? '-bottom-1.5 -right-1.5 cursor-nwse-resize' : ''}
-                        `}
-                      onMouseDown={(e) => {
-                        e.stopPropagation();
-                        setResizeItem({
-                          id: token.id,
-                          type: 'token',
-                          handle: handle as any,
-                          startX: e.clientX,
-                          startY: e.clientY,
-                          initialW: token.width,
-                          initialH: token.height,
-                          initialX: token.x,
-                          initialY: token.y,
-                          initialScaleX: token.scaleX,
-                          initialScaleY: token.scaleY,
-                          uniformScale: token.uniformScale,
-                          // Pass anchor for resize math
-                          anchorX: token.anchorX,
-                          anchorY: token.anchorY
-                        } as any);
-                      }}
-                    />
-                  ))}
-                </>
-              )}
-
-              {/* Label */}
-              <div className={`absolute -bottom-6 left-1/2 -translate-x-1/2 bg-black/60 px-2 py-0.5 rounded text-[8px] text-white uppercase font-bold tracking-wider pointer-events-none transition-opacity ${state.selection === token.id ? 'opacity-100' : 'opacity-0 group-hover/token:opacity-100'}`}>
-                {token.tag}
+              <div className="p-2 bg-purple-500/10 rounded-lg group-hover:bg-purple-500/20 transition-colors">
+                <Copy className={`w-4 h-4 ${!state.selection ? 'text-gray-600' : 'text-purple-400'}`} />
               </div>
-            </div>
-          ))}
+              <span className="text-[8px] font-bold text-gray-500 uppercase group-hover:text-purple-400">Copy</span>
+            </button>
 
-          {/* Annotations Layer */}
-          {[...state.annotations].sort((a, b) => a.zIndex - b.zIndex).map(note => (
-            <div
-              key={note.id}
-              className={`absolute cursor-move group/note ${state.selection === note.id ? 'z-50' : ''}`}
-              style={{
-                left: note.x,
-                top: note.y,
-                width: note.width,
-                height: note.height,
-                zIndex: note.zIndex,
-                transform: `rotate(${note.rotation}deg)`
+            <button
+              onClick={() => {
+                if (confirm('Are you sure you want to clear the entire stage?')) {
+                  dispatch({ type: 'CLEAR_STAGE' });
+                }
               }}
-              onMouseDown={(e) => {
-                if ((state as any).regionEdit?.isMaskMode) return;
-                e.stopPropagation();
-                dispatch({ type: 'SELECT_ITEM', payload: { id: note.id, type: 'annotation' } });
-                setDragItem({
-                  id: note.id,
-                  type: 'annotation',
-                  startX: e.clientX,
-                  startY: e.clientY,
-                  initialX: note.x,
-                  initialY: note.y
-                });
-              }}
+              className="flex flex-col items-center gap-1 group bg-black/80 p-2 rounded-xl border border-white/5 backdrop-blur-md shadow-lg hover:bg-black transition-colors"
+              title="Clear Everything"
             >
-              {note.type === 'zone' && (
-                <div className="w-full h-full border-4 border-dashed border-blue-500/50 bg-blue-500/10 flex items-center justify-center">
-                  <span className="text-blue-500 font-bold uppercase tracking-widest text-[10px] bg-black/50 px-2 py-1 rounded">
-                    Active Zone
-                  </span>
-                </div>
-              )}
-              {note.type === 'note' && (
-                <div
-                  className="w-full h-full border-2 border-yellow-500/50 bg-yellow-500/20 p-2 overflow-hidden"
-                  onDoubleClick={(e) => {
-                    e.stopPropagation();
-                    setEditingAnnotationId(note.id);
-                  }}
-                >
-                  {editingAnnotationId === note.id ? (
-                    <textarea
-                      autoFocus
-                      className="w-full h-full bg-transparent text-yellow-200 font-mono text-[10px] resize-none outline-none"
-                      value={note.text || ''}
-                      onChange={(e) => dispatch({
-                        type: 'UPDATE_ANNOTATION',
-                        payload: { id: note.id, text: e.target.value }
-                      })}
-                      onBlur={() => setEditingAnnotationId(null)}
-                      onMouseDown={(e) => e.stopPropagation()}
-                      onKeyDown={(e) => e.stopPropagation()}
-                    />
-                  ) : (
-                    <p className="text-yellow-200 font-mono text-[10px] whitespace-pre-wrap leading-tight select-none pointer-events-none">
-                      {note.text || 'New Note'}
-                    </p>
-                  )}
-                </div>
-              )}
-              {note.type === 'arrow' && (
-                <div className="w-full h-full flex items-center justify-center">
-                  <MoveUpRight className="w-full h-full text-purple-500 opacity-80" />
-                </div>
-              )}
+              <div className="p-2 bg-red-500/10 rounded-lg group-hover:bg-red-500/20 transition-colors">
+                <TrashIcon className="w-4 h-4 text-red-500" />
+              </div>
+              <span className="text-[8px] font-bold text-gray-500 uppercase group-hover:text-red-400">CLEAR STAGE</span>
+            </button>
 
-              {/* Selection Helpers */}
-              {state.selection === note.id && (
-                <div
-                  className="absolute -right-1 -bottom-1 w-4 h-4 bg-white rounded-full cursor-nwse-resize flex items-center justify-center shadow-lg hover:scale-125 transition-transform"
-                  onMouseDown={(e) => {
-                    e.stopPropagation();
-                    setResizeItem({
-                      id: note.id,
-                      type: 'annotation',
-                      handle: 'br',
-                      startX: e.clientX,
-                      startY: e.clientY,
-                      initialW: note.width,
-                      initialH: note.height,
-                      initialX: note.x,
-                      initialY: note.y,
-                      initialScaleX: 1, // Annotations don't strictly use scale property for sizing yet, but required by type
-                      initialScaleY: 1,
-                      uniformScale: false,
-                      anchorX: 0,
-                      anchorY: 0
-                    });
-                  }}
-                />
-              )}
-              {/* Rotation Handle (Top Center) */}
-              {state.selection === note.id && (
-                <div
-                  className="absolute left-1/2 -top-6 -translate-x-1/2 w-5 h-5 bg-white border border-blue-500 rounded-full flex items-center justify-center cursor-grabbing shadow-lg z-50 group/rotate"
-                  onMouseDown={(e) => {
-                    e.stopPropagation();
-                    const stage = stageRef.current;
-                    if (!stage) return;
-                    const rect = stage.getBoundingClientRect();
-                    // Note x,y is relative to stage top-left.
-                    // Center = rect.left + note.x + width/2
-                    const cx = rect.left + note.x + (note.width / 2);
-                    const cy = rect.top + note.y + (note.height / 2);
+            <div className="w-px h-10 bg-white/10 mx-2" />
 
-                    const angle = Math.atan2(e.clientY - cy, e.clientX - cx) * (180 / Math.PI);
-
-                    setRotateItem({
-                      id: note.id,
-                      type: 'annotation',
-                      centerX: cx,
-                      centerY: cy,
-                      startAngle: angle,
-                      initialRotation: note.rotation
-                    });
-                  }}
-                >
-                  <RotateCw className="w-3 h-3 text-blue-500 group-hover/rotate:animate-spin" />
-                </div>
-              )}
-            </div>
-          ))}
-
-          {/* Canvas Toolbar (Absolute Bottom Left) */}
-          <div className="absolute bottom-4 left-4 flex flex-col gap-2 z-[60]">
+            {/* ADD TOOLS */}
             <button
               onClick={() => {
                 const id = `ann-${Date.now()}`;
                 dispatch({
                   type: 'ADD_ANNOTATION', payload: {
-                    id, type: 'note', x: 50, y: 50, width: 150, height: 100, rotation: 0, scaleX: 1, scaleY: 1, zIndex: 10, text: 'New Director Note'
+                    id, type: 'note', x: 50, y: 50, width: 150, height: 100, rotation: 0, scaleX: 1, scaleY: 1, zIndex: 10, text: ''
                   }
                 });
                 dispatch({ type: 'SELECT_ITEM', payload: { id, type: 'annotation' } });
@@ -1896,7 +2538,7 @@ const SceneCanvas = () => {
               <div className="p-2 bg-blue-500/10 rounded-lg group-hover:bg-blue-500/20 transition-colors">
                 <StickyNote className="w-4 h-4 text-blue-400" />
               </div>
-              <span className="text-[8px] font-bold text-gray-500 uppercase group-hover:text-blue-400">Add Note</span>
+              <span className="text-[8px] font-bold text-gray-500 uppercase group-hover:text-blue-400">Note</span>
             </button>
 
             <button
@@ -1914,7 +2556,7 @@ const SceneCanvas = () => {
               <div className="p-2 bg-emerald-500/10 rounded-lg group-hover:bg-emerald-500/20 transition-colors">
                 <BoxSelect className="w-4 h-4 text-emerald-400" />
               </div>
-              <span className="text-[8px] font-bold text-gray-500 uppercase group-hover:text-emerald-400">Add Zone</span>
+              <span className="text-[8px] font-bold text-gray-500 uppercase group-hover:text-emerald-400">Zone</span>
             </button>
 
             <button
@@ -1932,171 +2574,158 @@ const SceneCanvas = () => {
               <div className="p-2 bg-purple-500/10 rounded-lg group-hover:bg-purple-500/20 transition-colors">
                 <MoveUpRight className="w-4 h-4 text-purple-400" />
               </div>
-              <span className="text-[8px] font-bold text-gray-500 uppercase group-hover:text-purple-400">Add Path</span>
-            </button>
-
-            <div className="h-px w-full bg-white/10 my-1" />
-
-            <button
-              onClick={() => {
-                if (confirm('Are you sure you want to clear the entire stage?')) {
-                  dispatch({ type: 'CLEAR_STAGE' });
-                }
-              }}
-              className="flex flex-col items-center gap-1 group bg-black/80 p-2 rounded-xl border border-white/5 backdrop-blur-md shadow-lg hover:bg-black transition-colors"
-              title="Clear Everything"
-            >
-              <div className="p-2 bg-red-500/10 rounded-lg group-hover:bg-red-500/20 transition-colors">
-                <TrashIcon className="w-4 h-4 text-red-500" />
-              </div>
-              <span className="text-[8px] font-bold text-gray-500 uppercase group-hover:text-red-500">Clear</span>
+              <span className="text-[8px] font-bold text-gray-500 uppercase group-hover:text-purple-400">Path</span>
             </button>
           </div>
 
-          <div className="flex items-center gap-2">
+          {/* Right Group: Capture */}
+          <div>
             <button
               onClick={downloadCanvas}
-              className="bg-yellow-500 hover:bg-yellow-400 text-black px-6 py-2.5 rounded-lg flex items-center gap-2 text-xs font-bold uppercase tracking-widest transition-all shadow-lg shadow-yellow-900/20 active:scale-95"
+              className="bg-black/80 hover:bg-black border border-white/10 text-blue-500 hover:text-green-500 px-6 py-2 rounded-lg flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest transition-all shadow-lg active:scale-95"
             >
               <MonitorPlay className="w-4 h-4" />
-              Capture to Storyboard
+              Capture Stage
             </button>
           </div>
+
         </div>
-      </div>
+      </div >
       {/* 3. RIGHT SIDEBAR: GLOBAL SPECS, ANCHOR, & REFERENCES */}
-      <div className="w-[400px] flex flex-col gap-4 overflow-y-auto pl-2 custom-scrollbar">
+      < div className="w-[400px] flex flex-col gap-4 overflow-y-auto pl-2 custom-scrollbar" >
 
         {/* Stage 00: Shots (Conditional) */}
-        {state.isStoryboardEnabled && (
-          <div className="bg-[#09090b] border border-[#27272a] rounded-xl p-4">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2">
-                <Clapperboard className="w-4 h-4 text-yellow-500" />
-                <h3 className="text-xs font-bold text-gray-500 uppercase">Shots</h3>
-              </div>
-              <span className="text-[10px] text-gray-600 font-mono">
-                {shots?.length ?? 0}
-              </span>
-            </div>
-
-            <div className="flex gap-2 mb-3">
-              <input
-                value={newShotName}
-                onChange={(e) => setNewShotName(e.target.value)}
-                placeholder="New shot name (optional)"
-                className="flex-1 bg-[#18181b] border border-[#27272a] rounded px-2 py-1 text-[10px] text-gray-300 outline-none focus:border-yellow-500"
-              />
-              <button
-                onClick={addShotFromStage}
-                className="bg-yellow-500 hover:bg-yellow-400 text-black px-3 py-2 rounded text-[10px] font-bold uppercase tracking-wider"
-                title="Create a new shot from the current stage"
-              >
-                Add
-              </button>
-            </div>
-
-            <div className="flex gap-2 mb-3">
-              <button
-                onClick={saveActiveShot}
-                disabled={!activeShotId}
-                className="flex-1 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] text-gray-300 hover:text-white text-[10px] py-2 rounded font-bold uppercase tracking-wider disabled:opacity-50"
-                title="Save current stage into active shot"
-              >
-                Save Shot
-              </button>
-              <button
-                onClick={() => captureAndSetShotFrame('start')}
-                disabled={!activeShotId}
-                className="flex-1 bg-blue-600 hover:bg-blue-500 text-white text-[10px] py-2 rounded font-bold uppercase tracking-wider disabled:opacity-50"
-                title="Capture stage as Start Frame for active shot"
-              >
-                Start
-              </button>
-              <button
-                onClick={() => captureAndSetShotFrame('end')}
-                disabled={!activeShotId}
-                className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] py-2 rounded font-bold uppercase tracking-wider disabled:opacity-50"
-                title="Capture stage as End Frame for active shot"
-              >
-                End
-              </button>
-            </div>
-
-            {activeShotId && (
-              <div className="mb-3 space-y-2">
-                <label className="text-[9px] uppercase font-bold text-gray-500 block">Active Shot Name</label>
-                <div className="flex gap-2">
-                  <input
-                    value={activeShotNameDraft}
-                    onChange={(e) => setActiveShotNameDraft(e.target.value)}
-                    onBlur={renameActiveShot}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        renameActiveShot();
-                      }
-                    }}
-                    className="flex-1 bg-[#18181b] border border-[#27272a] rounded px-2 py-1 text-[10px] text-yellow-400 outline-none focus:border-yellow-500"
-                  />
-                  <button
-                    onClick={renameActiveShot}
-                    className="px-3 py-2 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] rounded text-[10px] font-bold uppercase text-gray-300"
-                    title="Rename active shot"
-                  >
-                    Save
-                  </button>
+        {
+          state.isStoryboardEnabled && (
+            <div className="bg-[#09090b] border border-[#27272a] rounded-xl p-4">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <Clapperboard className="w-4 h-4 text-yellow-500" />
+                  <h3 className="text-xs font-bold text-gray-500 uppercase">Shots</h3>
                 </div>
+                <span className="text-[10px] text-gray-600 font-mono">
+                  {shots?.length ?? 0}
+                </span>
               </div>
-            )}
 
-            <div className="space-y-2 max-h-48 overflow-y-auto custom-scrollbar pr-1">
-              {(shots ?? []).map((s: any) => {
-                const active = s.id === activeShotId;
-                return (
-                  <div
-                    key={s.id}
-                    className={`flex items-center gap-2 p-2 rounded border transition-colors ${active ? 'border-yellow-500 bg-yellow-500/5' : 'border-[#27272a] bg-[#0b0b0d] hover:bg-[#18181b]'
-                      }`}
-                  >
-                    <button
-                      onClick={() => setActiveShot(s.id)}
-                      className="flex-1 text-left"
-                      title="Load this shot into the stage"
-                    >
-                      <div className="text-[10px] font-bold text-gray-200 truncate">{s.name}</div>
-                      <div className="text-[9px] text-gray-600 font-mono">
-                        {s.startFrameUrl ? 'S' : '-'} / {s.endFrameUrl ? 'E' : '-'}
-                      </div>
-                    </button>
+              <div className="flex gap-2 mb-3">
+                <input
+                  value={newShotName}
+                  onChange={(e) => setNewShotName(e.target.value)}
+                  placeholder="New shot name (optional)"
+                  className="flex-1 bg-[#18181b] border border-[#27272a] rounded px-2 py-1 text-[10px] text-gray-300 outline-none focus:border-yellow-500"
+                />
+                <button
+                  onClick={addShotFromStage}
+                  className="bg-yellow-500 hover:bg-yellow-400 text-black px-3 py-2 rounded text-[10px] font-bold uppercase tracking-wider"
+                  title="Create a new shot from the current stage"
+                >
+                  Add
+                </button>
+              </div>
 
-                    <button
-                      onClick={() => duplicateShot(s.id)}
-                      className="p-1.5 bg-black/30 hover:bg-white/5 rounded text-gray-400 hover:text-white transition-colors"
-                      title="Duplicate shot"
-                    >
-                      <Link2 className="w-3.5 h-3.5" />
-                    </button>
+              <div className="flex gap-2 mb-3">
+                <button
+                  onClick={saveActiveShot}
+                  disabled={!activeShotId}
+                  className="flex-1 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] text-gray-300 hover:text-white text-[10px] py-2 rounded font-bold uppercase tracking-wider disabled:opacity-50"
+                  title="Save current stage into active shot"
+                >
+                  Save Shot
+                </button>
+                <button
+                  onClick={() => captureAndSetShotFrame('start')}
+                  disabled={!activeShotId}
+                  className="flex-1 bg-blue-600 hover:bg-blue-500 text-white text-[10px] py-2 rounded font-bold uppercase tracking-wider disabled:opacity-50"
+                  title="Capture stage as Start Frame for active shot"
+                >
+                  Start
+                </button>
+                <button
+                  onClick={() => captureAndSetShotFrame('end')}
+                  disabled={!activeShotId}
+                  className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] py-2 rounded font-bold uppercase tracking-wider disabled:opacity-50"
+                  title="Capture stage as End Frame for active shot"
+                >
+                  End
+                </button>
+              </div>
 
+              {activeShotId && (
+                <div className="mb-3 space-y-2">
+                  <label className="text-[9px] uppercase font-bold text-gray-500 block">Active Shot Name</label>
+                  <div className="flex gap-2">
+                    <input
+                      value={activeShotNameDraft}
+                      onChange={(e) => setActiveShotNameDraft(e.target.value)}
+                      onBlur={renameActiveShot}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          renameActiveShot();
+                        }
+                      }}
+                      className="flex-1 bg-[#18181b] border border-[#27272a] rounded px-2 py-1 text-[10px] text-yellow-400 outline-none focus:border-yellow-500"
+                    />
                     <button
-                      onClick={() => removeShot(s.id)}
-                      className="p-1.5 bg-black/30 hover:bg-red-500/20 rounded text-gray-400 hover:text-red-400 transition-colors"
-                      title="Delete shot"
+                      onClick={renameActiveShot}
+                      className="px-3 py-2 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] rounded text-[10px] font-bold uppercase text-gray-300"
+                      title="Rename active shot"
                     >
-                      <TrashIcon className="w-3.5 h-3.5" />
+                      Save
                     </button>
                   </div>
-                );
-              })}
-
-              {(shots ?? []).length === 0 && (
-                <div className="text-[10px] text-gray-600 italic py-2 border border-dashed border-gray-800 rounded text-center">
-                  No shots yet. Add one from the current stage.
                 </div>
               )}
+
+              <div className="space-y-2 max-h-48 overflow-y-auto custom-scrollbar pr-1">
+                {(shots ?? []).map((s: any) => {
+                  const active = s.id === activeShotId;
+                  return (
+                    <div
+                      key={s.id}
+                      className={`flex items-center gap-2 p-2 rounded border transition-colors ${active ? 'border-yellow-500 bg-yellow-500/5' : 'border-[#27272a] bg-[#0b0b0d] hover:bg-[#18181b]'
+                        }`}
+                    >
+                      <button
+                        onClick={() => setActiveShot(s.id)}
+                        className="flex-1 text-left"
+                        title="Load this shot into the stage"
+                      >
+                        <div className="text-[10px] font-bold text-gray-200 truncate">{s.name}</div>
+                        <div className="text-[9px] text-gray-600 font-mono">
+                          {s.startFrameUrl ? 'S' : '-'} / {s.endFrameUrl ? 'E' : '-'}
+                        </div>
+                      </button>
+
+                      <button
+                        onClick={() => duplicateShot(s.id)}
+                        className="p-1.5 bg-black/30 hover:bg-white/5 rounded text-gray-400 hover:text-white transition-colors"
+                        title="Duplicate shot"
+                      >
+                        <Link2 className="w-3.5 h-3.5" />
+                      </button>
+
+                      <button
+                        onClick={() => removeShot(s.id)}
+                        className="p-1.5 bg-black/30 hover:bg-red-500/20 rounded text-gray-400 hover:text-red-400 transition-colors"
+                        title="Delete shot"
+                      >
+                        <TrashIcon className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  );
+                })}
+
+                {(shots ?? []).length === 0 && (
+                  <div className="text-[10px] text-gray-600 italic py-2 border border-dashed border-gray-800 rounded text-center">
+                    No shots yet. Add one from the current stage.
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          )
+        }
 
 
         {/* Stage 00.5: Region Edit (NanoBanana-style) */}
@@ -2425,6 +3054,18 @@ const SceneCanvas = () => {
                       dispatch({ type: 'SELECT_ITEM', payload: { id: layer.id, type: layer.type } });
                     }}
                   >
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (layer.type === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: layer.id, visible: layer.visible === false } });
+                        else dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: layer.id, visible: layer.visible === false } });
+                      }}
+                      className="p-1 text-gray-500 hover:text-white rounded hover:bg-white/10 transition-colors mr-1"
+                      title={layer.visible === false ? "Show Layer" : "Hide Layer"}
+                    >
+                      {layer.visible === false ? <EyeOff className="w-3 h-3 text-gray-600" /> : <Eye className="w-3 h-3" />}
+                    </button>
+
                     <div className="text-gray-600 group-hover:text-gray-400 cursor-grab active:cursor-grabbing">
                       <GripVertical className="w-3 h-3" />
                     </div>
@@ -2934,116 +3575,113 @@ const SceneCanvas = () => {
               options={['', 'horizontal', 'vertical', 'depth', 'center']}
               onChange={(v: any) => setDirector({ spatialLayout: v as DirectorSpatialLayout })}
             />
-            <Dropdown
-              label="Markers"
-              value={state.director.markerType}
-              options={['', 'Colored Bounding Boxes', 'Hand-Drawn Circles', 'Directional Arrows']}
-              onChange={(v: any) => setDirector({ markerType: v as DirectorMarkerType })}
-            />
+
           </div>
         </div>
 
-      </div>
+      </div >
 
       {/* Reference Inspector Modal */}
-      {inspectRefIndex !== null && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-8 bg-black/90 backdrop-blur-sm">
-          <div className="bg-[#09090b] border border-[#27272a] rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex shadow-2xl animate-in zoom-in-95 duration-200">
-            {/* Image Preview */}
-            <div className="flex-1 bg-black flex items-center justify-center p-8 relative">
-              <img
-                src={state.referenceSlots.find(s => s.index === inspectRefIndex)?.url}
-                alt="Inspector Preview"
-                className="max-w-full max-h-full object-contain shadow-2xl"
-              />
-              <div className="absolute top-4 left-4 flex items-center gap-2">
-                <div className="px-3 py-1.5 bg-yellow-500 text-black text-[10px] font-bold rounded-full uppercase tracking-widest">
-                  Reference Slot {inspectRefIndex}
-                </div>
-              </div>
-            </div>
-
-            {/* Metadata Editor */}
-            <div className="w-[400px] border-l border-[#27272a] flex flex-col p-8 bg-[#09090b]">
-              <div className="flex items-center justify-between mb-8">
-                <h3 className="text-sm font-bold text-white uppercase tracking-[0.2em]">Reference DNA</h3>
-                <button
-                  onClick={() => setInspectRefIndex(null)}
-                  className="p-2 hover:bg-white/5 rounded-full text-gray-500 hover:text-white transition-colors"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              <div className="space-y-6 flex-1 overflow-y-auto pr-2 custom-scrollbar">
-                <PropertyField
-                  label="Alias / Identity"
-                  value={inspectName}
-                  onChange={setInspectName}
-                  placeholder="e.g. Hero Protagonist"
+      {
+        inspectRefIndex !== null && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-8 bg-black/90 backdrop-blur-sm">
+            <div className="bg-[#09090b] border border-[#27272a] rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex shadow-2xl animate-in zoom-in-95 duration-200">
+              {/* Image Preview */}
+              <div className="flex-1 bg-black flex items-center justify-center p-8 relative">
+                <img
+                  src={state.referenceSlots.find(s => s.index === inspectRefIndex)?.url}
+                  alt="Inspector Preview"
+                  className="max-w-full max-h-full object-contain shadow-2xl"
                 />
-                <PropertyField
-                  label="Subject & Style Analysis"
-                  type="textarea"
-                  value={inspectAnalysis}
-                  onChange={setInspectAnalysis}
-                  placeholder="AI analysis will appear here..."
-                />
-
-                <div className="pt-4 border-t border-[#27272a]">
-                  <div className="flex items-center justify-between mb-4">
-                    <label className="text-[10px] uppercase font-bold text-gray-500 flex items-center gap-2">
-                      <Link2 className="w-3 h-3 text-blue-500" /> Subject Replacement
-                    </label>
-                    <div
-                      onClick={() => toggleReplaceMode(!state.director.replaceAnchorSubjects)}
-                      className={`w-10 h-5 rounded-full relative cursor-pointer transition-colors ${state.director.replaceAnchorSubjects ? 'bg-blue-600' : 'bg-gray-800'}`}
-                    >
-                      <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${state.director.replaceAnchorSubjects ? 'left-6' : 'left-1'}`} />
-                    </div>
+                <div className="absolute top-4 left-4 flex items-center gap-2">
+                  <div className="px-3 py-1.5 bg-yellow-500 text-black text-[10px] font-bold rounded-full uppercase tracking-widest">
+                    Reference Slot {inspectRefIndex}
                   </div>
-                  {state.director.replaceAnchorSubjects && (
-                    <div className="space-y-4 animate-in slide-in-from-top-2 duration-200">
-                      <PropertyField
-                        label="Target in Anchor Scene"
-                        value={inspectTarget}
-                        onChange={setInspectTarget}
-                        placeholder="e.g. the man on the bench"
-                      />
-                      <p className="text-[9px] text-gray-500 italic leading-relaxed">
-                        This character identity will precisely replace the target subject identified in the anchor scene.
-                      </p>
-                    </div>
-                  )}
                 </div>
               </div>
 
-              <div className="pt-8 flex flex-col gap-3">
-                <button
-                  onClick={() => {
-                    updateRefSlot(inspectRefIndex, {
-                      name: inspectName,
-                      analysis: inspectAnalysis,
-                      target: inspectTarget || undefined
-                    });
-                    setInspectRefIndex(null);
-                  }}
-                  className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl text-xs uppercase tracking-widest transition-all shadow-lg shadow-blue-900/40"
-                >
-                  Save DNA Changes
-                </button>
-                <button
-                  onClick={() => setInspectRefIndex(null)}
-                  className="w-full bg-transparent hover:bg-white/5 text-gray-400 font-bold py-3 rounded-xl text-xs uppercase tracking-widest transition-all"
-                >
-                  Cancel
-                </button>
+              {/* Metadata Editor */}
+              <div className="w-[400px] border-l border-[#27272a] flex flex-col p-8 bg-[#09090b]">
+                <div className="flex items-center justify-between mb-8">
+                  <h3 className="text-sm font-bold text-white uppercase tracking-[0.2em]">Reference DNA</h3>
+                  <button
+                    onClick={() => setInspectRefIndex(null)}
+                    className="p-2 hover:bg-white/5 rounded-full text-gray-500 hover:text-white transition-colors"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <div className="space-y-6 flex-1 overflow-y-auto pr-2 custom-scrollbar">
+                  <PropertyField
+                    label="Alias / Identity"
+                    value={inspectName}
+                    onChange={setInspectName}
+                    placeholder="e.g. Hero Protagonist"
+                  />
+                  <PropertyField
+                    label="Subject & Style Analysis"
+                    type="textarea"
+                    value={inspectAnalysis}
+                    onChange={setInspectAnalysis}
+                    placeholder="AI analysis will appear here..."
+                  />
+
+                  <div className="pt-4 border-t border-[#27272a]">
+                    <div className="flex items-center justify-between mb-4">
+                      <label className="text-[10px] uppercase font-bold text-gray-500 flex items-center gap-2">
+                        <Link2 className="w-3 h-3 text-blue-500" /> Subject Replacement
+                      </label>
+                      <div
+                        onClick={() => toggleReplaceMode(!state.director.replaceAnchorSubjects)}
+                        className={`w-10 h-5 rounded-full relative cursor-pointer transition-colors ${state.director.replaceAnchorSubjects ? 'bg-blue-600' : 'bg-gray-800'}`}
+                      >
+                        <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${state.director.replaceAnchorSubjects ? 'left-6' : 'left-1'}`} />
+                      </div>
+                    </div>
+                    {state.director.replaceAnchorSubjects && (
+                      <div className="space-y-4 animate-in slide-in-from-top-2 duration-200">
+                        <PropertyField
+                          label="Target in Anchor Scene"
+                          value={inspectTarget}
+                          onChange={setInspectTarget}
+                          placeholder="e.g. the man on the bench"
+                        />
+                        <p className="text-[9px] text-gray-500 italic leading-relaxed">
+                          This character identity will precisely replace the target subject identified in the anchor scene.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="pt-8 flex flex-col gap-3">
+                  <button
+                    onClick={() => {
+                      updateRefSlot(inspectRefIndex, {
+                        name: inspectName,
+                        analysis: inspectAnalysis,
+                        target: inspectTarget || undefined
+                      });
+                      setInspectRefIndex(null);
+                    }}
+                    className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl text-xs uppercase tracking-widest transition-all shadow-lg shadow-blue-900/40"
+                  >
+                    Save DNA Changes
+                  </button>
+                  <button
+                    onClick={() => setInspectRefIndex(null)}
+                    className="w-full bg-transparent hover:bg-white/5 text-gray-400 font-bold py-3 rounded-xl text-xs uppercase tracking-widest transition-all"
+                  >
+                    Cancel
+                  </button>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      )}
-    </div>
+        )
+      }
+    </div >
   );
 };
 
