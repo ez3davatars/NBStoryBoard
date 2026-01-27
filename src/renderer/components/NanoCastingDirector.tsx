@@ -7,27 +7,19 @@ import {
     Scan, Target, User, Layers, Share2,
     ChevronRight, RefreshCw, Cpu, Aperture, CheckCircle2, UserPlus, Upload, Sliders,
     Swords, Zap, Shield, Ghost, Camera as CameraIcon, Ban, RotateCcw,
-    EyeOff, Shirt, Sparkles, LayoutTemplate, Download, X, MoreHorizontal, ChevronDown, ImagePlus
+    EyeOff, Shirt, Sparkles, LayoutTemplate, Download, X, ChevronDown
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
+import BodyScopeSelector from './BodyScopeSelector';
+import type { BodyScope } from './BodyScopeSelector';
 
-
-const REFERENCE_SHEET_PROMPT = `Create a professional, 8k resolution character reference sheet based strictly on the uploaded reference image. Use a clean, neutral plain background.
-CRITICAL COMPOSITION RULES:
-- STRICT ADHERENCE to view counts. DO NOT add extra rows or duplicate figures.
-- NO ghost images or hallucinations in negative space. Leave empty areas EMPTY.
-- Maintain PERFECT facial identity and symmetry across ALL views. No distortion.
-- Ensure feet, hands, and facial features are anatomically correct and sharp.
-- Lighting must be studio-neutral with no harsh shadows obscuring details.
-- Output must be crisp, production-ready, and free of artifacts.
-`;
 
 const REF_SHEET_STYLES = {
     family_3d: {
         id: 'family_3d',
         label: 'Family 3D Animation',
-        keywords: "premium family-friendly 3D animation, soft subsurface scattering, clean stylized materials, expressive facial features, high-end CG render, smooth shading, gentle rim light, cinematic depth",
+        keywords: "High-end studio 3D character, stylized facial features, vibrant colors, soft subsurface scattering, clean stylized materials, high-end CG render, smooth shading, cinematic depth",
         lighting: "Golden hour, cinematic bounce light"
     },
     premium_cg: {
@@ -62,8 +54,57 @@ const REF_SHEET_STYLES = {
     }
 };
 
+
+
+
+
+// Canonical style ID resolver
+const normalizeStyleId = (id: string) => {
+    const map: Record<string, string> = {
+        family_3d: 'pixar',
+        premium_cg: 'hyper_real',
+        retro_cel: 'retro_anime',
+        graphic_noir: 'comic_book',
+        cyberpunk_neon: 'cyberpunk',
+    };
+    return map[id] ?? id;
+};
+
+// --- CONFIGURATION CONSTANTS ---
+const STYLE_SCOPE_RULES: Record<string, { default: BodyScope; allowed: BodyScope[] }> = {
+    pixar: { default: 'full', allowed: ['full', 'torso'] },
+    retro_anime: { default: 'full', allowed: ['full'] },
+    comic_book: { default: 'torso', allowed: ['torso', 'full'] },
+    cyberpunk: { default: 'torso', allowed: ['head', 'torso', 'full'] },
+    hyper_real: { default: 'head', allowed: ['head', 'torso', 'full'] },
+    exact_studio: { default: 'head', allowed: ['head', 'torso'] },
+    // Defaults for undefined styles
+    default: { default: 'full', allowed: ['head', 'torso', 'full'] }
+};
+
+const SCOPE_COST: Record<BodyScope, { gpu: string; note: string }> = {
+    head: { gpu: 'low', note: 'Fastest generation' },
+    torso: { gpu: 'medium', note: 'Balanced detail' },
+    full: { gpu: 'high', note: 'Higher compute cost' }
+};
+
+const WARDROBE_SCOPE_RULES: Record<BodyScope, string[]> = {
+    head: ['headwear', 'glasses', 'earrings'],
+    torso: ['tops', 'jackets', 'armor', 'headwear', 'glasses'],
+    full: ['full_outfit', 'dress', 'uniform', 'tops', 'pants', 'shoes']
+};
+
+
 // Types for Phases
 type Phase = 1 | 2 | 3 | 4 | 5;
+
+const formatHeight = (inches: number) => {
+    const ft = Math.floor(inches / 12);
+    const range = inches % 12;
+    return `${ft}'${range}"`;
+};
+
+
 
 const NanoCastingDirector = () => {
     const { state, dispatch } = useAppContext();
@@ -100,6 +141,32 @@ const NanoCastingDirector = () => {
 
     // --- PHASE 3: STYLE SYNTHESIS ---
     const [selectedStyle, setSelectedStyle] = useState<string | null>(null);
+
+    // --- PHASE 3: BODY SCOPE (REQUIRED AFTER STYLE) ---
+    const [bodyScope, setBodyScope] = useState<BodyScope | null>(() => {
+        // STEP 12: PERSISTENCE (RESTORE)
+        const saved = localStorage.getItem('nano_body_scope');
+        return (saved === 'head' || saved === 'torso' || saved === 'full') ? saved : null;
+    });
+
+    // STEP 12 & 15: PERSISTENCE (SAVE) & TELEMETRY
+    useEffect(() => {
+        if (bodyScope) {
+            localStorage.setItem('nano_body_scope', bodyScope);
+            // STEP 15: TELEMETRY
+            console.log("event: body_scope_selected", { scope: bodyScope, style: selectedStyle });
+        }
+    }, [bodyScope, selectedStyle]);
+
+    // Ensure style rules override persistence if incompatible
+    useEffect(() => {
+        if (selectedStyle && bodyScope) {
+            const rules = STYLE_SCOPE_RULES[selectedStyle] ?? STYLE_SCOPE_RULES.default;
+            if (!rules.allowed.includes(bodyScope)) {
+                setBodyScope(null); // Force reset if invalid for new style
+            }
+        }
+    }, [selectedStyle, bodyScope]);
 
     const styleMatrix = {
         pixar: {
@@ -146,8 +213,42 @@ const NanoCastingDirector = () => {
     const [refLayout, setRefLayout] = useState<'form_focus' | 'face_focus' | 'split_focus'>('form_focus');
     const [refStyle, setRefStyle] = useState<keyof typeof REF_SHEET_STYLES>('family_3d');
     const [identitySource, setIdentitySource] = useState<'biometric' | 'generated'>('biometric');
-    const [sheetContent, setSheetContent] = useState<'full' | 'head'>('full');
-    const [bodyWeight, setBodyWeight] = useState<'light' | 'medium' | 'heavy' | 'athletic'>('medium');
+    // sheetContent is now derived from refLayout (face_focus = head, others = full)
+    // Numeric body controls (more precise than categorical presets)
+    const [weightLbs, setWeightLbs] = useState<number>(170); // 90–300
+    // OPTIMIZATION: Local state for slider to prevent heavy re-renders during drag
+    const [localWeight, setLocalWeight] = useState<number>(170);
+
+    // Sync local weight when external weight changes (e.g. reset)
+    useEffect(() => {
+        setLocalWeight(weightLbs);
+    }, [weightLbs]);
+
+    // --- AUTO-SYNC: SCOPE -> FRAMING ---
+    useEffect(() => {
+        if (!bodyScope) return;
+
+        // Auto-update Director Controls based on Scope
+        setDirectorControls(prev => {
+            let framing: 'bust' | 'half_body' | 'full_body' = 'full_body';
+            if (bodyScope === 'head') framing = 'bust';
+            if (bodyScope === 'torso') framing = 'half_body';
+
+            // Silent update only if changed
+            if (prev.shotFraming !== framing) {
+                return { ...prev, shotFraming: framing };
+            }
+            return prev;
+        });
+
+        // Auto-update Ref Sheet Layout
+        if (bodyScope === 'head') setRefLayout('face_focus');
+        else if (bodyScope === 'torso') setRefLayout('split_focus');
+        else setRefLayout('form_focus');
+
+    }, [bodyScope]);
+
+    const [heightIn, setHeightIn] = useState<number>(70);    // 36–108 (3'0"–9'0")
 
     // --- DIRECTOR CONTROLS ---
     const [showSettings, setShowSettings] = useState(false);
@@ -155,14 +256,11 @@ const NanoCastingDirector = () => {
         identityStrength: 85, // 0-100
         stylization: 50,      // 0-100
         age: 25,              // 10-90
-        outfit: "",
+        outfit: "Black polo shirt, jeans, and black and yellow casual shoes",
         lighting: "studio_default",
-        negatives: {
-            watermarks: true,
-            distortion: true,
-            extra_limbs: true,
-            text: true
-        }
+        shotFraming: "full_body" as 'bust' | 'half_body' | 'full_body',
+        logoImage: null as string | null,
+        logoPlacement: "Center Chest"
     });
 
     // --- PHASE 1: BIOMETRIC SCANNER STATE ---
@@ -559,26 +657,6 @@ const NanoCastingDirector = () => {
     // New: Pack Mode State
     const [generatePackMode] = useState(true);
 
-    // Auto-select Identity Source based on availability
-    useEffect(() => {
-        const hasBiometrics = capturedAngles.center && capturedAngles.left && capturedAngles.right;
-        const hasPortrait = !!finalCharacterUrl;
-
-        // If currently on biometric but missing data, try to switch
-        if (identitySource === 'biometric' && !hasBiometrics && hasPortrait) {
-            setIdentitySource('generated');
-        }
-        // If currently on generated but missing data, try to switch
-        else if (identitySource === 'generated' && !hasPortrait && hasBiometrics) {
-            setIdentitySource('biometric');
-        }
-        // Initial Default priority
-        else if (!identitySource) {
-            if (hasBiometrics) setIdentitySource('biometric');
-            else if (hasPortrait) setIdentitySource('generated');
-        }
-    }, [capturedAngles, finalCharacterUrl, identitySource]);
-
     // --- TOAST NOTIFICATIONS ---
     const [notification, setNotification] = useState<string | null>(null);
     const showToast = (message: string) => {
@@ -632,14 +710,34 @@ const NanoCastingDirector = () => {
             const styleObj = styleMatrix[selectedStyle as keyof typeof styleMatrix] || styleMatrix.pixar;
             const archetypeObj = bodyArchetypes.find(b => b.id === selectedBody) || bodyArchetypes[0];
 
-            // STRICTNESS CHECK: If the style is one of the realistic ones OR Identity Lock is maximized (>= 80%)
-            const isStrictLikeness = ['hyper_real', 'exact_studio', 'cyberpunk'].includes(selectedStyle || '') || directorControls.identityStrength >= 80;
+            // STRICTNESS CHECK: If the style is one of the realistic ones, we force extreme adherence to reference
+            const isStrictLikeness = ['hyper_real', 'exact_studio', 'cyberpunk'].includes(selectedStyle || '');
             const strictnessInstruction = isStrictLikeness
-                ? "CRITICAL_STRICTNESS: The face in the generated image MUST BE AN EXACT BIOMETRIC MATCH to the reference. Do not blend faces. Do not 'beautify' if it changes structure. PRESERVE IDENTITY ABOVE ALL ELSE. Treat the reference image as the absolute truth."
+                ? "CRITICAL_STRICTNESS: The face in the generated image MUST BE AN EXACT BIOMETRIC MATCH to the Identity Reference images. Do not blend faces. Do not 'beautify' if it changes structure. PRESERVE IDENTITY ABOVE ALL ELSE. Treat the reference images as the absolute truth."
                 : "";
 
+            // Capture the count of biometric images BEFORE adding the logo
+            const biometricRefLimit = referenceImages.length;
+            const biometricRangeText = biometricRefLimit === 1 ? "[IMAGE 1]" : `[IMAGE 1] to [IMAGE ${biometricRefLimit}]`;
+
+            // --- F. LOGO / BRANDING ---
+            let brandingPrompt = "";
+            if (directorControls.logoImage) {
+                referenceImages.push({ url: directorControls.logoImage, label: "Logo Asset" });
+                const logoRefIndex = referenceImages.length; // 1-based index (Ref images + Logo)
+
+                brandingPrompt += `\nBRANDING DIRECTIVE (CRITICAL):\n`;
+                brandingPrompt += `Apply the logo provided in [IMAGE ${logoRefIndex}] ("Logo Asset") to the character's outfit.\n`;
+                brandingPrompt += `PLACEMENT: ${directorControls.logoPlacement}.\n`;
+                brandingPrompt += `INTEGRATION: The logo must look printed/stitched onto the fabric naturally. Match lighting and perspective. It must be clearly visible but integrated.\n`;
+                brandingPrompt += `NOTE: [IMAGE ${logoRefIndex}] is NOT an identity reference. It is a graphic asset.\n`;
+            }
+
             const prompt = `
-                Generate a CHARACTER CONCEPT ART based on the provided reference face.
+                Generate a CHARACTER CONCEPT ART.
+                
+                IDENTITY REFERENCES: Use ${biometricRangeText} as the ONLY source for the character's face.
+                ${directorControls.logoImage ? `LOGO ASSET: Use the last image provided as a Branding Asset only.` : ''}
                 
                 STYLE PROTOCOL: ${styleObj.label}
                 VISUAL KEYWORDS: ${styleObj.keywords}
@@ -655,20 +753,35 @@ const NanoCastingDirector = () => {
 
                 CRITICAL INSTRUCTIONS:
                 ${strictnessInstruction}
-                1. MAINTAIN FACIAL IDENTITY from references with high fidelity (Priority: ${directorControls.identityStrength}%).
+                1. MAINTAIN FACIAL IDENTITY from ${biometricRangeText} with high fidelity (Priority: ${directorControls.identityStrength}%).
                 2. APPLY the selected "${styleObj.label}" art style (Intensity: ${directorControls.stylization}%).
                 3. Body proportions must match "${archetypeObj.name}".
                 4. Background: Neutral, dark, cinematic studio void.
                 5. High resolution, 4k, masterpiece.
                 6. Facial Expression: Slight, natural smile (warm and approachable).
+                ${directorControls.logoImage ? `7. BRANDING: See Branding Directive below. Apply logo to ${directorControls.logoPlacement}.` : ''}
                 
-                ${generatePackMode ? '6. OUTPUT: Cinematic Character Portrait (Front View) with high detail.' : ''}
+                ${generatePackMode ? 'OUTPUT: Cinematic Character Portrait (Front View) with high detail.' : ''}
                 
+                ${brandingPrompt}
+
                 NEGATIVE CONSTRAINTS:
-                ${directorControls.negatives.watermarks ? '- No watermarks, signatures, or UI elements.' : ''}
-                ${directorControls.negatives.distortion ? '- No distorted features, bad hands, or asymmetric eyes.' : ''}
-                ${directorControls.negatives.extra_limbs ? '- No extra limbs or fused fingers.' : ''}
-                ${directorControls.negatives.text ? '- No text overlays.' : ''}
+                - No watermarks (except requested branding), signatures, or UI elements.
+                - No distorted features, bad hands, or asymmetric eyes.
+                - No extra limbs or fused fingers.
+                - No text overlays.
+                
+                BODY SCOPE DIRECTIVE (NON-NEGOTIABLE):
+                ${bodyScope === 'head' ? '- HEAD: Head & shoulders only. No torso or legs.' : ''}
+                ${bodyScope === 'torso' ? '- TORSO: Upper body only. Shoulders to waist.' : ''}
+                ${bodyScope === 'full' ? '- FULL: Full body. Head to toe.' : ''}
+
+                SHOT FRAMING: ${bodyScope === 'head'
+                    ? 'HEAD AND SHOULDERS ONLY. Do NOT generate torso or legs.'
+                    : bodyScope === 'torso'
+                        ? 'UPPER BODY ONLY. From shoulders to waist.'
+                        : 'FULL BODY. Head to toe, complete posture.'
+                }
             `;
 
             // UPDATE APP CONTEXT
@@ -782,70 +895,36 @@ const NanoCastingDirector = () => {
     }, [finalCharacterUrl, dispatch]);
 
     const handleGenerateRefSheet = async () => {
-        // Validation check based on Identity Source
+        if (!state.apiKey) return;
+
+        const hasBiometrics = Boolean(capturedAngles.center && capturedAngles.left && capturedAngles.right);
+        const hasPortrait = Boolean(finalCharacterUrl);
+
+        // Validation based on Identity Source
         if (identitySource === 'biometric') {
-            // Note: Up/Down are optional
-            if (!capturedAngles.center || !capturedAngles.left || !capturedAngles.right) {
+            if (!hasBiometrics) {
                 showToast("Requires: Center + Left + Right");
                 return;
             }
         } else {
-            if (!finalCharacterUrl) {
+            if (!hasPortrait) {
                 showToast("Requires: Generate a portrait first");
                 return;
             }
         }
 
-        if (!state.apiKey) return;
-
         dispatch({ type: 'SET_PROCESSING', payload: true });
         dispatch({ type: 'ADD_LOG', payload: { message: "Generating Character Reference Sheet...", type: 'info' } });
 
         try {
-            const styleConfig = REF_SHEET_STYLES[refStyle];
 
-            let finalPrompt = `${REFERENCE_SHEET_PROMPT}\n\n`;
-            finalPrompt += `STYLE PROTOCOL: ${styleConfig.label}\n`;
-            finalPrompt += `VISUAL KEYWORDS: ${styleConfig.keywords}\n`;
-            finalPrompt += `LIGHTING: ${styleConfig.lighting}\n\n`;
 
-            // V2: Body Type (First, to establish base)
-            let bodyInstruction = `BODY TYPE: ${bodyWeight.toUpperCase()} BUILD. (CRITICAL: Do not let body build influence facial features. Face must remain distinct from body archetype).`;
-            if (bodyWeight === 'light') {
-                bodyInstruction += " EXTRA CAUTION: Do not make the face gaunt, sunken, or narrow. Preserve the original jawline width and cheek fullness from the reference.";
-            } else if (bodyWeight === 'heavy') {
-                bodyInstruction += " EXTRA CAUTION: Do not excessively bloat the face or alter the underlying bone structure. Preserve the subject's original facial identity, jawline definition, and eye shape.";
-            }
-            finalPrompt += bodyInstruction + "\n\n";
+            if (identitySource !== 'biometric' && !selectedBody) return;
 
-            // V2: Dynamic Director Overrides
-            const outfitPrompt = directorControls.outfit ? `OUTFIT: ${directorControls.outfit}` : "OUTFIT: Basic simple clothing";
-            finalPrompt += `DIRECTOR OVERRIDES: Age ${directorControls.age}, ${outfitPrompt}.\n`;
-
-            // Strictness Check (Matches handleOrchestration logic + Biometric Override)
-            const isStrictLikeness = ['hyper_real', 'exact_studio', 'cyberpunk'].includes(refStyle || '') || directorControls.identityStrength >= 80 || identitySource === 'biometric';
-            if (isStrictLikeness) {
-                finalPrompt += "CRITICAL_STRICTNESS: The face MUST BE AN EXACT BIOMETRIC MATCH to the references. PRESERVE IDENTITY ABOVE ALL ELSE. Allow for dissonance between body build and facial structure if necessary.\n\n";
-            }
-
-            if (sheetContent === 'head') {
-                finalPrompt += "CONTENT SCOPE: HEAD ONLY. Do not generate full body figures. Focus exclusively on facial rotation and expression.\n";
-            }
-
-            if (refLayout === 'form_focus') {
-                if (sheetContent === 'head') {
-                    finalPrompt += " [LAYOUT A - CLASSIC HEADS]: Split canvas horizontally. Top 50%: Front & Side profile close-ups. Bottom 50%: 3/4 view and Back view heads.";
-                } else {
-                    finalPrompt += " [LAYOUT A - CLASSIC]: Split canvas horizontally. Top 65% height: ROW OF EXACTLY 3 Full Body views (Front, Side, Back). Bottom 35% height: Grid of EXACTLY 4 Headshots. Ensure headshots are MACRO-DETAILED and hyper-sharp.";
-                }
-            } else if (refLayout === 'face_focus') {
-                finalPrompt += " [LAYOUT B - FACE FIRST]: Split canvas horizontally. Top 55% height: Row of EXACTLY 4 Large Headshots (Front, Left, Right, Back). Bottom 45% height: " + (sheetContent === 'head' ? "Row of Expression Variants (Happy, Neutral, Angry)." : "Row of EXACTLY 3 Full Body views.");
-            } else if (refLayout === 'split_focus') {
-                finalPrompt += " [LAYOUT C - STUDIO]: Split canvas vertically. " + (sheetContent === 'head' ? "Left 50%: Large Front facing potrait. Right 50%: Grid of side/angle headshots." : "Left 45% width: Vertical stack of EXACTLY 3 Full Body views (Front, Side, Back). Right 55% width: 2x2 Grid of Large Headshots.");
-            }
-
-            // Prepare Image References based on Source
+            // 1. PREPARE IMAGE REFERENCES FIRST
             const imageRefs: { url: string; label: string }[] = [];
+
+            // A. Biometric or Portrait Refs
             if (identitySource === 'biometric') {
                 const angles: (keyof typeof capturedAngles)[] = ['center', 'left', 'right', 'up', 'down'];
                 for (const angle of angles) {
@@ -859,13 +938,108 @@ const NanoCastingDirector = () => {
                 imageRefs.push({ url: finalCharacterUrl!, label: 'Character Reference' });
             }
 
+            // Capture the count of biometric/identity images BEFORE adding the logo
+            const identityRefLimit = imageRefs.length;
+            const identityRangeText = identityRefLimit === 1 ? "[IMAGE 1]" : `[IMAGE 1] to [IMAGE ${identityRefLimit}]`;
+
+            // B. Add Logo Reference if exists
+            let logoRefIndex = -1;
+            if (directorControls.logoImage) {
+                imageRefs.push({ url: directorControls.logoImage, label: "Logo Asset" });
+                logoRefIndex = imageRefs.length; // 1-based index
+            }
+
+            // 2. SANITIZE KEYWORDS
+            const getSafeKeywords = (style: string, originalKeywords: string) => {
+                let safe = originalKeywords;
+                if (identitySource === 'biometric') {
+                    if (style === 'family_3d' || style === 'pixar') {
+                        safe = safe.replace(/expressive features,?/gi, '').replace(/exaggerated,?/gi, '').replace(/cartoon proportions,?/gi, '');
+                    }
+                    if (style === 'cyberpunk' || style === 'cyberpunk_neon') {
+                        safe = safe.replace(/interface overlays,?/gi, '').replace(/high-tech interface,?/gi, '');
+                    }
+                }
+                return safe;
+            };
+
+            const targetStyleKey = refStyle || selectedStyle || 'family_3d';
+            const styleConfig = styleMatrix[targetStyleKey as keyof typeof styleMatrix] || styleMatrix.pixar;
+            const safeKeywords = getSafeKeywords(targetStyleKey, styleConfig.keywords);
+
+            // 3. PROMPT CONSTRUCTION
+            let effectiveStylization = directorControls.stylization;
+            let styleNote = "";
+            if (identitySource === 'biometric' && directorControls.identityStrength >= 90) {
+                if (effectiveStylization > 20) {
+                    effectiveStylization = 20;
+                    styleNote = " (Clamped to 20% to preserve Biometric Identity)";
+                }
+            }
+
+            let finalPrompt = "";
+
+            if (identitySource === 'biometric') {
+                // --- A. IDENTITY LOCK ---
+                finalPrompt += `BIOMETRIC IDENTITY LOCK (HARD — TOP PRIORITY):\n`;
+                finalPrompt += `Use ${identityRangeText} as the ONLY source for the character's face/head.\n`;
+                finalPrompt += `The head/face is IMMUTABLE:\n`;
+                finalPrompt += `- PRIMARY DIRECTIVE: Exact match of facial hair (beard/mustache/stubble) and grooming from ${identityRangeText}. Do NOT add hair that is not there.\n`;
+                finalPrompt += `- Do NOT change skull shape, face width, jaw structure, ears, hairline, eyebrows, eyes, nose, mouth.\n`;
+                finalPrompt += `If identity does not match the references, the output is INVALID.\n\n`;
+
+            } else {
+                // GENERATED IDENTITY
+                finalPrompt += `GENERATE CHARACTER REFERENCE SHEET:\n`;
+                finalPrompt += `Subject: ${selectedBody ? bodyArchetypes.find(b => b.id === selectedBody)?.name : "Character"}.\n`;
+                finalPrompt += `Reference: Use [IMAGE 1] as the base character.\n`;
+            }
+
+            // --- B. BRANDING / LOGO ---
+            if (directorControls.logoImage && logoRefIndex > 0) {
+                finalPrompt += `BRANDING DIRECTIVE:\n`;
+                finalPrompt += `Apply the logo provided in [IMAGE ${logoRefIndex}] ("Logo Asset") to the character's outfit.\n`;
+                finalPrompt += `PLACEMENT: ${directorControls.logoPlacement}.\n`;
+                finalPrompt += `INTEGRATION: The logo must look printed/stitched onto the fabric naturally. It must be clearly visible.\n`;
+                finalPrompt += `NOTE: [IMAGE ${logoRefIndex}] is NOT an identity reference. do NOT blend it into the face.\n\n`;
+            }
+
+            // --- C. BODY & STYLE ---
+            finalPrompt += `STYLE PROTOCOL: ${styleConfig.label}\n`;
+            finalPrompt += `Keywords: ${safeKeywords}\n`;
+            finalPrompt += `Stylization Intensity: ${effectiveStylization}%${styleNote}.\n\n`;
+
+            if (identitySource === 'biometric') {
+                finalPrompt += `ADVANCED BODY SETTINGS (BODY ONLY):\n`;
+                finalPrompt += `Target Height: ${formatHeight(heightIn)}\n`;
+                const promptWeight = Math.round(weightLbs / 5) * 5;
+                finalPrompt += `Target Weight: ${promptWeight} lbs\n`;
+                finalPrompt += `Apply height/weight ONLY to the body silhouette.\n\n`;
+            }
+
+            // --- D. LAYOUT ---
+            finalPrompt += `LAYOUT & COMPOSITION RULES:\n`;
+            const framing = directorControls.shotFraming;
+            if (framing === 'full_body') {
+                finalPrompt += " [LAYOUT A]: Split canvas horizontally. Top 65%: 3 Full Body views. Bottom 35%: 4 Headshots.";
+            } else if (framing === 'bust') {
+                finalPrompt += " [LAYOUT B]: Top 60%: 4 Headshots. Bottom 40%: Expression row.";
+            } else {
+                finalPrompt += " [LAYOUT C]: Split canvas vertically. Left 45%: 3 Full Body views. Right 55%: 2x2 grid of Large Headshots.";
+            }
+
+            // --- E. NEGATIVES ---
+            finalPrompt += `\nNEGATIVE CONSTRAINTS:\n`;
+            finalPrompt += `different person, face swap, generic face, altered skull, incorrect facial hair, added beard, different grooming, altered hairline, extra people, text, watermarks (except branding).\n`;
+
             const res = await GeminiService.generateImage(
                 finalPrompt,
                 state.apiKey,
-                state.model.includes('imagen') ? 'imagen-4.0-generate-001' : 'gemini-3-pro-image-preview', // Force high-reasoning model if available
+                state.model.includes('imagen') ? 'imagen-4.0-generate-001' : 'gemini-3-pro-image-preview',
                 imageRefs,
                 { aspectRatio: '16:9' }
             );
+
             setRefSheetUrl(res);
             setShowRefSheet(true);
             dispatch({ type: 'ADD_LOG', payload: { message: "Reference Sheet Generated.", type: 'success' } });
@@ -993,7 +1167,10 @@ const NanoCastingDirector = () => {
                 <header className="h-16 border-b border-border flex items-center justify-between px-8 bg-bg/80 backdrop-blur">
                     <div className="flex items-center gap-4">
                         <div className="w-2 h-2 bg-accent rounded-full animate-ping"></div>
-                        <h2 className="text-lg font-bold text-fg uppercase tracking-wider">{getPhaseTitle(phase)}</h2>
+                        <h2 className="text-lg font-bold text-fg uppercase tracking-wider">
+                            {getPhaseTitle(phase)}
+                            {phase >= 3 && bodyScope && <span className="text-accent ml-2 opacity-70"> // {bodyScope}</span>}
+                        </h2>
                     </div>
                     <div className="flex items-center gap-6 text-sm text-muted font-bold tracking-widest">
                         <div className="flex items-center gap-2">
@@ -1079,7 +1256,7 @@ const NanoCastingDirector = () => {
                                         <div className="space-y-6 animate-in fade-in slide-in-from-left-4 duration-300">
                                             <div className="space-y-2">
                                                 <label className="text-xs text-accent uppercase tracking-widest font-black flex justify-between">
-                                                    <span>Identity Lock <span className={directorControls.identityStrength >= 80 ? "text-emerald-500" : "text-muted"}>{directorControls.identityStrength >= 80 ? "(STRICT)" : ""}</span></span>
+                                                    <span>Identity Lock</span>
                                                     <span className="text-white">{directorControls.identityStrength}%</span>
                                                 </label>
                                                 <input
@@ -1089,7 +1266,6 @@ const NanoCastingDirector = () => {
                                                     className="w-full accent-accent h-2 rounded-full appearance-none cursor-pointer bg-surface-2"
                                                 />
                                             </div>
-
 
                                             <div className="space-y-2">
                                                 <label className="text-xs text-accent uppercase tracking-widest font-black flex justify-between">
@@ -1131,23 +1307,65 @@ const NanoCastingDirector = () => {
                                             </div>
 
                                             <div className="space-y-3 pt-6 border-t border-border">
-                                                <label className="text-xs text-muted uppercase tracking-widest font-bold">
-                                                    Negative Constraints
-                                                </label>
-                                                {Object.entries(directorControls.negatives).map(([key, val]) => (
-                                                    <div key={key} className="flex items-center gap-3 p-2 hover:bg-surface-2 rounded-lg cursor-pointer" onClick={() => setDirectorControls(p => ({ ...p, negatives: { ...p.negatives, [key]: !val } }))}>
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={val}
-                                                            onChange={(e) => setDirectorControls(p => ({
-                                                                ...p,
-                                                                negatives: { ...p.negatives, [key]: e.target.checked }
-                                                            }))}
-                                                            className="w-4 h-4 accent-danger rounded"
-                                                        />
-                                                        <span className="text-sm text-fg capitalize">{key.replace('_', ' ')}</span>
+                                                <div className="flex justify-between items-center mb-2">
+                                                    <label className="text-xs text-accent uppercase tracking-widest font-black flex items-center gap-2">
+                                                        <Zap className="w-3 h-3" /> Branding & Identity
+                                                    </label>
+                                                    {directorControls.logoImage && (
+                                                        <button
+                                                            onClick={() => setDirectorControls(p => ({ ...p, logoImage: null }))}
+                                                            className="text-[9px] text-danger hover:text-red-400 uppercase font-black"
+                                                        >
+                                                            Remove Logo
+                                                        </button>
+                                                    )}
+                                                </div>
+
+                                                <div className="bg-black/40 rounded-lg border border-border/50 p-3 space-y-3">
+                                                    {/* Logo Uploader */}
+                                                    <div className="flex gap-3">
+                                                        <div className="w-16 h-16 bg-black rounded border border-border dashed-border flex items-center justify-center overflow-hidden relative group cursor-pointer">
+                                                            <input
+                                                                type="file"
+                                                                accept="image/*"
+                                                                className="absolute inset-0 opacity-0 cursor-pointer z-10"
+                                                                onChange={(e) => {
+                                                                    const file = e.target.files?.[0];
+                                                                    if (file) {
+                                                                        const reader = new FileReader();
+                                                                        reader.onload = (e) => {
+                                                                            setDirectorControls(p => ({ ...p, logoImage: e.target?.result as string }));
+                                                                        };
+                                                                        reader.readAsDataURL(file);
+                                                                    }
+                                                                }}
+                                                            />
+                                                            {directorControls.logoImage ? (
+                                                                <img src={directorControls.logoImage} className="w-full h-full object-contain" />
+                                                            ) : (
+                                                                <Upload className="w-6 h-6 text-muted group-hover:text-accent transition-colors" />
+                                                            )}
+                                                            <div className="absolute inset-0 bg-accent/20 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
+                                                        </div>
+
+                                                        <div className="flex-1 space-y-2">
+                                                            <div className="space-y-1">
+                                                                <label className="text-[9px] text-muted uppercase tracking-widest font-bold">Logo Position</label>
+                                                                <input
+                                                                    type="text"
+                                                                    className="w-full bg-black/50 border border-border rounded px-2 py-1.5 text-[10px] text-white focus:border-accent outline-none"
+                                                                    placeholder="e.g. Left Chest, Back of Jacket"
+                                                                    value={directorControls.logoPlacement}
+                                                                    onChange={(e) => setDirectorControls(p => ({ ...p, logoPlacement: e.target.value }))}
+                                                                />
+                                                            </div>
+                                                        </div>
                                                     </div>
-                                                ))}
+
+                                                    <div className="text-[9px] text-muted/60 leading-tight">
+                                                        Upload a PNG logo (transparent background recommended). Specify exact placement for the weaver.
+                                                    </div>
+                                                </div>
                                             </div>
 
                                             <div className="pt-6 border-t border-border space-y-2">
@@ -1176,7 +1394,7 @@ const NanoCastingDirector = () => {
                                                     <button
                                                         onClick={generateWardrobe}
                                                         disabled={isProcessing}
-                                                        className="!bg-yellow-500 hover:!bg-yellow-400 !text-black py-2 rounded-lg text-[10px] font-black uppercase tracking-wider shadow-lg shadow-yellow-500/20"
+                                                        className="bg-accent hover:bg-yellow-400 text-black py-2 rounded-lg text-[10px] font-black uppercase tracking-wider"
                                                     >
                                                         Generate & Fit
                                                     </button>
@@ -1195,38 +1413,40 @@ const NanoCastingDirector = () => {
                                                     Wardrobe Library ({state.wardrobeItems.length})
                                                 </h4>
                                                 <div className="grid grid-cols-3 gap-2 max-h-[400px] overflow-y-auto pr-1">
-                                                    {state.wardrobeItems.map(item => (
-                                                        <button
-                                                            key={item.id}
-                                                            onClick={async () => {
-                                                                if (!finalCharacterUrl || isProcessing) return;
-                                                                // Trigger quick try-on
-                                                                setIsProcessing(true);
-                                                                setProgress({ phase: 'wardrobe', percent: 50, detail: `Fitting ${item.name}...` });
-                                                                try {
-                                                                    const fitted = await GeminiService.generateImage(
-                                                                        `Virtual Try-On: Apply costume in [IMAGE 2] to subject [IMAGE 1].
+                                                    {state.wardrobeItems
+                                                        .filter(item => !bodyScope || (WARDROBE_SCOPE_RULES[bodyScope] || []).includes((item.category || 'full_outfit').toLowerCase()) || item.category === 'Nano')
+                                                        .map(item => (
+                                                            <button
+                                                                key={item.id}
+                                                                onClick={async () => {
+                                                                    if (!finalCharacterUrl || isProcessing) return;
+                                                                    // Trigger quick try-on
+                                                                    setIsProcessing(true);
+                                                                    setProgress({ phase: 'wardrobe', percent: 50, detail: `Fitting ${item.name}...` });
+                                                                    try {
+                                                                        const fitted = await GeminiService.generateImage(
+                                                                            `Virtual Try-On: Apply costume in [IMAGE 2] to subject [IMAGE 1].
                                                                          Maintain subject identity. Match lighting.`,
-                                                                        state.apiKey,
-                                                                        state.model,
-                                                                        [
-                                                                            { url: finalCharacterUrl, label: "Subject" },
-                                                                            { url: item.url, label: "Costume" }
-                                                                        ],
-                                                                        { aspectRatio: '2:3' }
-                                                                    );
-                                                                    setFinalCharacterUrl(fitted);
-                                                                } catch (e) { console.error(e); }
-                                                                finally { setIsProcessing(false); setProgress({ phase: '', percent: 0, detail: "" }); }
-                                                            }}
-                                                            className="aspect-square rounded-lg border border-border overflow-hidden relative group hover:border-accent transition-all"
-                                                        >
-                                                            <img src={item.url} className="w-full h-full object-cover" />
-                                                            <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                                                                <Shirt className="w-4 h-4 text-white" />
-                                                            </div>
-                                                        </button>
-                                                    ))}
+                                                                            state.apiKey,
+                                                                            state.model,
+                                                                            [
+                                                                                { url: finalCharacterUrl, label: "Subject" },
+                                                                                { url: item.url, label: "Costume" }
+                                                                            ],
+                                                                            { aspectRatio: '2:3' }
+                                                                        );
+                                                                        setFinalCharacterUrl(fitted);
+                                                                    } catch (e) { console.error(e); }
+                                                                    finally { setIsProcessing(false); setProgress({ phase: '', percent: 0, detail: "" }); }
+                                                                }}
+                                                                className="aspect-square rounded-lg border border-border overflow-hidden relative group hover:border-accent transition-all"
+                                                            >
+                                                                <img src={item.url} className="w-full h-full object-cover" />
+                                                                <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                                                                    <Shirt className="w-4 h-4 text-white" />
+                                                                </div>
+                                                            </button>
+                                                        ))}
                                                     {state.wardrobeItems.length === 0 && (
                                                         <div className="col-span-3 text-center py-4 opacity-50 text-[10px]">
                                                             Library Empty
@@ -1255,17 +1475,6 @@ const NanoCastingDirector = () => {
                                     {/* TOGGLE HEADER */}
                                     {/* TOGGLE HEADER */}
                                     <div className="absolute top-4 right-4 z-20 flex items-center gap-4">
-
-                                        {/* Controls Button */}
-                                        <button
-                                            onClick={() => {
-                                                setSidebarMode('director');
-                                                setShowSettings(true);
-                                            }}
-                                            className="px-5 py-2 rounded-full border border-accent/30 bg-black/80 text-accent font-black uppercase tracking-wider text-xs flex items-center gap-2 hover:bg-accent hover:text-black transition-all shadow-[0_0_15px_rgba(250,204,21,0.15)]"
-                                        >
-                                            <Sliders className="w-3 h-3" /> Controls
-                                        </button>
 
                                         {/* Camera Toggle */}
                                         <button
@@ -1506,9 +1715,7 @@ const NanoCastingDirector = () => {
                                             {capturedAngles[label] && <CheckCircle2 className="w-4 h-4 text-success" />}
                                         </div>
                                     ))}
-                                    <div className="mt-auto space-y-2">
-                                        {/* EXPORT OPTIONS */}
-
+                                    <div className="mt-auto">
                                         <button
                                             onClick={resetScan}
                                             className="w-full py-4 mb-2 bg-danger hover:bg-red-600 text-accent shadow-lg shadow-danger/20 font-black uppercase tracking-widest transition-all text-xs rounded-lg flex items-center justify-center gap-2"
@@ -1520,7 +1727,7 @@ const NanoCastingDirector = () => {
                                             onClick={() => setPhase(2)}
                                             className={`w-full py-4 font-black uppercase tracking-widest transition-all text-xs rounded-lg flex items-center justify-center gap-2 ${isPhaseLocked(2)
                                                 ? 'bg-surface-2 text-muted cursor-not-allowed'
-                                                : '!bg-yellow-500 hover:!bg-yellow-400 !text-black shadow-lg shadow-yellow-500/20'
+                                                : 'bg-accent hover:bg-cyan-400 text-black shadow-lg shadow-accent/20'
                                                 }`}
                                         >
                                             Processing Matrix <ChevronRight className="w-4 h-4" />
@@ -1630,47 +1837,98 @@ const NanoCastingDirector = () => {
                                     </p>
                                 </div>
                                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 w-full max-w-5xl">
-                                    {Object.values(styleMatrix).map((style) => (
-                                        <button
-                                            key={style.id}
-                                            onClick={() => setSelectedStyle(style.id)}
-                                            className={`group relative h-40 border rounded-xl transition-all duration-300 overflow-hidden flex flex-col justify-center px-8 ${selectedStyle === style.id
-                                                ? 'bg-surface border-blue-500 shadow-[0_0_20px_rgba(59,130,246,0.5)] scale-105 z-10'
-                                                : 'bg-surface border-border hover:border-accent hover:bg-surface-2'
-                                                }`}
-                                        >
-                                            <div className="flex justify-between items-center mb-2">
-                                                <span className={`text-xl font-black uppercase tracking-tighter ${selectedStyle === style.id ? 'text-blue-400' : 'text-fg'}`}>
-                                                    {style.label}
-                                                </span>
-                                                <Target className={`w-5 h-5 ${selectedStyle === style.id ? 'text-blue-400' : 'text-muted'}`} />
-                                            </div>
-                                            <p className={`text-[10px] font-mono leading-tight line-clamp-2 ${selectedStyle === style.id ? 'text-blue-200/70' : 'text-muted'}`}>
-                                                {style.keywords}
-                                            </p>
-                                            {/* Preview Mockup */}
-                                            <div className="flex gap-1 mt-3">
-                                                <div className={`w-2 h-2 rounded-full ${selectedStyle === style.id ? 'bg-blue-400' : 'bg-muted'}`}></div>
-                                                <div className={`w-2 h-2 rounded-full opacity-50 ${selectedStyle === style.id ? 'bg-blue-400' : 'bg-muted'}`}></div>
-                                                <div className={`w-2 h-2 rounded-full opacity-25 ${selectedStyle === style.id ? 'bg-blue-400' : 'bg-muted'}`}></div>
-                                            </div>
-                                        </button>
-                                    ))}
+                                    {Object.values(styleMatrix).map((style) => {
+                                        const normalizedId = normalizeStyleId(style.id);
+                                        const isSelected = selectedStyle === normalizedId;
+
+                                        return (
+                                            <button
+                                                key={style.id}
+                                                onClick={() => {
+                                                    const normalizedId = normalizeStyleId(style.id);
+                                                    setSelectedStyle(normalizedId);
+
+                                                    // Immediately set default scope to prevent null-state flicker/jump
+                                                    const rules = STYLE_SCOPE_RULES[normalizedId] || STYLE_SCOPE_RULES.default;
+                                                    setBodyScope(rules.default);
+                                                }}
+                                                className={`group relative h-40 border rounded-xl transition-all duration-300 overflow-hidden flex flex-col justify-center px-8 ${isSelected
+                                                    ? 'bg-surface border-blue-500 shadow-[0_0_20px_rgba(59,130,246,0.5)] scale-105 z-10'
+                                                    : 'bg-surface border-border hover:border-accent hover:bg-surface-2'
+                                                    }`}
+                                            >
+                                                <div className="flex justify-between items-center mb-2">
+                                                    <span className={`text-xl font-black uppercase tracking-tighter ${isSelected ? 'text-blue-400' : 'text-fg'}`}>
+                                                        {style.label}
+                                                    </span>
+                                                    <Target className={`w-5 h-5 ${isSelected ? 'text-blue-400' : 'text-muted'}`} />
+                                                </div>
+                                                <p className={`text-[10px] font-mono leading-tight line-clamp-2 ${isSelected ? 'text-blue-200/70' : 'text-muted'}`}>
+                                                    {style.keywords}
+                                                </p>
+                                                {/* Preview Mockup */}
+                                                <div className="flex gap-1 mt-3">
+                                                    <div className={`w-2 h-2 rounded-full ${isSelected ? 'bg-blue-400' : 'bg-muted'}`}></div>
+                                                    <div className={`w-2 h-2 rounded-full opacity-50 ${isSelected ? 'bg-blue-400' : 'bg-muted'}`}></div>
+                                                    <div className={`w-2 h-2 rounded-full opacity-25 ${isSelected ? 'bg-blue-400' : 'bg-muted'}`}></div>
+                                                </div>
+
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                                <div className="mt-6 w-full max-w-5xl flex justify-center min-h-[140px]">
+                                    <AnimatePresence mode="wait">
+                                        {selectedStyle && (
+                                            <motion.div
+                                                key="body-scope"
+                                                initial={{ opacity: 0, y: -8 }}
+                                                animate={{ opacity: 1, y: 0 }}
+                                                exit={{ opacity: 0, y: -8 }}
+                                                transition={{ duration: 0.2, ease: 'easeOut' }}
+                                                className="flex flex-col items-center gap-6"
+                                            >
+                                                <BodyScopeSelector
+                                                    value={bodyScope}
+                                                    onChange={setBodyScope}
+                                                    allowedScopes={STYLE_SCOPE_RULES[selectedStyle]?.allowed ?? STYLE_SCOPE_RULES.default.allowed}
+                                                    defaultScope={STYLE_SCOPE_RULES[selectedStyle]?.default ?? STYLE_SCOPE_RULES.default.default}
+                                                />
+                                                <div className={`h-6 text-[9px] text-muted flex items-center gap-2 transition-all duration-300 ${bodyScope ? 'opacity-100' : 'opacity-0'}`}>
+                                                    {bodyScope ? (
+                                                        <>
+                                                            <span className={`w-1.5 h-1.5 rounded-full ${SCOPE_COST[bodyScope].gpu === 'low' ? 'bg-emerald-500' : SCOPE_COST[bodyScope].gpu === 'medium' ? 'bg-yellow-500' : 'bg-red-500'}`}></span>
+                                                            <span className="uppercase tracking-widest">{SCOPE_COST[bodyScope].gpu} COMPUTE: {SCOPE_COST[bodyScope].note}</span>
+                                                        </>
+                                                    ) : (
+                                                        <span className="uppercase tracking-widest text-transparent">Computing...</span>
+                                                    )}
+                                                </div>
+                                            </motion.div>
+                                        )}
+                                    </AnimatePresence>
                                 </div>
                                 <div className="mt-16 flex justify-between w-full max-w-5xl">
                                     <button onClick={() => setPhase(2)} className="text-muted hover:text-fg text-xs font-bold uppercase tracking-widest flex items-center gap-2">
                                         &larr; Return to Body
                                     </button>
-                                    <button
-                                        disabled={!selectedStyle}
-                                        onClick={handleOrchestration}
-                                        className={`px-12 py-4 text-sm font-black uppercase tracking-widest rounded-lg transition-all ${selectedStyle
-                                            ? 'bg-gradient-to-r from-accent to-blue-600 text-white hover:shadow-lg shadow-accent/20'
-                                            : 'bg-surface-2 text-muted cursor-not-allowed'
-                                            }`}
-                                    >
-                                        Initialize Neural Link &rarr;
-                                    </button>
+                                    <div className="flex flex-col items-end gap-2">
+                                        <button
+                                            disabled={!selectedStyle || !bodyScope}
+                                            onClick={handleOrchestration}
+                                            className={`px-12 py-4 text-sm font-black uppercase tracking-widest rounded-lg transition-all ${selectedStyle && bodyScope
+                                                ? 'bg-gradient-to-r from-accent to-blue-600 text-white hover:shadow-lg shadow-accent/20'
+                                                : 'bg-surface-2 text-muted cursor-not-allowed'
+                                                }`}
+                                        >
+                                            Initialize Neural Link &rarr;
+                                        </button>
+                                        {selectedStyle && !bodyScope && (
+                                            <div className="text-[9px] text-danger uppercase tracking-widest font-bold animate-pulse">
+                                                Select Body Scope to Continue
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
                             </motion.div>
                         )}
@@ -1725,15 +1983,15 @@ const NanoCastingDirector = () => {
                         {phase === 5 && finalCharacterUrl && (
                             <motion.div
                                 key="phase5"
-                                initial={{ opacity: 0, scale: 0.95 }}
+                                initial={{ opacity: 0, scale: 0.9 }}
                                 animate={{ opacity: 1, scale: 1 }}
-                                className="h-full flex gap-8 items-start justify-center p-8 lg:p-12"
+                                className="h-full flex gap-8 items-center justify-center p-12"
                             >
-                                {/* LEFT: PORTRAIT CARD */}
-                                <div className="h-full aspect-[2/3] relative rounded-2xl overflow-hidden border-2 border-accent shadow-2xl group shrink-0">
+                                <div className="h-full aspect-[2/3] relative rounded-xl overflow-hidden border-2 border-accent shadow-2xl group">
                                     <img src={finalCharacterUrl} className="w-full h-full object-cover" />
                                     <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent opacity-80"></div>
 
+                                    {/* ID CARD */}
                                     <div className="absolute bottom-6 left-6 right-6 font-mono text-xs">
                                         <div className="flex justify-between items-end border-b border-white/20 pb-2 mb-2">
                                             <div>
@@ -1752,96 +2010,63 @@ const NanoCastingDirector = () => {
                                     </div>
                                 </div>
 
-                                {/* RIGHT: CONTROL PANEL (3 ZONES) */}
-                                <div className="w-[400px] flex flex-col h-full overflow-y-auto pr-1">
-                                    <div className="mb-6">
-                                        <h3 className="text-2xl font-black text-fg uppercase italic tracking-tighter">
-                                            Reconstruction <span className="text-accent">Complete</span>
-                                        </h3>
-                                        <p className="text-xs text-muted leading-relaxed">
-                                            Neural synthesis successful. Subject ready for matrix integration.
-                                        </p>
-                                    </div>
+                                <div className="w-96 flex flex-col gap-4 h-full overflow-y-scroll px-4 pb-24">
+                                    <h3 className="text-2xl font-black text-fg uppercase italic tracking-tighter">
+                                        Reconstruction <span className="text-accent">Complete</span>
+                                    </h3>
+                                    <p className="text-xs text-muted mb-8 leading-relaxed">
+                                        Neural synthesis successful. Subject has been re-topologized and is ready for integration into the storyboard matrix.
+                                        {generatePackMode && " Full variation pack generated."}
+                                    </p>
 
-                                    <div className="flex flex-col gap-6 flex-1">
-                                        {/* ZONE 1: PRIMARY ACTIONS */}
-                                        <div className="flex flex-col gap-3">
-                                            <div className="grid grid-cols-[1fr_auto] gap-2">
-                                                <button
-                                                    onClick={() => addToCast(false)}
-                                                    className="py-4 bg-surface-2 hover:bg-surface text-accent hover:text-white font-black uppercase tracking-widest text-xs rounded-xl transition-all shadow-lg shadow-accent/10 border border-accent flex items-center justify-center gap-2 group hover:scale-[1.02]"
-                                                >
-                                                    <UserPlus className="w-4 h-4" />
-                                                    {generatePackMode ? "Add Pack" : "Add Actor"}
-                                                </button>
-                                                <button
-                                                    onClick={handleRegenerate}
-                                                    className="px-4 bg-surface-2 hover:bg-surface text-fg font-bold uppercase tracking-widest text-xs rounded-xl transition-all border border-border hover:border-accent flex items-center justify-center"
-                                                    title="Regenerate"
-                                                >
-                                                    <RotateCcw className="w-4 h-4 text-accent-2" />
-                                                </button>
-                                            </div>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <button
+                                            onClick={() => addToCast(false)}
+                                            className="col-span-1 py-4 bg-surface-2 hover:bg-surface text-accent font-black uppercase tracking-widest text-xs rounded-xl transition-all shadow-lg shadow-accent/10 border border-accent flex flex-col items-center gap-1 group-hover:scale-[1.02]"
+                                        >
+                                            <UserPlus className="w-5 h-5" />
+                                            {generatePackMode ? "Add Pack" : "Add Actor"}
+                                        </button>
 
-                                            {/* Secondary Actions Row */}
+                                        <button
+                                            // Call distinct handler to ensure state preservation
+                                            onClick={handleRegenerate}
+                                            className="col-span-1 py-4 bg-surface-2 hover:bg-surface text-fg font-bold uppercase tracking-widest text-xs rounded-xl transition-all border border-border hover:border-accent flex flex-col items-center gap-1"
+                                        >
+                                            <RotateCcw className="w-5 h-5 text-accent-2" />
+                                            Regenerate
+                                        </button>
+
+                                        <button
+                                            onClick={downloadPoster}
+                                            className="col-span-1 py-3 bg-bg border border-border text-muted hover:text-fg hover:border-accent text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2"
+                                        >
+                                            <Share2 className="w-3 h-3" /> Save Poster
+                                        </button>
+                                        <button
+                                            onClick={() => {
+                                                setShowSettings(true);
+                                                setSidebarMode('wardrobe');
+                                            }}
+                                            className="col-span-1 py-3 bg-bg border border-border text-muted hover:text-accent hover:border-accent/30 text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2"
+                                        >
+                                            <Layers className="w-3 h-3" /> Wardrobe V2
+                                        </button>
+
+                                        {/* Reference Sheet Section */}
+                                        <div className="col-span-2 pt-2 border-t border-border mt-2 space-y-3">
                                             <div className="flex gap-2">
-                                                <div className="relative group w-full">
-                                                    <button className="w-full py-2 bg-transparent hover:bg-surface border border-dashed border-border hover:border-accent/50 text-muted hover:text-fg text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2">
-                                                        <MoreHorizontal className="w-4 h-4" /> More Actions
-                                                    </button>
-
-                                                    {/* Hover Menu */}
-                                                    <div className="absolute top-full left-0 right-0 pt-2 opacity-0 translate-y-2 pointer-events-none group-hover:opacity-100 group-hover:translate-y-0 group-hover:pointer-events-auto transition-all z-50">
-                                                        <div className="bg-[#18181b] border border-border rounded-xl shadow-2xl p-1 flex flex-col gap-1">
-                                                            <button
-                                                                onClick={() => {
-                                                                    setSidebarMode('director');
-                                                                    setShowSettings(true);
-                                                                }}
-                                                                className="w-full py-2 px-3 text-left hover:bg-surface-2 text-muted hover:text-fg text-[10px] font-bold uppercase tracking-widest rounded-lg transition-all flex items-center gap-2"
-                                                            >
-                                                                <Sliders className="w-3 h-3" /> Director Controls
-                                                            </button>
-                                                            <button
-                                                                onClick={downloadPoster}
-                                                                className="w-full py-2 px-3 text-left hover:bg-surface-2 text-muted hover:text-fg text-[10px] font-bold uppercase tracking-widest rounded-lg transition-all flex items-center gap-2"
-                                                            >
-                                                                <Share2 className="w-3 h-3" /> Save Poster
-                                                            </button>
-                                                            <button
-                                                                onClick={() => {
-                                                                    setShowSettings(true);
-                                                                    setSidebarMode('wardrobe');
-                                                                }}
-                                                                className="w-full py-2 px-3 text-left hover:bg-surface-2 text-muted hover:text-fg text-[10px] font-bold uppercase tracking-widest rounded-lg transition-all flex items-center gap-2"
-                                                            >
-                                                                <Shirt className="w-3 h-3" /> Wardrobe V2
-                                                            </button>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        {/* ZONE 2: REFERENCE SHEET STUDIO */}
-                                        <div className="bg-[#09090b] rounded-2xl border border-white/10 p-4 space-y-4 shadow-lg">
-                                            <h4 className="text-xs font-black text-white uppercase tracking-widest flex items-center gap-2 border-b border-white/5 pb-2">
-                                                <LayoutTemplate className="w-3.5 h-3.5 text-blue-400" /> Reference Sheet
-                                            </h4>
-
-                                            {/* Layout Selector */}
-                                            <div className="flex bg-black rounded-lg p-1 border border-white/10">
                                                 {[
-                                                    { id: 'form_focus', label: 'Form' },
-                                                    { id: 'face_focus', label: 'Face' },
-                                                    { id: 'split_focus', label: 'Split' }
+                                                    { id: 'form_focus', label: 'Body Focus' },
+                                                    { id: 'face_focus', label: 'Expressions' },
+                                                    { id: 'split_focus', label: 'Hybrid' }
                                                 ].map((l) => (
                                                     <button
                                                         key={l.id}
                                                         onClick={() => setRefLayout(l.id as any)}
-                                                        className={`flex-1 py-1.5 rounded-md text-[9px] font-bold uppercase transition-all ${refLayout === l.id
-                                                            ? 'bg-blue-600 text-white shadow-lg'
-                                                            : 'text-muted hover:text-white hover:bg-white/5'
+                                                        className={`flex-1 py-2 rounded text-[9px] font-bold uppercase transition-all border ${refLayout === l.id
+                                                            ? 'bg-accent/20 border-accent text-accent shadow-[0_0_10px_rgba(250,204,21,0.2)]'
+                                                            : 'bg-surface-2 border-border text-muted hover:border-white/50'
                                                             }`}
                                                     >
                                                         {l.label}
@@ -1849,14 +2074,14 @@ const NanoCastingDirector = () => {
                                                 ))}
                                             </div>
 
-                                            {/* Style Selector Dropdown */}
+                                            {/* Style Preset */}
                                             <div className="space-y-1">
                                                 <label className="text-[9px] font-bold text-muted uppercase tracking-widest pl-1">Style Preset</label>
                                                 <div className="relative">
                                                     <select
                                                         value={refStyle}
                                                         onChange={(e) => setRefStyle(e.target.value as any)}
-                                                        className="w-full appearance-none bg-black border border-white/10 rounded-xl px-3 py-2 text-[10px] font-bold uppercase text-white outline-none focus:border-blue-500 transition-colors cursor-pointer"
+                                                        className="w-full appearance-none bg-bg border border-border rounded-xl px-3 py-2 text-[10px] font-bold uppercase text-white outline-none focus:border-accent transition-colors cursor-pointer"
                                                     >
                                                         {Object.values(REF_SHEET_STYLES).map((s) => (
                                                             <option key={s.id} value={s.id}>{s.label}</option>
@@ -1866,86 +2091,113 @@ const NanoCastingDirector = () => {
                                                 </div>
                                             </div>
 
-                                            {/* Advanced Settings Accordion */}
-                                            <details className="group">
-                                                <summary className="list-none flex items-center justify-between cursor-pointer py-2 border-t border-white/5 text-[9px] font-bold text-muted uppercase tracking-widest hover:text-white transition-colors">
-                                                    <span>Advanced Settings</span>
+                                            {/* Advanced (Identity + Scope + Body Sliders) */}
+                                            <details className="group rounded-xl border border-border bg-surface-2/40 p-3">
+                                                <summary className="list-none flex items-center justify-between cursor-pointer text-[9px] font-bold text-muted uppercase tracking-widest">
+                                                    <span>Advanced</span>
                                                     <ChevronDown className="w-3 h-3 transition-transform group-open:rotate-180" />
                                                 </summary>
-                                                <div className="space-y-3 pt-2 animate-in slide-in-from-top-2 duration-200">
-                                                    {/* Body Weight */}
-                                                    <div className="space-y-1">
-                                                        <label className="text-[8px] text-muted/60 uppercase tracking-widest font-bold">Body Structure</label>
-                                                        <div className="flex bg-black rounded-lg p-1 border border-white/5">
-                                                            {['light', 'athletic', 'medium', 'heavy'].map((w) => (
-                                                                <button
-                                                                    key={w}
-                                                                    onClick={() => setBodyWeight(w as any)}
-                                                                    className={`flex-1 py-1 rounded text-[8px] font-bold uppercase transition-all ${bodyWeight === w
-                                                                        ? 'bg-white/10 text-white'
-                                                                        : 'text-muted hover:text-white'
-                                                                        }`}
-                                                                >
-                                                                    {w}
-                                                                </button>
-                                                            ))}
-                                                        </div>
-                                                    </div>
-
+                                                <div className="pt-3 space-y-4">
                                                     {/* Identity Source */}
                                                     <div className="space-y-1">
-                                                        <label className="text-[8px] text-muted/60 uppercase tracking-widest font-bold">Identity Source</label>
-                                                        <div className="flex bg-black rounded-lg p-1 border border-white/5">
+                                                        <label className="text-[8px] text-muted/70 uppercase tracking-widest font-bold">Identity Source</label>
+                                                        <div className="flex bg-bg rounded-lg p-1 border border-border">
                                                             <button
                                                                 onClick={() => setIdentitySource('biometric')}
-                                                                className={`flex-1 py-1 rounded text-[8px] font-bold uppercase transition-all ${identitySource === 'biometric' ? 'bg-white/10 text-blue-400' : 'text-muted'}`}
+                                                                className={`flex-1 py-1 rounded text-[8px] font-bold uppercase transition-all ${identitySource === 'biometric'
+                                                                    ? 'bg-accent/15 text-accent border border-accent/30'
+                                                                    : 'text-muted hover:text-white'
+                                                                    }`}
                                                             >
-                                                                Biometric (Scans)
+                                                                Biometric
                                                             </button>
                                                             <button
                                                                 onClick={() => setIdentitySource('generated')}
-                                                                className={`flex-1 py-1 rounded text-[8px] font-bold uppercase transition-all ${identitySource === 'generated' ? 'bg-white/10 text-blue-400' : 'text-muted'}`}
+                                                                className={`flex-1 py-1 rounded text-[8px] font-bold uppercase transition-all ${identitySource === 'generated'
+                                                                    ? 'bg-accent/15 text-accent border border-accent/30'
+                                                                    : 'text-muted hover:text-white'
+                                                                    }`}
                                                             >
-                                                                Generated (Portrait)
+                                                                Portrait
                                                             </button>
+                                                        </div>
+                                                        <div className="text-[9px] text-muted/70 normal-case">
+                                                            Biometric uses LEFT/CENTER/RIGHT/UP/DOWN for the most accurate likeness.
                                                         </div>
                                                     </div>
 
-                                                    {/* Sheet Content */}
-                                                    <div className="space-y-1">
-                                                        <label className="text-[8px] text-muted/60 uppercase tracking-widest font-bold">Scope</label>
-                                                        <div className="flex bg-black rounded-lg p-1 border border-white/5">
-                                                            <button onClick={() => setSheetContent('full')} className={`flex-1 py-1 rounded text-[8px] font-bold uppercase ${sheetContent === 'full' ? 'bg-white/10 text-white' : 'text-muted'}`}>Full Sheet</button>
-                                                            <button onClick={() => setSheetContent('head')} className={`flex-1 py-1 rounded text-[8px] font-bold uppercase ${sheetContent === 'head' ? 'bg-white/10 text-white' : 'text-muted'}`}>Head Only</button>
+
+
+                                                    {/* Weight */}
+                                                    <div className="space-y-2">
+                                                        <div className="flex items-center justify-between">
+                                                            <label className="text-[8px] text-muted/70 uppercase tracking-widest font-bold">Weight</label>
+                                                            <div className="flex items-center gap-2">
+                                                                {identitySource === 'biometric' && weightLbs === 275 && (
+                                                                    <span className="text-[8px] text-yellow-500 font-bold uppercase tracking-wider">(MAX SAFE LIMIT)</span>
+                                                                )}
+                                                                <span className="text-[10px] font-bold text-white">{localWeight} lb</span>
+                                                            </div>
                                                         </div>
+                                                        <input
+                                                            type="range"
+                                                            min={90}
+                                                            max={identitySource === 'biometric' ? 275 : 300}
+                                                            step={5}
+                                                            value={localWeight > (identitySource === 'biometric' ? 275 : 300) ? (identitySource === 'biometric' ? 275 : 300) : localWeight}
+                                                            onChange={(e) => setLocalWeight(parseInt(e.target.value, 10))}
+                                                            onPointerUp={() => setWeightLbs(localWeight)}
+                                                            className="w-full accent-accent h-2 rounded-full appearance-none cursor-pointer bg-bg"
+                                                        />
+                                                    </div>
+
+                                                    {/* Height */}
+                                                    <div className="space-y-2">
+                                                        <div className="flex items-center justify-between">
+                                                            <label className="text-[8px] text-muted/70 uppercase tracking-widest font-bold">Height</label>
+                                                            <span className="text-[10px] font-bold text-white">{formatHeight(heightIn)}</span>
+                                                        </div>
+                                                        <input
+                                                            type="range"
+                                                            min={36}
+                                                            max={108}
+                                                            value={heightIn}
+                                                            onChange={(e) => setHeightIn(parseInt(e.target.value, 10))}
+                                                            className="w-full accent-accent-2 h-2 rounded-full appearance-none cursor-pointer bg-bg"
+                                                        />
                                                     </div>
                                                 </div>
                                             </details>
 
-                                            <button
-                                                onClick={handleGenerateRefSheet}
-                                                disabled={isProcessing || (identitySource === 'biometric' && (!capturedAngles.center || !capturedAngles.left || !capturedAngles.right)) || (identitySource === 'generated' && !finalCharacterUrl)}
-                                                className={`w-full py-3 bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all shadow-lg shadow-blue-900/40 flex items-center justify-center gap-2 ${(identitySource === 'biometric' && (!capturedAngles.center || !capturedAngles.left || !capturedAngles.right)) || (identitySource === 'generated' && !finalCharacterUrl)
-                                                    ? 'opacity-50 grayscale cursor-not-allowed'
-                                                    : ''
-                                                    }`}
-                                            >
-                                                <ImagePlus className="w-3.5 h-3.5" />
-                                                Generate Reference Sheet
-                                            </button>
+                                            <div className="relative group w-full">
+                                                <button
+                                                    onClick={handleGenerateRefSheet}
+                                                    disabled={isProcessing || (identitySource === 'biometric' && (!capturedAngles.center || !capturedAngles.left || !capturedAngles.right)) || (identitySource === 'generated' && !finalCharacterUrl)}
+                                                    className={`w-full py-3 bg-bg border border-border text-muted hover:text-accent hover:border-accent text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2 ${(identitySource === 'biometric' && (!capturedAngles.center || !capturedAngles.left || !capturedAngles.right)) || (identitySource === 'generated' && !finalCharacterUrl)
+                                                        ? 'opacity-60 cursor-not-allowed'
+                                                        : ''
+                                                        }`}
+                                                >
+                                                    <LayoutTemplate className="w-3 h-3" />
+                                                    Generate Reference Sheet
+                                                </button>
+                                                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 p-3 bg-gray-900 border border-gray-700 rounded-lg shadow-xl text-[10px] text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 normal-case text-left">
+                                                    <strong className="text-white block mb-1">Production Note:</strong>
+                                                    High-Fidelity AI Synthesis: Identity & layout are strictly enforced, but minor variations may occur. Always review for production use.
+                                                </div>
+                                            </div>
 
-                                            {/* Validation Messages */}
                                             {identitySource === 'biometric' && (!capturedAngles.center || !capturedAngles.left || !capturedAngles.right) && (
-                                                <div className="text-center text-[9px] text-red-400 font-bold uppercase tracking-widest bg-red-500/10 py-1 rounded">Requires Center + Left + Right Scans</div>
+                                                <div className="text-center text-[9px] text-danger font-bold uppercase tracking-widest bg-danger/10 py-1 rounded">
+                                                    Requires Center + Left + Right Scans
+                                                </div>
                                             )}
                                         </div>
                                     </div>
-
-                                    {/* ZONE 3: FOOTER */}
-                                    <div className="mt-8 pt-4 border-t border-white/5">
+                                    <div className="mt-8 border-t border-border pt-4">
                                         <button
                                             onClick={resetScan}
-                                            className="w-full py-2 text-muted hover:text-white text-[10px] font-bold uppercase tracking-widest transition-colors flex items-center justify-center gap-2 opacity-50 hover:opacity-100"
+                                            className="w-full py-3 text-muted hover:text-danger text-xs font-bold uppercase tracking-widest transition-colors flex items-center justify-center gap-2"
                                         >
                                             <RefreshCw className="w-3 h-3" />
                                             Initialize New Subject
@@ -2034,7 +2286,7 @@ const NanoCastingDirector = () => {
                                                         a.click();
                                                     }
                                                 }}
-                                                className="bg-accent hover:bg-white text-black px-6 py-2 rounded-lg font-bold uppercase tracking-widest text-[10px] transition-all flex items-center gap-2"
+                                                className="bg-accent hover:bg-white text-green-900 px-6 py-2 rounded-lg font-bold uppercase tracking-widest text-[10px] transition-all flex items-center gap-2"
                                             >
                                                 <Share2 className="w-4 h-4" /> Save
                                             </button>
@@ -2079,4 +2331,5 @@ const NanoCastingDirector = () => {
     );
 };
 
+// End of file
 export default NanoCastingDirector;

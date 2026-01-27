@@ -29,6 +29,10 @@
   --color-success: #22c55e;
   --color-warning: #f59e0b;
   --color-danger: #ef4444;
+
+  /* User Requested Variables */
+  --nano-white: #ffffff;
+  --nano-gold: var(--color-accent);
 }
 
 @theme {
@@ -178,4 +182,22 @@ button:focus-visible {
 @keyframes bounce-x {
     0%, 100% { transform: translateX(0); }
     50% { transform: translateX(25%); }
+}
+
+/* Body Scope Selector Icons */
+.bodyIcon {
+  color: var(--nano-white);
+  transition: transform 0.2s ease, filter 0.2s ease;
+}
+
+.bodyIcon:hover {
+  filter: drop-shadow(0 0 10px rgba(255,200,60,0.35));
+}
+
+.bodyIcon.active {
+  color: var(--nano-gold);
+  filter:
+    drop-shadow(0 0 14px rgba(255,200,60,0.55))
+    drop-shadow(0 0 24px rgba(80,160,255,0.25));
+  transform: scale(1.04);
 }

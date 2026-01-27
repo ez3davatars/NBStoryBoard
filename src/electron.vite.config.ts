@@ -3,6 +3,8 @@ import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 
+import svgr from 'vite-plugin-svgr';
+
 const projectRoot = resolve(__dirname, '..');
 
 export default defineConfig({
@@ -36,7 +38,7 @@ export default defineConfig({
         '@renderer': resolve(projectRoot, 'src')
       }
     },
-    plugins: [react(), tailwindcss()],
+    plugins: [react(), tailwindcss(), svgr()],
     build: {
       outDir: resolve(projectRoot, 'out/renderer')
     },

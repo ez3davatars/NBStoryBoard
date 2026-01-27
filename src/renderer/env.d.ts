@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+/// <reference types="vite-plugin-svgr/client" />
 /// <reference lib="dom" />
 /// <reference lib="dom.iterable" />
 

@@ -339,15 +339,22 @@ const WardrobeStudio = () => {
       const res = await GeminiService.generateImage(
         `Perform a professional virtual try-on and fashion fitting. 
          [IMAGE 1] is the target SUBJECT. 
-         [IMAGE 2] is the standalone COSTUME to fit.
+         [IMAGE 2] is the standalone COSTUME ASSET to fit.
          
          OBJECTIVE: Apply the costume from [IMAGE 2] onto the subject in [IMAGE 1].
+         
+         OUTPUT FORMAT: SINGLE COMPOSITE IMAGE. (Do NOT show the source image. Do NOT show a "before/after" comparison. Do NOT create a collage. ONE subject only).
+
          CRITICAL CONSTRAINTS:
-         1. MAINTAIN the subject's exact facial identity, hairstyle, and body proportions from [IMAGE 1].
-         2. FULLY REPLACE their current clothing with the outfit in [IMAGE 2].
-         3. Adjust the fit to match their pose and lighting naturally.
-         4. ${tryOnNote || "Clean studio execution."}
-         5. Use a solid Neon Green background (#39FF14) for perfect subject isolation.`,
+         1. **COSTUME FIDELITY**: You MUST transfer the EXACT clothing from [IMAGE 2]. Maintain all details, textures, logos, and materials.
+         2. **SOURCE HANDLING**: [IMAGE 2] is a flat garment reference (potentially transparent PNG). Do NOT generate the "image file" itself. Do NOT include any mannequin, hanger, or background artifacts from [IMAGE 2]. Just the clothes.
+         3. **SUBJECT PRESERVATION**: Maintain the subject's exact facial identity, hairstyle, and body proportions from [IMAGE 1].
+         4. **INTEGRATION**: Adjust the fit to match the subject's pose and lighting naturally.
+         5. ${tryOnNote || "Clean studio execution."}
+         6. Use a solid Neon Green background (#39FF14) for perfect subject isolation.
+         
+         NEGATIVE CONSTRAINTS:
+         split view, side by side, triptych, reference sheet, grid, collage, multiple views, ghosting, double exposure, extra people, two people, floating clothes, watermark, text, bad anatomy, distorted face, extra limbs, background artifacts, before and after.`,
         state.apiKey,
         state.model,
         [
@@ -485,7 +492,7 @@ const WardrobeStudio = () => {
                 onClick={() => setSelectedCostume(item)}
                 className={`aspect-square rounded-lg border overflow-hidden transition-all group relative cursor-pointer ${selectedCostume?.id === item.id ? 'border-yellow-500 border-2 shadow-lg shadow-yellow-500/20' : 'border-gray-800 hover:border-gray-600'}`}
               >
-                <img src={item.url} className="w-full h-full object-cover group-hover:scale-110 transition-transform" />
+                <img src={item.url} className={`w-full h-full transition-transform group-hover:scale-110 ${item.category === 'Designer' ? 'object-cover' : 'object-contain p-2 bg-black/50'}`} />
                 <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
                   <button
                     onClick={(e) => {
