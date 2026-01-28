@@ -5,7 +5,9 @@ import {
   Trash2, Upload, RotateCw, MonitorPlay,
   Eraser, RefreshCw, X,
   Target, Download, UserPlus, Sparkles,
-  Maximize, RefreshCcw, LayoutTemplate, Share2, Info, CheckCircle2
+  Search, Calendar, Type, Layers, Folder, HelpCircle,
+  Maximize, RefreshCcw, LayoutTemplate, Share2, Info, CheckCircle2,
+  ArrowDownUp, Edit2
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
@@ -13,15 +15,26 @@ import { GeminiService } from '../services/GeminiService';
 // Types are exported from AppContext
 import type { CastMember } from '../context/AppContext';
 
+import coverRealism from '../assets/cover-realism.png';
+import coverAnim from '../assets/cover-anim.png';
+import coverIllustration from '../assets/cover-illustration.png';
+import coverScifi from '../assets/cover-scifi.png';
+
 const REFERENCE_SHEET_PROMPT = `Create a professional, 8k resolution character reference sheet based strictly on the uploaded reference image. Use a clean, neutral plain background.
 CRITICAL COMPOSITION RULES:
 - STRICT ADHERENCE to view counts. DO NOT add extra rows or duplicate figures.
 - NO ghost images or hallucinations in negative space. Leave empty areas EMPTY.
 - Maintain PERFECT facial identity and symmetry across ALL views. No distortion.
-- Ensure feet, hands, and facial features are anatomically correct and sharp.
-- Lighting must be studio-neutral with no harsh shadows obscuring details.
 - Output must be crisp, production-ready, and free of artifacts.
 `;
+
+const STUDIO_FOLDERS = [
+  { id: 'realism', label: 'Realism Studio', description: "Exact Likeness & Premium CG", image: coverRealism, styles: ['exact_studio', 'premium_cg', 'hyper_real'] },
+  { id: 'anim', label: 'Animation Studio', description: "Family 3D & Claymation", image: coverAnim, styles: ['family_3d', 'pixar', 'claymation'] },
+  { id: 'illustration', label: 'Illustration Studio', description: "Anime, Noir & Graphic", image: coverIllustration, styles: ['retro_cel', 'graphic_noir', 'retro_anime', 'comic_book'] },
+  { id: 'scifi', label: 'Sci-Fi Studio', description: "Cyberpunk & High Tech", image: coverScifi, styles: ['cyberpunk_neon', 'cyberpunk'] },
+  { id: 'uncategorized', label: 'Unsorted', description: "No Specific Style", image: null, styles: [] as string[] }
+];
 
 const CastingForge = () => {
   const { state, dispatch } = useAppContext();
@@ -99,9 +112,101 @@ const CastingForge = () => {
 
       dispatch({ type: 'REMOVE_ACTOR_LIBRARY', payload: actorId });
       dispatch({ type: 'ADD_LOG', payload: { message: "Actor permanently removed from library", type: 'info' } });
+
     }
     setDeleteTarget(null);
   };
+
+  // --- LIBRARY SEARCH & SORT STATE ---
+  const [librarySearch, setLibrarySearch] = useState('');
+  const [sortOption, setSortOption] = useState<'name' | 'date' | 'type'>('date');
+  const [showSortMenu, setShowSortMenu] = useState(false);
+  const [activeFolder, setActiveFolder] = useState<string | null>(null);
+
+  // Custom Covers State
+  const [customCovers, setCustomCovers] = useState<Record<string, string>>({});
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const saved = localStorage.getItem('studio_covers');
+    if (saved) {
+      try { setCustomCovers(JSON.parse(saved)); } catch (e) { console.error("Failed to load covers", e); }
+    }
+  }, []);
+
+  const handleCoverUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !editingFolderId) return;
+
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const result = ev.target?.result as string;
+      if (result) {
+        const newCovers = { ...customCovers, [editingFolderId]: result };
+        setCustomCovers(newCovers);
+        localStorage.setItem('studio_covers', JSON.stringify(newCovers));
+        dispatch({ type: 'ADD_LOG', payload: { message: "Studio Cover Updated", type: 'success' } });
+      }
+    };
+    reader.readAsDataURL(file);
+    e.target.value = ''; // Reset
+    setEditingFolderId(null);
+  };
+
+  const triggerCoverEdit = (folderId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingFolderId(folderId);
+    setTimeout(() => fileInputRef.current?.click(), 50);
+  };
+
+  // Derived Library List
+  const filteredLibrary = React.useMemo(() => {
+    let result = state.actorLibrary;
+
+    // 1. Search Filter
+    if (librarySearch.trim()) {
+      const q = librarySearch.toLowerCase();
+      result = result.filter(a => a.name.toLowerCase().includes(q));
+    }
+
+    // 2. Folder Filter (NEW)
+    if (activeFolder) {
+      const folder = STUDIO_FOLDERS.find(f => f.id === activeFolder);
+      if (folder) {
+        if (folder.id === 'uncategorized') {
+          // Get all styles defined in other folders
+          const categorizedStyles = STUDIO_FOLDERS
+            .filter(f => f.id !== 'uncategorized')
+            .flatMap(f => f.styles);
+
+          result = result.filter(a => {
+            const s = a.profile?.style;
+            return !s || !categorizedStyles.includes(s);
+          });
+        } else {
+          result = result.filter(a => folder.styles.includes(a.profile?.style || ''));
+        }
+      }
+    }
+
+    // 3. Sort Logic
+    return [...result].sort((a, b) => { // ... existing logic
+      if (sortOption === 'name') {
+        return a.name.localeCompare(b.name);
+      } else if (sortOption === 'type') {
+        const typeA = a.profile?.style || '';
+        const typeB = b.profile?.style || '';
+        return typeA.localeCompare(typeB);
+      } else {
+        // Date (Default: Newest First)
+        // Heuristic: ID is timestamp-based "actor-123456789"
+        const timeA = parseInt(a.id.split('-')[1] || '0');
+        const timeB = parseInt(b.id.split('-')[1] || '0');
+        return timeB - timeA;
+      }
+    });
+  }, [state.actorLibrary, librarySearch, sortOption]);
 
   const runIsolationProcess = (): string | null => {
     if (!removeBg || !state.lastCastedImage || !imgRef.current || !previewCanvasRef.current) {
@@ -1316,20 +1421,124 @@ const CastingForge = () => {
         </div>
 
         <div className="flex-grow overflow-y-auto p-4 space-y-4 scrollbar-thin scrollbar-thumb-gray-800 scrollbar-track-transparent">
-          <div className="grid grid-cols-2 gap-4">
-            {state.actorLibrary
-              .filter((actor, index, self) =>
-                index === self.findIndex((t) => (
-                  t.url === actor.url
-                ))
-              )
-              .map(actor => (
-                <div
-                  key={actor.id}
-                  className="group relative aspect-square rounded-2xl border border-[#27272a] overflow-hidden transition-all hover:border-yellow-500/50 shadow-2xl"
+          {/* FOLDER NAVIGATION HEADER */}
+          {activeFolder ? (
+            <div className="flex items-center gap-3 mb-4">
+              <button
+                onClick={() => setActiveFolder(null)}
+                className="flex items-center gap-2 px-3 py-2 bg-white/5 hover:bg-white/10 rounded-lg border border-white/10 text-xs font-bold text-gray-300 hover:text-white transition-all uppercase tracking-wider"
+              >
+                <ArrowDownUp className="w-3 h-3 rotate-90" /> Studios
+              </button>
+              <div className="h-6 w-[1px] bg-white/10" />
+              <h3 className="text-xs font-black text-white uppercase tracking-widest text-yellow-500">
+                {STUDIO_FOLDERS.find(f => f.id === activeFolder)?.label}
+              </h3>
+            </div>
+          ) : null}
+
+          {/* SEARCH & SORT (Only show inside a folder or if search is active? Actually keep global search for now) */}
+          <div className="flex items-center gap-2 mb-4">
+            {/* Keep existing search UI */}
+            <div className="relative flex-1 group">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 group-focus-within:text-yellow-500 transition-colors" />
+              <input
+                type="text"
+                placeholder="Search actors..."
+                value={librarySearch}
+                onChange={(e) => setLibrarySearch(e.target.value)}
+                className="w-full bg-black/40 border border-[#27272a] rounded-lg pl-9 pr-3 py-2 text-xs text-white placeholder:text-gray-600 focus:border-yellow-500/50 focus:outline-none transition-all"
+              />
+            </div>
+            {activeFolder && (
+              <div className="relative">
+                <button
+                  onClick={() => setShowSortMenu(!showSortMenu)}
+                  className={`h-9 w-9 flex items-center justify-center rounded-lg border transition-all ${sortOption !== 'date' ? 'bg-yellow-500/10 border-yellow-500 text-yellow-500' : 'bg-black/40 border-[#27272a] text-gray-400 hover:text-white'}`}
                 >
-                  <img src={actor.url} className="w-full h-full object-contain group-hover:scale-110 transition-transform duration-700" />
-                  <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 transition-all duration-300 flex items-center justify-center p-4 backdrop-blur-md">
+                  {sortOption === 'date' && <Calendar className="w-4 h-4" />}
+                  {sortOption === 'name' && <Type className="w-4 h-4" />}
+                  {sortOption === 'type' && <Layers className="w-4 h-4" />}
+                </button>
+                {showSortMenu && (
+                  <div className="absolute right-0 top-full mt-2 w-32 bg-[#18181b] border border-[#27272a] rounded-xl shadow-2xl z-50 overflow-hidden animate-in fade-in zoom-in duration-200">
+                    <button onClick={() => { setSortOption('date'); setShowSortMenu(false); }} className="w-full text-left px-3 py-2 text-[10px] font-bold uppercase flex items-center gap-2 hover:bg-white/5 text-gray-400"><Calendar className="w-3 h-3" /> Date</button>
+                    <button onClick={() => { setSortOption('name'); setShowSortMenu(false); }} className="w-full text-left px-3 py-2 text-[10px] font-bold uppercase flex items-center gap-2 hover:bg-white/5 text-gray-400"><Type className="w-3 h-3" /> Name</button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* MAIN CONTENT AREA */}
+          {!activeFolder && !librarySearch ? (
+            // ROOT VIEW: HERO STUDIO CARDS
+            <div className="flex flex-col gap-4">
+              <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleCoverUpload} />
+
+              {STUDIO_FOLDERS.map(folder => {
+                const count = state.actorLibrary.filter(a => {
+                  if (folder.id === 'uncategorized') {
+                    const allStyles = STUDIO_FOLDERS.filter(f => f.id !== 'uncategorized').flatMap(f => f.styles);
+                    return !a.profile?.style || !allStyles.includes(a.profile.style as string);
+                  }
+                  // @ts-ignore
+                  return folder.styles.includes(a.profile?.style || '');
+                }).length;
+
+                const activeImage = customCovers[folder.id] || folder.image;
+
+                return (
+                  <div key={folder.id} className="group relative h-48 w-full rounded-3xl overflow-hidden border border-white/10 shadow-2xl transition-all hover:scale-[1.02] hover:border-white/30 cursor-pointer" onClick={() => setActiveFolder(folder.id)}>
+                    {/* Background Image */}
+                    {activeImage ? (
+                      <img src={activeImage} className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
+                    ) : (
+                      <div className="absolute inset-0 bg-gradient-to-br from-gray-800 to-black flex items-center justify-center">
+                        <HelpCircle className="w-12 h-12 text-white/20" />
+                      </div>
+                    )}
+
+                    {/* Cinematic Overlay */}
+                    <div className="absolute inset-0 bg-gradient-to-r from-black/90 via-black/40 to-transparent flex flex-col justify-end px-6 pb-4 pt-6">
+                      <div>
+                        <h3 className="text-2xl font-black text-white italic tracking-tighter uppercase drop-shadow-md group-hover:text-yellow-500 transition-colors leading-none">
+                          {folder.label}
+                        </h3>
+                        <div className="flex items-center gap-3 mt-2">
+                          <p className="text-xs font-bold text-gray-300 border-l-2 border-yellow-500 pl-2">
+                            {folder.description}
+                          </p>
+                          <span className="bg-white/10 backdrop-blur text-gray-300 text-[10px] font-bold px-2 py-0.5 rounded-sm border border-white/10">
+                            {count} ACTORS
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Edit Hotspot (Corner Only) */}
+                    <div className="absolute top-0 right-0 p-4 opacity-0 hover:opacity-100 transition-opacity duration-300 z-50">
+                      <button
+                        onClick={(e) => triggerCoverEdit(folder.id, e)}
+                        className="w-auto h-8 px-3 rounded-full bg-black/80 border border-white/20 flex items-center gap-2 transition-all hover:bg-zinc-900 hover:border-yellow-500 shadow-xl group/btn"
+                        title="Change Cover Image"
+                      >
+                        <Edit2 className="w-3.5 h-3.5 text-white group-hover/btn:text-yellow-500 transition-colors" />
+                        <span className="text-[10px] font-bold text-white group-hover/btn:text-yellow-500 uppercase tracking-wider transition-colors">Edit</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            // FOLDER VIEW: GRID
+            <div className="grid grid-cols-2 gap-4 pb-20">
+              {filteredLibrary.map(actor => (
+                <div key={actor.id} className="group relative aspect-square rounded-xl overflow-hidden bg-black/40 border border-[#27272a] hover:border-yellow-500/50 transition-all shadow-lg hover:shadow-yellow-500/10">
+                  <img src={actor.url} className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-500" />
+                  {/* Overlay Actions */}
+                  <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 transition-all duration-300 flex items-center justify-center p-4 pb-8 backdrop-blur-md">
                     <div className="grid grid-cols-2 gap-2">
                       <button
                         onClick={() => {
@@ -1390,7 +1599,14 @@ const CastingForge = () => {
                   </div>
                 </div>
               ))}
-          </div>
+              {filteredLibrary.length === 0 && (
+                <div className="col-span-2 py-10 flex flex-col items-center justify-center text-gray-600 gap-2 border border-dashed border-gray-800 rounded-xl">
+                  <Folder className="w-8 h-8 opacity-20" />
+                  <p className="text-xs uppercase font-bold tracking-widest">Empty Studio</p>
+                </div>
+              )}
+            </div>
+          )}
 
           {state.actorLibrary.length === 0 && (
             <div className="flex flex-col items-center justify-center py-20 opacity-20 filter grayscale">
