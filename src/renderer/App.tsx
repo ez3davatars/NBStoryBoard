@@ -290,7 +290,8 @@ const App = () => {
                   wardrobe: "",
                   accessories: "",
                   style: "External Asset"
-                }
+                },
+                filename: entry.name
               });
             } catch (err) {
               console.warn("Failed to load actor file:", entry.name, err);
@@ -313,13 +314,34 @@ const App = () => {
           // To be safe, let's just dispatch ADD for each one? No, too many renders.
           // We will use SET_ACTOR_LIBRARY with a merge strategy.
 
-          const existingIds = new Set(state.actorLibrary.map((a: CastMember) => a.id));
-          const newOnes = externalActors.filter((a: CastMember) => !existingIds.has(a.id));
+          // MERGE STRATEGY:
+          // 1. New items from disk -> Add
+          // 2. Existing items matching disk -> Update filename (preserve name/tags)
 
-          if (newOnes.length > 0) {
-            const merged = [...state.actorLibrary, ...newOnes];
+          const libraryMap = new Map(state.actorLibrary.map((a: CastMember) => [a.id, a]));
+          let hasChanges = false;
+
+          externalActors.forEach(diskActor => {
+            const existing = libraryMap.get(diskActor.id);
+            if (existing) {
+              // Exists in memory. Check if we need to backfill filename
+              if (!existing.filename) {
+                libraryMap.set(diskActor.id, { ...existing, filename: diskActor.filename });
+                hasChanges = true;
+              }
+            } else {
+              // New from disk
+              libraryMap.set(diskActor.id, diskActor);
+              hasChanges = true;
+            }
+          });
+
+          if (hasChanges) {
+            const merged = Array.from(libraryMap.values());
+            // Sort by latest added (optional, but keep consistent)
+            // merged.sort(...) 
             dispatch({ type: 'SET_ACTOR_LIBRARY', payload: merged });
-            dispatch({ type: 'ADD_LOG', payload: { message: `Imported ${newOnes.length} actors from disk.`, type: 'success' } });
+            dispatch({ type: 'ADD_LOG', payload: { message: `Synced ${externalActors.length} actors from disk.`, type: 'success' } });
           }
         }
 

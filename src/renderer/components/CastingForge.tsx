@@ -81,10 +81,24 @@ const CastingForge = () => {
     if (!deleteTarget) return;
     if (deleteTarget.type === 'cast') {
       dispatch({ type: 'REMOVE_CAST', payload: deleteTarget.payload });
-      dispatch({ type: 'ADD_LOG', payload: { message: "Token removed from stage", type: 'info' } });
+      dispatch({ type: 'ADD_LOG', payload: { message: "Actor removed from Cast List", type: 'info' } });
     } else {
-      dispatch({ type: 'REMOVE_ACTOR_LIBRARY_BY_URL', payload: deleteTarget.payload });
-      dispatch({ type: 'ADD_LOG', payload: { message: "Actor removed from library", type: 'info' } });
+      // Library Deletion with Disk Persistence
+      const actorId = deleteTarget.payload;
+      const actor = state.actorLibrary.find(a => a.id === actorId);
+
+      if (actor && actor.filename && state.saveDirectoryHandle) {
+        try {
+          // We can't await here easily without making function async or using .then
+          // But Fire & Forget is acceptable for this user experience
+          state.saveDirectoryHandle.getDirectoryHandle('Actors').then(dir => {
+            dir.removeEntry(actor.filename!).catch(e => console.error("Disk delete failed", e));
+          });
+        } catch (e) { console.error("Disk handle logic error", e); }
+      }
+
+      dispatch({ type: 'REMOVE_ACTOR_LIBRARY', payload: actorId });
+      dispatch({ type: 'ADD_LOG', payload: { message: "Actor permanently removed from library", type: 'info' } });
     }
     setDeleteTarget(null);
   };
@@ -403,11 +417,13 @@ const CastingForge = () => {
     const freshlyIsolatedUrl = runIsolationProcess();
     const finalUrl = await prepareLibraryImage(freshlyIsolatedUrl || processedPreviewUrl || state.lastCastedImage);
 
+    let filename: string | undefined;
+
     if (state.saveDirectoryHandle) {
       try {
         const actorsDir = await state.saveDirectoryHandle.getDirectoryHandle('Actors', { create: true });
         const safeName = (state.lastCastedPrompt || 'NewActor').slice(0, 30).replace(/[^a-z0-9]/gi, '_');
-        const filename = `Actor-${state.actorLibrary.length + 1}-${safeName}.png`;
+        filename = `Actor-${state.actorLibrary.length + 1}-${safeName}.png`;
         const fileHandle = await actorsDir.getFileHandle(filename, { create: true });
         const writable = await fileHandle.createWritable();
         const res = await fetch(finalUrl);
@@ -431,6 +447,7 @@ const CastingForge = () => {
       url: finalUrl,
       tag: 'front',
       name: `Actor ${state.actorLibrary.length + 1}`,
+      filename: filename,
       profile: {
         identity: state.lastCastedPrompt || "Unknown Identity",
         wardrobe: "",
@@ -1345,7 +1362,7 @@ const CastingForge = () => {
                         <UserPlus className="w-5 h-5 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
                       </button>
                       <button
-                        onClick={() => setDeleteTarget({ type: 'library', payload: actor.url, name: actor.name })}
+                        onClick={() => setDeleteTarget({ type: 'library', payload: actor.id, name: actor.name })}
                         className="bg-[#27272a] hover:bg-red-600 w-12 h-12 rounded-xl border border-white/10 hover:border-red-400/50 shadow-xl transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
                         title="Remove from Library"
                       >
@@ -1362,6 +1379,11 @@ const CastingForge = () => {
                         type: 'UPDATE_ACTOR_LIBRARY',
                         payload: { id: actor.id, updates: { name: e.target.value } }
                       })}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.currentTarget.blur();
+                        }
+                      }}
                       onFocus={(e) => e.target.select()}
                       title="Click to Rename Actor"
                     />

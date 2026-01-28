@@ -47,6 +47,7 @@ export interface CastMember {
   url: string;
   tag: 'front' | 'side' | 'back' | '3/4' | 'detail';
   name: string;
+  filename?: string;
   profile?: WhitelistProfile;
 }
 
@@ -115,7 +116,7 @@ export type DirectorMarkerType =
   | 'Numeric Markers';
 
 export type DirectorAspectRatio = '16:9' | '21:9' | '3:2' | '4:3' | '9:16' | '1:1' | '4:5';
-export type DirectorResolution = 'Native 4K' | '2K QHD' | '1K';
+export type DirectorResolution = 'Native 4K' | '2K QHD' | '1K' | { width: number; height: number };
 export type DirectorQualityMode = 'Standard' | 'Raw Uncompressed' | '3D Render' | 'Stylized';
 export type DirectorSafety = 'Standard' | 'Strict';
 
@@ -529,6 +530,7 @@ export const reducer = (state: AppState, action: Action): AppState => {
     case 'REMOVE_TOKEN': {
       const nextTokens = state.tokens.filter(t => t.id !== action.payload);
       const nextSelection = state.selection === action.payload ? null : state.selection;
+      // SAFEGUARD: This action removes visual tokens only. DO NOT filter state.actorLibrary or state.cast here.
       return { ...state, tokens: nextTokens, selection: nextSelection };
     }
 

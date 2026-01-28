@@ -35,7 +35,11 @@ import {
   Redo,
   Copy,
   Eye,
-  EyeOff
+  EyeOff,
+  ChevronDown,
+  Film,
+  Grid,
+  Lock
 } from 'lucide-react';
 
 
@@ -47,9 +51,7 @@ import { useAppContext } from '../context/AppContext';
 import type {
   DirectorSettings,
   DirectorAspectRatio,
-  DirectorResolution,
-  DirectorQualityMode,
-  DirectorSafety,
+
   DirectorMergeStrategy,
   DirectorSpatialLayout,
   ReferenceSlot,
@@ -201,6 +203,46 @@ const PropertyField = ({ label, value, onChange, icon: Icon, type = "text", plac
   </div>
 );
 
+const SidebarPanel = ({ id, title, icon: Icon, children, collapsed, onToggle, onDrop, isMaskMode, headerColor = "text-gray-500" }: any) => {
+  const isRegionActive = title === 'Region Edit' && isMaskMode;
+  const activeBg = isRegionActive ? 'bg-green-500 text-black hover:bg-green-400' : '';
+
+  // Icon gets the color, text remains neutral unless active mask mode
+  const iconStyle = isRegionActive ? 'text-black' : headerColor;
+  const titleStyle = isRegionActive ? 'text-black' : 'text-gray-400';
+  const chevronStyle = isRegionActive ? 'text-black' : 'text-gray-600';
+  const gripStyle = isRegionActive ? 'text-black/50' : headerColor;
+
+  return (
+    <div
+      draggable
+      onDragStart={(e) => { e.dataTransfer.setData('panelId', id); }}
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={(e) => { e.preventDefault(); onDrop && onDrop(id); }}
+      className={`border border-[#27272a] rounded-xl overflow-hidden transition-all duration-300 ${collapsed ? 'h-[42px]' : 'bg-[#09090b]/80 backdrop-blur-md'}`}
+    >
+      <div
+        onClick={() => onToggle && onToggle(id)}
+        className={`flex items-center justify-between p-3 cursor-pointer select-none hover:bg-white/5 transition-colors ${activeBg}`}
+      >
+        <div className="flex items-center gap-2">
+          <GripVertical className={`w-3 h-3 ${gripStyle} opacity-50`} />
+          {Icon && <Icon className={`w-3.5 h-3.5 ${iconStyle}`} />}
+          <span className={`text-[10px] font-bold uppercase tracking-widest ${titleStyle}`}>{title}</span>
+        </div>
+        <div className={`${collapsed ? '-rotate-90' : ''} transition-transform duration-300`}>
+          <ChevronDown className={`w-3 h-3 ${chevronStyle}`} />
+        </div>
+      </div>
+      {!collapsed && (
+        <div className="p-3 border-t border-[#27272a]">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // B. Scene Blocking Component
 const SceneCanvas = () => {
   const { state, dispatch } = useAppContext();
@@ -248,11 +290,7 @@ const SceneCanvas = () => {
 
       setViewportBox((prev) => {
         const changed =
-          Math.abs(prev.x - x) > 0.5 ||
-          Math.abs(prev.y - y) > 0.5 ||
-          Math.abs(prev.w - w) > 0.5 ||
-          Math.abs(prev.h - h) > 0.5;
-
+          prev.x !== x || prev.y !== y || prev.w !== w || prev.h !== h;
         return changed ? { x, y, w, h } : prev;
       });
     };
@@ -266,7 +304,7 @@ const SceneCanvas = () => {
   // Keyboard Shortcuts (Global)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore if typing in an input/textarea
+      // (Keep existing keyboard logic...)
       if (
         (e.target as HTMLElement).tagName === 'INPUT' ||
         (e.target as HTMLElement).tagName === 'TEXTAREA' ||
@@ -274,41 +312,44 @@ const SceneCanvas = () => {
       ) {
         return;
       }
-
-      // Undo: Ctrl+Z
-      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
-        e.preventDefault();
-        dispatch({ type: 'UNDO' });
-        return;
-      }
-
-      // Redo: Ctrl+Y or Ctrl+Shift+Z
-      if (
-        ((e.ctrlKey || e.metaKey) && e.key === 'y') ||
-        ((e.ctrlKey || e.metaKey) && e.key === 'z' && e.shiftKey)
-      ) {
-        e.preventDefault();
-        dispatch({ type: 'REDO' });
-        return;
-      }
-
-      // Delete: Delete or Backspace
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) { e.preventDefault(); dispatch({ type: 'UNDO' }); return; }
+      if (((e.ctrlKey || e.metaKey) && e.key === 'y') || ((e.ctrlKey || e.metaKey) && e.key === 'z' && e.shiftKey)) { e.preventDefault(); dispatch({ type: 'REDO' }); return; }
       if (e.key === 'Delete' || e.key === 'Backspace') {
         if (state.selection) {
           e.preventDefault();
-          if (state.selectionType === 'token') {
-            dispatch({ type: 'REMOVE_TOKEN', payload: state.selection });
-          } else {
-            // Annotations (notes, etc)
-            dispatch({ type: 'REMOVE_ANNOTATION', payload: state.selection });
-          }
+          if (state.selectionType === 'token') dispatch({ type: 'REMOVE_TOKEN', payload: state.selection });
+          else dispatch({ type: 'REMOVE_ANNOTATION', payload: state.selection });
         }
       }
     };
-
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [state.selection, state.selectionType, dispatch]);
+
+  // --- SIDEBAR STATE ---
+  const [panelOrder, setPanelOrder] = useState<string[]>(['region_edit', 'layers', 'specs', 'anchor', 'v3_terminal']);
+  const [collapsedPanels, setCollapsedPanels] = useState<Record<string, boolean>>({});
+  const [draggedPanelId, setDraggedPanelId] = useState<string | null>(null);
+
+
+
+  const togglePanel = (id: string) => {
+    setCollapsedPanels(prev => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const handlePanelDrop = (targetId: string) => {
+    if (!draggedPanelId || draggedPanelId === targetId) return;
+    const newOrder = [...panelOrder];
+    const fromIndex = newOrder.indexOf(draggedPanelId);
+    const toIndex = newOrder.indexOf(targetId);
+    if (fromIndex === -1 || toIndex === -1) return;
+    newOrder.splice(fromIndex, 1);
+    newOrder.splice(toIndex, 0, draggedPanelId);
+    setPanelOrder(newOrder);
+    setDraggedPanelId(null);
+  };
+
+
   // Region Edit Job Runner (Cancel/Status)
   const [isRegionEditRunning, setIsRegionEditRunning] = useState(false);
   const cancelRegionEditRef = useRef(false);
@@ -798,79 +839,11 @@ const SceneCanvas = () => {
   // Recompile prompt when stage or settings change
 
 
-  // --- V3-STYLE ANCHOR SCENE INTELLIGENCE (integrated) ---
-  const [anchorStatus, setAnchorStatus] = useState<'idle' | 'analyzing' | 'ready' | 'error'>('idle');
-  const [anchorMessage, setAnchorMessage] = useState<string>(() => state.backgroundUrl ? '> Anchor loaded. Ready to analyze.' : '> No anchor scene loaded.');
+
   const anchorFileInputRef = useRef<HTMLInputElement>(null);
-  const lastBgRef = useRef<string | null>(state.backgroundUrl);
 
-  const safeParseJson = (raw: string): any | null => {
-    try {
-      const cleaned = raw.replace(/```json/g, '').replace(/```/g, '').trim();
-      return JSON.parse(cleaned);
-    } catch {
-      return null;
-    }
-  };
 
-  useEffect(() => {
-    if (lastBgRef.current === state.backgroundUrl) return;
-    setAnchorStatus('idle');
-    setAnchorMessage(state.backgroundUrl ? '> Anchor loaded. Ready to analyze.' : '> No anchor scene loaded.');
-    // If the env/cam/light were auto-injected, clear them on anchor change (V3 behavior).
-    if (state.director.envAuto) {
-      setDirector({ environment: '', lighting: '', camera: '', envAuto: false });
-    }
-    lastBgRef.current = state.backgroundUrl;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.backgroundUrl]);
 
-  const analyzeAnchorDNA = async () => {
-    if (!state.backgroundUrl) {
-      setAnchorStatus('error');
-      setAnchorMessage('> No anchor scene loaded.');
-      return;
-    }
-    if (!state.apiKey) {
-      setAnchorStatus('error');
-      setAnchorMessage('> Auth Error: Check Settings.');
-      return;
-    }
-
-    setAnchorStatus('analyzing');
-    setAnchorMessage('> Analyzing Anchor Scene DNA...');
-
-    try {
-      const raw = await GeminiService.analyzeImage(
-        "Analyze this image for a film director. Return a JSON object with 3 keys: 'environment' (string, concise setting/vibe), 'lighting' (string, e.g. 'Golden Hour', 'Neon', 'Dark/Moody'), and 'camera' (string, e.g. 'Wide Angle', 'Close Up', 'Drone'). Only return the JSON.",
-        state.apiKey,
-        state.model,
-        state.backgroundUrl
-      );
-
-      const parsed = safeParseJson(raw);
-      if (!parsed) throw new Error('Non-JSON response');
-
-      const dna = {
-        environment: String(parsed.environment || '').trim(),
-        lighting: String(parsed.lighting || '').trim(),
-        camera: String(parsed.camera || '').trim(),
-      };
-
-      setDirector({
-        environment: dna.environment,
-        lighting: dna.lighting,
-        camera: dna.camera,
-        envAuto: true
-      });
-
-      setAnchorStatus('ready');
-      setAnchorMessage('> DNA extracted.');
-    } catch (e: any) {
-      setAnchorStatus('error');
-      setAnchorMessage(`> Analysis unavailable (${e.message || 'error'})`);
-    }
-  };
 
   const handleGenerateBackground = async () => {
     if (!state.apiKey) {
@@ -1152,6 +1125,7 @@ const SceneCanvas = () => {
     if (!state.selection) return;
     if (state.selectionType === 'token') {
       dispatch({ type: 'REMOVE_TOKEN', payload: state.selection });
+      dispatch({ type: 'ADD_LOG', payload: { message: "Token removed from Scene (Library Safe)", type: 'info' } });
     } else if (state.selectionType === 'annotation') {
       dispatch({ type: 'REMOVE_ANNOTATION', payload: state.selection });
     }
@@ -1406,14 +1380,7 @@ const SceneCanvas = () => {
     setNewShotName('');
   };
 
-  const saveActiveShot = () => {
-    if (!activeShotId) {
-      dispatch({ type: 'ADD_LOG', payload: { message: 'No active shot selected.', type: 'error' } } as any);
-      return;
-    }
-    dispatch({ type: 'SAVE_ACTIVE_SHOT' } as any);
-    dispatch({ type: 'ADD_LOG', payload: { message: 'Shot snapshot saved.', type: 'success' } } as any);
-  };
+
 
   const setActiveShot = (id: string) => {
     dispatch({ type: 'SET_ACTIVE_SHOT', payload: { id } } as any);
@@ -2593,806 +2560,912 @@ const SceneCanvas = () => {
       </div >
       {/* 3. RIGHT SIDEBAR: GLOBAL SPECS, ANCHOR, & REFERENCES */}
       < div className="w-[400px] flex flex-col gap-4 overflow-y-auto pl-2 custom-scrollbar" >
-
-        {/* Stage 00: Shots (Conditional) */}
-        {
-          state.isStoryboardEnabled && (
-            <div className="bg-[#09090b] border border-[#27272a] rounded-xl p-4">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  <Clapperboard className="w-4 h-4 text-yellow-500" />
-                  <h3 className="text-xs font-bold text-gray-500 uppercase">Shots</h3>
-                </div>
-                <span className="text-[10px] text-gray-600 font-mono">
-                  {shots?.length ?? 0}
-                </span>
-              </div>
-
-              <div className="flex gap-2 mb-3">
-                <input
-                  value={newShotName}
-                  onChange={(e) => setNewShotName(e.target.value)}
-                  placeholder="New shot name (optional)"
-                  className="flex-1 bg-[#18181b] border border-[#27272a] rounded px-2 py-1 text-[10px] text-gray-300 outline-none focus:border-yellow-500"
-                />
-                <button
-                  onClick={addShotFromStage}
-                  className="bg-yellow-500 hover:bg-yellow-400 text-black px-3 py-2 rounded text-[10px] font-bold uppercase tracking-wider"
-                  title="Create a new shot from the current stage"
-                >
-                  Add
-                </button>
-              </div>
-
-              <div className="flex gap-2 mb-3">
-                <button
-                  onClick={saveActiveShot}
-                  disabled={!activeShotId}
-                  className="flex-1 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] text-gray-300 hover:text-white text-[10px] py-2 rounded font-bold uppercase tracking-wider disabled:opacity-50"
-                  title="Save current stage into active shot"
-                >
-                  Save Shot
-                </button>
-                <button
-                  onClick={() => captureAndSetShotFrame('start')}
-                  disabled={!activeShotId}
-                  className="flex-1 bg-blue-600 hover:bg-blue-500 text-white text-[10px] py-2 rounded font-bold uppercase tracking-wider disabled:opacity-50"
-                  title="Capture stage as Start Frame for active shot"
-                >
-                  Start
-                </button>
-                <button
-                  onClick={() => captureAndSetShotFrame('end')}
-                  disabled={!activeShotId}
-                  className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] py-2 rounded font-bold uppercase tracking-wider disabled:opacity-50"
-                  title="Capture stage as End Frame for active shot"
-                >
-                  End
-                </button>
-              </div>
-
-              {activeShotId && (
-                <div className="mb-3 space-y-2">
-                  <label className="text-[9px] uppercase font-bold text-gray-500 block">Active Shot Name</label>
-                  <div className="flex gap-2">
-                    <input
-                      value={activeShotNameDraft}
-                      onChange={(e) => setActiveShotNameDraft(e.target.value)}
-                      onBlur={renameActiveShot}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          renameActiveShot();
-                        }
-                      }}
-                      className="flex-1 bg-[#18181b] border border-[#27272a] rounded px-2 py-1 text-[10px] text-yellow-400 outline-none focus:border-yellow-500"
-                    />
-                    <button
-                      onClick={renameActiveShot}
-                      className="px-3 py-2 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] rounded text-[10px] font-bold uppercase text-gray-300"
-                      title="Rename active shot"
-                    >
-                      Save
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              <div className="space-y-2 max-h-48 overflow-y-auto custom-scrollbar pr-1">
-                {(shots ?? []).map((s: any) => {
-                  const active = s.id === activeShotId;
-                  return (
-                    <div
-                      key={s.id}
-                      className={`flex items-center gap-2 p-2 rounded border transition-colors ${active ? 'border-yellow-500 bg-yellow-500/5' : 'border-[#27272a] bg-[#0b0b0d] hover:bg-[#18181b]'
-                        }`}
-                    >
-                      <button
-                        onClick={() => setActiveShot(s.id)}
-                        className="flex-1 text-left"
-                        title="Load this shot into the stage"
-                      >
-                        <div className="text-[10px] font-bold text-gray-200 truncate">{s.name}</div>
-                        <div className="text-[9px] text-gray-600 font-mono">
-                          {s.startFrameUrl ? 'S' : '-'} / {s.endFrameUrl ? 'E' : '-'}
-                        </div>
-                      </button>
-
-                      <button
-                        onClick={() => duplicateShot(s.id)}
-                        className="p-1.5 bg-black/30 hover:bg-white/5 rounded text-gray-400 hover:text-white transition-colors"
-                        title="Duplicate shot"
-                      >
-                        <Link2 className="w-3.5 h-3.5" />
-                      </button>
-
-                      <button
-                        onClick={() => removeShot(s.id)}
-                        className="p-1.5 bg-black/30 hover:bg-red-500/20 rounded text-gray-400 hover:text-red-400 transition-colors"
-                        title="Delete shot"
-                      >
-                        <TrashIcon className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  );
-                })}
-
-                {(shots ?? []).length === 0 && (
-                  <div className="text-[10px] text-gray-600 italic py-2 border border-dashed border-gray-800 rounded text-center">
-                    No shots yet. Add one from the current stage.
-                  </div>
-                )}
-              </div>
-            </div>
-          )
-        }
-
-
-        {/* Stage 00.5: Region Edit (NanoBanana-style) */}
-        <div className="bg-[#09090b] border border-[#27272a] rounded-xl p-4">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-blue-400" />
-              <h3 className="text-xs font-bold text-gray-500 uppercase">Region Edit</h3>
-            </div>
-
-            <button
-              onClick={() => dispatch({ type: 'SET_REGION_EDIT', payload: { isMaskMode: !(state as any).regionEdit?.isMaskMode } } as any)}
-              className={`px-3 py-1.5 rounded text-[10px] font-bold uppercase tracking-wider border transition-colors ${(state as any).regionEdit?.isMaskMode
-                ? 'bg-blue-600 border-blue-400 text-white'
-                : 'bg-[#18181b] border-[#27272a] text-yellow-500 hover:text-white'
-                }`}
-              title="Toggle mask paint mode"
-            >
-              {(state as any).regionEdit?.isMaskMode ? 'Mask ON' : 'Mask OFF'}
-            </button>
-          </div>
-
-          <div className="flex items-center gap-2 mb-3">
-            <button
-              onClick={() => dispatch({ type: 'SET_REGION_EDIT', payload: { mode: 'paint' } } as any)}
-              className={`flex-1 py-2 rounded text-[10px] font-bold uppercase border ${(state as any).regionEdit?.mode === 'paint'
-                ? 'bg-blue-600 text-white border-blue-600'
-                : 'bg-[#18181b] text-accent border-[#27272a] hover:bg-[#27272a]'
-                }`}
-            >
-              Paint
-            </button>
-            <button
-              onClick={() => dispatch({ type: 'SET_REGION_EDIT', payload: { mode: 'erase' } } as any)}
-              className={`flex-1 py-2 rounded text-[10px] font-bold uppercase border ${(state as any).regionEdit?.mode === 'erase'
-                ? 'bg-blue-600 text-white border-blue-600'
-                : 'bg-[#18181b] text-accent border-[#27272a] hover:bg-[#27272a]'
-                }`}
-            >
-              Erase
-            </button>
-          </div>
-
-          {/* Layer list */}
-          <div className="space-y-2 mb-3">
-            {((state as any).regionEdit?.layers || []).map((l: any) => {
-              const active = l.id === (state as any).regionEdit?.activeLayerId;
+        {/* DYNAMIC SIDEBAR PANELS */}
+        <div className="flex flex-col gap-3">
+          {panelOrder.map(panelId => {
+            if (panelId === 'shots') {
+              // --- SHOTS PANEL ---
               return (
-                <div
-                  key={l.id}
-                  className={`flex items-center gap-2 p-2 rounded border ${active ? 'border-blue-500 bg-blue-500/5' : 'border-[#27272a] bg-[#0b0b0d]'
-                    }`}
+                <SidebarPanel
+                  key="shots"
+                  id="shots"
+                  title="Shot List"
+                  icon={Film}
+                  headerColor="text-blue-500"
+                  collapsed={collapsedPanels['shots']}
+                  onToggle={togglePanel}
+                  onDrop={handlePanelDrop}
                 >
-                  <button
-                    className="flex-1 text-left"
-                    onClick={() => dispatch({ type: 'SET_REGION_ACTIVE_LAYER', payload: { id: l.id } } as any)}
-                    title="Select layer to paint"
-                  >
-                    <div className="text-[10px] font-bold text-gray-200">{l.name}</div>
-                    <div className="text-[9px] text-gray-600 font-mono">
-                      {l.maskDataUrl ? 'MASK' : '--'} {l.prompt?.trim() ? ' / TXT' : ''}
-                    </div>
-                  </button>
-
-                  <button
-                    onClick={() =>
-                      dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: l.id, updates: { enabled: !l.enabled } } } as any)
-                    }
-                    className={`px-2 py-1 rounded text-[9px] font-bold uppercase border ${l.enabled ? 'bg-emerald-500/20 border-emerald-500/30 text-emerald-300' : 'bg-[#18181b] border-[#27272a] text-gray-400'
-                      }`}
-                    title="Include layer in Apply Queue"
-                  >
-                    {l.enabled ? 'ON' : 'OFF'}
-                  </button>
-
-                  <button
-                    onClick={() => dispatch({ type: 'CLEAR_REGION_LAYER_MASK', payload: { id: l.id } } as any)}
-                    className="p-1.5 bg-black/30 hover:bg-red-500/20 rounded text-gray-400 hover:text-red-400 transition-colors"
-                    title="Clear this mask"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Brush controls */}
-          <div className="space-y-3 mb-3">
-            <div className="flex items-center justify-between text-[10px] text-gray-500 uppercase font-bold">
-              <span>Brush Size</span>
-              <span className="text-blue-400 font-mono">{(state as any).regionEdit?.brushSize ?? 40}px</span>
-            </div>
-            <input
-              type="range"
-              min={5}
-              max={200}
-              value={(state as any).regionEdit?.brushSize ?? 40}
-              onChange={(e) => dispatch({ type: 'SET_REGION_EDIT', payload: { brushSize: parseInt(e.target.value) } } as any)}
-              className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
-            />
-
-            <div className="flex items-center justify-between text-[10px] text-gray-500 uppercase font-bold">
-              <span>Edge Softness</span>
-              <span className="text-blue-400 font-mono">{((state as any).regionEdit?.brushSoftness ?? 0.35).toFixed(2)}</span>
-            </div>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.05}
-              value={(state as any).regionEdit?.brushSoftness ?? 0.35}
-              onChange={(e) => dispatch({ type: 'SET_REGION_EDIT', payload: { brushSoftness: parseFloat(e.target.value) } } as any)}
-              className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
-            />
-          </div>
-
-
-          {/* Protection Mask (Face/Hair Lock) */}
-          <div className="space-y-2 mb-3">
-            <div className="flex items-center justify-between gap-2">
-              <label className="text-[10px] uppercase font-bold text-gray-500 flex items-center gap-2 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={protectEnabled}
-                  onChange={(e) => setProtectEnabled(e.target.checked)}
-                  className="w-4 h-4 accent-blue-500 rounded border-white/10 bg-black"
-                />
-                Protect Face/Hair
-              </label>
-
-              <button
-                onClick={generateFaceProtectionMask}
-                disabled={!state.apiKey || protectStatus === 'generating'}
-                className="px-3 py-1.5 rounded text-[9px] font-bold uppercase tracking-wider border transition-colors disabled:opacity-50 bg-[#18181b] border-[#27272a] text-yellow-500 hover:bg-[#27272a]"
-                title="Generate a face/hair protection mask (white = protected)"
-              >
-                {protectStatus === 'generating' ? 'Generating…' : protectMaskUrl ? 'Regen' : 'Generate'}
-              </button>
-            </div>
-
-            {protectMaskUrl && (
-              <div className="flex flex-col gap-2">
-                <div className="flex items-center gap-2">
-                  <div className="w-12 h-12 rounded border border-[#27272a] bg-black overflow-hidden relative group">
-                    <img src={protectMaskUrl} className="w-full h-full object-contain opacity-90" alt="Protection Mask" />
-                    {state.isProcessing && <div className="absolute inset-0 bg-black/50 flex items-center justify-center"><RotateCw className="w-4 h-4 text-white animate-spin" /></div>}
-                  </div>
-                  <div className="flex-1 space-y-1">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[9px] text-gray-500 font-bold uppercase">Shrink Mask</span>
-                      <span className="text-[9px] text-yellow-500 font-mono">{protectErosion}px</span>
-                    </div>
-                    <input
-                      type="range"
-                      min={0} max={20} step={1}
-                      value={protectErosion}
-                      onChange={(e) => setProtectErosion(parseInt(e.target.value))}
-                      className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-yellow-500"
-                      title="Erode mask to remove white halo"
-                    />
-                  </div>
-                  <button
-                    onClick={() => {
-                      setProtectMaskUrl(null);
-                      setRawProtectMaskUrl(null); // Clear raw too
-                      setProtectStatus('idle');
-                    }}
-                    className="self-start mt-2 px-2 py-1 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] rounded text-[8px] font-bold uppercase text-red-500"
-                    title="Clear protection mask"
-                  >
-                    Clear
-                  </button>
-                  <span className="text-[9px] text-gray-600 ml-auto self-start mt-2">{protectStatus.toUpperCase()}</span>
-                </div>
-              </div>
-            )}
-
-            <p className="text-[9px] text-gray-600 mt-2 leading-relaxed">
-              When enabled, protected (white) pixels are automatically removed from every edit mask before applying.
-            </p>
-          </div>
-
-          {/* Prompt */}
-          <div className="space-y-2 mb-3">
-            <label className="text-[10px] uppercase font-bold text-gray-500">Layer Instruction</label>
-            <textarea
-              value={activeLayer?.prompt || ''}
-              onChange={(e) =>
-                activeLayer &&
-                dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: activeLayer.id, updates: { prompt: e.target.value } } } as any)
-              }
-              className="w-full bg-[#18181b] border border-[#27272a] rounded p-2 text-[10px] text-gray-300 resize-none focus:border-blue-500 outline-none"
-              rows={3}
-              placeholder="e.g. Remove the IV line. Match lighting. No new objects."
-            />
-            <div className="grid grid-cols-3 gap-2">
-              {[
-                { label: 'Remove', text: 'Remove the object in the masked area. Clean seamless fill. Match surrounding texture and lighting.' },
-                { label: 'Replace', text: 'Replace the masked area with: (describe). Match perspective, lighting, and realism.' },
-                { label: 'Relight', text: 'Relight the masked area to match scene lighting. Preserve identity and realism.' },
-              ].map((p) => (
-                <button
-                  key={p.label}
-                  onClick={() =>
-                    activeLayer &&
-                    dispatch({
-                      type: 'UPDATE_REGION_LAYER',
-                      payload: { id: activeLayer.id, updates: { prompt: (activeLayer.prompt || '') ? `${activeLayer.prompt}\n${p.text}` : p.text } },
-                    } as any)
-                  }
-                  className="bg-[#18181b] border border-[#27272a] hover:bg-[#27272a] text-gray-300 text-[9px] py-2 rounded uppercase font-bold"
-                >
-                  {p.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="flex gap-2">
-            <button
-              onClick={clearActiveMask}
-              disabled={!activeLayer}
-              className="flex-1 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] text-gray-300 hover:text-white text-[10px] py-2 rounded font-bold uppercase tracking-wider disabled:opacity-50"
-            >
-              Clear Active
-            </button>
-            <button
-              onClick={() => dispatch({ type: 'CLEAR_ALL_REGION_MASKS' } as any)}
-              className="flex-1 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] text-gray-300 hover:text-white text-[10px] py-2 rounded font-bold uppercase tracking-wider"
-            >
-              Clear All
-            </button>
-          </div>
-
-          <div className="flex gap-2 mt-3">
-            <button
-              onClick={applyRegionEditQueue}
-              disabled={state.isProcessing || !state.apiKey || isRegionEditRunning}
-              className="flex-1 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-black text-[10px] uppercase tracking-[0.25em] py-3 rounded-xl shadow-lg shadow-blue-500/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              Apply Enabled Layers
-            </button>
-            <button
-              onClick={requestCancelRegionEdit}
-              disabled={!isRegionEditRunning}
-              className="px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest border border-red-500/30 bg-red-500/10 text-red-300 hover:bg-red-500/20 disabled:opacity-40 disabled:cursor-not-allowed"
-              title="Stops after current layer finishes"
-            >
-              Cancel
-            </button>
-          </div>
-
-          <p className="text-[9px] text-gray-600 mt-2 leading-relaxed">
-            Paint white to define the edit region. Apply runs each enabled layer sequentially.
-          </p>
-        </div>
-
-        {/* Stage 00.7: Stage Hierarchy (Layers) */}
-        <div className="bg-[#09090b] border border-[#27272a] rounded-xl p-4">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <Layers className="w-4 h-4 text-orange-400" />
-              <h3 className="text-xs font-bold text-gray-500 uppercase">Stage Layers</h3>
-            </div>
-            <span className="text-[10px] text-gray-600 font-mono">
-              {state.tokens.length + state.annotations.length} Items
-            </span>
-          </div>
-
-          <div className="space-y-1 max-h-48 overflow-y-auto custom-scrollbar pr-1 mb-2">
-            {[...state.tokens.map(t => ({ ...t, type: 'token' })), ...state.annotations.map(a => ({ ...a, type: 'annotation' }))]
-              .sort((a: any, b: any) => b.zIndex - a.zIndex)
-              .map((layer: any) => {
-                const isSelected = state.selection === layer.id;
-                const isDragging = draggedLayerId === layer.id;
-
-                return (
-                  <div
-                    key={layer.id}
-                    draggable
-                    onDragStart={(e) => {
-                      setDraggedLayerId(layer.id);
-                      e.dataTransfer.effectAllowed = 'move';
-                      // Create a ghost image if needed, but default is usually fine
-                    }}
-                    onDragOver={(e) => {
-                      e.preventDefault(); // Must allow drop
-                      e.dataTransfer.dropEffect = 'move';
-                    }}
-                    onDrop={(e) => {
-                      e.preventDefault();
-                      if (!draggedLayerId || draggedLayerId === layer.id) return;
-
-                      // Capture current state of full list sorted by Z
-                      const allLayers = [...state.tokens.map(t => ({ ...t, type: 'token' })), ...state.annotations.map(a => ({ ...a, type: 'annotation' }))]
-                        .sort((a: any, b: any) => b.zIndex - a.zIndex);
-
-                      const fromIndex = allLayers.findIndex(l => l.id === draggedLayerId);
-                      const toIndex = allLayers.findIndex(l => l.id === layer.id);
-
-                      if (fromIndex === -1 || toIndex === -1) return;
-
-                      // Reorder array
-                      const item = allLayers[fromIndex];
-                      allLayers.splice(fromIndex, 1);
-                      allLayers.splice(toIndex, 0, item);
-
-                      // Re-assign Z-indices based on new order (Top of list = High Z)
-                      // Max Z is list length
-                      const maxZ = allLayers.length;
-                      allLayers.forEach((l, idx) => {
-                        const newZ = maxZ - idx;
-                        if (l.zIndex !== newZ) {
-                          if (l.type === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: l.id, zIndex: newZ } });
-                          else dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: l.id, zIndex: newZ } });
-                        }
-                      });
-
-                      setDraggedLayerId(null);
-                    }}
-                    onDragEnd={() => setDraggedLayerId(null)}
-                    className={`flex items-center gap-2 p-1.5 rounded border transition-colors cursor-grab active:cursor-grabbing group ${isSelected ? 'bg-orange-500/10 border-orange-500/50' : 'bg-[#18181b] border-[#27272a] hover:bg-[#27272a]'} ${isDragging ? 'opacity-40 border-dashed border-orange-500' : ''}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      dispatch({ type: 'SELECT_ITEM', payload: { id: layer.id, type: layer.type } });
-                    }}
-                  >
+                  <div className="flex items-center gap-2 mb-2">
                     <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (layer.type === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: layer.id, visible: layer.visible === false } });
-                        else dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: layer.id, visible: layer.visible === false } });
-                      }}
-                      className="p-1 text-gray-500 hover:text-white rounded hover:bg-white/10 transition-colors mr-1"
-                      title={layer.visible === false ? "Show Layer" : "Hide Layer"}
+                      onClick={addShotFromStage}
+                      className="flex-1 bg-blue-600 hover:bg-blue-500 text-white text-[10px] py-2 rounded font-bold uppercase tracking-wider flex items-center justify-center gap-2"
                     >
-                      {layer.visible === false ? <EyeOff className="w-3 h-3 text-gray-600" /> : <Eye className="w-3 h-3" />}
+                      <Grid className="w-3 h-3" />
+                      New Shot
                     </button>
+                    <button
+                      onClick={() => captureAndSetShotFrame('start')}
+                      disabled={!activeShotId}
+                      className="flex-1 bg-blue-600 hover:bg-blue-500 text-white text-[10px] py-2 rounded font-bold uppercase tracking-wider disabled:opacity-50"
+                      title="Capture stage as Start Frame for active shot"
+                    >
+                      Start
+                    </button>
+                    <button
+                      onClick={() => captureAndSetShotFrame('end')}
+                      disabled={!activeShotId}
+                      className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] py-2 rounded font-bold uppercase tracking-wider disabled:opacity-50"
+                      title="Capture stage as End Frame for active shot"
+                    >
+                      End
+                    </button>
+                  </div>
 
-                    <div className="text-gray-600 group-hover:text-gray-400 cursor-grab active:cursor-grabbing">
-                      <GripVertical className="w-3 h-3" />
-                    </div>
-                    <div className={`p-1 rounded ${isSelected ? 'bg-orange-500 text-black' : 'bg-gray-800 text-gray-400'}`}>
-                      {layer.type === 'token' && <UserPlus className="w-3 h-3" />}
-                      {layer.type === 'annotation' && layer.type === 'note' && <StickyNote className="w-3 h-3" />}
-                      {layer.type === 'annotation' && layer.type === 'zone' && <BoxSelect className="w-3 h-3" />}
-                      {layer.type === 'annotation' && layer.type === 'arrow' && <MoveUpRight className="w-3 h-3" />}
-                    </div>
-                    <span className={`text-[9px] font-bold uppercase truncate flex-1 ${isSelected ? 'text-orange-400' : 'text-gray-400'}`}>
-                      {layer.tag || layer.text || layer.type}
-                    </span>
-                    <span className="text-[9px] font-mono text-gray-600 mr-2">Z:{layer.zIndex}</span>
-
-                    {isSelected && (
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (layer.type === 'token') dispatch({ type: 'REMOVE_TOKEN', payload: layer.id });
-                            else dispatch({ type: 'REMOVE_ANNOTATION', payload: layer.id });
+                  {activeShotId && (
+                    <div className="mb-3 space-y-2">
+                      <label className="text-[9px] uppercase font-bold text-gray-500 block">Active Shot Name</label>
+                      <div className="flex gap-2">
+                        <input
+                          value={activeShotNameDraft}
+                          onChange={(e) => setActiveShotNameDraft(e.target.value)}
+                          onBlur={renameActiveShot}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              renameActiveShot();
+                            }
                           }}
-                          className="p-1 hover:bg-red-500/20 text-gray-500 hover:text-red-400 rounded transition-colors"
+                          className="flex-1 bg-[#18181b] border border-[#27272a] rounded px-2 py-1 text-[10px] text-yellow-400 outline-none focus:border-yellow-500"
+                        />
+                        <button
+                          onClick={renameActiveShot}
+                          className="px-3 py-2 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] rounded text-[10px] font-bold uppercase text-gray-300"
+                          title="Rename active shot"
                         >
-                          <TrashIcon className="w-3 h-3" />
+                          Save
                         </button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="space-y-2 max-h-48 overflow-y-auto custom-scrollbar pr-1">
+                    {(shots ?? []).map((s: any) => {
+                      const active = s.id === activeShotId;
+                      return (
+                        <div
+                          key={s.id}
+                          className={`flex items-center gap-2 p-2 rounded border transition-colors ${active ? 'border-yellow-500 bg-yellow-500/5' : 'border-[#27272a] bg-[#0b0b0d] hover:bg-[#18181b]'
+                            }`}
+                        >
+                          <button
+                            onClick={() => setActiveShot(s.id)}
+                            className="flex-1 text-left"
+                            title="Load this shot into the stage"
+                          >
+                            <div className="text-[10px] font-bold text-gray-200 truncate">{s.name}</div>
+                            <div className="text-[9px] text-gray-600 font-mono">
+                              {s.startFrameUrl ? 'S' : '-'} / {s.endFrameUrl ? 'E' : '-'}
+                            </div>
+                          </button>
+
+                          <button
+                            onClick={() => duplicateShot(s.id)}
+                            className="p-1.5 bg-black/30 hover:bg-white/5 rounded text-gray-400 hover:text-white transition-colors"
+                            title="Duplicate shot"
+                          >
+                            <Link2 className="w-3.5 h-3.5" />
+                          </button>
+
+                          <button
+                            onClick={() => removeShot(s.id)}
+                            className="p-1.5 bg-black/30 hover:bg-red-500/20 rounded text-gray-400 hover:text-red-400 transition-colors"
+                            title="Delete shot"
+                          >
+                            <TrashIcon className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      );
+                    })}
+
+                    {(shots ?? []).length === 0 && (
+                      <div className="text-[10px] text-gray-600 italic py-2 border border-dashed border-gray-800 rounded text-center">
+                        No shots yet. Add one from the current stage.
                       </div>
                     )}
                   </div>
-                );
-              })}
-            {state.tokens.length === 0 && state.annotations.length === 0 && (
-              <div className="text-[10px] text-gray-600 italic text-center py-4 border border-dashed border-gray-800 rounded">
-                Stage is empty. Add cast or notes.
-              </div>
-            )}
-          </div>
+                </SidebarPanel>
+              );
+            }
 
-          <div className="grid grid-cols-4 gap-1 pt-2 border-t border-[#27272a]">
-            <button
-              disabled={!state.selection}
-              onClick={() => {
-                if (!state.selection) return;
-                const all = [...state.tokens, ...state.annotations];
-                const maxZ = Math.max(...all.map(i => i.zIndex));
-                const type = state.selectionType;
-                if (type === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: state.selection, zIndex: maxZ + 1 } });
-                else dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: state.selection, zIndex: maxZ + 1 } });
-              }}
-              className="bg-[#18181b] hover:bg-orange-500/20 text-gray-400 hover:text-orange-400 border border-[#27272a] rounded p-1.5 flex items-center justify-center disabled:opacity-30"
-              title="Bring to Front"
-            >
-              <ArrowUpToLine className="w-3.5 h-3.5" />
-            </button>
-            <button
-              disabled={!state.selection}
-              onClick={() => {
-                if (!state.selection) return;
-                const item = [...state.tokens, ...state.annotations].find(i => i.id === state.selection);
-                if (!item) return;
-                const type = state.selectionType;
-                if (type === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: state.selection, zIndex: item.zIndex + 1 } });
-                else dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: state.selection, zIndex: item.zIndex + 1 } });
-              }}
-              className="bg-[#18181b] hover:bg-orange-500/20 text-gray-400 hover:text-orange-400 border border-[#27272a] rounded p-1.5 flex items-center justify-center disabled:opacity-30"
-              title="Bring Forward"
-            >
-              <ArrowUp className="w-3.5 h-3.5" />
-            </button>
-            <button
-              disabled={!state.selection}
-              onClick={() => {
-                if (!state.selection) return;
-                const item = [...state.tokens, ...state.annotations].find(i => i.id === state.selection);
-                if (!item) return;
-                const type = state.selectionType;
-                if (type === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: state.selection, zIndex: item.zIndex - 1 } });
-                else dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: state.selection, zIndex: item.zIndex - 1 } });
-              }}
-              className="bg-[#18181b] hover:bg-orange-500/20 text-gray-400 hover:text-orange-400 border border-[#27272a] rounded p-1.5 flex items-center justify-center disabled:opacity-30"
-              title="Send Backward"
-            >
-              <ArrowDown className="w-3.5 h-3.5" />
-            </button>
-            <button
-              disabled={!state.selection}
-              onClick={() => {
-                if (!state.selection) return;
-                const all = [...state.tokens, ...state.annotations];
-                const minZ = Math.min(...all.map(i => i.zIndex));
-                const type = state.selectionType;
-                if (type === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: state.selection, zIndex: minZ - 1 } });
-                else dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: state.selection, zIndex: minZ - 1 } });
-              }}
-              className="bg-[#18181b] hover:bg-orange-500/20 text-gray-400 hover:text-orange-400 border border-[#27272a] rounded p-1.5 flex items-center justify-center disabled:opacity-30"
-              title="Send to Back"
-            >
-              <ArrowDownToLine className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-
-        {/* Stage 01: Canvas Specs */}
-        <div className="bg-[#09090b] border border-[#27272a] rounded-xl p-4">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <SettingsIcon className="w-4 h-4 text-gray-500" />
-              <h3 className="text-xs font-bold text-gray-500 uppercase">Canvas Specs</h3>
-            </div>
-            <div className="flex items-center gap-2 text-[10px] text-gray-600">
-              <span className="px-2 py-0.5 rounded bg-black/40 border border-[#27272a]">AR: {state.director.aspectRatio}</span>
-              <span className="px-2 py-0.5 rounded bg-black/40 border border-[#27272a]">RES: {state.director.resolution}</span>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <Dropdown
-              label="Aspect Ratio"
-              value={state.director.aspectRatio}
-              options={['16:9', '21:9', '3:2', '4:3', '9:16', '1:1', '4:5']}
-              onChange={(v: any) => setDirector({ aspectRatio: v as DirectorAspectRatio })}
-            />
-            <Dropdown
-              label="Resolution"
-              value={state.director.resolution}
-              options={['Native 4K', '2K QHD', '1K']}
-              onChange={(v: any) => setDirector({ resolution: v as DirectorResolution })}
-            />
-            <Dropdown
-              label="Quality Mode"
-              value={state.director.qualityMode}
-              options={['Standard', 'Raw Uncompressed', '3D Render', 'Stylized']}
-              onChange={(v: any) => setDirector({ qualityMode: v as DirectorQualityMode })}
-            />
-            <Dropdown
-              label="Safety"
-              value={state.director.safety}
-              options={['Standard', 'Strict']}
-              onChange={(v: any) => setDirector({ safety: v as DirectorSafety })}
-            />
-          </div>
-        </div>
-
-        {/* Stage 01.5: Anchor Scene & Intelligence */}
-        <div className="bg-[#09090b] border border-[#27272a] rounded-xl p-4">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <ImageIcon className="w-4 h-4 text-gray-500" />
-              <h3 className="text-xs font-bold text-gray-500 uppercase">Anchor Scene</h3>
-            </div>
-            <span className={`text-[10px] font-mono ${anchorStatus === 'ready' ? 'text-green-500' : anchorStatus === 'analyzing' ? 'text-yellow-500' : anchorStatus === 'error' ? 'text-red-500' : 'text-gray-600'}`}>
-              {anchorStatus.toUpperCase()}
-            </span>
-          </div>
-
-          <div className="flex gap-3 mb-3">
-            <div className="w-[100px] aspect-video bg-black rounded-lg border border-[#27272a] overflow-hidden relative group">
-              {state.backgroundUrl ? (
-                <img src={state.backgroundUrl} className="w-full h-full object-cover opacity-90" alt="Anchor" />
-              ) : (
-                <div className="w-full h-full flex items-center justify-center text-gray-700">
-                  <ImageIcon className="w-6 h-6 opacity-50" />
-                </div>
-              )}
-              <button
-                className="absolute inset-0 flex flex-col items-center justify-center text-[9px] font-bold text-gray-200 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity uppercase tracking-wider"
-                onClick={() => anchorFileInputRef.current?.click()}
-              >
-                <UploadIcon className="w-4 h-4 mb-1" />
-                Upload
-              </button>
-              <input
-                ref={anchorFileInputRef}
-                type="file"
-                className="hidden"
-                accept="image/*"
-                onChange={async (e) => {
-                  const file = e.target.files?.[0];
-                  if (file) {
-                    const url = await fileToDataUrl(file);
-                    dispatch({ type: 'SET_BG', payload: url });
+            if (panelId === 'region_edit') {
+              // --- REGION EDIT PANEL ---
+              return (
+                <SidebarPanel
+                  key="region_edit"
+                  id="region_edit"
+                  title="Region Edit"
+                  icon={Sparkles}
+                  headerColor="text-green-500"
+                  collapsed={collapsedPanels['region_edit']}
+                  onToggle={togglePanel}
+                  onDrop={handlePanelDrop}
+                  isMaskMode={(state as any).regionEdit?.isMaskMode}
+                  rightElement={
+                    <button
+                      onClick={() => dispatch({ type: 'SET_REGION_EDIT', payload: { isMaskMode: !(state as any).regionEdit?.isMaskMode } } as any)}
+                      className={`px-3 py-1 rounded text-[9px] font-bold uppercase tracking-wider border transition-all duration-300 ${(state as any).regionEdit?.isMaskMode
+                        ? 'bg-green-500 border-green-400 text-black shadow-[0_0_15px_rgba(34,197,94,0.6)]'
+                        : 'bg-[#18181b] border-[#27272a] text-gray-500 hover:text-white hover:border-gray-600'
+                        }`}
+                      title="Toggle mask paint mode"
+                    >
+                      {(state as any).regionEdit?.isMaskMode ? 'Mask ON' : 'Mask OFF'}
+                    </button>
                   }
-                  e.currentTarget.value = '';
-                }}
-              />
-            </div>
-
-            <div className="flex-1 flex flex-col gap-2">
-              <div className={`flex-1 bg-black/40 border border-[#27272a] rounded p-2 font-mono text-[10px] leading-tight ${anchorStatus === 'error' ? 'text-red-400' : 'text-green-400'}`}>
-                {anchorMessage}
-              </div>
-              <button
-                onClick={analyzeAnchorDNA}
-                disabled={!state.backgroundUrl || !state.apiKey || anchorStatus === 'analyzing'}
-                className="w-full bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] text-gray-300 hover:text-white text-[9px] py-1.5 rounded font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
-              >
-                {anchorStatus === 'analyzing' ? <RefreshCcw className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
-                Extract DNA
-              </button>
-            </div>
-          </div>
-
-          {/* Generator (Keep existing functionality, just moved) */}
-          <div className="pt-3 border-t border-[#27272a]">
-            <div className="flex gap-2">
-              <textarea
-                className="flex-1 bg-[#18181b] border border-[#27272a] rounded px-2 py-1 text-[10px] text-gray-300 resize-none focus:border-blue-500 outline-none"
-                placeholder="Or generate new anchor scene..."
-                rows={1}
-                value={bgPrompt}
-                onChange={(e) => setBgPrompt(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    generateBg();
-                  }
-                }}
-              />
-              <button
-                onClick={generateBg}
-                disabled={state.isProcessing || !bgPrompt.trim()}
-                className="bg-blue-600 hover:bg-blue-500 text-white p-2 rounded flex items-center justify-center disabled:opacity-50 disabled:bg-gray-800"
-                title="Generate Background"
-              >
-                {state.isProcessing ? <RefreshCcw className="w-3.5 h-3.5 animate-spin" /> : <MaximizeIcon className="w-3.5 h-3.5" />}
-              </button>
-            </div>
-          </div>
-          {/* Merge Strategy (New) */}
-          <div className="mt-3 pt-3 border-t border-[#27272a] mb-3">
-            <Dropdown
-              label="Merge Strategy"
-              value={state.director.mergeStrategy}
-              options={['Character Identity', 'Style Transfer', 'Composition Reference', 'Photo Merge']}
-              onChange={(v: any) => setDirector({ mergeStrategy: v as DirectorMergeStrategy })}
-            />
-          </div>
-
-          {/* RESTORED: Reference Replacement Logic & Negative Prompt */}
-          <div className="pt-4 border-t border-[#27272a] space-y-4">
-
-            {/* Global Replace Toggle */}
-            <div className="flex items-center justify-between">
-              <label className="text-[10px] uppercase font-bold text-gray-500 flex items-center gap-2">
-                <div className={`w-3 h-3 rounded border ${state.director.replaceAnchorSubjects ? 'bg-yellow-500 border-yellow-500' : 'border-gray-600'} flex items-center justify-center cursor-pointer transition-colors`} onClick={() => setDirector({ replaceAnchorSubjects: !state.director.replaceAnchorSubjects })}>
-                  {state.director.replaceAnchorSubjects && <div className="w-1.5 h-1.5 bg-black rounded-[1px]" />}
-                </div>
-                Replace Anchor Subjects
-              </label>
-              {state.director.replaceAnchorSubjects && (
-                <button
-                  onClick={() => setDirector({ globalReplaceTarget: '' })}
-                  className="px-2 py-0.5 bg-gray-800 hover:bg-gray-700 rounded text-[9px] text-gray-400 uppercase font-bold"
                 >
-                  Wipe
-                </button>
-              )}
-            </div>
+                  <div className="flex items-center gap-2 mb-3">
+                    <button
+                      onClick={() => dispatch({ type: 'SET_REGION_EDIT', payload: { mode: 'paint' } } as any)}
+                      className={`flex-1 py-2 rounded text-[10px] font-bold uppercase border ${(state as any).regionEdit?.mode === 'paint'
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-[#18181b] text-accent border-[#27272a] hover:bg-[#27272a]'
+                        }`}
+                    >
+                      Paint
+                    </button>
+                    <button
+                      onClick={() => dispatch({ type: 'SET_REGION_EDIT', payload: { mode: 'erase' } } as any)}
+                      className={`flex-1 py-2 rounded text-[10px] font-bold uppercase border ${(state as any).regionEdit?.mode === 'erase'
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-[#18181b] text-accent border-[#27272a] hover:bg-[#27272a]'
+                        }`}
+                    >
+                      Erase
+                    </button>
+                  </div>
 
-            {/* Global Replace Input */}
-            {state.director.replaceAnchorSubjects && (
-              <div className="animate-in slide-in-from-top-2 duration-200 space-y-1">
-                <label className="text-[9px] text-gray-500">Global Replace Target</label>
-                <input
-                  type="text"
-                  className="w-full bg-[#18181b] border border-[#27272a] text-xs text-yellow-500 p-2 rounded focus:border-yellow-500 outline-none placeholder:text-gray-700"
-                  placeholder="e.g. 'the actor in the center'"
-                  value={state.director.globalReplaceTarget || ''}
-                  onChange={(e) => setDirector({ globalReplaceTarget: e.target.value })}
-                />
-                <p className="text-[9px] text-gray-600 italic">Per-slot targets override the global target.</p>
-              </div>
-            )}
+                  {/* Layer list */}
+                  <div className="space-y-2 mb-3">
+                    {((state as any).regionEdit?.layers || []).map((l: any) => {
+                      const active = l.id === (state as any).regionEdit?.activeLayerId;
+                      return (
+                        <div
+                          key={l.id}
+                          className={`flex items-center gap-2 p-2 rounded border ${active ? 'border-blue-500 bg-blue-500/5' : 'border-[#27272a] bg-[#0b0b0d]'
+                            }`}
+                        >
+                          <button
+                            className="flex-1 text-left"
+                            onClick={() => dispatch({ type: 'SET_REGION_ACTIVE_LAYER', payload: { id: l.id } } as any)}
+                            title="Select layer to paint"
+                          >
+                            <div className="text-[10px] font-bold text-gray-200">{l.name}</div>
+                            <div className="text-[9px] text-gray-600 font-mono">
+                              {l.maskDataUrl ? 'MASK' : '--'} {l.prompt?.trim() ? ' / TXT' : ''}
+                            </div>
+                          </button>
 
-            {/* Negative Prompt */}
-            <div className="space-y-2">
-              <label className="text-[10px] uppercase font-bold text-gray-500">Negative Prompt (Exclusions)</label>
-              <textarea
-                className="w-full bg-[#18181b] border border-[#27272a] text-[10px] text-gray-400 p-2 rounded focus:border-red-500/50 outline-none resize-none leading-relaxed custom-scrollbar"
-                rows={4}
-                value={state.director.negativePrompt}
-                onChange={(e) => setDirector({ negativePrompt: e.target.value })}
-              />
-              <div className="grid grid-cols-2 gap-2">
-                {['+ Anatomy', '+ Quality', '+ Details', '+ Photo'].map(tag => (
-                  <button
-                    key={tag}
-                    onClick={() => {
-                      // Simple append logic purely for UI demo, real usage might be more sophisticated
-                      // But for now, just appending "bad anatomy" etc based on tag? 
-                      // User didn't specify exact mapping, so I'll just leave it as a placeholder or append the tag text itself if that was the intent.
-                      // Actually let's map them to common negative embeddings/terms
-                      let term = '';
-                      if (tag === '+ Anatomy') term = 'bad anatomy, bad proportions, extra limbs, missing limbs, fused fingers, too many fingers';
-                      if (tag === '+ Quality') term = 'worst quality, low quality, normal quality, lowres, artifacting';
-                      if (tag === '+ Details') term = 'blurry, blurry background, bokeh, depth of field';
-                      if (tag === '+ Photo') term = 'sketch, painting, drawing, illustration, anime';
+                          <button
+                            onClick={() =>
+                              dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: l.id, updates: { enabled: !l.enabled } } } as any)
+                            }
+                            className={`px-2 py-1 rounded text-[9px] font-bold uppercase border ${l.enabled ? 'bg-emerald-500/20 border-emerald-500/30 text-emerald-300' : 'bg-[#18181b] border-[#27272a] text-gray-400'
+                              }`}
+                            title="Include layer in Apply Queue"
+                          >
+                            {l.enabled ? 'ON' : 'OFF'}
+                          </button>
 
-                      const current = state.director.negativePrompt;
-                      setDirector({ negativePrompt: current ? `${current}, ${term}` : term });
-                    }}
-                    className="bg-[#18181b] border border-[#27272a] hover:bg-gray-800 text-gray-500 hover:text-gray-300 text-[9px] py-1.5 rounded uppercase font-bold transition-colors"
-                  >
-                    {tag}
-                  </button>
-                ))}
-              </div>
-            </div>
+                          <button
+                            onClick={() => dispatch({ type: 'CLEAR_REGION_LAYER_MASK', payload: { id: l.id } } as any)}
+                            className="p-1.5 bg-black/30 hover:bg-red-500/20 rounded text-gray-400 hover:text-red-400 transition-colors"
+                            title="Clear this mask"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
 
-            {/* Scene Lock */}
-            <div className="flex items-center gap-2 pt-2">
-              <div className={`w-3 h-3 rounded border ${state.director.sceneLock ? 'bg-red-500 border-red-500' : 'border-gray-600'} flex items-center justify-center cursor-pointer transition-colors`} onClick={() => setDirector({ sceneLock: !state.director.sceneLock })}>
-                {state.director.sceneLock && <div className="w-1.5 h-1.5 bg-white rounded-[1px]" />}
-              </div>
-              <label className="text-[10px] uppercase font-bold text-gray-400 cursor-pointer" onClick={() => setDirector({ sceneLock: !state.director.sceneLock })}>
-                Lock Scene
-              </label>
-              <span className="text-[9px] text-gray-600 ml-auto">(Prompt-level)</span>
-            </div>
+                  {/* Brush controls */}
+                  <div className="space-y-3 mb-3">
+                    <div className="flex items-center justify-between text-[10px] text-gray-500 uppercase font-bold">
+                      <span>Brush Size</span>
+                      <span className="text-blue-400 font-mono">{(state as any).regionEdit?.brushSize ?? 40}px</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={5}
+                      max={200}
+                      value={(state as any).regionEdit?.brushSize ?? 40}
+                      onChange={(e) => dispatch({ type: 'SET_REGION_EDIT', payload: { brushSize: parseInt(e.target.value) } } as any)}
+                      className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                    />
 
-          </div>
+                    <div className="flex items-center justify-between text-[10px] text-gray-500 uppercase font-bold">
+                      <span>Edge Softness</span>
+                      <span className="text-blue-400 font-mono">{((state as any).regionEdit?.brushSoftness ?? 0.35).toFixed(2)}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={(state as any).regionEdit?.brushSoftness ?? 0.35}
+                      onChange={(e) => dispatch({ type: 'SET_REGION_EDIT', payload: { brushSoftness: parseFloat(e.target.value) } } as any)}
+                      className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                    />
+                  </div>
 
+
+                  {/* Protection Mask (Face/Hair Lock) */}
+                  <div className="space-y-2 mb-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <label className="text-[10px] uppercase font-bold text-gray-500 flex items-center gap-2 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={protectEnabled}
+                          onChange={(e) => setProtectEnabled(e.target.checked)}
+                          className="w-4 h-4 accent-blue-500 rounded border-white/10 bg-black"
+                        />
+                        Protect Face/Hair
+                      </label>
+
+                      <button
+                        onClick={generateFaceProtectionMask}
+                        disabled={!state.apiKey || protectStatus === 'generating'}
+                        className="px-3 py-1.5 rounded text-[9px] font-bold uppercase tracking-wider border transition-colors disabled:opacity-50 bg-[#18181b] border-[#27272a] text-yellow-500 hover:bg-[#27272a]"
+                        title="Generate a face/hair protection mask (white = protected)"
+                      >
+                        {protectStatus === 'generating' ? 'Generating…' : protectMaskUrl ? 'Regen' : 'Generate'}
+                      </button>
+                    </div>
+
+                    {protectMaskUrl && (
+                      <div className="flex flex-col gap-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-12 h-12 rounded border border-[#27272a] bg-black overflow-hidden relative group">
+                            <img src={protectMaskUrl} className="w-full h-full object-contain opacity-90" alt="Protection Mask" />
+                            {state.isProcessing && <div className="absolute inset-0 bg-black/50 flex items-center justify-center"><RotateCw className="w-4 h-4 text-white animate-spin" /></div>}
+                          </div>
+                          <div className="flex-1 space-y-1">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[9px] text-gray-500 font-bold uppercase">Shrink Mask</span>
+                              <span className="text-[9px] text-yellow-500 font-mono">{protectErosion}px</span>
+                            </div>
+                            <input
+                              type="range"
+                              min={0} max={20} step={1}
+                              value={protectErosion}
+                              onChange={(e) => setProtectErosion(parseInt(e.target.value))}
+                              className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-yellow-500"
+                              title="Erode mask to remove white halo"
+                            />
+                          </div>
+                          <button
+                            onClick={() => {
+                              setProtectMaskUrl(null);
+                              setRawProtectMaskUrl(null); // Clear raw too
+                              setProtectStatus('idle');
+                            }}
+                            className="self-start mt-2 px-2 py-1 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] rounded text-[8px] font-bold uppercase text-red-500"
+                            title="Clear protection mask"
+                          >
+                            Clear
+                          </button>
+                          <span className="text-[9px] text-gray-600 ml-auto self-start mt-2">{protectStatus.toUpperCase()}</span>
+                        </div>
+                      </div>
+                    )}
+
+                    <p className="text-[9px] text-gray-600 mt-2 leading-relaxed">
+                      When enabled, protected (white) pixels are automatically removed from every edit mask before applying.
+                    </p>
+                  </div>
+
+                  {/* Prompt */}
+                  <div className="space-y-2 mb-3">
+                    <label className="text-[10px] uppercase font-bold text-gray-500">Layer Instruction</label>
+                    <textarea
+                      value={activeLayer?.prompt || ''}
+                      onChange={(e) =>
+                        activeLayer &&
+                        dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: activeLayer.id, updates: { prompt: e.target.value } } } as any)
+                      }
+                      className="w-full bg-[#18181b] border border-[#27272a] rounded p-2 text-[10px] text-gray-300 resize-none focus:border-blue-500 outline-none"
+                      rows={3}
+                      placeholder="e.g. Remove the IV line. Match lighting. No new objects."
+                    />
+                    <div className="grid grid-cols-3 gap-2">
+                      {[
+                        { label: 'Remove', text: 'Remove the object in the masked area. Clean seamless fill. Match surrounding texture and lighting.' },
+                        { label: 'Replace', text: 'Replace the masked area with: (describe). Match perspective, lighting, and realism.' },
+                        { label: 'Relight', text: 'Relight the masked area to match scene lighting. Preserve identity and realism.' },
+                      ].map((p) => (
+                        <button
+                          key={p.label}
+                          onClick={() =>
+                            activeLayer &&
+                            dispatch({
+                              type: 'UPDATE_REGION_LAYER',
+                              payload: { id: activeLayer.id, updates: { prompt: (activeLayer.prompt || '') ? `${activeLayer.prompt}\n${p.text}` : p.text } },
+                            } as any)
+                          }
+                          className="bg-[#18181b] border border-[#27272a] hover:bg-[#27272a] text-gray-300 text-[9px] py-2 rounded uppercase font-bold"
+                        >
+                          {p.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button
+                      onClick={clearActiveMask}
+                      disabled={!activeLayer}
+                      className="flex-1 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] text-gray-300 hover:text-white text-[10px] py-2 rounded font-bold uppercase tracking-wider disabled:opacity-50"
+                    >
+                      Clear Active
+                    </button>
+                    <button
+                      onClick={() => dispatch({ type: 'CLEAR_ALL_REGION_MASKS' } as any)}
+                      className="flex-1 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] text-gray-300 hover:text-white text-[10px] py-2 rounded font-bold uppercase tracking-wider"
+                    >
+                      Clear All
+                    </button>
+                  </div>
+
+                  <div className="flex gap-2 mt-3">
+                    <button
+                      onClick={applyRegionEditQueue}
+                      disabled={state.isProcessing || !state.apiKey || isRegionEditRunning}
+                      className="flex-1 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-black text-[10px] uppercase tracking-[0.25em] py-3 rounded-xl shadow-lg shadow-blue-500/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Apply Enabled Layers
+                    </button>
+                    <button
+                      onClick={requestCancelRegionEdit}
+                      disabled={!isRegionEditRunning}
+                      className="px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest border border-red-500/30 bg-red-500/10 text-red-300 hover:bg-red-500/20 disabled:opacity-40 disabled:cursor-not-allowed"
+                      title="Stops after current layer finishes"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+
+                  <p className="text-[9px] text-gray-600 mt-2 leading-relaxed">
+                    Paint white to define the edit region. Apply runs each enabled layer sequentially.
+                  </p>
+                </SidebarPanel>
+              );
+            }
+
+            if (panelId === 'layers') {
+              // --- STAGE LAYERS ---
+              const stageItemsCount = state.tokens.length + state.annotations.length;
+              return (
+                <SidebarPanel
+                  key="layers"
+                  id="layers"
+                  title="Stage Layers"
+                  icon={Layers}
+                  headerColor="text-orange-500"
+                  collapsed={collapsedPanels['layers']}
+                  onToggle={togglePanel}
+                  onDrop={handlePanelDrop}
+                  rightElement={<span className="text-[9px] text-gray-600 font-mono">{stageItemsCount} Items</span>}
+                >
+                  <div className="space-y-1 max-h-[400px] overflow-y-auto custom-scrollbar pr-1">
+                    {[...state.tokens.map(t => ({ ...t, type: 'token' })), ...state.annotations.map(a => ({ ...a, type: 'annotation' }))]
+                      .sort((a: any, b: any) => b.zIndex - a.zIndex)
+                      .map((layer: any) => {
+                        const isSelected = state.selection === layer.id;
+                        const isDragging = draggedLayerId === layer.id;
+
+                        return (
+                          <div
+                            key={layer.id}
+                            draggable
+                            onDragStart={(e) => {
+                              setDraggedLayerId(layer.id);
+                              e.dataTransfer.effectAllowed = 'move';
+                            }}
+                            onDragOver={(e) => {
+                              e.preventDefault();
+                              e.dataTransfer.dropEffect = 'move';
+                            }}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              if (!draggedLayerId || draggedLayerId === layer.id) return;
+                              // Capture current state of full list sorted by Z
+                              const allLayers = [...state.tokens.map(t => ({ ...t, type: 'token' })), ...state.annotations.map(a => ({ ...a, type: 'annotation' }))]
+                                .sort((a: any, b: any) => b.zIndex - a.zIndex);
+                              const fromIndex = allLayers.findIndex(l => l.id === draggedLayerId);
+                              const toIndex = allLayers.findIndex(l => l.id === layer.id);
+                              if (fromIndex === -1 || toIndex === -1) return;
+                              // Reorder array
+                              const item = allLayers[fromIndex];
+                              allLayers.splice(fromIndex, 1);
+                              allLayers.splice(toIndex, 0, item);
+                              // Re-assign Z-indices
+                              const maxZ = allLayers.length;
+                              allLayers.forEach((l, idx) => {
+                                const newZ = maxZ - idx;
+                                if (l.zIndex !== newZ) {
+                                  if (l.type === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: l.id, zIndex: newZ } });
+                                  else dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: l.id, zIndex: newZ } });
+                                }
+                              });
+                              setDraggedLayerId(null);
+                            }}
+                            onDragEnd={() => setDraggedLayerId(null)}
+                            className={`flex items-center gap-2 p-1.5 rounded border transition-colors cursor-grab active:cursor-grabbing group ${isSelected ? 'bg-orange-500/10 border-orange-500/50' : 'bg-[#18181b] border-[#27272a] hover:bg-[#27272a]'} ${isDragging ? 'opacity-40 border-dashed border-orange-500' : ''}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              dispatch({ type: 'SELECT_ITEM', payload: { id: layer.id, type: layer.type } });
+                            }}
+                          >
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (layer.type === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: layer.id, visible: layer.visible === false } });
+                                else dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: layer.id, visible: layer.visible === false } });
+                              }}
+                              className="p-1 text-gray-500 hover:text-white rounded hover:bg-white/10 transition-colors mr-1"
+                              title={layer.visible === false ? "Show Layer" : "Hide Layer"}
+                            >
+                              {layer.visible === false ? <EyeOff className="w-3 h-3 text-gray-600" /> : <Eye className="w-3 h-3" />}
+                            </button>
+
+                            <div className="text-gray-600 group-hover:text-gray-400 cursor-grab active:cursor-grabbing">
+                              <GripVertical className="w-3 h-3" />
+                            </div>
+                            <div className={`p-1 rounded ${isSelected ? 'bg-orange-500 text-black' : 'bg-gray-800 text-gray-400'}`}>
+                              {layer.type === 'token' && <UserPlus className="w-3 h-3" />}
+                              {layer.type === 'annotation' && layer.type === 'note' && <StickyNote className="w-3 h-3" />}
+                              {layer.type === 'annotation' && layer.type === 'zone' && <BoxSelect className="w-3 h-3" />}
+                              {layer.type === 'annotation' && layer.type === 'arrow' && <MoveUpRight className="w-3 h-3" />}
+                            </div>
+                            <span className={`text-[9px] font-bold uppercase truncate flex-1 ${isSelected ? 'text-orange-400' : 'text-gray-400'}`}>
+                              {layer.tag || layer.text || layer.type}
+                            </span>
+                            <span className="text-[9px] font-mono text-gray-600 mr-2">Z:{layer.zIndex}</span>
+
+                            {isSelected && (
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (layer.type === 'token') {
+                                      dispatch({ type: 'REMOVE_TOKEN', payload: layer.id });
+                                      dispatch({ type: 'ADD_LOG', payload: { message: "Token removed from Scene (Library Safe)", type: 'info' } });
+                                    }
+                                    else dispatch({ type: 'REMOVE_ANNOTATION', payload: layer.id });
+                                  }}
+                                  className="p-1 hover:bg-red-500/20 text-gray-500 hover:text-red-400 rounded transition-colors"
+                                >
+                                  <TrashIcon className="w-3 h-3" />
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    {state.tokens.length === 0 && state.annotations.length === 0 && (
+                      <div className="text-[10px] text-gray-600 italic text-center py-4 border border-dashed border-gray-800 rounded">
+                        Stage is empty. Add cast or notes.
+                      </div>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-4 gap-1 pt-2 border-t border-[#27272a] mt-2">
+                    <button
+                      disabled={!state.selection}
+                      onClick={() => {
+                        if (!state.selection) return;
+                        const all = [...state.tokens, ...state.annotations];
+                        const maxZ = Math.max(...all.map(i => i.zIndex));
+                        if (state.selectionType === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: state.selection, zIndex: maxZ + 1 } });
+                        else dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: state.selection, zIndex: maxZ + 1 } });
+                      }}
+                      className="bg-[#18181b] hover:bg-orange-500/20 text-gray-400 hover:text-orange-400 border border-[#27272a] rounded p-1.5 flex items-center justify-center disabled:opacity-30"
+                      title="Bring to Front"
+                    >
+                      <ArrowUpToLine className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      disabled={!state.selection}
+                      onClick={() => {
+                        if (!state.selection) return;
+                        const item = [...state.tokens, ...state.annotations].find(i => i.id === state.selection);
+                        if (!item) return;
+                        if (state.selectionType === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: state.selection, zIndex: item.zIndex + 1 } });
+                        else dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: state.selection, zIndex: item.zIndex + 1 } });
+                      }}
+                      className="bg-[#18181b] hover:bg-orange-500/20 text-gray-400 hover:text-orange-400 border border-[#27272a] rounded p-1.5 flex items-center justify-center disabled:opacity-30"
+                      title="Bring Forward"
+                    >
+                      <ArrowUp className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      disabled={!state.selection}
+                      onClick={() => {
+                        if (!state.selection) return;
+                        const item = [...state.tokens, ...state.annotations].find(i => i.id === state.selection);
+                        if (!item) return;
+                        if (state.selectionType === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: state.selection, zIndex: item.zIndex - 1 } });
+                        else dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: state.selection, zIndex: item.zIndex - 1 } });
+                      }}
+                      className="bg-[#18181b] hover:bg-orange-500/20 text-gray-400 hover:text-orange-400 border border-[#27272a] rounded p-1.5 flex items-center justify-center disabled:opacity-30"
+                      title="Send Backward"
+                    >
+                      <ArrowDown className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      disabled={!state.selection}
+                      onClick={() => {
+                        if (!state.selection) return;
+                        const all = [...state.tokens, ...state.annotations];
+                        const minZ = Math.min(...all.map(i => i.zIndex));
+                        if (state.selectionType === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: state.selection, zIndex: minZ - 1 } });
+                        else dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: state.selection, zIndex: minZ - 1 } });
+                      }}
+                      className="bg-[#18181b] hover:bg-orange-500/20 text-gray-400 hover:text-orange-400 border border-[#27272a] rounded p-1.5 flex items-center justify-center disabled:opacity-30"
+                      title="Send to Back"
+                    >
+                      <ArrowDownToLine className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </SidebarPanel>
+              );
+            }
+
+            if (panelId === 'specs') {
+              // --- GLOBAL SPECS ---
+              return (
+                <SidebarPanel
+                  key="specs"
+                  id="specs"
+                  title="Context Specs"
+                  icon={SettingsIcon}
+                  headerColor="text-cyan-400"
+                  collapsed={collapsedPanels['specs']}
+                  onToggle={togglePanel}
+                  onDrop={handlePanelDrop}
+                >
+                  <div className="space-y-2 px-1">
+                    {/* Resolution Display - Slimmer */}
+                    <div className="flex items-center justify-between bg-[#18181b]/50 rounded-lg p-2 border border-[#27272a]">
+                      <div className="flex flex-col">
+                        <span className="text-[9px] font-bold uppercase tracking-widest text-gray-600">Resolution</span>
+                        <span className="text-sm font-mono text-cyan-400 font-bold tracking-tight">
+                          {typeof state.director?.resolution === 'object' ? `${state.director.resolution.width}x${state.director.resolution.height}` : state.director?.resolution}
+                        </span>
+                      </div>
+
+                      <div className="flex gap-1">
+                        <button
+                          onClick={() => setDirector({ resolution: typeof state.director.resolution === 'object' ? { width: state.director.resolution.width * 2, height: state.director.resolution.height * 2 } : { width: 3840 * 2, height: 2160 * 2 } })}
+                          className="px-2 py-1 rounded bg-[#27272a] hover:bg-[#3f3f46] text-[9px] font-bold text-gray-400 hover:text-cyan-400 transition-colors uppercase"
+                          title="Upscale 2x"
+                        >
+                          2x
+                        </button>
+                        <button
+                          onClick={() => setDirector({ resolution: { width: 1920, height: 1080 } })}
+                          className="px-2 py-1 rounded bg-[#27272a] hover:bg-[#3f3f46] text-[9px] font-bold text-gray-400 hover:text-red-400 transition-colors uppercase"
+                          title="Reset to 1920x1080"
+                        >
+                          Reset
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      <PropertyField
+                        label="Aspect Ratio"
+                        value={state.director.aspectRatio}
+                        onChange={(v: any) => setDirector({ aspectRatio: v as DirectorAspectRatio })}
+                        type="select"
+                        options={['16:9', '9:16', '1:1', '4:3', '3:4', '2.39:1', '4:5']}
+                      />
+                    </div>
+                  </div>
+                </SidebarPanel>
+              );
+            }
+
+            if (panelId === 'anchor') {
+              // --- ANCHOR REFERENCE ---
+              return (
+                <SidebarPanel
+                  key="anchor"
+                  id="anchor"
+                  title="Anchor Ref"
+                  icon={ImageIcon}
+                  headerColor="text-purple-500"
+                  collapsed={collapsedPanels['anchor']}
+                  onToggle={togglePanel}
+                  onDrop={handlePanelDrop}
+                >
+                  <div className="space-y-3">
+                    <div className="aspect-video bg-black/40 rounded border border-[#27272a] overflow-hidden relative group">
+                      {state.backgroundUrl ? (
+                        <>
+                          <img src={state.backgroundUrl} className="w-full h-full object-contain transition-all duration-500" />
+                          <div className="absolute top-2 right-2 flex flex-col gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button
+                              onClick={() => dispatch({ type: 'SET_BG', payload: null })}
+                              className="p-1.5 bg-black/60 text-white rounded hover:bg-red-500/80 transition-colors"
+                              title="Clear Reference"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="w-full h-full flex flex-col items-center justify-center text-gray-700">
+                          <UploadIcon className="w-6 h-6 mb-2 opacity-20" />
+                          <span className="text-[9px] font-bold uppercase tracking-widest text-center">Drag / Paste<br />Anchor Ref</span>
+                        </div>
+                      )}
+                      <input
+                        ref={anchorFileInputRef}
+                        type="file"
+                        className="hidden"
+                        accept="image/*"
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            const url = await fileToDataUrl(file);
+                            dispatch({ type: 'SET_BG', payload: url });
+                          }
+                          e.currentTarget.value = '';
+                        }}
+                      />
+                    </div>
+                    {/* Anchor Tools */}
+                    <div>
+                      <div className="flex gap-2">
+                        <input
+                          className="flex-1 bg-[#18181b] border border-[#27272a] rounded px-2 py-1 text-[10px] text-gray-300 resize-none focus:border-blue-500 outline-none"
+                          placeholder="Or generate new anchor scene..."
+                          value={bgPrompt}
+                          onChange={(e) => setBgPrompt(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                              e.preventDefault();
+                              generateBg();
+                            }
+                          }}
+                        />
+                        <button
+                          onClick={generateBg}
+                          disabled={state.isProcessing || !bgPrompt.trim()}
+                          className="bg-blue-600 hover:bg-blue-500 text-white p-2 rounded flex items-center justify-center disabled:opacity-50 disabled:bg-gray-800"
+                          title="Generate Background"
+                        >
+                          {state.isProcessing ? <RefreshCcw className="w-3.5 h-3.5 animate-spin" /> : <MaximizeIcon className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                      <div className="mt-2 flex gap-2 items-end">
+                        <div className="flex-1">
+                          <Dropdown
+                            label="Merge Strategy"
+                            value={state.director.mergeStrategy}
+                            options={['Character Identity', 'Style Transfer', 'Composition Reference', 'Photo Merge']}
+                            onChange={(v: any) => setDirector({ mergeStrategy: v as DirectorMergeStrategy })}
+                          />
+                        </div>
+                        <button
+                          onClick={() => setDirector({ sceneLock: !state.director.sceneLock })}
+                          className={`h-[42px] min-w-[50px] rounded flex flex-col items-center justify-center border transition-all ${state.director.sceneLock ? 'bg-purple-500/20 border-purple-500 text-purple-400 shadow-[0_0_15px_rgba(168,85,247,0.15)]' : 'bg-[#18181b] border-[#27272a] text-gray-600 hover:text-gray-400 hover:border-gray-700'}`}
+                          title={state.director.sceneLock ? "Unlock Anchor Scene" : "Lock Anchor Scene"}
+                        >
+                          <Lock className="w-3.5 h-3.5 mb-0.5" />
+                          <span className="text-[8px] font-bold uppercase tracking-wider">
+                            {state.director.sceneLock ? "Locked" : "Lock"}
+                          </span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Replacement Logic */}
+                    <div className="pt-3 border-t border-[#27272a] space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] uppercase font-bold text-gray-500 flex items-center gap-2 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={state.director.replaceAnchorSubjects ?? false}
+                            onChange={(e) => setDirector({ replaceAnchorSubjects: e.target.checked })}
+                            className="w-3 h-3 accent-yellow-500 bg-black"
+                          />
+                          Replace Anchor Subjects
+                        </label>
+                        {state.director.replaceAnchorSubjects && (
+                          <button
+                            onClick={() => setDirector({ globalReplaceTarget: '' })}
+                            className="px-2 py-0.5 bg-gray-800 hover:bg-gray-700 rounded text-[9px] text-gray-400 uppercase font-bold"
+                          >
+                            Wipe
+                          </button>
+                        )}
+                      </div>
+                      {state.director.replaceAnchorSubjects && (
+                        <div className="animate-in slide-in-from-top-2 duration-200">
+                          <input
+                            type="text"
+                            className="w-full bg-[#18181b] border border-[#27272a] text-xs text-yellow-500 p-2 rounded focus:border-yellow-500 outline-none placeholder:text-gray-700"
+                            placeholder="e.g. 'the actor in the center'"
+                            value={state.director.globalReplaceTarget || ''}
+                            onChange={(e) => setDirector({ globalReplaceTarget: e.target.value })}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </SidebarPanel>
+              );
+            }
+
+            if (panelId === 'v3_terminal') {
+              // --- V3 TERMINAL ---
+              return (
+                <SidebarPanel
+                  key="v3_terminal"
+                  id="v3_terminal"
+                  title="PROMPT ENGINE"
+                  icon={MonitorPlay}
+                  headerColor="text-yellow-500"
+                  collapsed={collapsedPanels['v3_terminal']}
+                  onToggle={togglePanel}
+                  onDrop={handlePanelDrop}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-[9px] text-gray-600 font-mono">COMPILED OUTPUT</div>
+                    <button
+                      onClick={handleCopyDirectorPrompt}
+                      className="p-1.5 hover:bg-white/10 rounded text-emerald-400 transition-colors"
+                      title="Copy to clipboard"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  <div className="bg-[#050505] p-3 rounded border border-[#27272a] font-mono text-[9px] text-emerald-500 leading-relaxed overflow-x-auto whitespace-pre-wrap max-h-60 custom-scrollbar select-text shadow-inner">
+                    {v3DirectorPrompt}
+                  </div>
+                </SidebarPanel>
+              );
+            }
+            return null;
+          })}
         </div>
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <Layers className="w-4 h-4 text-orange-400" />
+            <h3 className="text-xs font-bold text-gray-500 uppercase">Stage Layers</h3>
+          </div>
+          <span className="text-[10px] text-gray-600 font-mono">
+            {state.tokens.length + state.annotations.length} Items
+          </span>
+        </div>
+
+        <div className="space-y-1 max-h-48 overflow-y-auto custom-scrollbar pr-1 mb-2">
+          {[...state.tokens.map(t => ({ ...t, type: 'token' })), ...state.annotations.map(a => ({ ...a, type: 'annotation' }))]
+            .sort((a: any, b: any) => b.zIndex - a.zIndex)
+            .map((layer: any) => {
+              const isSelected = state.selection === layer.id;
+              const isDragging = draggedLayerId === layer.id;
+
+              return (
+                <div
+                  key={layer.id}
+                  draggable
+                  onDragStart={(e) => {
+                    setDraggedLayerId(layer.id);
+                    e.dataTransfer.effectAllowed = 'move';
+                    // Create a ghost image if needed, but default is usually fine
+                  }}
+                  onDragOver={(e) => {
+                    e.preventDefault(); // Must allow drop
+                    e.dataTransfer.dropEffect = 'move';
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    if (!draggedLayerId || draggedLayerId === layer.id) return;
+
+                    // Capture current state of full list sorted by Z
+                    const allLayers = [...state.tokens.map(t => ({ ...t, type: 'token' })), ...state.annotations.map(a => ({ ...a, type: 'annotation' }))]
+                      .sort((a: any, b: any) => b.zIndex - a.zIndex);
+
+                    const fromIndex = allLayers.findIndex(l => l.id === draggedLayerId);
+                    const toIndex = allLayers.findIndex(l => l.id === layer.id);
+
+                    if (fromIndex === -1 || toIndex === -1) return;
+
+                    // Reorder array
+                    const item = allLayers[fromIndex];
+                    allLayers.splice(fromIndex, 1);
+                    allLayers.splice(toIndex, 0, item);
+
+                    // Re-assign Z-indices based on new order (Top of list = High Z)
+                    // Max Z is list length
+                    const maxZ = allLayers.length;
+                    allLayers.forEach((l, idx) => {
+                      const newZ = maxZ - idx;
+                      if (l.zIndex !== newZ) {
+                        if (l.type === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: l.id, zIndex: newZ } });
+                        else dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: l.id, zIndex: newZ } });
+                      }
+                    });
+
+                    setDraggedLayerId(null);
+                  }}
+                  onDragEnd={() => setDraggedLayerId(null)}
+                  className={`flex items-center gap-2 p-1.5 rounded border transition-colors cursor-grab active:cursor-grabbing group ${isSelected ? 'bg-orange-500/10 border-orange-500/50' : 'bg-[#18181b] border-[#27272a] hover:bg-[#27272a]'} ${isDragging ? 'opacity-40 border-dashed border-orange-500' : ''}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    dispatch({ type: 'SELECT_ITEM', payload: { id: layer.id, type: layer.type } });
+                  }}
+                >
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (layer.type === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: layer.id, visible: layer.visible === false } });
+                      else dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: layer.id, visible: layer.visible === false } });
+                    }}
+                    className="p-1 text-gray-500 hover:text-white rounded hover:bg-white/10 transition-colors mr-1"
+                    title={layer.visible === false ? "Show Layer" : "Hide Layer"}
+                  >
+                    {layer.visible === false ? <EyeOff className="w-3 h-3 text-gray-600" /> : <Eye className="w-3 h-3" />}
+                  </button>
+
+                  <div className="text-gray-600 group-hover:text-gray-400 cursor-grab active:cursor-grabbing">
+                    <GripVertical className="w-3 h-3" />
+                  </div>
+                  <div className={`p-1 rounded ${isSelected ? 'bg-orange-500 text-black' : 'bg-gray-800 text-gray-400'}`}>
+                    {layer.type === 'token' && <UserPlus className="w-3 h-3" />}
+                    {layer.type === 'annotation' && layer.type === 'note' && <StickyNote className="w-3 h-3" />}
+                    {layer.type === 'annotation' && layer.type === 'zone' && <BoxSelect className="w-3 h-3" />}
+                    {layer.type === 'annotation' && layer.type === 'arrow' && <MoveUpRight className="w-3 h-3" />}
+                  </div>
+                  <span className={`text-[9px] font-bold uppercase truncate flex-1 ${isSelected ? 'text-orange-400' : 'text-gray-400'}`}>
+                    {layer.tag || layer.text || layer.type}
+                  </span>
+                  <span className="text-[9px] font-mono text-gray-600 mr-2">Z:{layer.zIndex}</span>
+
+                  {isSelected && (
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (layer.type === 'token') dispatch({ type: 'REMOVE_TOKEN', payload: layer.id });
+                          else dispatch({ type: 'REMOVE_ANNOTATION', payload: layer.id });
+                        }}
+                        className="p-1 hover:bg-red-500/20 text-gray-500 hover:text-red-400 rounded transition-colors"
+                      >
+                        <TrashIcon className="w-3 h-3" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          {state.tokens.length === 0 && state.annotations.length === 0 && (
+            <div className="text-[10px] text-gray-600 italic text-center py-4 border border-dashed border-gray-800 rounded">
+              Stage is empty. Add cast or notes.
+            </div>
+          )}
+        </div>
+
+
+
+
 
 
         {/* v3 Prompt Terminal (Keep existing logic) */}
-        <div className="bg-[#09090b] border border-[#27272a] rounded-xl p-4 shadow-xl flex flex-col shrink-0">
+        < div className="bg-[#09090b] border border-[#27272a] rounded-xl p-4 shadow-xl flex flex-col shrink-0" >
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <div className="p-2 bg-yellow-500/10 rounded-lg">
@@ -3505,33 +3578,10 @@ const SceneCanvas = () => {
               )}
             </div>
           </div>
-
-          {/* V3 Prompt Terminal */}
-          <div className="mt-6 pt-6 border-t border-[#27272a]">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2">
-                <MonitorPlay className="w-3 h-3 text-emerald-400" />
-                <h4 className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest">Prompt Powerhouse</h4>
-              </div>
-              <button
-                onClick={handleCopyDirectorPrompt}
-                className="p-1.5 hover:bg-white/5 rounded transition-colors text-white/40 hover:text-white"
-                title="Copy Prompt"
-              >
-                <Download className="w-3.5 h-3.5" />
-              </button>
-            </div>
-            <div className="relative group">
-              <div className="absolute inset-0 bg-emerald-500/5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
-              <div className="bg-[#09090b] border border-[#27272a] rounded-lg p-3 h-32 overflow-y-auto custom-scrollbar font-mono text-[9px] text-emerald-500/80 leading-relaxed whitespace-pre-wrap">
-                {v3DirectorPrompt || '// Cinematic stage is empty.'}
-              </div>
-            </div>
-          </div>
-        </div>
+        </div >
 
         {/* Stage 03: Scene Director */}
-        <div className="bg-[#09090b] border border-[#27272a] rounded-xl p-4 space-y-4 shrink-0">
+        < div className="bg-[#09090b] border border-[#27272a] rounded-xl p-4 space-y-4 shrink-0" >
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Clapperboard className="w-4 h-4 text-gray-500" />
@@ -3577,110 +3627,111 @@ const SceneCanvas = () => {
             />
 
           </div>
-        </div>
+        </div >
 
-      </div >
 
-      {/* Reference Inspector Modal */}
-      {
-        inspectRefIndex !== null && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-8 bg-black/90 backdrop-blur-sm">
-            <div className="bg-[#09090b] border border-[#27272a] rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex shadow-2xl animate-in zoom-in-95 duration-200">
-              {/* Image Preview */}
-              <div className="flex-1 bg-black flex items-center justify-center p-8 relative">
-                <img
-                  src={state.referenceSlots.find(s => s.index === inspectRefIndex)?.url}
-                  alt="Inspector Preview"
-                  className="max-w-full max-h-full object-contain shadow-2xl"
-                />
-                <div className="absolute top-4 left-4 flex items-center gap-2">
-                  <div className="px-3 py-1.5 bg-yellow-500 text-black text-[10px] font-bold rounded-full uppercase tracking-widest">
-                    Reference Slot {inspectRefIndex}
-                  </div>
-                </div>
-              </div>
 
-              {/* Metadata Editor */}
-              <div className="w-[400px] border-l border-[#27272a] flex flex-col p-8 bg-[#09090b]">
-                <div className="flex items-center justify-between mb-8">
-                  <h3 className="text-sm font-bold text-white uppercase tracking-[0.2em]">Reference DNA</h3>
-                  <button
-                    onClick={() => setInspectRefIndex(null)}
-                    className="p-2 hover:bg-white/5 rounded-full text-gray-500 hover:text-white transition-colors"
-                  >
-                    <X className="w-5 h-5" />
-                  </button>
-                </div>
-
-                <div className="space-y-6 flex-1 overflow-y-auto pr-2 custom-scrollbar">
-                  <PropertyField
-                    label="Alias / Identity"
-                    value={inspectName}
-                    onChange={setInspectName}
-                    placeholder="e.g. Hero Protagonist"
+        {/* Reference Inspector Modal */}
+        {
+          inspectRefIndex !== null && (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center p-8 bg-black/90 backdrop-blur-sm">
+              <div className="bg-[#09090b] border border-[#27272a] rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex shadow-2xl animate-in zoom-in-95 duration-200">
+                {/* Image Preview */}
+                <div className="flex-1 bg-black flex items-center justify-center p-8 relative">
+                  <img
+                    src={state.referenceSlots.find(s => s.index === inspectRefIndex)?.url}
+                    alt="Inspector Preview"
+                    className="max-w-full max-h-full object-contain shadow-2xl"
                   />
-                  <PropertyField
-                    label="Subject & Style Analysis"
-                    type="textarea"
-                    value={inspectAnalysis}
-                    onChange={setInspectAnalysis}
-                    placeholder="AI analysis will appear here..."
-                  />
-
-                  <div className="pt-4 border-t border-[#27272a]">
-                    <div className="flex items-center justify-between mb-4">
-                      <label className="text-[10px] uppercase font-bold text-gray-500 flex items-center gap-2">
-                        <Link2 className="w-3 h-3 text-blue-500" /> Subject Replacement
-                      </label>
-                      <div
-                        onClick={() => toggleReplaceMode(!state.director.replaceAnchorSubjects)}
-                        className={`w-10 h-5 rounded-full relative cursor-pointer transition-colors ${state.director.replaceAnchorSubjects ? 'bg-blue-600' : 'bg-gray-800'}`}
-                      >
-                        <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${state.director.replaceAnchorSubjects ? 'left-6' : 'left-1'}`} />
-                      </div>
+                  <div className="absolute top-4 left-4 flex items-center gap-2">
+                    <div className="px-3 py-1.5 bg-yellow-500 text-black text-[10px] font-bold rounded-full uppercase tracking-widest">
+                      Reference Slot {inspectRefIndex}
                     </div>
-                    {state.director.replaceAnchorSubjects && (
-                      <div className="space-y-4 animate-in slide-in-from-top-2 duration-200">
-                        <PropertyField
-                          label="Target in Anchor Scene"
-                          value={inspectTarget}
-                          onChange={setInspectTarget}
-                          placeholder="e.g. the man on the bench"
-                        />
-                        <p className="text-[9px] text-gray-500 italic leading-relaxed">
-                          This character identity will precisely replace the target subject identified in the anchor scene.
-                        </p>
-                      </div>
-                    )}
                   </div>
                 </div>
 
-                <div className="pt-8 flex flex-col gap-3">
-                  <button
-                    onClick={() => {
-                      updateRefSlot(inspectRefIndex, {
-                        name: inspectName,
-                        analysis: inspectAnalysis,
-                        target: inspectTarget || undefined
-                      });
-                      setInspectRefIndex(null);
-                    }}
-                    className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl text-xs uppercase tracking-widest transition-all shadow-lg shadow-blue-900/40"
-                  >
-                    Save DNA Changes
-                  </button>
-                  <button
-                    onClick={() => setInspectRefIndex(null)}
-                    className="w-full bg-transparent hover:bg-white/5 text-gray-400 font-bold py-3 rounded-xl text-xs uppercase tracking-widest transition-all"
-                  >
-                    Cancel
-                  </button>
+                {/* Metadata Editor */}
+                <div className="w-[400px] border-l border-[#27272a] flex flex-col p-8 bg-[#09090b]">
+                  <div className="flex items-center justify-between mb-8">
+                    <h3 className="text-sm font-bold text-white uppercase tracking-[0.2em]">Reference DNA</h3>
+                    <button
+                      onClick={() => setInspectRefIndex(null)}
+                      className="p-2 hover:bg-white/5 rounded-full text-gray-500 hover:text-white transition-colors"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
+
+                  <div className="space-y-6 flex-1 overflow-y-auto pr-2 custom-scrollbar">
+                    <PropertyField
+                      label="Alias / Identity"
+                      value={inspectName}
+                      onChange={setInspectName}
+                      placeholder="e.g. Hero Protagonist"
+                    />
+                    <PropertyField
+                      label="Subject & Style Analysis"
+                      type="textarea"
+                      value={inspectAnalysis}
+                      onChange={setInspectAnalysis}
+                      placeholder="AI analysis will appear here..."
+                    />
+
+                    <div className="pt-4 border-t border-[#27272a]">
+                      <div className="flex items-center justify-between mb-4">
+                        <label className="text-[10px] uppercase font-bold text-gray-500 flex items-center gap-2">
+                          <Link2 className="w-3 h-3 text-blue-500" /> Subject Replacement
+                        </label>
+                        <div
+                          onClick={() => toggleReplaceMode(!state.director.replaceAnchorSubjects)}
+                          className={`w-10 h-5 rounded-full relative cursor-pointer transition-colors ${state.director.replaceAnchorSubjects ? 'bg-blue-600' : 'bg-gray-800'}`}
+                        >
+                          <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${state.director.replaceAnchorSubjects ? 'left-6' : 'left-1'}`} />
+                        </div>
+                      </div>
+                      {state.director.replaceAnchorSubjects && (
+                        <div className="space-y-4 animate-in slide-in-from-top-2 duration-200">
+                          <PropertyField
+                            label="Target in Anchor Scene"
+                            value={inspectTarget}
+                            onChange={setInspectTarget}
+                            placeholder="e.g. the man on the bench"
+                          />
+                          <p className="text-[9px] text-gray-500 italic leading-relaxed">
+                            This character identity will precisely replace the target subject identified in the anchor scene.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="pt-8 flex flex-col gap-3">
+                    <button
+                      onClick={() => {
+                        updateRefSlot(inspectRefIndex!, {
+                          name: inspectName,
+                          analysis: inspectAnalysis,
+                          target: inspectTarget || undefined
+                        });
+                        setInspectRefIndex(null);
+                      }}
+                      className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl text-xs uppercase tracking-widest transition-all shadow-lg shadow-blue-900/40"
+                    >
+                      Save DNA Changes
+                    </button>
+                    <button
+                      onClick={() => setInspectRefIndex(null)}
+                      className="w-full bg-transparent hover:bg-white/5 text-gray-400 font-bold py-3 rounded-xl text-xs uppercase tracking-widest transition-all"
+                    >
+                      Cancel
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-        )
-      }
+          )
+        }
+      </div >
     </div >
   );
 };
