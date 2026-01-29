@@ -7,7 +7,7 @@ import {
   Target, Download, UserPlus, Sparkles,
   Search, Calendar, Type, Layers, Folder, HelpCircle,
   Maximize, RefreshCcw, LayoutTemplate, Share2, Info, CheckCircle2,
-  ArrowDownUp, Edit2
+  ArrowDownUp, Edit2, FolderInput, Hammer
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
@@ -127,6 +127,7 @@ const CastingForge = () => {
   const [customCovers, setCustomCovers] = useState<Record<string, string>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
+  const [organizeTarget, setOrganizeTarget] = useState<{ id: string, name: string } | null>(null);
 
   useEffect(() => {
     const saved = localStorage.getItem('studio_covers');
@@ -206,7 +207,7 @@ const CastingForge = () => {
         return timeB - timeA;
       }
     });
-  }, [state.actorLibrary, librarySearch, sortOption]);
+  }, [state.actorLibrary, librarySearch, sortOption, activeFolder]);
 
   const runIsolationProcess = (): string | null => {
     if (!removeBg || !state.lastCastedImage || !imgRef.current || !previewCanvasRef.current) {
@@ -1406,8 +1407,8 @@ const CastingForge = () => {
                 )}
               </div>
             )}
+            <canvas ref={previewCanvasRef} className="hidden" />
           </div>
-          <canvas ref={previewCanvasRef} className="hidden" />
         </div>
       </div>
 
@@ -1420,10 +1421,9 @@ const CastingForge = () => {
           <div className="text-[10px] bg-blue-500/20 px-2 py-0.5 rounded border border-blue-500/30 text-blue-400 font-mono font-bold">{state.actorLibrary.length}</div>
         </div>
 
-        <div className="flex-grow overflow-y-auto p-4 space-y-4 scrollbar-thin scrollbar-thumb-gray-800 scrollbar-track-transparent">
-          {/* FOLDER NAVIGATION HEADER */}
-          {activeFolder ? (
-            <div className="flex items-center gap-3 mb-4">
+        <div className="flex-grow overflow-y-scroll p-4 space-y-4 scrollbar-thin scrollbar-thumb-gray-800 scrollbar-track-transparent">
+          {activeFolder && (
+            <div className="flex items-center gap-3 mb-4 h-[34px]">
               <button
                 onClick={() => setActiveFolder(null)}
                 className="flex items-center gap-2 px-3 py-2 bg-white/5 hover:bg-white/10 rounded-lg border border-white/10 text-xs font-bold text-gray-300 hover:text-white transition-all uppercase tracking-wider"
@@ -1435,30 +1435,32 @@ const CastingForge = () => {
                 {STUDIO_FOLDERS.find(f => f.id === activeFolder)?.label}
               </h3>
             </div>
-          ) : null}
+          )}
 
-          {/* SEARCH & SORT (Only show inside a folder or if search is active? Actually keep global search for now) */}
-          <div className="flex items-center gap-2 mb-4">
-            {/* Keep existing search UI */}
-            <div className="relative flex-1 group">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 group-focus-within:text-yellow-500 transition-colors" />
-              <input
-                type="text"
-                placeholder="Search actors..."
-                value={librarySearch}
-                onChange={(e) => setLibrarySearch(e.target.value)}
-                className="w-full bg-black/40 border border-[#27272a] rounded-lg pl-9 pr-3 py-2 text-xs text-white placeholder:text-gray-600 focus:border-yellow-500/50 focus:outline-none transition-all"
-              />
-            </div>
-            {activeFolder && (
+          {/* SEARCH & SORT (Only show inside a folder) */}
+          {activeFolder && (
+            <div className="flex items-center gap-2 mb-4">
+              {/* Keep existing search UI */}
+              <div className="relative flex-1 group">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 group-focus-within:text-yellow-500 transition-colors" />
+                <input
+                  type="text"
+                  placeholder="Search actors..."
+                  value={librarySearch}
+                  onChange={(e) => setLibrarySearch(e.target.value)}
+                  className="w-full bg-black/40 border border-[#27272a] rounded-lg pl-9 pr-3 py-2 text-xs text-white placeholder:text-gray-600 focus:border-yellow-500/50 focus:outline-none transition-all"
+                />
+              </div>
+              {/* SORT BUTTON */}
               <div className="relative">
                 <button
                   onClick={() => setShowSortMenu(!showSortMenu)}
-                  className={`h-9 w-9 flex items-center justify-center rounded-lg border transition-all ${sortOption !== 'date' ? 'bg-yellow-500/10 border-yellow-500 text-yellow-500' : 'bg-black/40 border-[#27272a] text-gray-400 hover:text-white'}`}
+                  className={`h-9 px-3 flex items-center justify-center gap-2 rounded-lg border transition-all ${sortOption !== 'date' ? 'bg-yellow-500/10 border-yellow-500 text-yellow-500' : 'bg-purple-600 border-purple-500 text-white hover:bg-purple-500'}`}
                 >
                   {sortOption === 'date' && <Calendar className="w-4 h-4" />}
                   {sortOption === 'name' && <Type className="w-4 h-4" />}
                   {sortOption === 'type' && <Layers className="w-4 h-4" />}
+                  <span className="text-[10px] font-bold">SORT</span>
                 </button>
                 {showSortMenu && (
                   <div className="absolute right-0 top-full mt-2 w-32 bg-[#18181b] border border-[#27272a] rounded-xl shadow-2xl z-50 overflow-hidden animate-in fade-in zoom-in duration-200">
@@ -1467,13 +1469,13 @@ const CastingForge = () => {
                   </div>
                 )}
               </div>
-            )}
-          </div>
+            </div>
+          )}
 
           {/* MAIN CONTENT AREA */}
-          {!activeFolder && !librarySearch ? (
+          {!activeFolder ? (
             // ROOT VIEW: HERO STUDIO CARDS
-            <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-4 pb-20">
               <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleCoverUpload} />
 
               {STUDIO_FOLDERS.map(folder => {
@@ -1500,9 +1502,9 @@ const CastingForge = () => {
                     )}
 
                     {/* Cinematic Overlay */}
-                    <div className="absolute inset-0 bg-gradient-to-r from-black/90 via-black/40 to-transparent flex flex-col justify-end px-6 pb-4 pt-6">
+                    <div className="absolute inset-0 bg-gradient-to-r from-black/50 via-black/20 to-transparent flex flex-col justify-end px-6 pb-4 pt-6">
                       <div>
-                        <h3 className="text-2xl font-black text-white italic tracking-tighter uppercase drop-shadow-md group-hover:text-yellow-500 transition-colors leading-none">
+                        <h3 className="text-lg font-black text-white italic tracking-tighter uppercase drop-shadow-md group-hover:text-yellow-500 transition-colors leading-none">
                           {folder.label}
                         </h3>
                         <div className="flex items-center gap-3 mt-2">
@@ -1538,8 +1540,9 @@ const CastingForge = () => {
                 <div key={actor.id} className="group relative aspect-square rounded-xl overflow-hidden bg-black/40 border border-[#27272a] hover:border-yellow-500/50 transition-all shadow-lg hover:shadow-yellow-500/10">
                   <img src={actor.url} className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-500" />
                   {/* Overlay Actions */}
-                  <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 transition-all duration-300 flex items-center justify-center p-4 pb-8 backdrop-blur-md">
-                    <div className="grid grid-cols-2 gap-2">
+                  <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 transition-all duration-300 flex flex-col items-center justify-center gap-2 backdrop-blur-md">
+                    {/* Top Row: 3 Actions */}
+                    <div className="flex gap-2">
                       <button
                         onClick={() => {
                           dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: actor.url });
@@ -1548,34 +1551,44 @@ const CastingForge = () => {
                           setProcessedPreviewUrl(null);
                           dispatch({ type: 'ADD_LOG', payload: { message: `Loaded ${actor.name} into Viewport`, type: 'info' } });
                         }}
-                        className="bg-[#27272a] hover:bg-orange-600 w-12 h-12 rounded-xl border border-white/10 hover:border-orange-400/50 shadow-xl transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
+                        className="bg-[#27272a] hover:bg-orange-600 w-8 h-8 rounded-lg border border-white/10 hover:border-orange-400/50 shadow-xl transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
                         title="Load to Forge / Turnaround"
                       >
-                        <RotateCw className="w-5 h-5 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
+                        <Hammer className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
                       </button>
                       <button
                         onClick={() => dispatch({ type: 'SET_INSPECT_IMAGE', payload: actor.url })}
-                        className="bg-[#27272a] hover:bg-blue-600 w-12 h-12 rounded-xl border border-white/10 hover:border-blue-400/50 shadow-xl transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
+                        className="bg-[#27272a] hover:bg-blue-600 w-8 h-8 rounded-lg border border-white/10 hover:border-blue-400/50 shadow-xl transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
                         title="Inspect Large"
                       >
-                        <Maximize className="w-5 h-5 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
+                        <Maximize className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
                       </button>
                       <button
                         onClick={() => dispatch({
                           type: 'ADD_CAST',
                           payload: { ...actor, id: `ref-${Date.now()}-${Math.random()}`, name: `${actor.name} (Ref)` }
                         })}
-                        className="bg-[#27272a] hover:bg-emerald-600 w-12 h-12 rounded-xl border border-white/10 hover:border-emerald-400/50 shadow-xl transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
+                        className="bg-[#27272a] hover:bg-emerald-600 w-8 h-8 rounded-lg border border-white/10 hover:border-emerald-400/50 shadow-xl transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
                         title="Add to Cast"
                       >
-                        <UserPlus className="w-5 h-5 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
+                        <UserPlus className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
+                      </button>
+                    </div>
+                    {/* Bottom Row: 2 Actions (Centered) */}
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setOrganizeTarget({ id: actor.id, name: actor.name })}
+                        className="bg-[#27272a] hover:bg-purple-600 w-8 h-8 rounded-lg border border-white/10 hover:border-purple-400/50 shadow-xl transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
+                        title="Move to Studio Folder"
+                      >
+                        <FolderInput className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
                       </button>
                       <button
                         onClick={() => setDeleteTarget({ type: 'library', payload: actor.id, name: actor.name })}
-                        className="bg-[#27272a] hover:bg-red-600 w-12 h-12 rounded-xl border border-white/10 hover:border-red-400/50 shadow-xl transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
+                        className="bg-[#27272a] hover:bg-red-600 w-8 h-8 rounded-lg border border-white/10 hover:border-red-400/50 shadow-xl transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
                         title="Remove from Library"
                       >
-                        <Trash2 className="w-5 h-5 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
+                        <Trash2 className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
                       </button>
                     </div>
                   </div>
@@ -1615,52 +1628,132 @@ const CastingForge = () => {
             </div>
           )}
         </div>
-      </div>
+      </div >
 
       {/* TOAST OVERLAY */}
       <AnimatePresence>
-        {notification && (
-          <motion.div
-            initial={{ opacity: 0, y: 50 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 20 }}
-            className="absolute bottom-8 left-1/2 -translate-x-1/2 bg-[#27272a] border border-green-500/50 text-white px-6 py-3 rounded-full shadow-2xl backdrop-blur-xl z-[3000] flex items-center gap-3"
-          >
-            <CheckCircle2 className="w-5 h-5 text-green-500" />
-            <span className="text-xs font-bold uppercase tracking-widest">{notification}</span>
-          </motion.div>
-        )}
-      </AnimatePresence>
+        {
+          notification && (
+            <motion.div
+              initial={{ opacity: 0, y: 50 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 20 }}
+              className="absolute bottom-8 left-1/2 -translate-x-1/2 bg-[#27272a] border border-green-500/50 text-white px-6 py-3 rounded-full shadow-2xl backdrop-blur-xl z-[3000] flex items-center gap-3"
+            >
+              <CheckCircle2 className="w-5 h-5 text-green-500" />
+              <span className="text-xs font-bold uppercase tracking-widest">{notification}</span>
+            </motion.div>
+          )
+        }
+      </AnimatePresence >
 
 
       {/* DELETE CONFIRMATION MODAL */}
       <AnimatePresence>
-        {deleteTarget && (
-          <div className="fixed inset-0 z-[3000] bg-black/80 backdrop-blur-sm flex items-center justify-center p-8 animate-in fade-in duration-200">
-            <div className="bg-[#18181b] border border-gray-700 p-6 rounded-2xl shadow-2xl max-w-sm w-full relative overflow-hidden">
-              <h3 className="text-lg font-black text-white uppercase tracking-wider mb-2">Delete Asset?</h3>
-              <p className="text-sm text-gray-400 mb-6">
-                Are you sure you want to delete <span className="text-white font-bold">{deleteTarget.name}</span>?
-                {deleteTarget.type === 'library' && " This will verify remove it from your global actors."}
-              </p>
-              <div className="flex justify-end gap-3">
-                <button
-                  onClick={() => setDeleteTarget(null)}
-                  className="px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider text-gray-400 hover:text-white hover:bg-gray-800 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={executeDelete}
-                  className="px-4 py-2 rounded-lg text-xs font-black uppercase tracking-wider bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-900/20"
-                >
-                  Delete Forever
-                </button>
+        {
+          deleteTarget && (
+            <div className="fixed inset-0 z-[3000] bg-black/80 backdrop-blur-sm flex items-center justify-center p-8 animate-in fade-in duration-200">
+              <div className="bg-[#18181b] border border-gray-700 p-6 rounded-2xl shadow-2xl max-w-sm w-full relative overflow-hidden">
+                <h3 className="text-lg font-black text-white uppercase tracking-wider mb-2">Delete Asset?</h3>
+                <p className="text-sm text-gray-400 mb-6">
+                  Are you sure you want to delete <span className="text-white font-bold">{deleteTarget.name}</span>?
+                  {deleteTarget.type === 'library' && " This will verify remove it from your global actors."}
+                </p>
+                <div className="flex justify-end gap-3">
+                  <button
+                    onClick={() => setDeleteTarget(null)}
+                    className="px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider text-gray-400 hover:text-white hover:bg-gray-800 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={executeDelete}
+                    className="px-4 py-2 rounded-lg text-xs font-black uppercase tracking-wider bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-900/20"
+                  >
+                    Delete Forever
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
-        )}
-      </AnimatePresence>
+          )
+        }
+
+        {/* ORGANIZATION MODAL */}
+        {
+          organizeTarget && (
+            <div className="fixed inset-0 z-[2000] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+              <div className="bg-[#18181b] p-6 rounded-2xl border border-gray-800 shadow-2xl max-w-md w-full relative overflow-hidden">
+                <h3 className="text-lg font-black text-white uppercase tracking-widest mb-2 flex items-center gap-2">
+                  <FolderInput className="w-5 h-5 text-purple-500" /> Move Actor
+                </h3>
+                <p className="text-xs text-gray-400 mb-4">
+                  Select a Studio for <span className="text-white font-bold">{organizeTarget.name}</span>. This will update its style tag.
+                </p>
+
+                <div className="grid grid-cols-1 gap-2 mb-4">
+                  {STUDIO_FOLDERS.filter(f => f.id !== 'uncategorized').map(folder => {
+                    const activeImage = customCovers[folder.id] || folder.image;
+                    return (
+                      <div
+                        key={folder.id}
+                        onClick={() => {
+                          const newStyle = folder.styles[0];
+                          const actor = state.actorLibrary.find(a => a.id === organizeTarget.id);
+                          if (actor) {
+                            const updatedProfile = { ...(actor.profile || { identity: "Unknown", wardrobe: "", accessories: "", style: "" }), style: newStyle };
+                            dispatch({
+                              type: 'UPDATE_ACTOR_LIBRARY',
+                              payload: {
+                                id: organizeTarget.id,
+                                updates: { profile: updatedProfile }
+                              }
+                            });
+                            dispatch({ type: 'ADD_LOG', payload: { message: `Moved to ${folder.label}`, type: 'success' } });
+                          }
+                          setOrganizeTarget(null);
+                        }}
+                        className="group relative h-24 w-full rounded-xl overflow-hidden border border-white/10 shadow-lg transition-all hover:scale-[1.02] hover:border-purple-500 cursor-pointer mb-2"
+                      >
+                        {/* Background Image */}
+                        {activeImage ? (
+                          <img src={activeImage} className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-110 opacity-60 group-hover:opacity-100" />
+                        ) : (
+                          <div className="absolute inset-0 bg-gradient-to-br from-gray-800 to-black flex items-center justify-center">
+                            <HelpCircle className="w-8 h-8 text-white/20" />
+                          </div>
+                        )}
+
+                        {/* Cinematic Overlay */}
+                        <div className="absolute inset-0 bg-gradient-to-r from-black/50 via-black/20 to-transparent flex flex-col justify-center px-6">
+                          <div>
+                            <h3 className="text-xl font-black text-white italic tracking-tighter uppercase drop-shadow-md group-hover:text-purple-400 transition-colors leading-none">
+                              {folder.label}
+                            </h3>
+                            <div className="flex items-center gap-2 mt-1">
+                              <p className="text-[10px] font-bold text-gray-300 border-l-2 border-purple-500 pl-2">
+                                {folder.description}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="flex justify-end">
+                  <button
+                    onClick={() => setOrganizeTarget(null)}
+                    className="px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider text-gray-400 hover:text-white hover:bg-gray-800 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          )
+        }
+      </AnimatePresence >
     </div >
   );
 };

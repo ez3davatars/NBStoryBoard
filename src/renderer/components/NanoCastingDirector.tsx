@@ -7,12 +7,71 @@ import {
     Scan, Target, User, Layers, Share2,
     ChevronRight, RefreshCw, Cpu, Aperture, CheckCircle2, UserPlus, Upload, Sliders,
     Swords, Zap, Shield, Ghost, Camera as CameraIcon, Ban, RotateCcw,
-    EyeOff, Shirt, Sparkles, LayoutTemplate, Download, X, ChevronDown
+    EyeOff, Shirt, Sparkles, LayoutTemplate, Download, X, ChevronDown, Pencil
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
+import { getCovers, saveCover, deleteCover } from '../utils/nanoDB';
 import BodyScopeSelector from './BodyScopeSelector';
 import type { BodyScope } from './BodyScopeSelector';
+
+import titanMasc from '../assets/archetypes/titan_masc.png';
+import scoutMasc from '../assets/archetypes/scout_masc.png';
+import guardianMasc from '../assets/archetypes/guardian_masc.png';
+import spriteMasc from '../assets/archetypes/sprite_masc.png';
+
+// Import Fem Images
+import titanFem from '../assets/archetypes/titan_fem.png';
+import scoutFem from '../assets/archetypes/scout_fem.png';
+import guardianFem from '../assets/archetypes/guardian_fem.png';
+import spriteFem from '../assets/archetypes/sprite_fem.png';
+
+// Import Youth Images
+import titanYouth from '../assets/archetypes/titan_youth.png';
+import scoutYouth from '../assets/archetypes/scout_youth.png';
+import guardianYouth from '../assets/archetypes/guardian_youth.png';
+import spriteYouth from '../assets/archetypes/sprite_youth.png';
+
+// Import Archetype Images (Youth - Fem)
+import titanYouthFem from '../assets/archetypes/titan_youth_fem.png';
+import scoutYouthFem from '../assets/archetypes/scout_youth_fem.png';
+import guardianYouthFem from '../assets/archetypes/guardian_youth_fem.png';
+import spriteYouthFem from '../assets/archetypes/sprite_youth_fem.png';
+
+// Import Style Images
+// Import Style Images (Feminine / Default)
+import stylePixarFem from '../assets/styles/style_pixar.png';
+import styleHyperRealFem from '../assets/styles/style_hyper_real.png';
+import styleRetroAnimeFem from '../assets/styles/style_retro_anime.png';
+import styleComicBookFem from '../assets/styles/style_comic_book.png';
+import styleCyberpunkFem from '../assets/styles/style_cyberpunk.png';
+import styleExactStudioFem from '../assets/styles/style_exact_studio.png';
+
+// Import Style Images (Masculine)
+import stylePixarMasc from '../assets/styles/style_pixar_masc.png';
+import styleHyperRealMasc from '../assets/styles/style_hyper_real_masc.png';
+import styleRetroAnimeMasc from '../assets/styles/style_retro_anime_masc.png';
+import styleComicBookMasc from '../assets/styles/style_comic_book_masc.png';
+import styleCyberpunkMasc from '../assets/styles/style_cyberpunk_masc.png';
+import styleExactStudioMasc from '../assets/styles/style_exact_studio_masc.png';
+
+// Import Style Images (Youth - Masc)
+import stylePixarYouth from '../assets/styles/style_pixar_youth.png';
+import styleHyperRealYouth from '../assets/styles/style_hyper_real_youth.png';
+import styleRetroAnimeYouth from '../assets/styles/style_retro_anime_youth.png';
+import styleComicBookYouth from '../assets/styles/style_comic_book_youth.png';
+import styleCyberpunkYouth from '../assets/styles/style_cyberpunk_youth.png';
+import styleExactStudioYouth from '../assets/styles/style_exact_studio_youth.png';
+
+// Import Style Images (Youth - Fem)
+import stylePixarYouthFem from '../assets/styles/style_pixar_youth_fem.png';
+import styleHyperRealYouthFem from '../assets/styles/style_hyper_real_youth_fem.png';
+import styleRetroAnimeYouthFem from '../assets/styles/style_retro_anime_youth_fem.png';
+import styleComicBookYouthFem from '../assets/styles/style_comic_book_youth_fem.png';
+import styleCyberpunkYouthFem from '../assets/styles/style_cyberpunk_youth_fem.png';
+import styleExactStudioYouthFem from '../assets/styles/style_exact_studio_youth_fem.png';
+
+
 
 
 const REF_SHEET_STYLES = {
@@ -77,7 +136,7 @@ const STYLE_SCOPE_RULES: Record<string, { default: BodyScope; allowed: BodyScope
     comic_book: { default: 'torso', allowed: ['torso', 'full'] },
     cyberpunk: { default: 'torso', allowed: ['head', 'torso', 'full'] },
     hyper_real: { default: 'head', allowed: ['head', 'torso', 'full'] },
-    exact_studio: { default: 'head', allowed: ['head', 'torso'] },
+    exact_studio: { default: 'head', allowed: ['head', 'torso', 'full'] },
     // Defaults for undefined styles
     default: { default: 'full', allowed: ['head', 'torso', 'full'] }
 };
@@ -108,27 +167,95 @@ const NanoCastingDirector = () => {
 
     // --- PHASE 2: BODY ARCHETYPE STATE ---
     const [selectedBody, setSelectedBody] = useState<string | null>(null);
-    const [morphVariant, setMorphVariant] = useState<'masc' | 'fem' | 'youth'>('masc');
+    const [morphVariant, setMorphVariant] = useState<'masc' | 'fem' | 'youth_masc' | 'youth_fem'>('masc');
 
-    const getArchetypes = (variant: 'masc' | 'fem' | 'youth') => {
+    // --- CUSTOM COVERS STATE ---
+    const [customArchetypeCovers, setCustomArchetypeCovers] = useState<Record<string, string>>({});
+    // const [isLoadingCovers, setIsLoadingCovers] = useState(true); // Unused for now
+
+    // Load covers from IndexedDB on mount
+    useEffect(() => {
+        const loadCovers = async () => {
+            try {
+                const covers = await getCovers();
+                setCustomArchetypeCovers(covers);
+            } catch (error) {
+                console.error("Failed to load covers from DB", error);
+            } finally {
+                // setIsLoadingCovers(false);
+            }
+        };
+        loadCovers();
+    }, []);
+
+    const handleArchetypeCoverUpload = async (storageKey: string, file: File) => {
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+            const result = e.target?.result as string;
+
+            try {
+                // Optimistic UI update
+                setCustomArchetypeCovers(prev => ({
+                    ...prev,
+                    [storageKey]: result
+                }));
+
+                // Save to IndexedDB
+                await saveCover(storageKey, result);
+
+            } catch (error) {
+                console.error("Failed to save cover to DB", error);
+                alert("Failed to save image to database.");
+            }
+        };
+        reader.readAsDataURL(file);
+    };
+
+    const handleArchetypeCoverDelete = async (storageKey: string, e: React.MouseEvent) => {
+        e.stopPropagation(); // Prevent card selection
+        if (!confirm("Remove custom cover and revert to default?")) return;
+
+        try {
+            // Optimistic UI update
+            setCustomArchetypeCovers(prev => {
+                const next = { ...prev };
+                delete next[storageKey];
+                return next;
+            });
+
+            // Delete from IndexedDB
+            await deleteCover(storageKey);
+        } catch (error) {
+            console.error("Failed to delete cover from DB", error);
+        }
+    };
+
+    const getArchetypes = (variant: 'masc' | 'fem' | 'youth_masc' | 'youth_fem') => {
         switch (variant) {
             case 'fem': return [
-                { id: 'titan', name: 'The Amazon', desc: 'Tall, athletic strength, powerful feminine build', icon: Zap },
-                { id: 'scout', name: 'The Muse', desc: 'Slender, grace, agile elegance', icon: Sparkles },
-                { id: 'guardian', name: 'The Matriarch', desc: 'Curvaceous, heavy-set, commanding presence', icon: Shield },
-                { id: 'sprite', name: 'The Fae', desc: 'Petite, ethereal, stylized proportions', icon: Ghost }
+                { id: 'titan', name: 'The Amazon', desc: 'Tall, athletic strength, powerful feminine build', icon: Zap, defaultImage: titanFem },
+                { id: 'scout', name: 'The Muse', desc: 'Slender, grace, agile elegance', icon: Sparkles, defaultImage: scoutFem },
+                { id: 'guardian', name: 'The Matriarch', desc: 'Curvaceous, heavy-set, commanding presence', icon: Shield, defaultImage: guardianFem },
+                { id: 'sprite', name: 'The Fae', desc: 'Petite, ethereal, stylized proportions', icon: Ghost, defaultImage: spriteFem }
             ];
-            case 'youth': return [
-                { id: 'titan', name: 'The Prodigy', desc: 'Strong for age, athletic youth', icon: Swords },
-                { id: 'scout', name: 'The Rascal', desc: 'Wiry, quick, mischievous energy', icon: Zap },
-                { id: 'guardian', name: 'The Husky', desc: 'Solid, chubby, sturdy frame', icon: Shield },
-                { id: 'sprite', name: 'The Chibi', desc: 'Cute, oversized head, toddler proportions', icon: Ghost }
+            case 'youth_masc': return [
+                { id: 'titan', name: 'The Prodigy', desc: 'Strong for age, athletic youth', icon: Swords, defaultImage: titanYouth },
+                { id: 'scout', name: 'The Rascal', desc: 'Wiry, quick, mischievous energy', icon: Zap, defaultImage: scoutYouth },
+                { id: 'guardian', name: 'The Husky', desc: 'Solid, chubby, sturdy frame', icon: Shield, defaultImage: guardianYouth },
+                { id: 'sprite', name: 'The Chibi', desc: 'Cute, oversized head, toddler proportions', icon: Ghost, defaultImage: spriteYouth }
             ];
+            case 'youth_fem': return [
+                { id: 'titan', name: 'The Prodigy', desc: 'Strong for age, athletic youth', icon: Swords, defaultImage: titanYouthFem },
+                { id: 'scout', name: 'The Rascal', desc: 'Wiry, quick, mischievous energy', icon: Zap, defaultImage: scoutYouthFem },
+                { id: 'guardian', name: 'The Husky', desc: 'Solid, chubby, sturdy frame', icon: Shield, defaultImage: guardianYouthFem },
+                { id: 'sprite', name: 'The Chibi', desc: 'Cute, oversized head, toddler proportions', icon: Ghost, defaultImage: spriteYouthFem }
+            ];
+            // Fallback for MASC and default
             default: return [
-                { id: 'titan', name: 'The Titan', desc: 'Heroic V-taper, broad shoulders, muscular frame', icon: Swords },
-                { id: 'scout', name: 'The Scout', desc: 'Slim, agile, tall, sleek athletic build', icon: Zap },
-                { id: 'guardian', name: 'The Guardian', desc: 'Stocky, powerhouse, heavy-set, rectangular frame', icon: Shield },
-                { id: 'sprite', name: 'The Sprite', desc: 'Stylized Chibi proportions, oversized head', icon: Ghost }
+                { id: 'titan', name: 'The Titan', desc: 'Heroic V-taper, broad shoulders, muscular frame', icon: Swords, defaultImage: titanMasc },
+                { id: 'scout', name: 'The Scout', desc: 'Slim, agile, tall, sleek athletic build', icon: Zap, defaultImage: scoutMasc },
+                { id: 'guardian', name: 'The Guardian', desc: 'Stocky, powerhouse, heavy-set, rectangular frame', icon: Shield, defaultImage: guardianMasc },
+                { id: 'sprite', name: 'The Sprite', desc: 'Stylized Chibi proportions, oversized head', icon: Ghost, defaultImage: spriteMasc }
             ];
         }
     };
@@ -164,38 +291,86 @@ const NanoCastingDirector = () => {
         }
     }, [selectedStyle, bodyScope]);
 
-    const styleMatrix = {
-        pixar: {
-            id: 'pixar', label: 'Family 3D Animation',
-            keywords: "3D Disney-Pixar animation style, stylized proportions, big eyes, soft shapes, vibrant colors, exaggerated features, cute, charming, subsurface scattering, rim lighting, soft textures, Octane Render, masterpiece 3D.",
-            lighting: "Golden hour, cinematic bounce light"
-        },
-        hyper_real: {
-            id: 'hyper_real', label: 'Premium CG Realism',
-            keywords: "Photorealistic 8k, raw photo, exact facial structure preservation, 3d scan, photogrammetry, highly detailed skin pores, 85mm lens, f/1.8, cinematic natural lighting, sharp focus, masterpiece, biometric fidelity.",
-            lighting: "High-contrast studio lighting"
-        },
-        retro_anime: {
-            id: 'retro_anime', label: 'Retro Cel Anime',
-            keywords: "90s retro anime aesthetic, large eyes, simplified nose, dynamic hair, cel-shaded, hand-drawn ink lines, Studio Ghibli vibes, vintage film grain, soft pastel palette.",
-            lighting: "Soft diffused daylight"
-        },
-        comic_book: {
-            id: 'comic_book', label: 'Graphic Novel Noir',
-            keywords: "Modern graphic novel style, heavy ink outlines, Halftone dot patterns, high contrast, dramatic shadows, bold dynamic lines.",
-            lighting: "Hard noir shadows"
-        },
-        cyberpunk: {
-            id: 'cyberpunk', label: 'Cyberpunk V2',
-            keywords: "Futuristic tech-wear, neon glow, wet pavement reflections, volumetric fog, teal and orange palette, high-tech interface overlays.",
-            lighting: "Neon-drenched night"
-        },
-        exact_studio: {
-            id: 'exact_studio', label: 'Exact Likeness Studio',
-            keywords: "Ultra-realistic 8k portrait, 1:1 identity replication, strict facial feature preservation, studio lighting, highly detailed skin texture, raw photography, 85mm lens, sharp focus, masterpiece, identity locked.",
-            lighting: "Professional studio lighting"
-        }
+    // --- STYLE CONFIGURATION BY CATEGORY ---
+    const getStyleMatrix = (variant: 'masc' | 'fem' | 'youth_masc' | 'youth_fem') => {
+        const images = {
+            masc: {
+                pixar: stylePixarMasc,
+                hyper_real: styleHyperRealMasc,
+                retro_anime: styleRetroAnimeMasc,
+                comic_book: styleComicBookMasc,
+                cyberpunk: styleCyberpunkMasc,
+                exact_studio: styleExactStudioMasc
+            },
+            fem: {
+                pixar: stylePixarFem,
+                hyper_real: styleHyperRealFem,
+                retro_anime: styleRetroAnimeFem,
+                comic_book: styleComicBookFem,
+                cyberpunk: styleCyberpunkFem,
+                exact_studio: styleExactStudioFem
+            },
+            youth_masc: {
+                pixar: stylePixarYouth,
+                hyper_real: styleHyperRealYouth,
+                retro_anime: styleRetroAnimeYouth,
+                comic_book: styleComicBookYouth,
+                cyberpunk: styleCyberpunkYouth,
+                exact_studio: styleExactStudioYouth
+            },
+            youth_fem: {
+                pixar: stylePixarYouthFem,
+                hyper_real: styleHyperRealYouthFem,
+                retro_anime: styleRetroAnimeYouthFem,
+                comic_book: styleComicBookYouthFem,
+                cyberpunk: styleCyberpunkYouthFem,
+                exact_studio: styleExactStudioYouthFem
+            }
+        };
+
+        const activeImages = images[variant] || images.masc; // Fallback
+
+        return {
+            pixar: {
+                id: 'pixar', label: 'Family 3D Animation',
+                keywords: "3D Disney-Pixar animation style, stylized proportions, big eyes, soft shapes, vibrant colors, exaggerated features, cute, charming, subsurface scattering, rim lighting, soft textures, Octane Render, masterpiece 3D.",
+                lighting: "Golden hour, cinematic bounce light",
+                image: activeImages.pixar
+            },
+            hyper_real: {
+                id: 'hyper_real', label: 'Premium CG Realism',
+                keywords: "Photorealistic 8k, raw photo, exact facial structure preservation, 3d scan, photogrammetry, highly detailed skin pores, 85mm lens, f/1.8, cinematic natural lighting, sharp focus, masterpiece, biometric fidelity.",
+                lighting: "High-contrast studio lighting",
+                image: activeImages.hyper_real
+            },
+            retro_anime: {
+                id: 'retro_anime', label: 'Retro Cel Anime',
+                keywords: "90s retro anime aesthetic, large eyes, simplified nose, dynamic hair, cel-shaded, hand-drawn ink lines, Studio Ghibli vibes, vintage film grain, soft pastel palette.",
+                lighting: "Soft diffused daylight",
+                image: activeImages.retro_anime
+            },
+            comic_book: {
+                id: 'comic_book', label: 'Graphic Novel Noir',
+                keywords: "Modern graphic novel style, heavy ink outlines, Halftone dot patterns, high contrast, dramatic shadows, bold dynamic lines.",
+                lighting: "Hard noir shadows",
+                image: activeImages.comic_book
+            },
+            cyberpunk: {
+                id: 'cyberpunk', label: 'Cyberpunk V2',
+                keywords: "Futuristic tech-wear, neon glow, wet pavement reflections, volumetric fog, teal and orange palette, high-tech interface overlays.",
+                lighting: "Neon-drenched night",
+                image: activeImages.cyberpunk
+            },
+            exact_studio: {
+                id: 'exact_studio', label: 'Exact Likeness Studio',
+                keywords: "Ultra-realistic 8k portrait, 1:1 identity replication, strict facial feature preservation, studio lighting, highly detailed skin texture, raw photography, 85mm lens, sharp focus, masterpiece, identity locked.",
+                lighting: "Professional studio lighting",
+                image: activeImages.exact_studio
+            }
+        };
     };
+
+    const styleMatrix = getStyleMatrix(morphVariant);
 
     // --- PHASE 4 & 5: STATE ---
     const [isProcessing, setIsProcessing] = useState(false);
@@ -1933,7 +2108,8 @@ const NanoCastingDirector = () => {
                                         {[
                                             { id: 'masc', label: 'Masculine' },
                                             { id: 'fem', label: 'Feminine' },
-                                            { id: 'youth', label: 'Youth' }
+                                            { id: 'youth_masc', label: 'Youth (Boy)' },
+                                            { id: 'youth_fem', label: 'Youth (Girl)' }
                                         ].map((v) => (
                                             <button
                                                 key={v.id}
@@ -1951,25 +2127,83 @@ const NanoCastingDirector = () => {
                                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-6 w-full max-w-6xl">
                                     {bodyArchetypes.map((type) => {
                                         const Icon = type.icon;
+                                        // Scope cover by variant so 'titan' (masc) is different from 'titan' (fem)
+                                        const storageKey = `${morphVariant}_${type.id}`;
+                                        const customCover = customArchetypeCovers[storageKey];
+
                                         return (
-                                            <button
-                                                key={type.id}
-                                                onClick={() => setSelectedBody(type.id)}
-                                                className={`relative group h-96 border rounded-2xl p-6 flex flex-col items-center justify-between transition-all duration-300 overflow-hidden ${selectedBody === type.id
-                                                    ? 'bg-accent/10 border-accent shadow-lg shadow-accent/10'
-                                                    : 'bg-surface border-border hover:border-accent/50 group-hover:bg-surface-2'
-                                                    }`}
-                                            >
-                                                <div className="text-center z-10 w-full h-full flex flex-col items-center justify-center">
-                                                    <Icon className={`w-12 h-12 mb-4 ${selectedBody === type.id ? 'text-accent' : 'text-muted'}`} />
-                                                    <h3 className={`text-xl font-bold uppercase tracking-widest mb-2 ${selectedBody === type.id ? 'text-fg' : 'text-muted group-hover:text-fg'}`}>
-                                                        {type.name}
-                                                    </h3>
-                                                    <p className="text-xs text-muted/60 font-mono leading-relaxed">
-                                                        {type.desc}
-                                                    </p>
+                                            <div key={type.id} className="relative group h-96 w-full rounded-2xl overflow-hidden border border-white/10 shadow-2xl transition-all hover:scale-[1.02] hover:border-white/30 cursor-pointer" onClick={() => setSelectedBody(type.id)}>
+                                                {/* Hidden File Input for Editing */}
+                                                <input
+                                                    type="file"
+                                                    id={`upload-${type.id}`}
+                                                    className="hidden"
+                                                    accept="image/*"
+                                                    onChange={(e) => {
+                                                        const file = e.target.files?.[0];
+                                                        if (file) handleArchetypeCoverUpload(storageKey, file);
+                                                    }}
+                                                    onClick={(e) => e.stopPropagation()} // Prevent card selection
+                                                />
+
+                                                {/* Edit Button (Top Right) */}
+                                                <div className="absolute top-3 right-3 z-30 flex gap-2 opacity-0 group-hover:opacity-100 transition-all">
+                                                    {/* Reset Button (Only if custom cover exists) */}
+                                                    {customCover && (
+                                                        <button
+                                                            className="p-2 bg-red-500/80 hover:bg-red-600 text-white rounded-full border border-white/10 shadow-lg"
+                                                            onClick={(e) => handleArchetypeCoverDelete(storageKey, e)}
+                                                            title="Reset to Default"
+                                                        >
+                                                            <X className="w-3 h-3" />
+                                                        </button>
+                                                    )}
+
+                                                    {/* Upload Button */}
+                                                    <label
+                                                        htmlFor={`upload-${type.id}`}
+                                                        className="p-2 bg-black/60 hover:bg-black/90 text-white/50 hover:text-white rounded-full border border-white/10 hover:border-white/30 cursor-pointer"
+                                                        onClick={(e) => e.stopPropagation()}
+                                                        title="Change Cover Image"
+                                                    >
+                                                        <Pencil className="w-3 h-3" />
+                                                    </label>
                                                 </div>
-                                            </button>
+
+                                                {/* Background Image */}
+                                                {(customCover || (type as any).defaultImage) ? (
+                                                    <img src={customCover || (type as any).defaultImage} className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
+                                                ) : (
+                                                    <div className={`absolute inset-0 bg-gradient-to-br transition-all duration-300 ${selectedBody === type.id ? 'from-gray-800 to-black' : 'from-gray-900 to-black'}`}>
+                                                        {/* Fallback pattern if no image */}
+                                                        <div className="absolute inset-0 opacity-10"
+                                                            style={{ backgroundImage: 'radial-gradient(circle at center, white 1px, transparent 1px)', backgroundSize: '20px 20px' }}>
+                                                        </div>
+                                                    </div>
+                                                )}
+
+                                                {/* Selection Border Overlay */}
+                                                {selectedBody === type.id && (
+                                                    <div className="absolute inset-0 border-2 border-accent z-20 pointer-events-none rounded-2xl shadow-[inset_0_0_30px_rgba(250,204,21,0.2)]"></div>
+                                                )}
+
+                                                {/* Cinematic Filter Overlay */}
+                                                <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent z-10 flex flex-col justify-end px-6 pb-6">
+                                                    <div>
+                                                        <div className="flex items-center gap-2 mb-1">
+                                                            {/* Small Icon next to title */}
+                                                            <Icon className={`w-4 h-4 ${selectedBody === type.id ? 'text-accent' : 'text-white/70'}`} />
+                                                            <span className="text-[9px] font-mono text-white/50 uppercase tracking-widest">{type.id} CLASS</span>
+                                                        </div>
+                                                        <h3 className={`text-2xl font-black italic tracking-tighter uppercase drop-shadow-md transition-colors leading-none ${selectedBody === type.id ? 'text-yellow-500' : 'text-white group-hover:text-yellow-500'}`}>
+                                                            {type.name}
+                                                        </h3>
+                                                        <p className="text-xs text-gray-400 mt-2 line-clamp-2 leading-relaxed opacity-80 group-hover:opacity-100 transition-opacity">
+                                                            {type.desc}
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                            </div>
                                         );
                                     })}
                                 </div>
@@ -2015,7 +2249,7 @@ const NanoCastingDirector = () => {
                                         const isSelected = selectedStyle === normalizedId;
 
                                         return (
-                                            <button
+                                            <div
                                                 key={style.id}
                                                 onClick={() => {
                                                     const normalizedId = normalizeStyleId(style.id);
@@ -2025,28 +2259,53 @@ const NanoCastingDirector = () => {
                                                     const rules = STYLE_SCOPE_RULES[normalizedId] || STYLE_SCOPE_RULES.default;
                                                     setBodyScope(rules.default);
                                                 }}
-                                                className={`group relative h-40 border rounded-xl transition-all duration-300 overflow-hidden flex flex-col justify-center px-8 ${isSelected
-                                                    ? 'bg-surface border-blue-500 shadow-[0_0_20px_rgba(59,130,246,0.5)] scale-105 z-10'
-                                                    : 'bg-surface border-border hover:border-accent hover:bg-surface-2'
+                                                className={`group relative h-56 border rounded-xl transition-all duration-300 overflow-hidden flex flex-col justify-end cursor-pointer ${isSelected
+                                                    ? 'bg-surface border-blue-500 shadow-[0_0_20px_rgba(59,130,246,0.3)] scale-[1.02] z-10'
+                                                    : 'bg-surface border-border hover:border-accent hover:shadow-xl hover:scale-[1.01]'
                                                     }`}
                                             >
-                                                <div className="flex justify-between items-center mb-2">
-                                                    <span className={`text-xl font-black uppercase tracking-tighter ${isSelected ? 'text-blue-400' : 'text-fg'}`}>
-                                                        {style.label}
-                                                    </span>
-                                                    <Target className={`w-5 h-5 ${isSelected ? 'text-blue-400' : 'text-muted'}`} />
-                                                </div>
-                                                <p className={`text-[10px] font-mono leading-tight line-clamp-2 ${isSelected ? 'text-blue-200/70' : 'text-muted'}`}>
-                                                    {style.keywords}
-                                                </p>
-                                                {/* Preview Mockup */}
-                                                <div className="flex gap-1 mt-3">
-                                                    <div className={`w-2 h-2 rounded-full ${isSelected ? 'bg-blue-400' : 'bg-muted'}`}></div>
-                                                    <div className={`w-2 h-2 rounded-full opacity-50 ${isSelected ? 'bg-blue-400' : 'bg-muted'}`}></div>
-                                                    <div className={`w-2 h-2 rounded-full opacity-25 ${isSelected ? 'bg-blue-400' : 'bg-muted'}`}></div>
-                                                </div>
+                                                {/* Background Image */}
+                                                <img
+                                                    src={style.image}
+                                                    className={`absolute inset-0 w-full h-full object-cover transition-transform duration-700 ${isSelected ? 'scale-110' : 'group-hover:scale-105'}`}
+                                                />
 
-                                            </button>
+                                                {/* Selection Border Overlay */}
+                                                {isSelected && (
+                                                    <div className="absolute inset-0 border-2 border-blue-500 z-20 pointer-events-none rounded-xl shadow-[inset_0_0_30px_rgba(59,130,246,0.2)]"></div>
+                                                )}
+
+                                                {/* Cinematic Filter Overlay */}
+                                                <div className={`absolute inset-0 z-10 flex flex-col justify-end px-6 pb-2.5 transition-all duration-300 ${isSelected
+                                                    ? 'bg-gradient-to-t from-black/90 via-black/20 to-transparent'
+                                                    : 'bg-gradient-to-t from-black/90 via-black/30 to-transparent group-hover:via-black/20'
+                                                    }`}>
+                                                    <div className="transform transition-transform duration-300 group-hover:-translate-y-1">
+                                                        <div className="flex items-center gap-2 mb-1">
+                                                            <Target className={`w-3 h-3 ${isSelected ? 'text-blue-400' : 'text-white/70'}`} />
+                                                            <span className="text-[9px] font-mono text-white/50 uppercase tracking-widest">PROTOCOL</span>
+                                                        </div>
+                                                        <div className="flex justify-between items-end mb-1">
+                                                            <h3 className={`text-lg font-black italic tracking-tighter uppercase drop-shadow-md transition-colors leading-none ${isSelected ? 'text-blue-400' : 'text-white group-hover:text-blue-400'}`}>
+                                                                {style.label}
+                                                            </h3>
+                                                        </div>
+                                                        <p className={`text-[10px] font-medium leading-tight line-clamp-2 mb-2 ${isSelected ? 'text-blue-100/80' : 'text-gray-300/80'}`}>
+                                                            {style.keywords.split(',').slice(0, 4).join(', ')}...
+                                                        </p>
+
+                                                        {/* Tech Specs Micro-UI */}
+                                                        <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                            <div className="px-1.5 py-0.5 bg-black/50 backdrop-blur-md rounded text-[7px] font-mono text-white/70 border border-white/10 uppercase tracking-wider">
+                                                                8K RES
+                                                            </div>
+                                                            <div className="px-1.5 py-0.5 bg-black/50 backdrop-blur-md rounded text-[7px] font-mono text-white/70 border border-white/10 uppercase tracking-wider">
+                                                                AUTO-LIGHT
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
                                         );
                                     })}
                                 </div>

@@ -25,7 +25,8 @@ import {
   UserPlus,
   Download,
   Copy,
-  X
+  X,
+  Hammer
 } from 'lucide-react';
 
 // --- 1. TYPES & INTERFACES ---
@@ -129,6 +130,37 @@ const ImageInspector = () => {
         )}
 
         <div className="fixed bottom-12 left-1/2 -translate-x-1/2 flex gap-4 z-[2001] bg-black/40 backdrop-blur-2xl border border-white/10 p-2 rounded-2xl shadow-2xl">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              const newCast: CastMember = {
+                id: `cast-insp-${Date.now()}`,
+                url: state.inspectImage!,
+                tag: 'front',
+                name: 'New Cast Member',
+                profile: { identity: 'Unknown', wardrobe: '', accessories: '', style: '' }
+              };
+              dispatch({ type: 'ADD_CAST', payload: newCast });
+              dispatch({ type: 'ADD_LOG', payload: { message: "Added to Cast", type: 'success' } });
+            }}
+            className="w-14 h-14 bg-emerald-500/20 hover:bg-emerald-500 text-emerald-500 hover:text-white rounded-xl transition-all transform hover:scale-110 flex items-center justify-center border border-emerald-500/30"
+            title="Add to Cast"
+          >
+            <UserPlus className="w-6 h-6 stroke-[2.5]" />
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: state.inspectImage });
+              dispatch({ type: 'SET_VIEW', payload: 'casting' });
+              closeInspector();
+              dispatch({ type: 'ADD_LOG', payload: { message: "Loaded into Forge", type: 'success' } });
+            }}
+            className="w-14 h-14 bg-blue-500/20 hover:bg-blue-500 text-blue-500 hover:text-white rounded-xl transition-all transform hover:scale-110 flex items-center justify-center border border-blue-500/30"
+            title="Load to Forge"
+          >
+            <Hammer className="w-6 h-6 stroke-[2.5]" />
+          </button>
           <button
             onClick={(e) => { e.stopPropagation(); closeInspector(); }}
             className="w-14 h-14 bg-red-500/20 hover:bg-red-500 text-red-500 hover:text-white rounded-xl transition-all transform hover:scale-110 flex items-center justify-center border border-red-500/30"
