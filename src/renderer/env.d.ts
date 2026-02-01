@@ -30,3 +30,16 @@ declare module '*.svg' {
   const value: string;
   export default value;
 }
+
+interface ElectronAPI {
+  selectFolder: () => Promise<string | null>;
+  readFile: (path: string) => Promise<string | null>; // Returns base64 string
+  writeFile: (path: string, buffer: ArrayBuffer) => Promise<boolean>;
+  exists: (path: string) => Promise<boolean>;
+  listFiles: (path: string) => Promise<string[]>;
+  joinPath: (...args: string[]) => Promise<string>;
+}
+
+interface Window {
+  electronAPI?: ElectronAPI;
+}

@@ -2,11 +2,13 @@ import React, { useState, useEffect, useRef } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import {
   Upload, RefreshCcw, Maximize, Shirt, Sparkles, Download,
-  UserPlus, X, Eraser, Save, Trash2
+  UserPlus, X, Eraser, Trash2, Undo2, Redo2, CheckCircle2
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
 import type { WardrobeItem, CastMember } from '../context/AppContext';
+import { nativeJoinPath, nativeListFiles, nativeReadFile } from '../utils/NativeFileAssets';
+import { removeBackground } from "@imgly/background-removal";
 
 const WardrobeStudio = () => {
   const { state, dispatch } = useAppContext();
@@ -21,155 +23,744 @@ const WardrobeStudio = () => {
   const [tryOnMask, setTryOnMask] = useState<string | null>(null);
 
   // Try-On Removal State
+  // Try-On Removal State (Advanced Port from CastingForge)
   const [removeTryOnBg, setRemoveTryOnBg] = useState(false);
-  const [tryOnAiMaskActive, setTryOnAiMaskActive] = useState(true);
-  const [tryOnTolerance, setTryOnTolerance] = useState(15);
-  const [tryOnSpillSuppression, setTryOnSpillSuppression] = useState(100);
-  const [tryOnMaskSoftening, setTryOnMaskSoftening] = useState(1.5);
-  const [tryOnInvertBg, setTryOnInvertBg] = useState(false);
-  const [matteErosion, setMatteErosion] = useState(1); // 0-5 pixels erosion
-  const tryOnImgRef = useRef<HTMLImageElement>(null);
-  const tryOnMaskImgRef = useRef<HTMLImageElement>(null);
-  const tryOnCanvasRef = useRef<HTMLCanvasElement>(null);
+  // const [tryOnAiMaskActive, setTryOnAiMaskActive] = useState(true); // Deprecated
+
+  // Advanced Composition State
+  const [fringeSize, setFringeSize] = useState(0);
+  const [erodedUrl, setErodedUrl] = useState<string | null>(null);
+  const [restorationLayer, setRestorationLayer] = useState<string | null>(null);
   const [processedTryOnUrl, setProcessedTryOnUrl] = useState<string | null>(null);
+
+  // Manual Restoration Tools
+  const [isBrushActive, setIsBrushActive] = useState(false);
+  const [brushSize, setBrushSize] = useState(20);
+  const [history, setHistory] = useState<string[]>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+
+  // Isolation Progress State (Ported from CastingForge)
+  const [isIsolating, setIsIsolating] = useState(false);
+  const [isolationProgress, setIsolationProgress] = useState(0);
+
+  // Draggable Panel State
+  const [panelPosition, setPanelPosition] = useState<{ x: number, y: number } | null>(null);
+  const [isDraggingPanel, setIsDraggingPanel] = useState(false);
+  const [panelDragOffset, setPanelDragOffset] = useState({ x: 0, y: 0 });
+
+  // Refs
+  const tryOnImgRef = useRef<HTMLImageElement>(null); // The Base Image (Fitted)
+  const previewImgRef = useRef<HTMLImageElement>(null); // The Composite Result
+  const uiCanvasRef = useRef<HTMLCanvasElement>(null); // For Brush Cursor
+  const restorationCanvasRef = useRef<HTMLCanvasElement>(null); // Offscreen Layer
+  const panelDimRef = useRef({ w: 0, h: 0 });
+  const tryOnCanvasRef = useRef<HTMLCanvasElement>(null); // Internal Processing Canvas
+  const historyRef = useRef<string[]>([]);
+  const historyIndexRef = useRef(-1);
+  const isPaintingRef = useRef(false);
+  const isSyncingRef = useRef(false); // Track async canvas sync state
+  const syncRequestId = useRef(0); // Track migration/sync requests to avoid race conditions
+  const lastPaintPos = useRef<{ x: number, y: number } | null>(null);
+  const lastScreenPos = useRef<{ x: number, y: number } | null>(null);
+  const cachedBaseImgRef = useRef<HTMLImageElement | null>(null);
+  const cachedOriginalImgRef = useRef<HTMLImageElement | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null); // Main container for interactions
 
   // Designer Workspace Refs
   const designerImgRef = useRef<HTMLImageElement>(null);
   const maskImgRef = useRef<HTMLImageElement>(null);
 
-  const runTryOnIsolation = (): string | null => {
-    if (removeTryOnBg && fittedImage && tryOnImgRef.current && tryOnCanvasRef.current) {
-      const canvas = tryOnCanvasRef.current;
-      const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      const img = tryOnImgRef.current;
-      if (!img.complete || img.naturalWidth === 0) return null;
+  // --- HELPERS PORTED FROM CASTINGFORGE ---
 
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-      ctx?.clearRect(0, 0, canvas.width, canvas.height);
+  // PHASE 1: EROSION (Heavy - CPU)
+  const generateErodedMask = async (srcUrl: string, pixels: number): Promise<string> => {
+    if (pixels === 0) return srcUrl;
 
-      let finalUrl: string | null = null;
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        if (!ctx) { resolve(srcUrl); return; }
 
-      // AI MASKING BRANCH
-      if (tryOnAiMaskActive && tryOnMask && tryOnMaskImgRef.current) {
-        const maskImg = tryOnMaskImgRef.current;
-        if (maskImg.complete && maskImg.naturalWidth > 0) {
-          const tempCanvas = document.createElement('canvas');
-          tempCanvas.width = canvas.width;
-          tempCanvas.height = canvas.height;
-          const tempCtx = tempCanvas.getContext('2d');
-          tempCtx?.drawImage(maskImg, 0, 0, canvas.width, canvas.height);
-
-          let maskData = tempCtx?.getImageData(0, 0, canvas.width, canvas.height);
-
-          if (matteErosion > 0 && maskData) {
-            const originalData = new Uint8ClampedArray(maskData.data);
-            const width = canvas.width;
-            const height = canvas.height;
-            const eroded = maskData.data;
-            const radius = matteErosion;
-
-            for (let y = radius; y < height - radius; y++) {
-              for (let x = radius; x < width - radius; x++) {
-                const idx = (y * width + x) * 4;
-                let minLuminance = 255;
-                for (let dy = -radius; dy <= radius; dy++) {
-                  for (let dx = -radius; dx <= radius; dx++) {
-                    const nIdx = ((y + dy) * width + (x + dx)) * 4;
-                    const lum = (originalData[nIdx] + originalData[nIdx + 1] + originalData[nIdx + 2]) / 3;
-                    if (lum < minLuminance) minLuminance = lum;
-                    if (minLuminance === 0) break;
-                  }
-                  if (minLuminance === 0) break;
-                }
-                eroded[idx] = eroded[idx + 1] = eroded[idx + 2] = minLuminance;
-              }
-            }
-            tempCtx?.putImageData(maskData, 0, 0);
-          }
-
-          // APPLY MASK SOFTENING (Blur the mask itself for smooth edges)
-          if (tryOnMaskSoftening > 0 && tempCtx) {
-            const blurCanvas = document.createElement('canvas');
-            blurCanvas.width = canvas.width;
-            blurCanvas.height = canvas.height;
-            const blurCtx = blurCanvas.getContext('2d');
-            if (blurCtx) {
-              blurCtx.filter = `blur(${tryOnMaskSoftening}px)`;
-              blurCtx.drawImage(tempCanvas, 0, 0);
-              // Update maskData to blurred version
-              maskData = blurCtx.getImageData(0, 0, canvas.width, canvas.height);
-            }
-          }
-
-          // 3. Composite original image with (eroded/softened) mask
-          ctx?.drawImage(img, 0, 0);
-          const imgData = ctx?.getImageData(0, 0, canvas.width, canvas.height);
-          const finalMaskData = maskData || tempCtx?.getImageData(0, 0, canvas.width, canvas.height);
-
-          if (imgData && finalMaskData) {
-            const data = imgData.data;
-            const mask = finalMaskData.data;
-
-            for (let i = 0; i < data.length; i += 4) {
-              const maskLum = (mask[i] + mask[i + 1] + mask[i + 2]) / 3;
-              data[i + 3] = tryOnInvertBg ? (255 - maskLum) : maskLum;
-
-              if (tryOnSpillSuppression > 0 && data[i + 3] > 0) {
-                const r = data[i]; const g = data[i + 1]; const b = data[i + 2];
-                const avgRB = (r + b) / 2;
-                if (g > avgRB) {
-                  const factor = tryOnSpillSuppression / 100;
-                  data[i + 1] = g * (1 - factor) + avgRB * factor;
-                }
-              }
-            }
-
-            ctx?.putImageData(imgData, 0, 0);
-            setProcessedTryOnUrl(canvas.toDataURL('image/png'));
-            return canvas.toDataURL('image/png');
-          }
-        }
-      }
-
-      // FALLBACK: Color Keying
-      ctx?.drawImage(img, 0, 0);
-      const imageData = ctx?.getImageData(0, 0, canvas.width, canvas.height);
-      if (imageData) {
+        ctx.drawImage(img, 0, 0);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         const data = imageData.data;
-        const key = { r: data[0], g: data[1], b: data[2] };
-        for (let i = 0; i < data.length; i += 4) {
-          const r = data[i]; const g = data[i + 1]; const b = data[i + 2];
-          const isMatch = Math.abs(r - key.r) < tryOnTolerance && Math.abs(g - key.g) < tryOnTolerance && Math.abs(b - key.b) < tryOnTolerance;
+        const w = canvas.width;
+        const h = canvas.height;
 
-          if (tryOnInvertBg) { if (!isMatch) data[i + 3] = 0; }
-          else { if (isMatch) data[i + 3] = 0; }
-
-          if (tryOnSpillSuppression > 0 && data[i + 3] > 0) {
-            const rP = data[i]; const gP = data[i + 1]; const bP = data[i + 2];
-            const avgRB = (rP + bP) / 2;
-            if (gP > avgRB) {
-              const factor = tryOnSpillSuppression / 100;
-              data[i + 1] = gP * (1 - factor) + avgRB * factor;
-            }
+        // GREEN SUPPRESSION PASS (Fixes internal islands that Imgly misses)
+        // #39FF14 = R:57, G:255, B:20
+        for (let j = 0; j < data.length; j += 4) {
+          const r = data[j];
+          const g = data[j + 1];
+          const b = data[j + 2];
+          // Strict Neon Green Detection (approx #39FF14)
+          if (g > 180 && r < 120 && b < 120) {
+            data[j + 3] = 0; // Set Alpha to 0
           }
         }
-        ctx?.putImageData(imageData, 0, 0);
-        finalUrl = canvas.toDataURL('image/png');
-        setProcessedTryOnUrl(finalUrl);
-        return finalUrl;
-      }
-    } else {
-      setProcessedTryOnUrl(null);
-    }
-    return null;
+
+        // Create a copy for reading so we don't read already-modified pixels
+        const originalAlphaArr = new Uint8Array(w * h);
+        for (let i = 0; i < w * h; i++) {
+          originalAlphaArr[i] = data[i * 4 + 3];
+        }
+
+        // SUB-PIXEL EROSION
+        const rBase = Math.floor(pixels);
+        const rExt = rBase + 1;
+        const fraction = pixels - rBase;
+
+        for (let y = 0; y < h; y++) {
+          for (let x = 0; x < w; x++) {
+            const idx = (y * w + x) * 4;
+            if (data[idx + 3] === 0) continue;
+
+            let minBase = 255;
+            let minExt = 255;
+
+            for (let dy = -rExt; dy <= rExt; dy++) {
+              for (let dx = -rExt; dx <= rExt; dx++) {
+                const nx = x + dx;
+                const ny = y + dy;
+                let nAlpha = 0;
+                if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
+                  nAlpha = originalAlphaArr[ny * w + nx];
+                }
+                const dist = Math.max(Math.abs(dx), Math.abs(dy));
+                if (dist <= rBase) { if (nAlpha < minBase) minBase = nAlpha; }
+                if (dist <= rExt) { if (nAlpha < minExt) minExt = nAlpha; }
+              }
+            }
+            const finalAlpha = minBase * (1 - fraction) + minExt * fraction;
+            // PRESERVE RGB - ONLY MODIFY ALPHA
+            data[idx + 3] = finalAlpha;
+          }
+        }
+
+        ctx.putImageData(imageData, 0, 0);
+        resolve(canvas.toDataURL());
+      };
+      img.onerror = () => {
+        console.error("Failed to load mask for erosion");
+        resolve(srcUrl); // Fallback to original
+      };
+      img.src = srcUrl;
+    });
   };
 
+
+  // PHASE 2: RESTORATION (Light - GPU Composition)
+  const compositeRestoration = (
+    baseInput: string | HTMLImageElement,
+    originalInput: string | HTMLImageElement,
+    restoreLayerUrl: string | null
+  ): Promise<string> => {
+    // console.log("COMPOSITE: Start", { hasRestore: !!restoreLayerUrl, baseType: typeof baseInput });
+
+    // If no restoration layer, return base (if string) or src (if image)
+    if (!restoreLayerUrl) {
+      return Promise.resolve(typeof baseInput === 'string' ? baseInput : baseInput.src);
+    }
+
+    // RETRY LOGIC WRAPPER
+    const attemptComposite = (retryCount = 0): Promise<string> => {
+      return new Promise((resolve) => {
+        // Helper to wait for image if string
+        const ensureImage = (input: string | HTMLImageElement): Promise<HTMLImageElement> => {
+          if (typeof input !== 'string') return Promise.resolve(input);
+          return new Promise((res, rej) => {
+            const i = new Image();
+            i.crossOrigin = "anonymous";
+            i.onload = () => res(i);
+            i.onerror = () => {
+              console.error(`Failed to load image: ${input.slice(0, 50)}...`);
+              rej();
+            };
+            i.src = input;
+          });
+        };
+
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+
+        ensureImage(baseInput).then(baseImg => {
+          canvas.width = baseImg.width;
+          canvas.height = baseImg.height;
+
+          if (!ctx) { resolve(baseImg.src); return; }
+
+          // 1. Draw Eroded Base
+          ctx.drawImage(baseImg, 0, 0);
+
+          // 2. Local Restoration
+          const restoreImg = new Image();
+          restoreImg.onload = () => {
+            ensureImage(originalInput).then(originalImg => {
+              const tempCanvas = document.createElement('canvas');
+              tempCanvas.width = canvas.width;
+              tempCanvas.height = canvas.height;
+              const tCtx = tempCanvas.getContext('2d');
+              if (tCtx) {
+                tCtx.drawImage(restoreImg, 0, 0);
+                tCtx.globalCompositeOperation = 'source-in';
+                tCtx.drawImage(originalImg, 0, 0);
+
+                ctx.globalCompositeOperation = 'source-over';
+                ctx.drawImage(tempCanvas, 0, 0);
+              }
+              resolve(canvas.toDataURL());
+            }).catch(() => {
+              console.error("Failed to load original for composite");
+              if (retryCount < 1) {
+                console.warn("Retrying composite with fresh load...");
+                attemptComposite(retryCount + 1).then(resolve);
+              } else {
+                resolve(baseImg.src);
+              }
+            });
+          };
+          restoreImg.onerror = () => {
+            console.error("Failed to load restoration mask");
+            if (retryCount < 1) {
+              console.warn("Retrying composite due to mask load fail...");
+              attemptComposite(retryCount + 1).then(resolve);
+            } else {
+              resolve(baseImg.src);
+            }
+          };
+          restoreImg.src = restoreLayerUrl;
+
+        }).catch(() => {
+          console.error("Failed to load base for composite");
+          resolve("");
+        });
+      });
+    };
+
+    return attemptComposite(0);
+  };
+
+  // EFFECT: Reset Restoration on New Image
   useEffect(() => {
-    runTryOnIsolation();
-  }, [removeTryOnBg, tryOnTolerance, matteErosion, fittedImage, tryOnMask, tryOnAiMaskActive, tryOnSpillSuppression, tryOnMaskSoftening, tryOnInvertBg]);
+    // When the main image changes, we MUST clear all manual edits
+    setRestorationLayer(null);
+    setRemoveTryOnBg(false); // Reset bg toggle
+    setIsBrushActive(false); // Reset brush tool
+
+    // Clear History
+    setHistory([]);
+    historyRef.current = [];
+    setHistoryIndex(-1);
+    historyIndexRef.current = -1;
+
+    // Clear Canvas
+    if (restorationCanvasRef.current) {
+      const ctx = restorationCanvasRef.current.getContext('2d');
+      ctx?.clearRect(0, 0, restorationCanvasRef.current.width, restorationCanvasRef.current.height);
+    }
+  }, [fittedImage]);
+
+  // EFFECT 1.5: Preload/Cache Static Images
+  useEffect(() => {
+    // ALWAYS clear cache first to prevent stale image usage
+    cachedBaseImgRef.current = null;
+
+    const base = erodedUrl || tryOnMask;
+    if (base && typeof base === 'string') {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.src = base;
+      img.onload = () => { cachedBaseImgRef.current = img; };
+    }
+  }, [erodedUrl, tryOnMask]);
+
+  useEffect(() => {
+    cachedOriginalImgRef.current = null;
+    if (fittedImage) {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.src = fittedImage;
+      img.onload = () => { cachedOriginalImgRef.current = img; };
+    }
+  }, [fittedImage]);
+
+  // EFFECT 2: Handle Composition (Fast)
+  useEffect(() => {
+    // If Remove BG is off, show nothing
+    if (!removeTryOnBg) {
+      setProcessedTryOnUrl(null);
+      return;
+    }
+
+    // Determine the base mask (Eroded or Raw)
+    const base = erodedUrl || tryOnMask;
+    if (!base) return;
+
+    let active = true;
+
+    const composite = async () => {
+      // Use Cached Images if available to prevent flickering
+      const baseInput = cachedBaseImgRef.current || base;
+      const originalInput = cachedOriginalImgRef.current || fittedImage;
+
+      if (originalInput) {
+        compositeRestoration(baseInput, originalInput, restorationLayer).then(url => {
+          if (active) {
+            setProcessedTryOnUrl(url);
+          }
+        });
+      }
+    };
+
+    composite();
+
+    return () => { active = false; };
+  }, [erodedUrl, tryOnMask, restorationLayer, removeTryOnBg, fittedImage]);
+
+  // Simplified Isolation (Just triggers Img.ly and sets mask)
+  const runTryOnIsolation = async (): Promise<string | null> => {
+    if (!fittedImage) return null; // removeTryOnBg check removed to allow manual run even if off? No, safer to keep logic consistent but Cast allows run if null.
+
+    try {
+      setIsIsolating(true);
+      setIsolationProgress(0);
+
+      const res = await fetch(fittedImage);
+      const blob = await res.blob();
+
+      const blobResult = await removeBackground(blob, {
+        progress: (_key: string, current: number, total: number) => {
+          if (total > 0) setIsolationProgress(Math.round((current / total) * 100));
+        }
+      });
+
+      const url = URL.createObjectURL(blobResult);
+      setTryOnMask(url);
+      setRemoveTryOnBg(true); // Auto-enable
+      return url;
+    } catch (e) {
+      console.error("Isolation failed", e);
+      dispatch({ type: 'ADD_LOG', payload: { message: "Isolation failed. Please try again.", type: 'error' } });
+      return null;
+    } finally {
+      setIsIsolating(false);
+      setIsolationProgress(0);
+    }
+  };
+
+  // EFFECT: Handle Erosion (Slow)
+  useEffect(() => {
+    if (!removeTryOnBg || !tryOnMask) {
+      setErodedUrl(null);
+      setIsIsolating(false);
+      return;
+    }
+
+    if (fringeSize === 0) {
+      setErodedUrl(tryOnMask);
+      setIsIsolating(false);
+      return;
+    }
+
+    setIsIsolating(true);
+    let active = true;
+    const t = setTimeout(() => {
+      generateErodedMask(tryOnMask, fringeSize).then(url => {
+        if (active) {
+          setErodedUrl(url);
+          setIsIsolating(false);
+        }
+      });
+    }, 100);
+
+    return () => { active = false; clearTimeout(t); };
+  }, [tryOnMask, fringeSize, removeTryOnBg]);
+
+
+  // --- INTERACTION HANDLERS ---
+
+  // SAFE SYNC REF CANVAS (Async Locked)
+  const syncRefCanvas = (url: string | null) => {
+    // Note: Wardrobe uses 'tryOnImgRef' as the dimension source
+    if (!tryOnImgRef.current) return;
+
+    // Ensure Dimension Sync
+    const requiredW = tryOnImgRef.current.naturalWidth;
+    const requiredH = tryOnImgRef.current.naturalHeight;
+
+    if (!restorationCanvasRef.current || restorationCanvasRef.current.width !== requiredW) {
+      console.log("SyncRef initializing canvas:", requiredW, requiredH);
+      const c = document.createElement('canvas');
+      c.width = requiredW;
+      c.height = requiredH;
+      restorationCanvasRef.current = c;
+    }
+
+    const ctx = restorationCanvasRef.current.getContext('2d');
+    if (!ctx) return;
+
+    const currentId = ++syncRequestId.current;
+
+    if (url) {
+      isSyncingRef.current = true;
+      const img = new Image();
+      img.onload = () => {
+        if (currentId === syncRequestId.current) {
+          if (restorationCanvasRef.current) {
+            // Re-verify dimensions on load just in case
+            if (restorationCanvasRef.current.width !== img.width && img.width > 0) {
+              restorationCanvasRef.current.width = img.width;
+              restorationCanvasRef.current.height = img.height;
+            }
+
+            const ctx = restorationCanvasRef.current.getContext('2d');
+            ctx?.clearRect(0, 0, restorationCanvasRef.current.width, restorationCanvasRef.current.height);
+            ctx?.drawImage(img, 0, 0);
+          }
+        }
+        isSyncingRef.current = false;
+      };
+      img.onerror = () => {
+        console.error("Failed to load history snapshot in SyncRef");
+        isSyncingRef.current = false;
+      }
+      img.src = url;
+    } else {
+      ctx.clearRect(0, 0, restorationCanvasRef.current.width, restorationCanvasRef.current.height);
+    }
+  };
+
+  const handleUndo = () => {
+    const currentIndex = historyIndexRef.current;
+    // Allow undoing if we are at least at index 0 (1st item) to go back to -1 (Empty)
+    if (currentIndex >= 0) {
+      const newIndex = currentIndex - 1;
+      const snapshot = newIndex >= 0 ? historyRef.current[newIndex] : null;
+
+      historyIndexRef.current = newIndex;
+      setHistoryIndex(newIndex);
+      setRestorationLayer(snapshot);
+      syncRefCanvas(snapshot);
+    }
+  };
+
+  const handleRedo = () => {
+    const currentIndex = historyIndexRef.current;
+    const currentHist = historyRef.current;
+    if (currentIndex < currentHist.length - 1) {
+      const newIndex = currentIndex + 1;
+      const snapshot = currentHist[newIndex];
+
+      historyIndexRef.current = newIndex;
+      setHistoryIndex(newIndex);
+      setRestorationLayer(snapshot);
+      syncRefCanvas(snapshot);
+    }
+  };
+
+  // HELPER: Purge Restoration State
+  const purgeRestorationState = () => {
+    setRestorationLayer(null);
+    setHistory([]);
+    setHistoryIndex(-1);
+    historyRef.current = [];
+    historyIndexRef.current = -1;
+    if (restorationCanvasRef.current) {
+      const ctx = restorationCanvasRef.current.getContext('2d');
+      ctx?.clearRect(0, 0, restorationCanvasRef.current.width, restorationCanvasRef.current.height);
+    }
+  };
+
+  const handlePanelMouseDown = (e: React.MouseEvent) => {
+    e.stopPropagation();
+
+    // prevent drag if interacting with controls
+    const target = e.target as HTMLElement;
+    if (['INPUT', 'BUTTON', 'LABEL'].includes(target.tagName) || target.closest('button') || target.closest('label')) {
+      return;
+    }
+
+    e.preventDefault();
+
+    if (!containerRef.current) return;
+
+    // Use currentTarget to get the card itself
+    const panel = e.currentTarget as HTMLElement;
+    const panelRect = panel.getBoundingClientRect();
+    const containerRect = containerRef.current.getBoundingClientRect();
+
+    // Store Panel Dimensions for Boundary Checks
+    panelDimRef.current = { w: panelRect.width, h: panelRect.height };
+
+    const offsetX = e.clientX - panelRect.left;
+    const offsetY = e.clientY - panelRect.top;
+
+    setPanelDragOffset({ x: offsetX, y: offsetY });
+    setIsDraggingPanel(true);
+
+    const borderLeft = containerRef.current.clientLeft || 0;
+    const borderTop = containerRef.current.clientTop || 0;
+
+    setPanelPosition({
+      x: panelRect.left - containerRect.left - borderLeft,
+      y: panelRect.top - containerRect.top - borderTop
+    });
+  };
+
+
+  // MOUSE TO IMAGE COORDINATE MAPPER
+  const getImgCoords = (clientX: number, clientY: number) => {
+    // 1. Identify which image is ACTUALLY visible to the user
+    // If preview exists, we use previewImgRef (which is object-contain)
+    // If not, we use tryOnImgRef (which is object-contain)
+    const activeImg = (processedTryOnUrl && previewImgRef.current)
+      ? previewImgRef.current
+      : tryOnImgRef.current;
+
+    if (!containerRef.current || !activeImg) return null;
+
+    // 2. Get Geometries
+    const container = containerRef.current;
+    const containerRect = container.getBoundingClientRect();
+    const imgRect = activeImg.getBoundingClientRect();
+
+    // 3. Calculate Image Coordinates
+    // relative to the IMAGE element's top-left
+    const mouseX = clientX - imgRect.left;
+    const mouseY = clientY - imgRect.top;
+
+    // 4. Scale to Natural Dimensions
+    const scale = activeImg.naturalWidth / imgRect.width;
+
+    // 5. Calculate UI Screen Coordinates (for Cursor Dot)
+    const borderLeft = container.clientLeft || 0;
+    const borderTop = container.clientTop || 0;
+    const screenX = clientX - containerRect.left - borderLeft;
+    const screenY = clientY - containerRect.top - borderTop;
+
+    return {
+      x: mouseX * scale,
+      y: mouseY * scale,
+      w: activeImg.naturalWidth,
+      h: activeImg.naturalHeight,
+      scale: scale,
+      screenX: screenX,
+      screenY: screenY,
+    };
+  };
+
+  const startInteraction = (e: React.MouseEvent) => {
+    // Block interaction if canvas is syncing (prevent race conditions)
+    if (isSyncingRef.current) return;
+    if (isDraggingPanel) return;
+
+    if (!isBrushActive || !tryOnImgRef.current) return;
+
+    e.stopPropagation();
+    e.preventDefault();
+    isPaintingRef.current = true;
+
+    const coords = getImgCoords(e.clientX, e.clientY);
+
+    // Init Canvas if Needed OR if Sizing Mismatch
+    const requiredW = tryOnImgRef.current.naturalWidth;
+    const requiredH = tryOnImgRef.current.naturalHeight;
+
+    if (!restorationCanvasRef.current || restorationCanvasRef.current.width !== requiredW || restorationCanvasRef.current.height !== requiredH) {
+      console.log("Re-initializing Restoration Canvas to match image:", requiredW, requiredH);
+      const c = document.createElement('canvas');
+      c.width = requiredW;
+      c.height = requiredH;
+      restorationCanvasRef.current = c;
+      if (restorationLayer) {
+        const ctx = c.getContext('2d');
+        const prevImg = new Image();
+        prevImg.onload = () => ctx?.drawImage(prevImg, 0, 0, requiredW, requiredH); // Force fit
+        prevImg.src = restorationLayer;
+      }
+    }
+
+    // Init UI Canvas (Visual Feedback)
+    if (uiCanvasRef.current && containerRef.current) {
+      uiCanvasRef.current.width = containerRef.current.clientWidth;
+      uiCanvasRef.current.height = containerRef.current.clientHeight;
+      const uictx = uiCanvasRef.current.getContext('2d');
+      uictx?.clearRect(0, 0, uiCanvasRef.current.width, uiCanvasRef.current.height);
+    }
+
+    if (coords) {
+      lastPaintPos.current = { x: coords.x, y: coords.y };
+      const uiX = coords.screenX;
+      const uiY = coords.screenY;
+      lastScreenPos.current = { x: uiX, y: uiY };
+
+      // Dot for click
+      const ctx = restorationCanvasRef.current.getContext('2d');
+      if (ctx) {
+        ctx.beginPath();
+        const r = (brushSize * coords.scale) / 2;
+        ctx.arc(coords.x, coords.y, r, 0, Math.PI * 2);
+        ctx.fillStyle = 'white';
+        ctx.fill();
+      }
+
+      // Draw visual dot on UI canvas
+      const uictx = uiCanvasRef.current?.getContext('2d');
+      if (uictx) {
+        uictx.beginPath();
+        const r = brushSize / 2;
+        uictx.arc(uiX, uiY, r, 0, Math.PI * 2);
+        uictx.fillStyle = 'white';
+        uictx.fill();
+      }
+    }
+  };
+
+  const moveInteraction = (e: React.MouseEvent) => {
+    if (!containerRef.current) return;
+
+    // PANEL DRAG (Priority)
+    if (isDraggingPanel) {
+      const containerRect = containerRef.current.getBoundingClientRect();
+      let newX = e.clientX - containerRect.left - panelDragOffset.x;
+      let newY = e.clientY - containerRect.top - panelDragOffset.y;
+
+      const pW = panelDimRef.current.w || 320;
+      const pH = panelDimRef.current.h || 400;
+
+      const maxX = containerRect.width - pW;
+      const maxY = containerRect.height - pH;
+
+      newX = Math.max(0, Math.min(newX, maxX));
+      newY = Math.max(0, Math.min(newY, maxY));
+
+      setPanelPosition({ x: newX, y: newY });
+      return;
+    }
+
+    if (isBrushActive) {
+      const coords = getImgCoords(e.clientX, e.clientY);
+
+      if (coords && restorationCanvasRef.current && isPaintingRef.current && lastPaintPos.current) {
+        const ctx = restorationCanvasRef.current.getContext('2d');
+        const uictx = uiCanvasRef.current?.getContext('2d');
+
+        if (ctx) {
+          ctx.beginPath();
+          ctx.strokeStyle = 'white';
+          ctx.lineWidth = brushSize * coords.scale;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.moveTo(lastPaintPos.current.x, lastPaintPos.current.y);
+          ctx.lineTo(coords.x, coords.y);
+          ctx.stroke();
+        }
+
+        if (uictx && lastScreenPos.current) {
+          uictx.beginPath();
+          uictx.strokeStyle = 'white';
+          uictx.lineWidth = brushSize;
+          uictx.lineCap = 'round';
+          uictx.lineJoin = 'round';
+          uictx.moveTo(lastScreenPos.current.x, lastScreenPos.current.y);
+          uictx.lineTo(coords.screenX, coords.screenY);
+          uictx.stroke();
+        }
+
+        lastPaintPos.current = { x: coords.x, y: coords.y };
+        lastScreenPos.current = { x: coords.screenX, y: coords.screenY };
+      }
+    }
+  };
+
+  const endInteraction = () => {
+    setIsDraggingPanel(false); // Stop dragging
+
+    // Commit Painting
+    if (isPaintingRef.current && restorationCanvasRef.current) {
+      const newSnapshot = restorationCanvasRef.current.toDataURL();
+      setRestorationLayer(newSnapshot);
+
+      // HISTORY PUSH
+      // Use Ref to ensure we slice from the ACTUAL current pointer, not stale state
+      const currentIndex = historyIndexRef.current;
+      const currentHistory = historyRef.current; // Read from Ref
+
+      const newHistory = currentHistory.slice(0, currentIndex + 1);
+      newHistory.push(newSnapshot);
+      if (newHistory.length > 20) newHistory.shift(); // Cap history to 20
+
+      // Update Refs (Source of Truth)
+      historyRef.current = newHistory;
+      historyIndexRef.current = newHistory.length - 1;
+
+      // Sync React State
+      setHistory(newHistory);
+      setHistoryIndex(newHistory.length - 1);
+
+      // Clear Visual Layer
+      if (uiCanvasRef.current) {
+        const ctx = uiCanvasRef.current.getContext('2d');
+        ctx?.clearRect(0, 0, uiCanvasRef.current.width, uiCanvasRef.current.height);
+      }
+    }
+
+    isPaintingRef.current = false;
+    lastPaintPos.current = null;
+    lastScreenPos.current = null;
+  };
+
+  // SAFETY: Force clear painting state when brush is deactivated
+  useEffect(() => {
+    if (!isBrushActive) {
+      isPaintingRef.current = false;
+      lastPaintPos.current = null;
+      lastScreenPos.current = null;
+      // Clear visual feedback
+      if (uiCanvasRef.current) {
+        const ctx = uiCanvasRef.current.getContext('2d');
+        ctx?.clearRect(0, 0, uiCanvasRef.current.width, uiCanvasRef.current.height);
+      }
+    }
+  }, [isBrushActive]);
 
   const scanWardrobe = async () => {
+    // 1. Native Mode
+    if (state.saveDirectoryPath) {
+      try {
+        const wardrobePath = await nativeJoinPath(state.saveDirectoryPath, 'wardrobe');
+        const files = await nativeListFiles(wardrobePath);
+        const items: WardrobeItem[] = [];
+
+        for (const file of files) {
+          if (/\.(png|jpg|jpeg|webp)$/i.test(file)) {
+            const fullPath = await nativeJoinPath(wardrobePath, file);
+            const dataUrl = await nativeReadFile(fullPath);
+            if (dataUrl) {
+              items.push({
+                id: file,
+                url: dataUrl,
+                name: file.replace(/\.[^/.]+$/, "").split('-').slice(1).join(' '),
+                prompt: "Saved costume asset",
+                category: "General",
+                timestamp: Date.now()
+              });
+            }
+          }
+        }
+        dispatch({ type: 'SET_WARDROBE_ITEMS', payload: items });
+        return;
+      } catch (err) {
+        console.error("Failed to scan native wardrobe:", err);
+        return;
+      }
+    }
+
     if (!state.saveDirectoryHandle) return;
     try {
       // @ts-ignore
@@ -333,6 +924,7 @@ const WardrobeStudio = () => {
     if (!selectedCharacter || !selectedCostume || !state.apiKey) return;
     setRemoveTryOnBg(false);
     setTryOnMask(null);
+    purgeRestorationState(); // Reset Paint History
     dispatch({ type: 'SET_PROCESSING', payload: true });
     try {
       // PASS 1: Generate Fusion on Neon Green for best edge isolation
@@ -343,18 +935,27 @@ const WardrobeStudio = () => {
          
          OBJECTIVE: Apply the costume from [IMAGE 2] onto the subject in [IMAGE 1].
          
-         OUTPUT FORMAT: SINGLE COMPOSITE IMAGE. (Do NOT show the source image. Do NOT show a "before/after" comparison. Do NOT create a collage. ONE subject only).
+         OBJECTIVE: Apply the costume from [IMAGE 2] onto the subject in [IMAGE 1].
+         
+         OUTPUT FORMAT: SINGLE COMPOSITE IMAGE. 
+         - Do NOT show the source image. 
+         - Do NOT show a "before/after" comparison. 
+         - Do NOT create a collage. 
+         - OUTPUT MUST BE ONE SOLITARY PERSON. 
+         - IF MULTIPLE PEOPLE APPEAR, THE TASK IS FAILED.
 
          CRITICAL CONSTRAINTS:
          1. **COSTUME FIDELITY**: You MUST transfer the EXACT clothing from [IMAGE 2]. Maintain all details, textures, logos, and materials.
          2. **SOURCE HANDLING**: [IMAGE 2] is a flat garment reference (potentially transparent PNG). Do NOT generate the "image file" itself. Do NOT include any mannequin, hanger, or background artifacts from [IMAGE 2]. Just the clothes.
          3. **SUBJECT PRESERVATION**: Maintain the subject's exact facial identity, hairstyle, and body proportions from [IMAGE 1].
          4. **INTEGRATION**: Adjust the fit to match the subject's pose and lighting naturally.
+         5. **SINGLE SUBJECT**: Ensure there is only ONE person in the final generation. No clones, no shadows, no reflections.
          5. ${tryOnNote || "Clean studio execution."}
          6. Use a solid Neon Green background (#39FF14) for perfect subject isolation.
+         7. **COMPOSITION**: GENERATE A FULL BODY SHOT. HANDS AND FEET MUST BE VISIBLE. If the subject reference is cropeed, YOU MUST OUTPAINT/GENERATE THE MISSING BODY PARTS to show the full costume.
          
          NEGATIVE CONSTRAINTS:
-         split view, side by side, triptych, reference sheet, grid, collage, multiple views, ghosting, double exposure, extra people, two people, floating clothes, watermark, text, bad anatomy, distorted face, extra limbs, background artifacts, before and after.`,
+         split view, side by side, triptych, reference sheet, grid, collage, multiple views, ghosting, double exposure, extra people, two people, floating clothes, watermark, text, bad anatomy, distorted face, extra limbs, background artifacts, before and after, cropped hands, cropped feet, portrait crop.`,
         state.apiKey,
         state.model,
         [
@@ -364,24 +965,36 @@ const WardrobeStudio = () => {
         { aspectRatio: '1:1' }
       );
       setFittedImage(res);
-      dispatch({ type: 'ADD_LOG', payload: { message: "Fusion complete. Creating character edge mask...", type: 'info' } });
+      setFittedImage(res);
 
-      // PASS 2: Generate Fusion Mask
+      // PASS 2: Auto-Isolation (Client Side Parity)
+      // Replaces legacy Gemini B/W Masking
       try {
-        const maskRes = await GeminiService.generateImage(
-          `DIGITAL CHARACTER SEGMENTATION MASK: Create a pure black and white silhouette of the character in [IMAGE 1].
-             The entire character silhouette (skin, hair, clothes) MUST be PURE WHITE (#FFFFFF).
-             The background MUST be PURE BLACK (#000000).
-             Film-grade precision, no gradients, no shadows.`,
-          state.apiKey,
-          state.model,
-          [{ url: res, label: "Reference" }],
-          { aspectRatio: '1:1' }
-        );
-        setTryOnMask(maskRes);
-        dispatch({ type: 'ADD_LOG', payload: { message: "Character mask generated with high fidelity", type: 'success' } });
+        dispatch({ type: 'ADD_LOG', payload: { message: "Fusion complete. Isolating subject...", type: 'info' } });
+        setIsIsolating(true);
+        setIsolationProgress(0);
+
+        const imgResponse = await fetch(res);
+        const blob = await imgResponse.blob();
+
+        const blobResult = await removeBackground(blob, {
+          progress: (_key: string, current: number, total: number) => {
+            if (total > 0) setIsolationProgress(Math.round((current / total) * 100));
+          }
+        });
+
+        const cutoutUrl = URL.createObjectURL(blobResult);
+        setTryOnMask(cutoutUrl);
+        setRemoveTryOnBg(true); // Auto-enable Isolation View
+        dispatch({ type: 'ADD_LOG', payload: { message: "Subject Isolated Successfully", type: 'success' } });
+
       } catch (maskErr: any) {
-        dispatch({ type: 'ADD_LOG', payload: { message: `Character mask failed: ${maskErr.message}. Falling back to standard keying.`, type: 'error' } });
+        console.error("Auto-Isolation Failed:", maskErr);
+        dispatch({ type: 'ADD_LOG', payload: { message: "Auto-isolation failed. You can try manually.", type: 'error' } });
+        // Don't fail the whole try-on, just the mask
+      } finally {
+        setIsIsolating(false);
+        setIsolationProgress(0);
       }
 
     } catch (e: any) {
@@ -391,8 +1004,8 @@ const WardrobeStudio = () => {
     }
   };
 
-  const handleAddToCast = () => {
-    const freshUrl = runTryOnIsolation();
+  const handleAddToCast = async () => {
+    const freshUrl = await runTryOnIsolation();
     const finalUrl = freshUrl || processedTryOnUrl || fittedImage;
     if (!finalUrl || !selectedCharacter) return;
     const newMember: CastMember = {
@@ -411,44 +1024,7 @@ const WardrobeStudio = () => {
     dispatch({ type: 'ADD_LOG', payload: { message: "Character added to cast library", type: 'success' } });
   };
 
-  const handleSaveFittedToActors = async () => {
-    const freshUrl = runTryOnIsolation();
-    const finalUrl = freshUrl || processedTryOnUrl || fittedImage;
-    if (!finalUrl || !state.saveDirectoryHandle) {
-      if (!state.saveDirectoryHandle) dispatch({ type: 'ADD_LOG', payload: { message: "No save directory configured", type: 'error' } });
-      return;
-    }
 
-    try {
-      const actorsDir = await state.saveDirectoryHandle.getDirectoryHandle('Actors', { create: true });
-      const safeName = (selectedCharacter?.name || 'FittedActor').slice(0, 30).replace(/[^a-z0-9]/gi, '_');
-      const filename = `Actor-Fitted-${Date.now()}-${safeName}.png`;
-      const fileHandle = await actorsDir.getFileHandle(filename, { create: true });
-      const writable = await fileHandle.createWritable();
-      const res = await fetch(finalUrl);
-      const blob = await res.blob();
-      await writable.write(blob);
-      await writable.close();
-
-      const newActor: CastMember = {
-        id: `actor-fitted-${Date.now()}`,
-        url: finalUrl,
-        tag: 'front',
-        name: `${selectedCharacter?.name} (Fitted)`,
-        profile: {
-          identity: selectedCharacter?.profile?.identity || "Unknown",
-          wardrobe: selectedCostume?.name || "Fitted Costume",
-          accessories: "",
-          style: "Virtual Try-On"
-        }
-      };
-      dispatch({ type: 'ADD_ACTOR_LIBRARY', payload: newActor });
-      dispatch({ type: 'ADD_LOG', payload: { message: `Saved to Actors Library: ${filename}`, type: 'success' } });
-
-    } catch (e: any) {
-      dispatch({ type: 'ADD_LOG', payload: { message: `Failed to save actor: ${e.message}`, type: 'error' } });
-    }
-  };
 
   const downloadImage = (url: string, filename: string) => {
     const link = document.createElement('a');
@@ -477,7 +1053,7 @@ const WardrobeStudio = () => {
         </div>
 
         <div className="flex-grow overflow-y-auto p-4 space-y-4">
-          {!state.saveDirectoryHandle && (
+          {!state.saveDirectoryHandle && !state.saveDirectoryPath && (
             <div className="p-4 bg-yellow-500/5 border border-yellow-500/20 rounded-lg">
               <p className="text-[10px] text-yellow-500 font-bold leading-relaxed">
                 ⚠️ PLEASE SELECT A SAVE FOLDER IN SETTINGS TO ENABLE LOCAL WARDROBE STORAGE.
@@ -678,20 +1254,45 @@ const WardrobeStudio = () => {
 
               {/* RESULT COLUMN */}
               <div className="col-span-8">
-                <div className="aspect-square bg-black rounded-3xl border border-gray-800 shadow-2xl flex items-center justify-center overflow-hidden relative group border-4 border-[#18181b]">
+                <div
+                  ref={containerRef}
+                  onMouseDown={startInteraction}
+                  onMouseMove={moveInteraction}
+                  onMouseUp={endInteraction}
+                  onMouseLeave={endInteraction}
+                  className="aspect-square bg-black flex items-center justify-center overflow-hidden relative group border-4 border-blue-500/30 rounded-2xl m-2 shadow-[0_0_30px_rgba(59,130,246,0.1)] cursor-crosshair"
+                >
                   {fittedImage ? (
                     <>
                       <img
                         ref={tryOnImgRef}
                         src={fittedImage}
-                        className={processedTryOnUrl ? 'hidden' : 'w-full h-full object-cover'}
+                        className={processedTryOnUrl ? 'hidden' : 'w-full h-full object-contain pointer-events-none'}
                       />
                       {processedTryOnUrl && (
-                        <img src={processedTryOnUrl} className="w-full h-full object-cover" />
+                        <img ref={previewImgRef} src={processedTryOnUrl} className="w-full h-full object-contain pointer-events-none" />
                       )}
+
+                      {/* INTERACTION CANVASES */}
+                      <canvas ref={uiCanvasRef} className="absolute inset-0 w-full h-full pointer-events-none z-50 opacity-50" />
+                      <canvas ref={restorationCanvasRef} className="hidden" />
+
+                      {/* Internal Processing Canvas (Hidden) */}
                       <canvas ref={tryOnCanvasRef} className="hidden" />
-                      {tryOnMask && (
-                        <img ref={tryOnMaskImgRef} src={tryOnMask} className="hidden" />
+
+                      {isIsolating && (
+                        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-black/40 backdrop-blur-[2px] animate-in fade-in duration-200">
+                          <div className="w-12 h-12 border-4 border-blue-500/30 border-t-blue-500 rounded-full animate-spin mb-4 shadow-[0_0_15px_rgba(59,130,246,0.5)]"></div>
+                          <div className="w-48 h-1.5 bg-gray-800 rounded-full overflow-hidden border border-white/10">
+                            <div
+                              className="h-full bg-blue-500 transition-all duration-200 ease-out shadow-[0_0_10px_rgba(59,130,246,0.8)]"
+                              style={{ width: `${isolationProgress}%` }}
+                            />
+                          </div>
+                          <span className="text-[10px] font-black text-blue-400 mt-2 uppercase tracking-widest animate-pulse">
+                            Processing {isolationProgress}%
+                          </span>
+                        </div>
                       )}
                     </>
                   ) : (
@@ -709,135 +1310,134 @@ const WardrobeStudio = () => {
                   </div>
 
                   {fittedImage && (
-                    <div className="absolute top-6 right-6 flex flex-col gap-3 z-20 bg-black/60 p-4 rounded-3xl border border-white/10 backdrop-blur-md shadow-2xl">
-                      <div className="flex items-center justify-between gap-6">
-                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-2 cursor-pointer">
+                    <div
+                      onMouseDown={handlePanelMouseDown}
+                      style={panelPosition ? { left: panelPosition.x, top: panelPosition.y, right: 'auto' } : undefined}
+                      className={`absolute ${!panelPosition ? 'top-6 right-6' : ''} flex flex-col gap-3 z-20 bg-black/60 p-4 rounded-3xl border border-white/10 backdrop-blur-md shadow-2xl w-80`}
+                    >
+                      <div className="flex items-center justify-between pb-3 border-b border-white/5">
+                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-2 cursor-pointer hover:text-white transition-colors">
                           <input
                             type="checkbox"
                             checked={removeTryOnBg}
                             onChange={(e) => setRemoveTryOnBg(e.target.checked)}
-                            className="w-4 h-4 accent-blue-500 rounded"
+                            className="w-4 h-4 accent-blue-500 rounded border-white/10 bg-black"
                           />
-                          <Eraser className="w-3.5 h-3.5" /> Remove BG
+                          <Eraser className="w-3.5 h-3.5" /> Remove Background
                         </label>
-
-                        {tryOnMask && (
-                          <label className="text-[9px] font-black text-blue-400 uppercase tracking-widest flex items-center gap-2 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={tryOnAiMaskActive}
-                              onChange={(e) => setTryOnAiMaskActive(e.target.checked)}
-                              className="w-3.5 h-3.5 accent-blue-500 rounded"
-                            />
-                            <Sparkles className="w-3 h-3" /> AI Masking
-                          </label>
-                        )}
                       </div>
 
                       {removeTryOnBg && (
-                        <div className="space-y-3 pt-2 border-t border-white/5">
-                          <div className="flex items-center justify-between text-[9px] font-bold text-gray-500 uppercase tracking-wider">
-                            <span>Tolerance</span>
-                            <span>{tryOnTolerance}%</span>
-                          </div>
-                          <input
-                            type="range"
-                            min="1" max="100"
-                            value={tryOnTolerance}
-                            onChange={(e) => setTryOnTolerance(parseInt(e.target.value))}
-                            className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                          />
+                        <div className="pt-2 border-t border-white/5 space-y-3">
+                          {/* SECTION 1: EDGE REFINEMENT */}
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[9px] font-black text-gray-500 uppercase tracking-widest">Edge Refinement</span>
 
-                          {tryOnMask && tryOnAiMaskActive && (
-                            <>
-                              <div className="flex items-center justify-between text-[9px] font-bold text-blue-400/60 uppercase tracking-wider pt-1">
-                                <span>Matte Contraction</span>
-                                <span>{matteErosion}px</span>
-                              </div>
-                              <input
-                                type="range"
-                                min="0" max="10"
-                                step="1"
-                                value={matteErosion}
-                                onChange={(e) => setMatteErosion(parseInt(e.target.value))}
-                                className="w-full h-1 bg-blue-900/30 rounded-lg appearance-none cursor-pointer"
-                              />
-
-                              <div className="flex items-center justify-between text-[9px] font-bold text-blue-400/60 uppercase tracking-wider pt-1">
-                                <span>Mask Softening</span>
-                                <span>{tryOnMaskSoftening}px</span>
-                              </div>
-                              <input
-                                type="range"
-                                min="0" max="10"
-                                step="0.5"
-                                value={tryOnMaskSoftening}
-                                onChange={(e) => setTryOnMaskSoftening(parseFloat(e.target.value))}
-                                className="w-full h-1 bg-blue-900/30 rounded-lg appearance-none cursor-pointer"
-                              />
-                            </>
-                          )}
-
-                          <div className="flex items-center justify-between text-[9px] font-bold text-green-400/60 uppercase tracking-wider pt-1">
-                            <span>Spill Suppression</span>
-                            <span>{tryOnSpillSuppression}%</span>
-                          </div>
-                          <input
-                            type="range"
-                            min="0" max="100"
-                            value={tryOnSpillSuppression}
-                            onChange={(e) => setTryOnSpillSuppression(parseInt(e.target.value))}
-                            className="w-full h-1 bg-green-900/30 rounded-lg appearance-none cursor-pointer"
-                          />
-                          <div className="flex items-center justify-between pt-2 border-t border-white/5 mt-2">
-                            <label className="text-[9px] font-black text-gray-500 uppercase tracking-widest flex items-center gap-2 cursor-pointer hover:text-gray-300 transition-colors pt-2">
-                              <input
-                                type="checkbox"
-                                checked={tryOnInvertBg}
-                                onChange={(e) => setTryOnInvertBg(e.target.checked)}
-                                className="w-3.5 h-3.5 accent-red-500 rounded border-gray-700 bg-black/50"
-                              />
-                              Invert Matte
-                            </label>
-                            <div className="w-10 h-10 bg-black/60 border border-white/5 rounded-xl overflow-hidden shadow-inner flex items-center justify-center mt-2">
-                              <canvas ref={tryOnCanvasRef} className="max-w-full max-h-full object-contain scale-150" />
+                              {/* Status Badge */}
+                              {tryOnMask ? (
+                                <div className="flex items-center gap-1.5 text-blue-400">
+                                  <CheckCircle2 className="w-3 h-3" />
+                                  <span className="text-[9px] font-bold uppercase">Isolated</span>
+                                </div>
+                              ) : (
+                                <button
+                                  onClick={runTryOnIsolation}
+                                  className="text-[9px] font-bold text-gray-400 hover:text-white flex items-center gap-1 bg-white/5 px-2 py-0.5 rounded transition-colors"
+                                >
+                                  <Sparkles className="w-3 h-3" /> Run
+                                </button>
+                              )}
                             </div>
+
+                            {/* Fringe Slider */}
+                            <div className="flex items-center gap-3">
+                              <span className="text-[10px] text-gray-400 font-bold w-8 text-right">{fringeSize}px</span>
+                              <input
+                                type="range"
+                                min="0"
+                                max="10"
+                                step="0.5"
+                                value={fringeSize}
+                                onChange={(e) => setFringeSize(parseFloat(e.target.value))}
+                                className="flex-grow h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                              />
+                            </div>
+                          </div>
+
+                          {/* MANUAL RESTORATION */}
+                          <div className="py-2 border-t border-white/5 space-y-3">
+                            <div className="flex flex-col w-full gap-2">
+                              <span className="text-[9px] font-black text-gray-500 uppercase tracking-widest leading-none">Restore</span>
+                              <div className="w-full flex items-center justify-between gap-1 bg-black/40 rounded-lg p-1 border border-white/10">
+                                {/* HISTORY COUNTER (DEBUG/UX) */}
+                                {/* REFACTORED HISTORY CONTROLS */}
+                                <div className="relative group/history">
+                                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-black border border-gray-700 px-2 py-1 rounded text-[9px] text-gray-300 opacity-0 group-hover/history:opacity-100 pointer-events-none transition-opacity whitespace-nowrap z-50">
+                                    History State: {historyIndex}
+                                  </div>
+                                  <span className="text-xs font-bold text-blue-400 font-mono px-2 select-none bg-blue-900/30 rounded border border-blue-500/30 min-w-[36px] text-center whitespace-nowrap block">
+                                    {historyIndex === -1 ? '0' : historyIndex + 1} / {history.length}
+                                  </span>
+                                </div>
+
+                                <button
+                                  onClick={() => setIsBrushActive(!isBrushActive)}
+                                  className={`p-1.5 rounded transition-all ${isBrushActive
+                                    ? 'bg-blue-600 text-white shadow-[0_0_10px_rgba(37,99,235,0.5)]'
+                                    : 'text-gray-400 hover:text-white hover:bg-white/10'
+                                    }`}
+                                  title="Restore Mask Brush"
+                                >
+                                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 20a6 6 0 0 0-12 0" /><path d="M12 20v-6" /><path d="M12 14a4 4 0 0 1 4-4V5a4 4 0 0 0-8 0v5a4 4 0 0 1 4 4z" /></svg>
+                                </button>
+                                <div className="w-px h-3 bg-white/10 mx-0.5" />
+                                <button
+                                  onClick={handleUndo}
+                                  disabled={historyIndex < 0}
+                                  className="p-3 rounded hover:bg-white/10 text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent transition-colors group"
+                                >
+                                  <Undo2 className="w-4 h-4 pointer-events-none" />
+                                </button>
+                                <button
+                                  onClick={handleRedo}
+                                  disabled={historyIndex >= history.length - 1}
+                                  className="p-3 rounded hover:bg-white/10 text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent transition-colors group"
+                                >
+                                  <Redo2 className="w-4 h-4 pointer-events-none" />
+                                </button>
+                              </div>
+                            </div>
+
+                            {isBrushActive && (
+                              <div className="flex items-center gap-3 pl-2 animate-in fade-in slide-in-from-top-1">
+                                <span className="text-[9px] font-bold text-gray-500 w-8 text-right">{brushSize}px</span>
+                                <input
+                                  type="range"
+                                  min="1"
+                                  max="100"
+                                  value={brushSize}
+                                  onChange={(e) => setBrushSize(parseInt(e.target.value))}
+                                  onMouseDown={(e) => e.stopPropagation()}
+                                  className="flex-grow h-1.5 bg-gray-700 rounded-full appearance-none cursor-pointer accent-blue-500"
+                                />
+                              </div>
+                            )}
+                          </div>
+                          {/* ACTIONS */}
+                          <div className="flex items-center justify-center gap-3 pt-4 border-t border-white/5 mt-auto">
+                            <button onClick={handleAddToCast} className="w-16 h-16 bg-emerald-500/10 hover:bg-emerald-500 text-emerald-500 hover:text-white rounded-2xl transition-all flex items-center justify-center border border-emerald-500/20 hover:shadow-[0_0_15px_rgba(16,185,129,0.4)]" title="Add to Session Cast">
+                              <UserPlus className="w-8 h-8" />
+                            </button>
+                            <button onClick={() => downloadImage(processedTryOnUrl || fittedImage!, `fitted-${selectedCharacter?.name || 'character'}.png`)} className="w-16 h-16 bg-blue-600/10 hover:bg-blue-600 text-blue-500 hover:text-white rounded-2xl transition-all flex items-center justify-center border border-blue-500/20 hover:shadow-[0_0_15px_rgba(37,99,235,0.4)]" title="Download">
+                              <Download className="w-8 h-8" />
+                            </button>
+                            <button onClick={() => { setFittedImage(null); purgeRestorationState(); }} className="w-16 h-16 bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white rounded-2xl transition-all flex items-center justify-center border border-red-500/20 hover:shadow-[0_0_15px_rgba(239,68,68,0.4)]" title="Clear/Discard">
+                              <X className="w-8 h-8" />
+                            </button>
                           </div>
                         </div>
                       )}
-                    </div>
-                  )}
-
-                  {fittedImage && (
-                    <div className="absolute bottom-10 left-1/2 -translate-x-1/2 flex gap-4 z-30 bg-black/40 backdrop-blur-2xl border border-white/10 p-2 rounded-2xl shadow-2xl animate-in slide-in-from-bottom-8 duration-500">
-                      <button
-                        onClick={handleAddToCast}
-                        className="w-14 h-14 bg-emerald-500/20 hover:bg-emerald-500 text-emerald-500 hover:text-white rounded-xl transition-all transform hover:scale-110 flex items-center justify-center border border-emerald-500/30 shadow-[0_0_15px_rgba(16,185,129,0.2)]"
-                        title="Add to Cast Library"
-                      >
-                        <UserPlus className="w-6 h-6 stroke-[2.5]" />
-                      </button>
-                      <button
-                        onClick={() => downloadImage(processedTryOnUrl || fittedImage!, `fitted-${selectedCharacter?.name || 'character'}.png`)}
-                        className="w-14 h-14 bg-white/10 hover:bg-white text-white hover:text-black rounded-xl transition-all transform hover:scale-110 flex items-center justify-center border border-white/20 shadow-[0_0_15px_rgba(255,255,255,0.1)]"
-                        title="Download Transparent PNG"
-                      >
-                        <Download className="w-6 h-6 stroke-[2.5]" />
-                      </button>
-                      <button
-                        onClick={() => setFittedImage(null)}
-                        className="w-14 h-14 bg-red-500/20 hover:bg-red-500 text-red-500 hover:text-white rounded-xl transition-all transform hover:scale-110 flex items-center justify-center border border-red-500/30 shadow-[0_0_15px_rgba(239,68,68,0.2)]"
-                        title="Discard Result"
-                      >
-                        <X className="w-6 h-6 stroke-[3]" />
-                      </button>
-                      <button
-                        onClick={handleSaveFittedToActors}
-                        className="w-14 h-14 bg-indigo-500/20 hover:bg-indigo-500 text-indigo-500 hover:text-white rounded-xl transition-all transform hover:scale-110 flex items-center justify-center border border-indigo-500/30 shadow-[0_0_15px_rgba(99,102,241,0.2)]"
-                        title="Save to Global Actor Library (Disk)"
-                      >
-                        <Save className="w-6 h-6 stroke-[2.5]" />
-                      </button>
                     </div>
                   )}
                 </div>

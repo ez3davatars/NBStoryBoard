@@ -249,15 +249,29 @@ const App = () => {
     restoreHandle();
   }, [dispatch]);
 
+  // Sync View to Settings Modal
+  useEffect(() => {
+    if (state.view === 'settings') {
+      setShowSettings(true);
+    }
+  }, [state.view]);
+
   // Settings Modal State
   const [showSettings, setShowSettings] = useState(false);
   const [tempKey, setTempKey] = useState(state.apiKey);
   const [tempModel, setTempModel] = useState<AppState['model']>(state.model);
 
+  const closeSettings = () => {
+    setShowSettings(false);
+    if (state.view === 'settings') {
+      dispatch({ type: 'SET_VIEW', payload: 'casting' }); // Fallback to casting
+    }
+  };
+
   const saveSettings = () => {
     dispatch({ type: 'SET_API_KEY', payload: tempKey });
     dispatch({ type: 'SET_MODEL', payload: tempModel });
-    setShowSettings(false);
+    closeSettings();
     dispatch({ type: 'ADD_LOG', payload: { message: "Settings saved", type: 'success' } });
   };
 
@@ -265,7 +279,8 @@ const App = () => {
   // Sync Actors from Disk Handle (External Folder)
   useEffect(() => {
     const syncFromDisk = async () => {
-      if (!state.saveDirectoryHandle) return;
+      // In Native Electron mode, ignore Web Handlers to avoid double-sync or conflicts
+      if (window.electronAPI || !state.saveDirectoryHandle) return;
 
       // @ts-ignore
       if ((await state.saveDirectoryHandle.queryPermission({ mode: 'read' })) !== 'granted') return;
@@ -353,16 +368,25 @@ const App = () => {
           const libraryMap = new Map(state.actorLibrary.map((a: CastMember) => [a.id, a]));
           let hasChanges = false;
 
+          const existingFilenames = new Set(state.actorLibrary.map((a: CastMember) => a.filename).filter(Boolean));
+
           externalActors.forEach(diskActor => {
-            const existing = libraryMap.get(diskActor.id);
-            if (existing) {
-              // Exists in memory. Check if we need to backfill filename
-              if (!existing.filename) {
-                libraryMap.set(diskActor.id, { ...existing, filename: diskActor.filename });
+            const existingById = libraryMap.get(diskActor.id);
+
+            if (existingById) {
+              // Exists by ID. Check if we need to backfill filename
+              if (!existingById.filename) {
+                libraryMap.set(diskActor.id, { ...existingById, filename: diskActor.filename });
                 hasChanges = true;
               }
             } else {
-              // New from disk
+              // Check if exists by Filename (to prevent duplicates if ID scheme differs)
+              if (diskActor.filename && existingFilenames.has(diskActor.filename)) {
+                // Already in library with a different ID. Skip to avoid duplicate.
+                return;
+              }
+
+              // Truly new from disk
               libraryMap.set(diskActor.id, diskActor);
               hasChanges = true;
             }
@@ -376,7 +400,6 @@ const App = () => {
             dispatch({ type: 'ADD_LOG', payload: { message: `Synced ${externalActors.length} actors from disk.`, type: 'success' } });
           }
         }
-
       } catch (e: any) {
         console.error("Disk sync error:", e);
         dispatch({ type: 'ADD_LOG', payload: { message: `Disk scan failed: ${e.message}`, type: 'error' } });
@@ -386,7 +409,113 @@ const App = () => {
     if (state.saveDirectoryHandle) {
       syncFromDisk();
     }
-  }, [state.saveDirectoryHandle, state.actorLibrary.length]); // Re-run if folder changes or library size changes (to allow re-sync)
+  }, [state.saveDirectoryHandle]); // Only run when folder connection changes
+
+  // --- NATIVE DISK SYNC (Electron) ---
+  useEffect(() => {
+    const syncFromNative = async () => {
+      if (!window.electronAPI || !state.saveDirectoryPath) return;
+
+      try {
+        const actorsPath = await window.electronAPI.joinPath(state.saveDirectoryPath, 'Actors');
+
+        // Ensure directory exists or gracefully fail
+        if (!await window.electronAPI.exists(actorsPath)) {
+          console.log("Native Sync: 'Actors' folder not found. Skipping.");
+          return;
+        }
+
+        const filenames = await window.electronAPI.listFiles(actorsPath);
+        if (!filenames || filenames.length === 0) return;
+
+        console.log(`Native Sync: Found ${filenames.length} files in Actors folder.`);
+
+        const externalActors: CastMember[] = [];
+
+        // Parallel load for speed
+        await Promise.all(filenames.map(async (filename) => {
+          if (!state.saveDirectoryPath) return;
+          try {
+            // Construct full path
+            const fullPath = await window.electronAPI!.joinPath(actorsPath, filename);
+            const base64 = await window.electronAPI!.readFile(fullPath);
+
+            if (!base64) return;
+
+            const diskId = `disk-${filename}`;
+            // Simple heuristic for name: remove extension
+            const displayName = filename.replace(/\.(png|jpg|jpeg)$/i, '');
+
+            externalActors.push({
+              id: diskId,
+              url: `data:image/png;base64,${base64}`,
+              tag: 'front',
+              name: displayName,
+              filename: filename,
+              profile: {
+                identity: 'Unknown', // Basic default
+                wardrobe: '',
+                accessories: '',
+                style: 'External Asset'
+              }
+            });
+          } catch (e) {
+            console.warn("Native load failed for", filename, e);
+          }
+        }));
+
+        if (externalActors.length > 0 || state.actorLibrary.some(a => a.id.startsWith('disk-'))) {
+          // SYNC TYPE: AUTHORITATIVE DISK SYNC
+          // We must remove 'disk-' actors that are NO LONGER in the folder (e.g. they were from Root, or deleted)
+          // And add/update the ones that are present.
+
+          const foundIds = new Set(externalActors.map(a => a.id));
+
+          // 1. Keep non-disk actors (created in-app)
+          const preservedActors = state.actorLibrary.filter(a => !a.id.startsWith('disk-'));
+
+          // 2. Keep disk actors that STILL exist (preserve their metadata if any)
+          const existingDiskActors = state.actorLibrary.filter(a => a.id.startsWith('disk-') && foundIds.has(a.id));
+
+          // 3. Merge New/Updated from Scan
+          // We prioritize the *Scan* for URL/Path updates, but might want to keep *Tags/Name* from Memory?
+          // For now, let's just use the Scan Result as truth for "External Assets", 
+          // but maybe preserve Profile/Name if ID matches?
+
+          // Better: Create a map of Existing for lookups
+          const existingMap = new Map(existingDiskActors.map(a => [a.id, a]));
+
+          const finalDiskActors = externalActors.map(newActor => {
+            const existing = existingMap.get(newActor.id);
+            if (existing) {
+              // Preserve user edits to Name/Tags if they exist? 
+              // Currently 'External Asset's don't support much editing, but let's be safe:
+              return { ...newActor, ...existing, url: newActor.url }; // Update URL (content), keep metadata
+            }
+            return newActor;
+          });
+
+          // Combine
+          const newLibrary = [...preservedActors, ...finalDiskActors];
+
+          // Only dispatch if count changed or we forced a refresh
+          // (Simple check: length diff or deep check. For safety, just dispatch.)
+          dispatch({ type: 'SET_ACTOR_LIBRARY', payload: newLibrary });
+
+          console.log(`Native Sync: Pruned and Synced. Total: ${newLibrary.length}`);
+        }
+
+      } catch (err) {
+        console.error("Native Sync Error:", err);
+      }
+    };
+
+
+
+    if (state.saveDirectoryPath && window.electronAPI) {
+      syncFromNative();
+    }
+  }, [state.saveDirectoryPath]);
 
   return (
     <AppContext.Provider value={{ state, dispatch }}>
@@ -498,6 +627,17 @@ const App = () => {
                     <button
                       onClick={async () => {
                         try {
+                          // NATIVE ELECTRON MODE
+                          if (window.electronAPI) {
+                            const path = await window.electronAPI.selectFolder();
+                            if (path) {
+                              dispatch({ type: 'SET_SAVE_PATH', payload: path });
+                              dispatch({ type: 'ADD_LOG', payload: { message: `Save path set: ${path}`, type: 'success' } });
+                            }
+                            return;
+                          }
+
+                          // WEB MODE
                           console.log("Requesting directory handle...");
                           const handle = await (window as any).showDirectoryPicker();
                           console.log("Directory handle received:", handle);
@@ -511,15 +651,21 @@ const App = () => {
                           }
                         }
                       }}
-                      className="flex-1 bg-gray-800 hover:bg-gray-700 text-white py-2 rounded text-xs font-bold transition-colors border border-gray-700"
+                      className="flex-1 bg-gray-800 hover:bg-gray-700 text-white py-2 rounded text-xs font-bold transition-colors border border-gray-700truncate"
                     >
-                      {state.saveDirectoryHandle ? `Folder: ${state.saveDirectoryHandle.name}` : 'Choose Save Folder...'}
+                      {state.saveDirectoryPath
+                        ? `Folder: ...${state.saveDirectoryPath.split(/[/\\]/).pop()}`
+                        : state.saveDirectoryHandle
+                          ? `Folder: ${state.saveDirectoryHandle.name}`
+                          : 'Choose Save Folder...'}
                     </button>
-                    {state.saveDirectoryHandle && (
+                    {(state.saveDirectoryHandle || state.saveDirectoryPath) && (
                       <button
                         onClick={async () => {
                           dispatch({ type: 'SET_SAVE_DIRECTORY', payload: null });
+                          dispatch({ type: 'SET_SAVE_PATH', payload: null });
                           await StorageService.remove('nano_save_handle');
+                          localStorage.removeItem('nano_save_path');
                         }}
                         className="bg-red-500/10 hover:bg-red-500/20 text-red-500 px-3 py-2 rounded text-xs transition-colors border border-red-500/30"
                         title="Reset folder (use browser downloads)"
@@ -555,7 +701,7 @@ const App = () => {
                   </div>
                 </div>
                 <div className="flex justify-end gap-2 mt-6">
-                  <button onClick={() => setShowSettings(false)} className="px-4 py-2 text-gray-400 text-xs hover:text-white">Cancel</button>
+                  <button onClick={closeSettings} className="px-4 py-2 text-gray-400 text-xs hover:text-white">Cancel</button>
                   <button onClick={saveSettings} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded text-xs font-bold">Save Config</button>
                 </div>
               </div>

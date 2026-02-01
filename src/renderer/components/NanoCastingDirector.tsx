@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
-import { getCovers, saveCover, deleteCover } from '../utils/nanoDB';
+
 import BodyScopeSelector from './BodyScopeSelector';
 import type { BodyScope } from './BodyScopeSelector';
 
@@ -37,6 +37,13 @@ import titanYouthFem from '../assets/archetypes/titan_youth_fem.png';
 import scoutYouthFem from '../assets/archetypes/scout_youth_fem.png';
 import guardianYouthFem from '../assets/archetypes/guardian_youth_fem.png';
 import spriteYouthFem from '../assets/archetypes/sprite_youth_fem.png';
+
+import {
+    saveAssetToDisk,
+    loadAssetFromDisk,
+    deleteAssetFromDisk,
+    verifyPermission
+} from '../utils/FileSystemAssets';
 
 // Import Style Images
 // Import Style Images (Feminine / Default)
@@ -174,59 +181,98 @@ const NanoCastingDirector = () => {
     // const [isLoadingCovers, setIsLoadingCovers] = useState(true); // Unused for now
 
     // Load covers from IndexedDB on mount
+    // Load covers from Disk on mount/change
     useEffect(() => {
-        const loadCovers = async () => {
-            try {
-                const covers = await getCovers();
-                setCustomArchetypeCovers(covers);
-            } catch (error) {
-                console.error("Failed to load covers from DB", error);
-            } finally {
-                // setIsLoadingCovers(false);
-            }
+        // Revoke old URLs to prevent memory leaks
+        return () => {
+            Object.values(customArchetypeCovers).forEach(url => URL.revokeObjectURL(url));
         };
-        loadCovers();
     }, []);
 
-    const handleArchetypeCoverUpload = async (storageKey: string, file: File) => {
-        const reader = new FileReader();
-        reader.onload = async (e) => {
-            const result = e.target?.result as string;
+    useEffect(() => {
+        const loadCovers = async () => {
+            if (!state.saveDirectoryHandle) return;
 
-            try {
-                // Optimistic UI update
-                setCustomArchetypeCovers(prev => ({
-                    ...prev,
-                    [storageKey]: result
-                }));
+            // Verify Read Permission
+            const hasPermission = await verifyPermission(state.saveDirectoryHandle, false);
+            if (!hasPermission) return;
 
-                // Save to IndexedDB
-                await saveCover(storageKey, result);
+            const loaded: Record<string, string> = {};
+            const variants = ['masc', 'fem', 'youth_masc', 'youth_fem'];
+            const archetypes = ['titan', 'scout', 'guardian', 'sprite'];
 
-            } catch (error) {
-                console.error("Failed to save cover to DB", error);
-                alert("Failed to save image to database.");
+            for (const v of variants) {
+                for (const a of archetypes) {
+                    const storageKey = `${v}_${a}`;
+                    const filename = `Archetype_${storageKey}.png`;
+                    const url = await loadAssetFromDisk(state.saveDirectoryHandle, filename);
+                    if (url) {
+                        loaded[storageKey] = url;
+                    }
+                }
+            }
+            if (Object.keys(loaded).length > 0) {
+                setCustomArchetypeCovers(prev => ({ ...prev, ...loaded }));
             }
         };
-        reader.readAsDataURL(file);
+
+        loadCovers();
+    }, [state.saveDirectoryHandle]);
+
+    const handleArchetypeCoverUpload = async (storageKey: string, file: File) => {
+        if (!state.saveDirectoryHandle) {
+            dispatch({ type: 'ADD_LOG', payload: { message: "Set Save Folder to use Custom Covers", type: 'error' } });
+            return;
+        }
+
+        const filename = `Archetype_${storageKey}.png`;
+
+        try {
+            // Verify Write Permission
+            const hasPermission = await verifyPermission(state.saveDirectoryHandle, true);
+            if (!hasPermission) {
+                dispatch({ type: 'ADD_LOG', payload: { message: "Permission Denied. Re-connect folder in settings.", type: 'error' } });
+                return;
+            }
+
+            await saveAssetToDisk(state.saveDirectoryHandle, filename, file);
+            // Reload to get blob URL
+            const url = await loadAssetFromDisk(state.saveDirectoryHandle, filename);
+
+            if (url) {
+                setCustomArchetypeCovers(prev => ({
+                    ...prev,
+                    [storageKey]: url
+                }));
+                dispatch({ type: 'ADD_LOG', payload: { message: "Archetype Cover Saved", type: 'success' } });
+            }
+
+        } catch (error) {
+            console.error("Failed to save cover to disk", error);
+            dispatch({ type: 'ADD_LOG', payload: { message: `Save Failed: ${error}`, type: 'error' } });
+        }
     };
 
     const handleArchetypeCoverDelete = async (storageKey: string, e: React.MouseEvent) => {
-        e.stopPropagation(); // Prevent card selection
+        e.stopPropagation();
         if (!confirm("Remove custom cover and revert to default?")) return;
 
+        if (!state.saveDirectoryHandle) return;
+
+        const filename = `Archetype_${storageKey}.png`;
+
         try {
-            // Optimistic UI update
+            await deleteAssetFromDisk(state.saveDirectoryHandle, filename);
+
             setCustomArchetypeCovers(prev => {
                 const next = { ...prev };
                 delete next[storageKey];
                 return next;
             });
+            dispatch({ type: 'ADD_LOG', payload: { message: "Cover Reverted to Default", type: 'info' } });
 
-            // Delete from IndexedDB
-            await deleteCover(storageKey);
         } catch (error) {
-            console.error("Failed to delete cover from DB", error);
+            console.error("Failed to delete cover from disk", error);
         }
     };
 

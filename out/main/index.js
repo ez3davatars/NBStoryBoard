@@ -1,6 +1,25 @@
 "use strict";
 const electron = require("electron");
 const path = require("path");
+const fs = require("fs/promises");
+function _interopNamespaceDefault(e) {
+  const n = Object.create(null, { [Symbol.toStringTag]: { value: "Module" } });
+  if (e) {
+    for (const k in e) {
+      if (k !== "default") {
+        const d = Object.getOwnPropertyDescriptor(e, k);
+        Object.defineProperty(n, k, d.get ? d : {
+          enumerable: true,
+          get: () => e[k]
+        });
+      }
+    }
+  }
+  n.default = e;
+  return Object.freeze(n);
+}
+const path__namespace = /* @__PURE__ */ _interopNamespaceDefault(path);
+const fs__namespace = /* @__PURE__ */ _interopNamespaceDefault(fs);
 const is = {
   dev: !electron.app.isPackaged
 };
@@ -127,6 +146,16 @@ app.whenReady().then(() => {
   app.on("browser-window-created", (_, window) => {
     optimizer.watchWindowShortcuts(window);
   });
+  const { session } = electron;
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Cross-Origin-Embedder-Policy": "require-corp"
+      }
+    });
+  });
   createWindow();
   app.on("activate", function() {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -136,4 +165,51 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     app.quit();
   }
+});
+electron.ipcMain.handle("dialog:openDirectory", async () => {
+  const { canceled, filePaths } = await electron.dialog.showOpenDialog({
+    properties: ["openDirectory"]
+  });
+  if (canceled) {
+    return null;
+  } else {
+    return filePaths[0];
+  }
+});
+electron.ipcMain.handle("file:read", async (_event, filePath) => {
+  try {
+    const content = await fs__namespace.readFile(filePath);
+    return content.toString("base64");
+  } catch (error) {
+    console.error("Read Error:", error);
+    return null;
+  }
+});
+electron.ipcMain.handle("file:write", async (_event, filePath, buffer) => {
+  try {
+    await fs__namespace.writeFile(filePath, Buffer.from(buffer));
+    return true;
+  } catch (error) {
+    console.error("Write Error:", error);
+    return false;
+  }
+});
+electron.ipcMain.handle("file:exists", async (_event, filePath) => {
+  try {
+    await fs__namespace.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+});
+electron.ipcMain.handle("file:list", async (_event, folderPath) => {
+  try {
+    const entries = await fs__namespace.readdir(folderPath, { withFileTypes: true });
+    return entries.filter((e) => e.isFile() && /\.(png|jpg|jpeg)$/i.test(e.name)).map((e) => e.name);
+  } catch {
+    return [];
+  }
+});
+electron.ipcMain.handle("path:join", async (_event, ...args) => {
+  return path__namespace.join(...args);
 });

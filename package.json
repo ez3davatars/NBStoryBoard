@@ -20,6 +20,7 @@
     "build:linux": "npm run build:desktop && electron-builder --linux"
   },
   "dependencies": {
+    "@imgly/background-removal": "^1.7.0",
     "@mediapipe/camera_utils": "^0.3.1675466862",
     "@mediapipe/drawing_utils": "^0.3.1675466124",
     "@mediapipe/face_mesh": "^0.4.1633559619",

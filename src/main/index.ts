@@ -51,6 +51,18 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window);
   });
 
+  // Enable SharedArrayBuffer for @imgly
+  const { session } = electron;
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Cross-Origin-Opener-Policy': 'same-origin',
+        'Cross-Origin-Embedder-Policy': 'require-corp'
+      }
+    });
+  });
+
   createWindow();
 
   app.on('activate', function () {
@@ -69,5 +81,63 @@ app.on('window-all-closed', () => {
   }
 });
 
-// In this file you can include the rest of your app"s specific main process
-// code. You can also put them in separate files and require them here.
+// Native File System Handlers
+import { ipcMain, dialog } from 'electron';
+import * as fs from 'fs/promises';
+import * as path from 'path';
+
+ipcMain.handle('dialog:openDirectory', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    properties: ['openDirectory']
+  });
+  if (canceled) {
+    return null;
+  } else {
+    return filePaths[0];
+  }
+});
+
+ipcMain.handle('file:read', async (_event, filePath) => {
+  try {
+    const content = await fs.readFile(filePath);
+    return content.toString('base64');
+  } catch (error) {
+    console.error("Read Error:", error);
+    return null;
+  }
+});
+
+ipcMain.handle('file:write', async (_event, filePath, buffer) => {
+  try {
+    await fs.writeFile(filePath, Buffer.from(buffer));
+    return true;
+  } catch (error) {
+    console.error("Write Error:", error);
+    return false;
+  }
+});
+
+ipcMain.handle('file:exists', async (_event, filePath) => {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+});
+
+ipcMain.handle('file:list', async (_event, folderPath) => {
+  try {
+    const entries = await fs.readdir(folderPath, { withFileTypes: true });
+    return entries
+      .filter(e => e.isFile() && /\.(png|jpg|jpeg)$/i.test(e.name)) // Simple filter
+      .map(e => e.name);
+  } catch {
+    return [];
+  }
+});
+
+ipcMain.handle('path:join', async (_event, ...args: string[]) => {
+  return path.join(...args);
+});
+

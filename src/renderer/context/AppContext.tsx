@@ -229,6 +229,7 @@ export interface AppState {
   logs: LogEntry[];
   isProcessing: boolean;
   saveDirectoryHandle: FileSystemDirectoryHandle | null;
+  saveDirectoryPath: string | null;
   wardrobeItems: WardrobeItem[];
   storyboardSource: { url: string; dna?: string } | null;
   storyboardEndSource: { url: string; dna?: string } | null;
@@ -240,7 +241,7 @@ export interface AppState {
   inspectMask: string | null;
   actorLibrary: CastMember[];
   propItems: PropItem[];
-
+  customCovers: Record<string, string>; // Studio ID -> Data URI/Blob URL
 
   regionEdit: RegionEditState;
 
@@ -276,6 +277,7 @@ export type Action =
   | { type: 'ADD_LOG'; payload: Omit<LogEntry, 'id' | 'timestamp'> }
   | { type: 'SET_PROCESSING'; payload: boolean }
   | { type: 'SET_SAVE_DIRECTORY'; payload: FileSystemDirectoryHandle | null }
+  | { type: 'SET_SAVE_PATH'; payload: string | null }
   | { type: 'ADD_WARDROBE_ITEM'; payload: WardrobeItem }
   | { type: 'REMOVE_WARDROBE_ITEM'; payload: string }
   | { type: 'SET_WARDROBE_ITEMS'; payload: WardrobeItem[] }
@@ -317,6 +319,7 @@ export type Action =
   | { type: 'UNDO' }
   | { type: 'REDO' }
   | { type: 'SET_STORYBOARD_ENABLED'; payload: boolean }
+  | { type: 'SET_CUSTOM_COVERS'; payload: Record<string, string> }
   ;
 
 // --- HELPERS ---
@@ -461,6 +464,7 @@ export const initialState: AppState = {
   logs: [],
   isProcessing: false,
   saveDirectoryHandle: null,
+  saveDirectoryPath: localStorage.getItem('nano_save_path') || null,
   wardrobeItems: loadJson<WardrobeItem[]>('nano_wardrobe', []),
   storyboardSource: null,
   storyboardEndSource: null,
@@ -472,6 +476,7 @@ export const initialState: AppState = {
   inspectMask: null,
   actorLibrary: [],
   propItems: loadJson<PropItem[]>('nano_props', []),
+  customCovers: {},
 
   regionEdit: clone(DEFAULT_REGION_EDIT),
 
@@ -589,6 +594,9 @@ export const reducer = (state: AppState, action: Action): AppState => {
       return { ...state, logs: [...state.logs, { ...action.payload, id: Math.random().toString(), timestamp: new Date() }] };
     case 'SET_SAVE_DIRECTORY':
       return { ...state, saveDirectoryHandle: action.payload };
+    case 'SET_SAVE_PATH':
+      localStorage.setItem('nano_save_path', action.payload || '');
+      return { ...state, saveDirectoryPath: action.payload };
 
     case 'ADD_WARDROBE_ITEM':
       return { ...state, wardrobeItems: [...state.wardrobeItems, action.payload] };
@@ -662,6 +670,10 @@ export const reducer = (state: AppState, action: Action): AppState => {
       return { ...state, propItems: state.propItems.filter(item => item.id !== action.payload) };
     case 'SET_PROP_ITEMS':
       return { ...state, propItems: action.payload };
+
+    case 'SET_CUSTOM_COVERS':
+      console.log(`[AppContext] SET_CUSTOM_COVERS dispatched. Keys: ${Object.keys(action.payload).join(', ')}`);
+      return { ...state, customCovers: action.payload };
 
     // --- REGION EDIT ---
     case 'SET_REGION_EDIT':

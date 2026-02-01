@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
+import { isNativeParams, nativeListFiles, nativeJoinPath, nativeReadFile, nativeWriteFile } from '../utils/NativeFileAssets';
 import type { PropItem, CastMember } from '../context/AppContext';
 
 const PropAccessoryStudio = () => {
@@ -157,6 +158,36 @@ const PropAccessoryStudio = () => {
   }, [removeApplyBg, applyTolerance, matteErosion, appliedImage, applyMask, applyAiMaskActive, applySpillSuppression, applyMaskSoftening, applyInvertBg]);
 
   const scanProps = async () => {
+    // 1. NATIVE MODE
+    if (isNativeParams() && state.saveDirectoryPath) {
+      try {
+        const propsPath = await nativeJoinPath(state.saveDirectoryPath, 'props');
+        const files = await nativeListFiles(propsPath);
+        const items: PropItem[] = [];
+
+        for (const filename of files) {
+          if (/\.(png|jpg|jpeg|webp)$/i.test(filename)) {
+            const fullPath = await nativeJoinPath(propsPath, filename);
+            const dataUrl = await nativeReadFile(fullPath);
+            if (dataUrl) {
+              items.push({
+                id: filename,
+                url: dataUrl,
+                name: filename.replace('.png', '').split('-').slice(1).join(' '),
+                prompt: "Saved prop asset",
+                timestamp: Date.now() // Native list doesn't give timestamp easily yet, using Now serves sort-of-ok or we can stat
+              });
+            }
+          }
+        }
+        dispatch({ type: 'SET_PROP_ITEMS', payload: items.sort((a, b) => b.timestamp - a.timestamp) });
+      } catch (e) {
+        // Folder might not exist yet, which is fine
+      }
+      return;
+    }
+
+    // 2. WEB MODE
     if (!state.saveDirectoryHandle) return;
     try {
       // @ts-ignore
@@ -218,7 +249,7 @@ const PropAccessoryStudio = () => {
   };
 
   const handleUploadProp = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files || e.target.files.length === 0 || !state.saveDirectoryHandle) return;
+    if (!e.target.files || e.target.files.length === 0) return;
     const file = e.target.files[0];
 
     try {
@@ -228,12 +259,31 @@ const PropAccessoryStudio = () => {
         return;
       }
 
-      const propsHandle = await state.saveDirectoryHandle.getDirectoryHandle('props', { create: true });
       const safeName = `Custom-Prop-${Date.now()}-${file.name.replace(/[^a-z0-9.]/gi, '_')}`;
-      const fileHandle = await propsHandle.getFileHandle(safeName, { create: true });
-      const writable = await fileHandle.createWritable();
-      await writable.write(file);
-      await writable.close();
+
+      // 1. NATIVE MODE
+      if (isNativeParams() && state.saveDirectoryPath) {
+        const propsPath = await nativeJoinPath(state.saveDirectoryPath, 'props');
+        // Ensure props folder exists (implied or we might fail writing if parent doesn't exist, Electron typically handles? No, usually need fs.mkdir. 
+        // Assuming main process ensures 'props' exists or writeFile does recursive? 
+        // Safest to just try write with the path.
+        const fullPath = await nativeJoinPath(propsPath, safeName);
+        const success = await nativeWriteFile(fullPath, file);
+
+        if (!success) {
+          throw new Error("Native write failed");
+        }
+      }
+      // 2. WEB MODE
+      else if (state.saveDirectoryHandle) {
+        const propsHandle = await state.saveDirectoryHandle.getDirectoryHandle('props', { create: true });
+        const fileHandle = await propsHandle.getFileHandle(safeName, { create: true });
+        const writable = await fileHandle.createWritable();
+        await writable.write(file);
+        await writable.close();
+      } else {
+        return; // No save method
+      }
 
       // Read for immediate display
       const reader = new FileReader();
@@ -261,7 +311,7 @@ const PropAccessoryStudio = () => {
 
   useEffect(() => {
     scanProps();
-  }, [state.saveDirectoryHandle]);
+  }, [state.saveDirectoryHandle, state.saveDirectoryPath]); // Add path dep
   // --- Reference Slot quick-bind (Shift+Click power-user shortcut) ---
   const bindToFirstEmptyRefSlot = (url: string, name: string) => {
     const slots: any[] = (state as any).referenceSlots || [];
@@ -298,16 +348,32 @@ const PropAccessoryStudio = () => {
   };
 
   const saveToProps = async (imageUrl: string, prompt: string) => {
-    if (!state.saveDirectoryHandle) return;
+    if (!state.saveDirectoryHandle && !state.saveDirectoryPath) return; // Need at least one
     try {
-      const propsHandle = await state.saveDirectoryHandle.getDirectoryHandle('props', { create: true });
       const filename = `PROP-${Date.now()}.png`;
-      const fileHandle = await propsHandle.getFileHandle(filename, { create: true });
-      const writable = await fileHandle.createWritable();
-      const res = await fetch(imageUrl);
-      const blob = await res.blob();
-      await writable.write(blob);
-      await writable.close();
+
+      // 1. NATIVE MODE
+      if (isNativeParams() && state.saveDirectoryPath) {
+        const propsPath = await nativeJoinPath(state.saveDirectoryPath, 'props');
+        const fullPath = await nativeJoinPath(propsPath, filename);
+
+        // Fetch blob to write
+        const res = await fetch(imageUrl);
+        const blob = await res.blob();
+
+        await nativeWriteFile(fullPath, blob);
+      }
+      // 2. WEB MODE
+      else if (state.saveDirectoryHandle) {
+        const propsHandle = await state.saveDirectoryHandle.getDirectoryHandle('props', { create: true });
+        const fileHandle = await propsHandle.getFileHandle(filename, { create: true });
+        const writable = await fileHandle.createWritable();
+        const res = await fetch(imageUrl);
+        const blob = await res.blob();
+        await writable.write(blob);
+        await writable.close();
+      }
+
       const newItem: PropItem = {
         id: filename,
         url: imageUrl,
