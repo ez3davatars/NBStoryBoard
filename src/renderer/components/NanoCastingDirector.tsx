@@ -8,7 +8,7 @@ import {
     ChevronRight, RefreshCw, Cpu, Aperture, CheckCircle2, UserPlus, Upload, Sliders,
     Swords, Zap, Shield, Ghost, Camera as CameraIcon, Ban, RotateCcw,
     EyeOff, Shirt, Sparkles, LayoutTemplate, Download, X, ChevronDown, Pencil,
-    Trash2, Maximize, RefreshCcw
+    Trash2, Maximize, RefreshCcw, FolderPlus
 } from 'lucide-react';
 import { nativeJoinPath, nativeListFiles, nativeReadFile } from '../utils/NativeFileAssets';
 import { useAppContext } from '../context/AppContext';
@@ -39,6 +39,8 @@ import titanYouthFem from '../assets/archetypes/titan_youth_fem.png';
 import scoutYouthFem from '../assets/archetypes/scout_youth_fem.png';
 import guardianYouthFem from '../assets/archetypes/guardian_youth_fem.png';
 import spriteYouthFem from '../assets/archetypes/sprite_youth_fem.png';
+
+import ActorSaveModal from './ActorSaveModal';
 
 import {
     saveAssetToDisk,
@@ -1251,10 +1253,79 @@ const NanoCastingDirector = () => {
         showToast("Poster Asset Extracted");
     };
 
+    // --- SAVE TO ACTOR LIBRARY STATE ---
+    const [showSaveModal, setShowSaveModal] = useState(false);
+    const [saveCategory, setSaveCategory] = useState("Realism");
+    const [newActorName, setNewActorName] = useState("");
+
+    const handleOpenSaveModal = () => {
+        if (!finalCharacterUrl) return;
+        const promptSummary = state.lastCastedPrompt ? state.lastCastedPrompt.substring(0, 15) : "Generated Actor";
+        setNewActorName(promptSummary);
+        setShowSaveModal(true);
+    };
+
+    const confirmSaveToLibrary = async () => {
+        if (!state.saveDirectoryHandle || !finalCharacterUrl) {
+            showToast("No Save Folder or Image!");
+            return;
+        }
+
+        try {
+            // 1. Get/Create "Actors" folder
+            const root = state.saveDirectoryHandle;
+            const actorsDir = await root.getDirectoryHandle('Actors', { create: true });
+
+            // 2. Get/Create Category folder
+            const catDir = await actorsDir.getDirectoryHandle(saveCategory, { create: true });
+
+            // 3. Create Actor Folder
+            const safeName = newActorName.replace(/[^a-z0-9\s-_]/gi, '').trim() || `Actor-${Date.now()}`;
+            const actorDir = await catDir.getDirectoryHandle(safeName, { create: true });
+
+            // 4. Save Portrait
+            const fileHandle = await actorDir.getFileHandle('portrait.png', { create: true });
+            const writable = await fileHandle.createWritable();
+
+            const res = await fetch(finalCharacterUrl);
+            const blob = await res.blob();
+
+            await writable.write(blob);
+            await writable.close();
+
+            // 5. Save Metadata (actor.json)
+            const metaHandle = await actorDir.getFileHandle('actor.json', { create: true });
+            const metaWritable = await metaHandle.createWritable();
+            const metadata = {
+                id: crypto.randomUUID(),
+                name: safeName,
+                description: state.lastCastedPrompt || "Nano Cast Generation",
+                tags: [saveCategory, "Nano Cast", selectedBody || "Unknown Class"],
+                version: "1.0",
+                created: Date.now(),
+                dna: {
+                    weight: weightLbs,
+                    height: heightIn,
+                    identity_lock: directorControls.identityStrength, // Corrected from biometicStrength
+                    stylization: directorControls.stylization // Corrected from stylization
+                }
+            };
+            await metaWritable.write(JSON.stringify(metadata, null, 2));
+            await metaWritable.close();
+
+            showToast(`Saved to Library: ${saveCategory}/${safeName}`);
+            setShowSaveModal(false);
+
+        } catch (e: any) {
+            console.error("Save to Library Failed:", e);
+            showToast("Save Failed: " + e.message);
+        }
+    };
+
     // UI Helpers
     useEffect(() => {
         if (!state.apiKey) {
-            console.warn("No API Key found in AppContext");
+            // navigate('/');
         }
         // Persistence: Restore last casted image if available and we are essentially "fresh"
         if (state.lastCastedImage && !finalCharacterUrl && phase === 1) {
@@ -1985,7 +2056,8 @@ const NanoCastingDirector = () => {
                                                         <div
                                                             key={item.id}
                                                             onClick={() => setSelectedWardrobeItem(item)}
-                                                            className={`aspect-square rounded-lg border overflow-hidden transition-all group relative cursor-pointer ${selectedWardrobeItem?.id === item.id ? 'border-accent border-2 shadow-lg shadow-accent/20' : 'border-border hover:border-gray-600'}`}
+                                                            className={`aspect-square rounded-lg border overflow-hidden transition-all group relative cursor-pointer ${selectedWardrobeItem?.id === item.id ? 'border-2 shadow-lg' : 'border-border hover:border-gray-600'}`}
+                                                            style={selectedWardrobeItem?.id === item.id ? { borderColor: '#39FF14', boxShadow: '0 0 20px rgba(57, 255, 20, 0.3)' } : {}}
                                                         >
                                                             <img src={item.url} className="w-full h-full transition-transform group-hover:scale-110 object-cover" />
                                                             <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
@@ -2287,7 +2359,7 @@ const NanoCastingDirector = () => {
                                     <div className="mt-auto">
                                         <button
                                             onClick={resetScan}
-                                            className="w-full py-4 mb-2 bg-danger hover:bg-red-600 text-accent shadow-lg shadow-danger/20 font-black uppercase tracking-widest transition-all text-xs rounded-lg flex items-center justify-center gap-2"
+                                            className="w-full py-4 mb-2 bg-danger hover:bg-red-600 text-accent font-black uppercase tracking-widest transition-all text-xs rounded-lg flex items-center justify-center gap-2"
                                         >
                                             <RotateCcw className="w-4 h-4 text-accent" /> RESET SCAN
                                         </button>
@@ -2296,7 +2368,7 @@ const NanoCastingDirector = () => {
                                             onClick={() => setPhase(2)}
                                             className={`w-full py-4 font-black uppercase tracking-widest transition-all text-xs rounded-lg flex items-center justify-center gap-2 ${isPhaseLocked(2)
                                                 ? 'bg-surface-2 text-muted cursor-not-allowed'
-                                                : 'bg-accent hover:bg-cyan-400 text-black shadow-lg shadow-accent/20'
+                                                : 'bg-accent hover:bg-cyan-400 text-blue-600'
                                                 }`}
                                         >
                                             Processing Matrix <ChevronRight className="w-4 h-4" />
@@ -2682,6 +2754,14 @@ const NanoCastingDirector = () => {
                                         </button>
 
                                         <button
+                                            onClick={handleOpenSaveModal}
+                                            className="col-span-1 py-4 bg-surface-2 hover:bg-surface text-purple-400 font-black uppercase tracking-widest text-xs rounded-xl transition-all shadow-lg shadow-purple-500/10 border border-purple-500/30 hover:border-purple-500 flex flex-col items-center gap-1"
+                                        >
+                                            <FolderPlus className="w-5 h-5" />
+                                            Save Library
+                                        </button>
+
+                                        <button
                                             // Call distinct handler to ensure state preservation
                                             onClick={handleRegenerate}
                                             className="col-span-1 py-4 bg-surface-2 hover:bg-surface text-fg font-bold uppercase tracking-widest text-xs rounded-xl transition-all border border-border hover:border-accent flex flex-col items-center gap-1"
@@ -2961,6 +3041,27 @@ const NanoCastingDirector = () => {
 
                     </AnimatePresence >
 
+                    {/* SAVE TO LIBRARY MODAL (Refactored) */}
+                    <ActorSaveModal
+                        isOpen={showSaveModal}
+                        initialName={newActorName}
+                        onClose={() => setShowSaveModal(false)}
+                        onSave={(name, category) => {
+                            setNewActorName(name);
+                            setSaveCategory(category);
+                            // Small timeout to allow state update before triggering the async save
+                            setTimeout(() => confirmSaveToLibrary(), 100);
+                        }}
+                        backgrounds={{
+                            realism: styleExactStudioMasc,
+                            animation: stylePixarMasc,
+                            illustration: styleRetroAnimeMasc,
+                            scifi: styleCyberpunkMasc
+                        }}
+                    />
+
+                    {/* DELETE CONFIRMATION MODAL */}
+
                     {/* DELETE CONFIRMATION MODAL */}
                     <AnimatePresence>
                         {
@@ -2982,7 +3083,7 @@ const NanoCastingDirector = () => {
                                                 onClick={executeDelete}
                                                 className="px-4 py-2 rounded-lg text-xs font-black uppercase tracking-wider bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-900/20"
                                             >
-                                                Delete Forever
+                                                Confirm
                                             </button>
                                         </div>
                                     </div>

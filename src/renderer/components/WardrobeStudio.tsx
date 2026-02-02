@@ -1,15 +1,23 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import {
   Upload, RefreshCcw, Maximize, Shirt, Sparkles, Download,
-  UserPlus, X, Eraser, Trash2, Undo2, Redo2, CheckCircle2
+  UserPlus, X, Eraser, Trash2, Undo2, Redo2, CheckCircle2, FolderPlus
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
 import type { WardrobeItem, CastMember } from '../context/AppContext';
 import { nativeJoinPath, nativeListFiles, nativeReadFile } from '../utils/NativeFileAssets';
 import { removeBackground } from "@imgly/background-removal";
+// Style Imports for Save Modal
+import styleRealism from '../assets/styles/style_exact_studio_masc.png';
+import styleAnimation from '../assets/styles/style_pixar_masc.png';
+import styleIllustration from '../assets/styles/style_retro_anime_masc.png';
+import styleScifi from '../assets/styles/style_cyberpunk_masc.png';
+import ActorSaveModal from './ActorSaveModal';
 
+// --- WARDROBE STUDIO COMPONENT ---
 const WardrobeStudio = () => {
   const { state, dispatch } = useAppContext();
   const [activeTab, setActiveTab] = useState<'designer' | 'library'>('designer');
@@ -51,6 +59,69 @@ const WardrobeStudio = () => {
   // Refs
   const tryOnImgRef = useRef<HTMLImageElement>(null); // The Base Image (Fitted)
   const previewImgRef = useRef<HTMLImageElement>(null); // The Composite Result
+
+  // --- SAVE TO ACTOR LIBRARY STATE ---
+  const [showSaveModal, setShowSaveModal] = useState(false);
+  const [saveCategory, setSaveCategory] = useState("Realism");
+  const [newActorName, setNewActorName] = useState("");
+
+  const handleOpenSaveModal = () => {
+    if (!fittedImage) return;
+    setNewActorName("Fitted Character");
+    setShowSaveModal(true);
+  };
+
+  const confirmSaveToLibrary = async () => {
+    if (!state.saveDirectoryHandle || !fittedImage) {
+      // alert("No Save Folder or Image!"); // Replace with toast if available
+      return;
+    }
+
+    try {
+      // 1. Get/Create "Actors" folder
+      const root = state.saveDirectoryHandle;
+      const actorsDir = await root.getDirectoryHandle('Actors', { create: true });
+
+      // 2. Get/Create Category folder
+      const catDir = await actorsDir.getDirectoryHandle(saveCategory, { create: true });
+
+      // 3. Create Actor Folder
+      const safeName = newActorName.replace(/[^a-z0-9\s-_]/gi, '').trim() || `Actor-${Date.now()}`;
+      const actorDir = await catDir.getDirectoryHandle(safeName, { create: true });
+
+      // 4. Save Portrait
+      const fileHandle = await actorDir.getFileHandle('portrait.png', { create: true });
+      const writable = await fileHandle.createWritable();
+
+      const res = await fetch(fittedImage);
+      const blob = await res.blob();
+
+      await writable.write(blob);
+      await writable.close();
+
+      // 5. Save Metadata (actor.json)
+      const metaHandle = await actorDir.getFileHandle('actor.json', { create: true });
+      const metaWritable = await metaHandle.createWritable();
+      const metadata = {
+        id: crypto.randomUUID(),
+        name: newActorName,
+        category: saveCategory,
+        created: Date.now(),
+        tags: ["wardrobe_fit"],
+        baseImage: "portrait.png"
+      };
+      await metaWritable.write(JSON.stringify(metadata, null, 2));
+      await metaWritable.close();
+
+      setShowSaveModal(false);
+      // alert("Actor Saved to Library!"); 
+      dispatch({ type: 'ADD_LOG', payload: { message: `Saved Actor: ${newActorName}`, type: 'success' } });
+
+    } catch (err) {
+      console.error("Failed to save to library:", err);
+      dispatch({ type: 'ADD_LOG', payload: { message: `Save Failed: ${err}`, type: 'error' } });
+    }
+  };
   const uiCanvasRef = useRef<HTMLCanvasElement>(null); // For Brush Cursor
   const restorationCanvasRef = useRef<HTMLCanvasElement>(null); // Offscreen Layer
   const panelDimRef = useRef({ w: 0, h: 0 });
@@ -791,7 +862,7 @@ const WardrobeStudio = () => {
       }
       dispatch({ type: 'SET_WARDROBE_ITEMS', payload: items.sort((a, b) => b.timestamp - a.timestamp) });
     } catch (e: any) {
-      dispatch({ type: 'ADD_LOG', payload: { message: `Wardrobe scan failed: ${e.message}`, type: 'error' } });
+      dispatch({ type: 'ADD_LOG', payload: { message: `Wardrobe scan failed: ${e.message} `, type: 'error' } });
     }
   };
 
@@ -803,7 +874,7 @@ const WardrobeStudio = () => {
     if (!state.saveDirectoryHandle) return;
     try {
       const wardrobeHandle = await state.saveDirectoryHandle.getDirectoryHandle('wardrobe', { create: true });
-      const filename = `WARDROBE-${Date.now()}.png`;
+      const filename = `WARDROBE - ${Date.now()}.png`;
       const fileHandle = await wardrobeHandle.getFileHandle(filename, { create: true });
       const writable = await fileHandle.createWritable();
       const res = await fetch(imageUrl);
@@ -821,9 +892,9 @@ const WardrobeStudio = () => {
       };
 
       dispatch({ type: 'ADD_WARDROBE_ITEM', payload: newItem });
-      dispatch({ type: 'ADD_LOG', payload: { message: `Costume saved to wardrobe: ${filename}`, type: 'success' } });
+      dispatch({ type: 'ADD_LOG', payload: { message: `Costume saved to wardrobe: ${filename} `, type: 'success' } });
     } catch (e: any) {
-      dispatch({ type: 'ADD_LOG', payload: { message: `Failed to save wardrobe item: ${e.message}`, type: 'error' } });
+      dispatch({ type: 'ADD_LOG', payload: { message: `Failed to save wardrobe item: ${e.message} `, type: 'error' } });
     }
   };
 
@@ -835,7 +906,7 @@ const WardrobeStudio = () => {
       const res = await GeminiService.generateImage(
         `Professional standalone apparel photography: ${designerPrompt}. 
          Film quality, detailed fabric texture, cinematic studio lighting, solid white studio background. 
-         Isolated garment, no background distractions. Strictly solid white background only.`,
+         Isolated garment, no background distractions.Strictly solid white background only.`,
         state.apiKey,
         state.model,
         [],
@@ -862,7 +933,7 @@ const WardrobeStudio = () => {
       }
 
       const wardrobeHandle = await state.saveDirectoryHandle.getDirectoryHandle('wardrobe', { create: true });
-      const safeName = `Custom-Costume-${Date.now()}-${file.name.replace(/[^a-z0-9.]/gi, '_')}`;
+      const safeName = `Custom - Costume - ${Date.now()} -${file.name.replace(/[^a-z0-9.]/gi, '_')} `;
       const fileHandle = await wardrobeHandle.getFileHandle(safeName, { create: true });
       const writable = await fileHandle.createWritable();
       await writable.write(file);
@@ -885,12 +956,12 @@ const WardrobeStudio = () => {
         };
 
         dispatch({ type: 'ADD_WARDROBE_ITEM', payload: newItem });
-        dispatch({ type: 'ADD_LOG', payload: { message: `Uploaded & Saved: ${file.name}`, type: 'success' } });
+        dispatch({ type: 'ADD_LOG', payload: { message: `Uploaded & Saved: ${file.name} `, type: 'success' } });
       };
       reader.readAsDataURL(file);
 
     } catch (err: any) {
-      dispatch({ type: 'ADD_LOG', payload: { message: `Upload failed: ${err.message}`, type: 'error' } });
+      dispatch({ type: 'ADD_LOG', payload: { message: `Upload failed: ${err.message} `, type: 'error' } });
     }
   };
 
@@ -1401,6 +1472,9 @@ const WardrobeStudio = () => {
                             <button onClick={handleAddToCast} className="w-16 h-16 bg-emerald-500/10 hover:bg-emerald-500 text-emerald-500 hover:text-white rounded-2xl transition-all flex items-center justify-center border border-emerald-500/20 hover:shadow-[0_0_15px_rgba(16,185,129,0.4)]" title="Add to Session Cast">
                               <UserPlus className="w-8 h-8" />
                             </button>
+                            <button onClick={handleOpenSaveModal} className="w-16 h-16 bg-purple-500/10 hover:bg-purple-500 text-purple-500 hover:text-white rounded-2xl transition-all flex items-center justify-center border border-purple-500/20 hover:shadow-[0_0_15px_rgba(168,85,247,0.4)]" title="Save to Actor Library">
+                              <FolderPlus className="w-8 h-8" />
+                            </button>
                             <button onClick={() => downloadImage(processedTryOnUrl || fittedImage!, `fitted-${selectedCharacter?.name || 'character'}.png`)} className="w-16 h-16 bg-blue-600/10 hover:bg-blue-600 text-blue-500 hover:text-white rounded-2xl transition-all flex items-center justify-center border border-blue-500/20 hover:shadow-[0_0_15px_rgba(37,99,235,0.4)]" title="Download">
                               <Download className="w-8 h-8" />
                             </button>
@@ -1440,7 +1514,7 @@ const WardrobeStudio = () => {
                     onClick={executeDelete}
                     className="px-4 py-2 rounded-lg text-xs font-black uppercase tracking-wider bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-900/20"
                   >
-                    Delete Forever
+                    Confirm
                   </button>
                 </div>
               </div>
@@ -1448,7 +1522,26 @@ const WardrobeStudio = () => {
           )
         }
       </AnimatePresence >
-    </div >
+
+      {/* SAVE TO LIBRARY MODAL (Refactored) */}
+      <ActorSaveModal
+        isOpen={showSaveModal}
+        initialName={newActorName}
+        onClose={() => setShowSaveModal(false)}
+        onSave={(name, category) => {
+          setNewActorName(name);
+          setSaveCategory(category);
+          // Small timeout to allow state update before triggering the async save
+          setTimeout(() => confirmSaveToLibrary(), 100);
+        }}
+        backgrounds={{
+          realism: styleRealism,
+          animation: styleAnimation,
+          illustration: styleIllustration,
+          scifi: styleScifi
+        }}
+      />
+    </div>
   );
 };
 

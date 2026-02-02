@@ -38,10 +38,10 @@ CRITICAL COMPOSITION RULES:
 `;
 
 const STUDIO_FOLDERS = [
-  { id: 'realism', label: 'Realism Studio', description: "Exact Likeness & Premium CG", image: coverRealism, styles: ['exact_studio', 'premium_cg', 'hyper_real'] },
-  { id: 'anim', label: 'Animation Studio', description: "Family 3D & Claymation", image: coverAnim, styles: ['family_3d', 'pixar', 'claymation'] },
-  { id: 'illustration', label: 'Illustration Studio', description: "Anime, Noir & Graphic", image: coverIllustration, styles: ['retro_cel', 'graphic_noir', 'retro_anime', 'comic_book'] },
-  { id: 'scifi', label: 'Sci-Fi Studio', description: "Cyberpunk & High Tech", image: coverScifi, styles: ['cyberpunk_neon', 'cyberpunk'] },
+  { id: 'realism', label: 'Realism', description: "Exact Likeness & Premium CG", image: coverRealism, styles: ['exact_studio', 'premium_cg', 'hyper_real'] },
+  { id: 'anim', label: 'Stylized Cartoon', description: "Family 3D & Claymation", image: coverAnim, styles: ['family_3d', 'pixar', 'claymation'] },
+  { id: 'illustration', label: 'Illustration', description: "Anime, Noir & Graphic", image: coverIllustration, styles: ['retro_cel', 'graphic_noir', 'retro_anime', 'comic_book'] },
+  { id: 'scifi', label: 'Sci-Fi', description: "Cyberpunk & High Tech", image: coverScifi, styles: ['cyberpunk_neon', 'cyberpunk'] },
   { id: 'uncategorized', label: 'Unsorted', description: "No Specific Style", image: null, styles: [] as string[] }
 ];
 
@@ -1749,9 +1749,9 @@ const CastingForge = () => {
 
           <div className="flex gap-2 mb-4">
             {[
-              { id: 'form_focus', label: 'Form A' },
-              { id: 'face_focus', label: 'Face B' },
-              { id: 'split_focus', label: 'Split C' }
+              { id: 'form_focus', label: 'Form' },
+              { id: 'face_focus', label: 'Face' },
+              { id: 'split_focus', label: 'Split' }
             ].map((l) => (
               <button
                 key={l.id}
@@ -2586,7 +2586,7 @@ const CastingForge = () => {
                     onClick={executeDelete}
                     className="px-4 py-2 rounded-lg text-xs font-black uppercase tracking-wider bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-900/20"
                   >
-                    Delete Forever
+                    Confirm
                   </button>
                 </div>
               </div>

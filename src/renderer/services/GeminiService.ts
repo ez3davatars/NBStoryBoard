@@ -1,10 +1,39 @@
 export const GeminiService = {
 
-  // Helper: extract base64 + mime from data URL (or pass-through base64)
-  _extractInlineData(url: string): { mimeType: string; data: string } {
-    const data = url.includes('base64,') ? url.split('base64,')[1] : url;
-    const mimeType = url.includes('data:') ? url.substring(url.indexOf(':') + 1, url.indexOf(';')) : 'image/png';
-    return { mimeType, data };
+  // Helper: Convert Blob/Data URL to Base64
+  async _resolveImageData(url: string): Promise<{ mimeType: string; data: string }> {
+    // 1. Handle Base64 Data URL
+    if (url.startsWith('data:')) {
+      const mimeType = url.substring(url.indexOf(':') + 1, url.indexOf(';'));
+      const data = url.split('base64,')[1];
+      return { mimeType, data };
+    }
+
+    // 2. Handle Blob URL (or any fetchable URL)
+    if (url.startsWith('blob:') || url.startsWith('http')) {
+      try {
+        const response = await fetch(url);
+        const blob = await response.blob();
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const result = reader.result as string;
+            const mimeType = result.substring(result.indexOf(':') + 1, result.indexOf(';'));
+            const data = result.split('base64,')[1];
+            resolve({ mimeType, data });
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+      } catch (e) {
+        console.warn("Failed to fetch image data from URL:", url, e);
+        // Fallback: try to pass it through if it looks like a b64 string already
+        return { mimeType: 'image/png', data: url };
+      }
+    }
+
+    // 3. Handle Raw Base64 (Assume PNG)
+    return { mimeType: 'image/png', data: url };
   },
 
   async generateImage(
@@ -28,14 +57,16 @@ export const GeminiService = {
       const contentsParts: any[] = [];
 
       // Inject references first
-      referenceImages.forEach((ref, index) => {
-        if (index >= 14) return;
-        contentsParts.push({ text: `[IMAGE ${index + 1}] ${ref.label}` });
-        const inline = GeminiService._extractInlineData(ref.url);
+      let imgIndex = 1;
+      for (const ref of referenceImages) {
+        if (imgIndex > 14) break;
+        contentsParts.push({ text: `[IMAGE ${imgIndex}] ${ref.label}` });
+        const inline = await GeminiService._resolveImageData(ref.url);
         contentsParts.push({
           inlineData: { mimeType: inline.mimeType, data: inline.data }
         });
-      });
+        imgIndex++;
+      }
 
       // Inject prompt last for better "instruction following" on the visual context
       contentsParts.push({ text: prompt });
@@ -45,7 +76,7 @@ export const GeminiService = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contents: [{ parts: contentsParts }],
-          generationConfig: { 
+          generationConfig: {
             responseModalities: ["IMAGE"],
             imageConfig: {
               aspectRatio: options.aspectRatio || "16:9"
@@ -58,7 +89,7 @@ export const GeminiService = {
         let errText = await response.text();
         console.error("Gemini API Error Response:", errText);
         let cleanMsg = errText;
-        try { cleanMsg = JSON.parse(errText).error?.message || cleanMsg; } catch {}
+        try { cleanMsg = JSON.parse(errText).error?.message || cleanMsg; } catch { }
         throw new Error(`Gemini Error (${response.status}): ${cleanMsg}`);
       }
 
@@ -82,7 +113,7 @@ export const GeminiService = {
     if (!response.ok) {
       const errText = await response.text();
       let cleanMsg = errText;
-      try { cleanMsg = JSON.parse(errText).error?.message || cleanMsg; } catch {}
+      try { cleanMsg = JSON.parse(errText).error?.message || cleanMsg; } catch { }
       throw new Error(`Imagen Error: ${cleanMsg}`);
     }
 
@@ -101,10 +132,10 @@ export const GeminiService = {
   ): Promise<string> {
     if (!apiKey) throw new Error("No API Key provided.");
     // Force a vision-text model for analysis to avoid modality errors with generation models
-    const useModel = 'gemini-2.0-flash'; 
+    const useModel = 'gemini-2.0-flash';
     const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${useModel}:generateContent`;
 
-    const inline = GeminiService._extractInlineData(imageUrl);
+    const inline = await GeminiService._resolveImageData(imageUrl);
     const response = await fetch(`${baseUrl}?key=${apiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -121,7 +152,7 @@ export const GeminiService = {
     if (!response.ok) {
       const errText = await response.text();
       let cleanMsg = errText;
-      try { cleanMsg = JSON.parse(errText).error?.message || cleanMsg; } catch {}
+      try { cleanMsg = JSON.parse(errText).error?.message || cleanMsg; } catch { }
       throw new Error(`Gemini Analyze Error: ${cleanMsg}`);
     }
 
@@ -145,13 +176,15 @@ export const GeminiService = {
     const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${useModel}:generateContent`;
 
     const parts: any[] = [];
-    
+
     // 1. Inject frames with labels
-    frames.forEach((frame, idx) => {
-        parts.push({ text: `[FRAME ${idx+1}: ${frame.label}]` });
-        const inline = GeminiService._extractInlineData(frame.url);
-        parts.push({ inlineData: { mimeType: inline.mimeType, data: inline.data } });
-    });
+    let idx = 1;
+    for (const frame of frames) {
+      parts.push({ text: `[FRAME ${idx}: ${frame.label}]` });
+      const inline = await GeminiService._resolveImageData(frame.url);
+      parts.push({ inlineData: { mimeType: inline.mimeType, data: inline.data } });
+      idx++;
+    }
 
     // 2. Inject the reasoning prompt
     parts.push({ text: prompt });
@@ -167,7 +200,7 @@ export const GeminiService = {
     if (!response.ok) {
       const errText = await response.text();
       let cleanMsg = errText;
-      try { cleanMsg = JSON.parse(errText).error?.message || cleanMsg; } catch {}
+      try { cleanMsg = JSON.parse(errText).error?.message || cleanMsg; } catch { }
       throw new Error(`Gemini Multi-Frame Error: ${cleanMsg}`);
     }
 
@@ -183,34 +216,34 @@ export const GeminiService = {
     model: string,
     frames: { url: string; label: string }[]
   ): Promise<T> {
-     const strictPrompt = `
+    const strictPrompt = `
        ${prompt}
        
        CRITICAL INSTRUCTION: Return ONLY valid JSON. No markdown formatting. No code fences. No commentary.
      `;
-     
-     // Reuse the underlying fetch logic or just call analyzeMultiFrame if acceptable. 
-     // For safety/types, let's call the base method since it returns string.
-     const rawText = await GeminiService.analyzeMultiFrame(strictPrompt, apiKey, model, frames);
-     
-     try {
-       // Clean potentially messy output (e.g. ```json ... ```)
-       const cleaned = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
-       
-       // Handle cases where model adds text before/after JSON
-       const firstBrace = cleaned.indexOf('{');
-       const lastBrace = cleaned.lastIndexOf('}');
-       
-       if (firstBrace === -1 || lastBrace === -1) {
-          throw new Error("No JSON object found in response.");
-       }
-       
-       const jsonString = cleaned.substring(firstBrace, lastBrace + 1);
-       return JSON.parse(jsonString) as T;
-     } catch (e) {
-       console.error("JSON Parse Error on:", rawText);
-       throw new Error("Gemini failed to return valid JSON. Please try again.");
-     }
+
+    // Reuse the underlying fetch logic or just call analyzeMultiFrame if acceptable. 
+    // For safety/types, let's call the base method since it returns string.
+    const rawText = await GeminiService.analyzeMultiFrame(strictPrompt, apiKey, model, frames);
+
+    try {
+      // Clean potentially messy output (e.g. ```json ... ```)
+      const cleaned = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
+
+      // Handle cases where model adds text before/after JSON
+      const firstBrace = cleaned.indexOf('{');
+      const lastBrace = cleaned.lastIndexOf('}');
+
+      if (firstBrace === -1 || lastBrace === -1) {
+        throw new Error("No JSON object found in response.");
+      }
+
+      const jsonString = cleaned.substring(firstBrace, lastBrace + 1);
+      return JSON.parse(jsonString) as T;
+    } catch (e) {
+      console.error("JSON Parse Error on:", rawText);
+      throw new Error("Gemini failed to return valid JSON. Please try again.");
+    }
   },
 
 
@@ -233,8 +266,8 @@ export const GeminiService = {
   ): Promise<string> {
     const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
-    const base = GeminiService._extractInlineData(baseImageUrl);
-    const mask = GeminiService._extractInlineData(maskDataUrl);
+    const base = await GeminiService._resolveImageData(baseImageUrl);
+    const mask = await GeminiService._resolveImageData(maskDataUrl);
 
     const parts: any[] = [];
 
@@ -244,7 +277,7 @@ export const GeminiService = {
 
     // 2) Optional reference images
     for (const ref of referenceImages) {
-      const r = GeminiService._extractInlineData(ref.url);
+      const r = await GeminiService._resolveImageData(ref.url);
       parts.push({ inlineData: { mimeType: r.mimeType, data: r.data } });
       parts.push({ text: `[REF] ${ref.label}` });
     }
@@ -283,7 +316,7 @@ Hard constraints:
     if (!response.ok) {
       const errText = await response.text();
       let cleanMsg = errText;
-      try { cleanMsg = JSON.parse(errText).error?.message || cleanMsg; } catch {}
+      try { cleanMsg = JSON.parse(errText).error?.message || cleanMsg; } catch { }
       throw new Error(`Gemini Mask Edit Error: ${cleanMsg}`);
     }
 
