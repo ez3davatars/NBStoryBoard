@@ -109,10 +109,24 @@ ipcMain.handle('file:read', async (_event, filePath) => {
 
 ipcMain.handle('file:write', async (_event, filePath, buffer) => {
   try {
+    // Ensure directory exists
+    const dirname = path.dirname(filePath);
+    await fs.mkdir(dirname, { recursive: true });
+
     await fs.writeFile(filePath, Buffer.from(buffer));
     return true;
   } catch (error) {
     console.error("Write Error:", error);
+    return false;
+  }
+});
+
+ipcMain.handle('dir:create', async (_event, dirPath) => {
+  try {
+    await fs.mkdir(dirPath, { recursive: true });
+    return true;
+  } catch (error) {
+    console.error("Create Dir Error:", error);
     return false;
   }
 });

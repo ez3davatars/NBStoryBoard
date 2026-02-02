@@ -11,6 +11,8 @@ import {
     Trash2, Maximize, RefreshCcw, FolderPlus
 } from 'lucide-react';
 import { nativeJoinPath, nativeListFiles, nativeReadFile } from '../utils/NativeFileAssets';
+import { nativeSelectFolder } from '../utils/NativeFileAssets';
+import type { CastMember } from '../context/AppContext';
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
 
@@ -245,6 +247,104 @@ const NanoCastingDirector = () => {
             dispatch({ type: 'ADD_LOG', payload: { message: `Wardrobe scan failed: ${e.message}`, type: 'error' } });
         }
     };
+
+    // --- ACTOR LIBRARY SCANNER (NATIVE) ---
+    const scanActorLibrary = async () => {
+        if (!state.saveDirectoryPath) return;
+
+        try {
+            const actorsRoot = await nativeJoinPath(state.saveDirectoryPath, 'Actors');
+            let categories: string[] = [];
+
+            try {
+                // Check if Actors folder exists and get categories
+                const rootContents = await nativeListFiles(actorsRoot);
+                // Filter for directories (simplified check: no extension = directory convention)
+                categories = rootContents.filter(c => !c.includes('.'));
+            } catch {
+                return; // Actors folder likely doesn't exist yet
+            }
+
+            const libraryPayload: CastMember[] = [];
+
+            for (const catName of categories) {
+                const catPath = await nativeJoinPath(actorsRoot, catName);
+                let files: string[] = [];
+                try {
+                    files = await nativeListFiles(catPath);
+                } catch { continue; }
+
+                for (const potentialFile of files) {
+                    // FLAT STRUCTURE SUPPORT: Actor-123.png + Actor-123.json in Category Folder
+                    if (potentialFile.endsWith('.png')) {
+                        const baseName = potentialFile.replace('.png', '');
+                        const imgPath = await nativeJoinPath(catPath, potentialFile);
+
+                        // Check for Sidecar JSON
+                        const jsonName = `${baseName}.json`;
+                        let metadata: any = null;
+
+                        if (files.includes(jsonName)) {
+                            const jsonPath = await nativeJoinPath(catPath, jsonName);
+                            const jsonContent = await nativeReadFile(jsonPath);
+
+                            if (jsonContent && typeof jsonContent === 'string') {
+                                try {
+                                    // Handle Data URL (if nativeReadFile returns it) or raw text
+                                    // Assuming nativeReadFile returns a Data URL for generic text files or need special handling
+                                    // The standard util returns a Data URL.
+                                    let jsonStr = jsonContent;
+                                    if (jsonContent.startsWith('data:')) {
+                                        const base64 = jsonContent.split(',')[1];
+                                        jsonStr = atob(base64);
+                                    }
+                                    metadata = JSON.parse(jsonStr);
+                                } catch (e) {
+                                    console.warn("Invalid JSON for actor:", baseName);
+                                }
+                            }
+                        }
+
+                        // Load Image (nativeReadFile returns DataURL for images)
+                        const imgUrl = await nativeReadFile(imgPath);
+                        if (imgUrl) {
+                            libraryPayload.push({
+                                id: metadata?.id || `${catName}-${baseName}`,
+                                name: metadata?.name || baseName, // Use metadata name if available
+                                url: imgUrl,
+                                tag: 'front',
+                                profile: {
+                                    identity: metadata?.name || baseName,
+                                    wardrobe: "Saved Actor",
+                                    accessories: "",
+                                    style: metadata?.style || catName
+                                }
+                            });
+                        }
+                    }
+                }
+            }
+
+            // Update Library State
+            if (libraryPayload.length > 0) {
+                // Sort by creation time if possible (descending)
+                libraryPayload.sort((a, b) => b.id.localeCompare(a.id));
+
+                dispatch({ type: 'SET_ACTOR_LIBRARY', payload: libraryPayload });
+                console.log(`[NanoCast] Loaded ${libraryPayload.length} actors from library.`);
+            }
+
+        } catch (err) {
+            console.error("Failed to scan native Actor Library:", err);
+        }
+    };
+
+    // Auto-Scan on Mount / Path Change
+    useEffect(() => {
+        if (state.saveDirectoryPath) {
+            scanActorLibrary();
+        }
+    }, [state.saveDirectoryPath]);
 
     const handleUploadCostume = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (!e.target.files || e.target.files.length === 0 || !state.saveDirectoryHandle) return;
@@ -1265,9 +1365,16 @@ const NanoCastingDirector = () => {
         setShowSaveModal(true);
     };
 
-    const confirmSaveToLibrary = async () => {
+    const confirmSaveToLibrary = async (nameOverride?: string, categoryOverride?: string) => {
+        const targetName = nameOverride || newActorName;
+        const targetCategory = categoryOverride || saveCategory;
+
+        alert(`Debug: Confirm Save Reached. Target: ${targetName}`);
+        console.log("confirmSaveToLibrary called with:", { targetName, targetCategory, hasHandle: !!state.saveDirectoryHandle, hasUrl: !!finalCharacterUrl });
+
         if (!state.saveDirectoryHandle || !finalCharacterUrl) {
-            showToast("No Save Folder or Image!");
+            console.warn("Save aborted: No Directory Handle or Character URL");
+            showToast("No Save Folder or Image! Link Storage in Sidebar.");
             return;
         }
 
@@ -1277,10 +1384,10 @@ const NanoCastingDirector = () => {
             const actorsDir = await root.getDirectoryHandle('Actors', { create: true });
 
             // 2. Get/Create Category folder
-            const catDir = await actorsDir.getDirectoryHandle(saveCategory, { create: true });
+            const catDir = await actorsDir.getDirectoryHandle(targetCategory, { create: true });
 
             // 3. Create Actor Folder
-            const safeName = newActorName.replace(/[^a-z0-9\s-_]/gi, '').trim() || `Actor-${Date.now()}`;
+            const safeName = targetName.replace(/[^a-z0-9\s-_]/gi, '').trim() || `Actor-${Date.now()}`;
             const actorDir = await catDir.getDirectoryHandle(safeName, { create: true });
 
             // 4. Save Portrait
@@ -1300,7 +1407,7 @@ const NanoCastingDirector = () => {
                 id: crypto.randomUUID(),
                 name: safeName,
                 description: state.lastCastedPrompt || "Nano Cast Generation",
-                tags: [saveCategory, "Nano Cast", selectedBody || "Unknown Class"],
+                tags: [targetCategory, "Nano Cast", selectedBody || "Unknown Class"],
                 version: "1.0",
                 created: Date.now(),
                 dna: {
@@ -1313,7 +1420,7 @@ const NanoCastingDirector = () => {
             await metaWritable.write(JSON.stringify(metadata, null, 2));
             await metaWritable.close();
 
-            showToast(`Saved to Library: ${saveCategory}/${safeName}`);
+            showToast(`Saved to Library: ${targetCategory}/${safeName}`);
             setShowSaveModal(false);
 
         } catch (e: any) {
@@ -1726,7 +1833,7 @@ const NanoCastingDirector = () => {
     };
 
     return (
-        <div className="h-full w-full bg-bg text-fg font-mono overflow-hidden flex relative selection:bg-accent/30">
+        <div className="flex h-screen bg-bg text-fg overflow-hidden relative font-sans select-none">
             {/* Background Grid - Subtle */}
             <div className="absolute inset-0 z-0 pointer-events-none opacity-[0.05]"
                 style={{
@@ -1850,6 +1957,17 @@ const NanoCastingDirector = () => {
                                         <button
                                             onClick={async () => {
                                                 try {
+                                                    // NATIVE MODE
+                                                    if (window.electronAPI) {
+                                                        const path = await nativeSelectFolder();
+                                                        if (path) {
+                                                            dispatch({ type: 'SET_SAVE_PATH', payload: path });
+                                                            dispatch({ type: 'ADD_LOG', payload: { message: `Native Storage Linked: ${path}`, type: 'success' } });
+                                                        }
+                                                        return;
+                                                    }
+
+                                                    // WEB MODE
                                                     // @ts-ignore
                                                     const handle = await window.showDirectoryPicker({ mode: 'readwrite', startIn: 'documents' });
                                                     if (handle) {
@@ -3049,8 +3167,7 @@ const NanoCastingDirector = () => {
                         onSave={(name, category) => {
                             setNewActorName(name);
                             setSaveCategory(category);
-                            // Small timeout to allow state update before triggering the async save
-                            setTimeout(() => confirmSaveToLibrary(), 100);
+                            confirmSaveToLibrary(name, category);
                         }}
                         backgrounds={{
                             realism: styleExactStudioMasc,
@@ -3100,7 +3217,7 @@ const NanoCastingDirector = () => {
                                     initial={{ opacity: 0, y: 50 }}
                                     animate={{ opacity: 1, y: 0 }}
                                     exit={{ opacity: 0, y: 20 }}
-                                    className="absolute bottom-8 left-1/2 -translate-x-1/2 bg-surface border border-accent/50 text-fg px-6 py-3 rounded-full shadow-2xl backdrop-blur-xl z-50 flex items-center gap-3"
+                                    className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-surface border border-accent/50 text-fg px-6 py-3 rounded-full shadow-2xl backdrop-blur-xl z-[5000] flex items-center gap-3"
                                 >
                                     <CheckCircle2 className="w-5 h-5 text-accent" />
                                     <span className="text-xs font-bold uppercase tracking-widest">{notification}</span>

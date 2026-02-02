@@ -464,51 +464,61 @@ const App = () => {
       if (!window.electronAPI || !state.saveDirectoryPath) return;
 
       try {
+
         const actorsPath = await window.electronAPI.joinPath(state.saveDirectoryPath, 'Actors');
 
-        // Ensure directory exists or gracefully fail
-        if (!await window.electronAPI.exists(actorsPath)) {
-          console.log("Native Sync: 'Actors' folder not found. Skipping.");
-          return;
-        }
-
-        const filenames = await window.electronAPI.listFiles(actorsPath);
-        if (!filenames || filenames.length === 0) return;
-
-        console.log(`Native Sync: Found ${filenames.length} files in Actors folder.`);
-
+        // Categories to scan (Matches WardrobeStudio Save Logic)
+        const CATEGORIES = ['Realism', 'Stylized Cartoon', 'Illustration', 'Sci-Fi', 'Uncategorized', 'Extras'];
         const externalActors: CastMember[] = [];
 
-        // Parallel load for speed
-        await Promise.all(filenames.map(async (filename) => {
-          if (!state.saveDirectoryPath) return;
-          try {
-            // Construct full path
-            const fullPath = await window.electronAPI!.joinPath(actorsPath, filename);
-            const base64 = await window.electronAPI!.readFile(fullPath);
+        // Parallel Scan of All Categories
+        await Promise.all(CATEGORIES.map(async (cat) => {
+          const catPath = await window.electronAPI!.joinPath(actorsPath, cat);
 
-            if (!base64) return;
+          if (!await window.electronAPI!.exists(catPath)) return;
 
-            const diskId = `disk-${filename}`;
-            // Simple heuristic for name: remove extension
-            const displayName = filename.replace(/\.(png|jpg|jpeg)$/i, '');
+          const filenames = await window.electronAPI!.listFiles(catPath);
+          if (!filenames || filenames.length === 0) return;
 
-            externalActors.push({
-              id: diskId,
-              url: `data:image/png;base64,${base64}`,
-              tag: 'front',
-              name: displayName,
-              filename: filename,
-              profile: {
-                identity: 'Unknown', // Basic default
-                wardrobe: '',
-                accessories: '',
-                style: 'External Asset'
-              }
-            });
-          } catch (e) {
-            console.warn("Native load failed for", filename, e);
-          }
+          // Map Category to Style for Metadata Consistency
+          const catToStyle: Record<string, string> = {
+            "Realism": "exact_studio",
+            "Stylized Cartoon": "family_3d",
+            "Illustration": "retro_anime",
+            "Sci-Fi": "cyberpunk_neon",
+            "Extras": "exact_studio"
+          };
+          const defaultStyle = catToStyle[cat] || "exact_studio";
+
+          await Promise.all(filenames.map(async (filename) => {
+            if (!filename.toLowerCase().endsWith('.png')) return;
+
+            try {
+              const fullPath = await window.electronAPI!.joinPath(catPath, filename);
+              const base64 = await window.electronAPI!.readFile(fullPath);
+
+              if (!base64) return;
+
+              const diskId = `disk-${cat}-${filename}`; // Ensure ID uniqueness across folders
+              const displayName = filename.replace(/\.(png|jpg|jpeg)$/i, '');
+
+              externalActors.push({
+                id: diskId,
+                url: `data:image/png;base64,${base64}`,
+                tag: 'front',
+                name: displayName,
+                filename: filename,
+                profile: {
+                  identity: displayName,
+                  wardrobe: '',
+                  accessories: '',
+                  style: defaultStyle // Auto-assigned from Folder location!
+                }
+              });
+            } catch (e) {
+              console.warn(`Failed to load ${filename} from ${cat}`, e);
+            }
+          }));
         }));
 
         if (externalActors.length > 0 || state.actorLibrary.some(a => a.id.startsWith('disk-'))) {

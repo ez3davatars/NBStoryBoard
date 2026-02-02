@@ -8,7 +8,7 @@ import {
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
 import type { WardrobeItem, CastMember } from '../context/AppContext';
-import { nativeJoinPath, nativeListFiles, nativeReadFile } from '../utils/NativeFileAssets';
+import { nativeJoinPath, nativeListFiles, nativeReadFile, nativeWriteFile } from '../utils/NativeFileAssets';
 import { removeBackground } from "@imgly/background-removal";
 // Style Imports for Save Modal
 import styleRealism from '../assets/styles/style_exact_studio_masc.png';
@@ -71,55 +71,142 @@ const WardrobeStudio = () => {
     setShowSaveModal(true);
   };
 
-  const confirmSaveToLibrary = async () => {
-    if (!state.saveDirectoryHandle || !fittedImage) {
-      // alert("No Save Folder or Image!"); // Replace with toast if available
+  const confirmSaveToLibrary = async (nameOverride?: string, categoryOverride?: string) => {
+    const targetName = nameOverride || newActorName;
+    const targetCategory = categoryOverride || saveCategory;
+
+    const hasStorage = !!state.saveDirectoryHandle || !!state.saveDirectoryPath;
+
+    if (!hasStorage || !fittedImage) {
+      alert("Save Failed: No Save Folder selected in Settings or Image is missing.");
+      dispatch({ type: 'ADD_LOG', payload: { message: "Save Failed: Missing Save Folder or Image", type: 'error' } });
       return;
     }
 
-    try {
-      // 1. Get/Create "Actors" folder
-      const root = state.saveDirectoryHandle;
-      const actorsDir = await root.getDirectoryHandle('Actors', { create: true });
+    // FIX: Use Processed URL (BG Removed) if available, otherwise fallback to Original
+    const sourceImage = processedTryOnUrl || fittedImage;
 
-      // 2. Get/Create Category folder
-      const catDir = await actorsDir.getDirectoryHandle(saveCategory, { create: true });
+    // NATIVE MODE SUPPORT
+    if (state.saveDirectoryPath) {
+      try {
+        const root = state.saveDirectoryPath;
+        const actorsDir = await nativeJoinPath(root, 'Actors');
+        const catDir = await nativeJoinPath(actorsDir, targetCategory);
 
-      // 3. Create Actor Folder
-      const safeName = newActorName.replace(/[^a-z0-9\s-_]/gi, '').trim() || `Actor-${Date.now()}`;
-      const actorDir = await catDir.getDirectoryHandle(safeName, { create: true });
+        // Ensure Category Directory exists (not actor subfolder)
+        // nativeWriteFile handles directory creation recursively
 
-      // 4. Save Portrait
-      const fileHandle = await actorDir.getFileHandle('portrait.png', { create: true });
-      const writable = await fileHandle.createWritable();
+        // REVERT TO GENERIC NAMING (User Request: "Original generic ACTOR #")
+        // We ignore the input name for the FILE, but keep it in metadata.
+        const timestamp = Date.now();
+        const safeName = `Actor-${timestamp}`;
 
-      const res = await fetch(fittedImage);
-      const blob = await res.blob();
+        // FLAT STRUCTURE: Write directly to .../Category/Name.png
+        const portraitPath = await nativeJoinPath(catDir, `${safeName}.png`);
+        const res = await fetch(sourceImage);
+        const blob = await res.blob();
+        const saveImg = await nativeWriteFile(portraitPath, blob);
 
-      await writable.write(blob);
-      await writable.close();
+        if (!saveImg) throw new Error("Failed to write image file");
 
-      // 5. Save Metadata (actor.json)
-      const metaHandle = await actorDir.getFileHandle('actor.json', { create: true });
-      const metaWritable = await metaHandle.createWritable();
-      const metadata = {
-        id: crypto.randomUUID(),
-        name: newActorName,
-        category: saveCategory,
-        created: Date.now(),
-        tags: ["wardrobe_fit"],
-        baseImage: "portrait.png"
-      };
-      await metaWritable.write(JSON.stringify(metadata, null, 2));
-      await metaWritable.close();
+        // Map Category to a valid Style for Library Filtering
+        const catToStyle: Record<string, string> = {
+          "Realism": "exact_studio",
+          "Stylized Cartoon": "family_3d",
+          "Illustration": "retro_anime",
+          "Sci-Fi": "cyberpunk_neon",
+          "Extras": "exact_studio"
+        };
+        const activeStyle = catToStyle[targetCategory] || "exact_studio";
 
-      setShowSaveModal(false);
-      // alert("Actor Saved to Library!"); 
-      dispatch({ type: 'ADD_LOG', payload: { message: `Saved Actor: ${newActorName}`, type: 'success' } });
+        // Save Metadata
+        const metaPath = await nativeJoinPath(catDir, `${safeName}.json`);
+        const metadata = {
+          id: crypto.randomUUID(),
+          name: targetName || safeName, // Keep their typed name in metadata
+          category: targetCategory,
+          created: timestamp,
+          tags: ["wardrobe_fit"],
+          baseImage: `${safeName}.png`,
+          style: activeStyle
+        };
+        const metaBlob = new Blob([JSON.stringify(metadata, null, 2)], { type: 'application/json' });
+        const saveMeta = await nativeWriteFile(metaPath, metaBlob);
 
-    } catch (err) {
-      console.error("Failed to save to library:", err);
-      dispatch({ type: 'ADD_LOG', payload: { message: `Save Failed: ${err}`, type: 'error' } });
+        if (!saveMeta) throw new Error("Failed to write metadata file");
+
+        // INSTANT UI UPDATE
+        const newActor: any = {
+          id: metadata.id,
+          name: metadata.name,
+          url: sourceImage, // Use Blob URL for immediate render!
+          tag: 'front',
+          profile: {
+            identity: metadata.name,
+            style: activeStyle,
+            wardrobe: "Fitted",
+            accessories: ""
+          }
+        };
+        dispatch({ type: 'ADD_ACTOR_LIBRARY', payload: newActor });
+
+        setShowSaveModal(false);
+        // Alert removed after verification
+        dispatch({ type: 'ADD_LOG', payload: { message: `Saved Actor (Native): ${safeName}`, type: 'success' } });
+        return;
+
+      } catch (err: any) {
+        console.error("Native Save Failed:", err);
+        dispatch({ type: 'ADD_LOG', payload: { message: `Native Save Failed: ${err.message}`, type: 'error' } });
+        return;
+      }
+    }
+
+    if (state.saveDirectoryHandle) {
+      try {
+        // 1. Get/Create "Actors" folder
+        const root = state.saveDirectoryHandle;
+        const actorsDir = await root.getDirectoryHandle('Actors', { create: true });
+
+        // 2. Get/Create Category folder
+        const catDir = await actorsDir.getDirectoryHandle(targetCategory, { create: true });
+
+        // 3. Create Actor Folder
+        const safeName = targetName.replace(/[^a-z0-9\s-_]/gi, '').trim() || `Actor-${Date.now()}`;
+        const actorDir = await catDir.getDirectoryHandle(safeName, { create: true });
+
+        // 4. Save Portrait
+        const fileHandle = await actorDir.getFileHandle('portrait.png', { create: true });
+        const writable = await fileHandle.createWritable();
+
+        const res = await fetch(sourceImage);
+        const blob = await res.blob();
+
+        await writable.write(blob);
+        await writable.close();
+
+        // 5. Save Metadata (actor.json)
+        const metaHandle = await actorDir.getFileHandle('actor.json', { create: true });
+        const metaWritable = await metaHandle.createWritable();
+        const metadata = {
+          id: crypto.randomUUID(),
+          name: safeName,
+          category: targetCategory,
+          created: Date.now(),
+          tags: ["wardrobe_fit"],
+          baseImage: "portrait.png"
+        };
+        await metaWritable.write(JSON.stringify(metadata, null, 2));
+        await metaWritable.close();
+
+        setShowSaveModal(false);
+        // alert("Actor Saved to Library!"); 
+        dispatch({ type: 'ADD_LOG', payload: { message: `Saved Actor: ${safeName}`, type: 'success' } });
+
+      } catch (err) {
+        console.error("Failed to save to library:", err);
+        dispatch({ type: 'ADD_LOG', payload: { message: `Save Failed: ${err}`, type: 'error' } });
+      }
     }
   };
   const uiCanvasRef = useRef<HTMLCanvasElement>(null); // For Brush Cursor
@@ -1004,29 +1091,26 @@ const WardrobeStudio = () => {
          [IMAGE 1] is the target SUBJECT. 
          [IMAGE 2] is the standalone COSTUME ASSET to fit.
          
-         OBJECTIVE: Apply the costume from [IMAGE 2] onto the subject in [IMAGE 1].
+         PRIMARY DIRECTIVE:
+         WEAR THE COSTUME. The subject from [IMAGE 1] must be WEARING the clothing from [IMAGE 2].
+         Create a natural, realistic fit. The clothing must drape, fold, and stretch according to the subject's body pose.
          
-         OBJECTIVE: Apply the costume from [IMAGE 2] onto the subject in [IMAGE 1].
-         
-         OUTPUT FORMAT: SINGLE COMPOSITE IMAGE. 
-         - Do NOT show the source image. 
-         - Do NOT show a "before/after" comparison. 
-         - Do NOT create a collage. 
-         - OUTPUT MUST BE ONE SOLITARY PERSON. 
-         - IF MULTIPLE PEOPLE APPEAR, THE TASK IS FAILED.
+         CRITICAL RULES FOR SINGLE_SUBJECT OUTPUT:
+         1. **SOLITARY SUBJECT ONLY**: The output must contain EXACTLY ONE PERSON. 
+         2. **NO MANNEQUINS**: Do NOT include mannequins, dress forms, or clothing racks.
+         3. **NO REFERENCE DISPLAY**: Do NOT show the costume floating next to the person. 
+         4. **NO SPLIT SCREENS**: Do NOT create a before/after split or reference sheet.
+         5. **BACKGROUND**: Use a SOLID NEON GREEN background (#39FF14).
 
-         CRITICAL CONSTRAINTS:
-         1. **COSTUME FIDELITY**: You MUST transfer the EXACT clothing from [IMAGE 2]. Maintain all details, textures, logos, and materials.
-         2. **SOURCE HANDLING**: [IMAGE 2] is a flat garment reference (potentially transparent PNG). Do NOT generate the "image file" itself. Do NOT include any mannequin, hanger, or background artifacts from [IMAGE 2]. Just the clothes.
-         3. **SUBJECT PRESERVATION**: Maintain the subject's exact facial identity, hairstyle, and body proportions from [IMAGE 1].
-         4. **INTEGRATION**: Adjust the fit to match the subject's pose and lighting naturally.
-         5. **SINGLE SUBJECT**: Ensure there is only ONE person in the final generation. No clones, no shadows, no reflections.
-         5. ${tryOnNote || "Clean studio execution."}
-         6. Use a solid Neon Green background (#39FF14) for perfect subject isolation.
-         7. **COMPOSITION**: GENERATE A FULL BODY SHOT. HANDS AND FEET MUST BE VISIBLE. If the subject reference is cropeed, YOU MUST OUTPAINT/GENERATE THE MISSING BODY PARTS to show the full costume.
+         EXECUTION DETAILS:
+         1. **INTEGRATION & FIT**: The costume must respect the subject's anatomy. If [IMAGE 2] is a mascot/oversized suit, the subject is INSIDE it. No "floating heads" on top of suits.
+         2. **COSTUME FIDELITY**: Transfer the EXACT textures/logos from [IMAGE 2].
+         3. **SUBJECT PRESERVATION**: Maintain facial identity and body proportions from [IMAGE 1].
+         4. **FULL BODY**: Generate a FULL BODY shot. Hands and feet must be visible and wearing the appropriate parts of the costume (gloves/shoes).
+         5. ${tryOnNote || "Clean professional studio fitting."}
          
          NEGATIVE CONSTRAINTS:
-         split view, side by side, triptych, reference sheet, grid, collage, multiple views, ghosting, double exposure, extra people, two people, floating clothes, watermark, text, bad anatomy, distorted face, extra limbs, background artifacts, before and after, cropped hands, cropped feet, portrait crop.`,
+         floating head, disembodied head, bad integration, bad fit, mannequin, plastic dummy, dress form, floating clothes, ghost outfit, split view, side by side, reference sheet, grid, collage, text, watermarks, bad anatomy, extra limbs, cropped head, cropped feet.`,
         state.apiKey,
         state.model,
         [
@@ -1531,8 +1615,7 @@ const WardrobeStudio = () => {
         onSave={(name, category) => {
           setNewActorName(name);
           setSaveCategory(category);
-          // Small timeout to allow state update before triggering the async save
-          setTimeout(() => confirmSaveToLibrary(), 100);
+          confirmSaveToLibrary(name, category);
         }}
         backgrounds={{
           realism: styleRealism,

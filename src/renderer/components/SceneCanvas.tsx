@@ -345,21 +345,25 @@ const SceneCanvas = () => {
 
   // --- SIDEBAR STATE ---
   const [panelOrder, setPanelOrder] = useState<string[]>(['specs', 'anchor', 'layers', 'ref_stacks', 'region_edit', 'scene_director']);
-  const [collapsedPanels, setCollapsedPanels] = useState<Record<string, boolean>>({
+
+  // Use global panel state from AppContext to persist during navigation
+  const collapsedPanels = (state as any).stagePanelState || {
+    'ref_stacks': true,
     'region_edit': true,
-    'layers': true,
+    'stage-layers': true,
     'specs': true,
     'anchor': true,
-    'v3_terminal': false,
-    'scene_director': true,
-    'ref_stacks': true
-  });
+    'scene_director': true
+  };
   const [draggedPanelId, setDraggedPanelId] = useState<string | null>(null);
 
 
 
   const togglePanel = (id: string) => {
-    setCollapsedPanels(prev => ({ ...prev, [id]: !prev[id] }));
+    dispatch({
+      type: 'SET_STAGE_PANEL_STATE',
+      payload: { id, isOpen: !collapsedPanels[id] }
+    } as any);
   };
 
   const handlePanelDrop = (targetId: string) => {

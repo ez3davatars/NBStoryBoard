@@ -252,6 +252,9 @@ export interface AppState {
   shots: Shot[];
   activeShotId: string | null;
   isStoryboardEnabled: boolean;
+
+  // Persist panel open/closed states in memory only (reset on reload)
+  stagePanelState: Record<string, boolean>;
 }
 
 export type Action =
@@ -320,6 +323,7 @@ export type Action =
   | { type: 'REDO' }
   | { type: 'SET_STORYBOARD_ENABLED'; payload: boolean }
   | { type: 'SET_CUSTOM_COVERS'; payload: Record<string, string> }
+  | { type: 'SET_STAGE_PANEL_STATE'; payload: { id: string; isOpen: boolean } }
   ;
 
 // --- HELPERS ---
@@ -487,6 +491,14 @@ export const initialState: AppState = {
   shots: [],
   activeShotId: localStorage.getItem('nano_active_shot_id') || null,
   isStoryboardEnabled: false, // ADMIN: MASTER TOGGLE OFF
+  stagePanelState: {
+    'ref_stacks': true,
+    'region_edit': true,
+    'layers': true,
+    'specs': true,
+    'anchor': true,
+    'scene_director': true
+  }
 };
 
 // --- REDUCER ---
@@ -674,6 +686,15 @@ export const reducer = (state: AppState, action: Action): AppState => {
     case 'SET_CUSTOM_COVERS':
       console.log(`[AppContext] SET_CUSTOM_COVERS dispatched. Keys: ${Object.keys(action.payload).join(', ')}`);
       return { ...state, customCovers: action.payload };
+
+    case 'SET_STAGE_PANEL_STATE':
+      return {
+        ...state,
+        stagePanelState: {
+          ...state.stagePanelState,
+          [action.payload.id]: action.payload.isOpen
+        }
+      };
 
     // --- REGION EDIT ---
     case 'SET_REGION_EDIT':

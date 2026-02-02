@@ -28,21 +28,21 @@ const STUDIOS = [
         color: 'border-purple-500' // Accent color
     },
     {
-        id: 'Animation',
+        id: 'Stylized Cartoon',
         label: 'STYLIZED CARTOON',
         sub: 'Family 3D & Claymation',
         bgKey: 'animation',
         color: 'border-blue-500'
     },
     {
-        id: 'Concept', // Mapping 'Concept' to Illustration for UI
+        id: 'Illustration',
         label: 'ILLUSTRATION',
         sub: 'Anime, Noir & Graphic',
         bgKey: 'illustration',
         color: 'border-pink-500'
     },
     {
-        id: 'Cyberpunk',
+        id: 'Sci-Fi',
         label: 'SCI-FI',
         sub: 'Cyberpunk & High Tech',
         bgKey: 'scifi',
@@ -75,7 +75,7 @@ const ActorSaveModal: React.FC<ActorSaveModalProps> = ({ isOpen, initialName, on
     return (
         <AnimatePresence>
             {isOpen && (
-                <div className="fixed inset-0 z-[3000] bg-black/90 backdrop-blur-sm flex items-center justify-center p-8 animate-in fade-in duration-200">
+                <div className="fixed inset-0 z-[3000] bg-black/80 backdrop-blur-sm flex items-center justify-center p-8 animate-in fade-in duration-200">
                     <motion.div
                         initial={{ opacity: 0, scale: 0.95 }}
                         animate={{ opacity: 1, scale: 1 }}
@@ -114,7 +114,7 @@ const ActorSaveModal: React.FC<ActorSaveModalProps> = ({ isOpen, initialName, on
                                     key={studio.id}
                                     onClick={() => setSelectedCategory(studio.id)}
                                     className={`w-full relative h-28 rounded-2xl overflow-hidden group transition-all duration-200 border-2 text-left ${selectedCategory === studio.id
-                                        ? `border-white scale-[1.02] shadow-[0_0_20px_rgba(255,255,255,0.2)] z-10`
+                                        ? `border-blue-500 scale-[1.02] shadow-[0_0_20px_rgba(59,130,246,0.4)] z-10`
                                         : 'border-transparent hover:border-white/20 opacity-80 hover:opacity-100 hover:scale-[1.01]'
                                         }`}
                                 >
@@ -134,7 +134,7 @@ const ActorSaveModal: React.FC<ActorSaveModalProps> = ({ isOpen, initialName, on
                                             {studio.label}
                                         </h4>
                                         <div className="flex items-center gap-2">
-                                            <div className={`w-1 h-3 ${selectedCategory === studio.id ? 'bg-white' : 'bg-purple-500'} shadow-lg`} />
+                                            <div className={`w-1 h-3 ${selectedCategory === studio.id ? 'bg-blue-500' : 'bg-purple-500'} shadow-lg`} />
                                             <span className="text-xs font-bold text-gray-200 tracking-wide uppercase drop-shadow-md">
                                                 {studio.sub}
                                             </span>
@@ -155,7 +155,7 @@ const ActorSaveModal: React.FC<ActorSaveModalProps> = ({ isOpen, initialName, on
                             <button
                                 onClick={handleSave}
                                 disabled={!selectedCategory || !name.trim()}
-                                className="px-8 py-3 rounded-xl text-xs font-black uppercase tracking-widest bg-white text-black hover:bg-purple-500 hover:text-white disabled:opacity-20 disabled:cursor-not-allowed transition-all shadow-lg"
+                                className="px-8 py-3 rounded-xl text-xs font-black uppercase tracking-widest bg-white text-emerald-600 hover:bg-emerald-500 hover:text-white disabled:opacity-20 disabled:cursor-not-allowed transition-all shadow-lg"
                             >
                                 Save Actor
                             </button>

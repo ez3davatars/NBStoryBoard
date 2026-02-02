@@ -32,14 +32,15 @@ import coverScifi from '../assets/cover-scifi.png';
 const REFERENCE_SHEET_PROMPT = `Create a professional, 8k resolution character reference sheet based strictly on the uploaded reference image. Use a clean, neutral plain background.
 CRITICAL COMPOSITION RULES:
 - STRICT ADHERENCE to view counts. DO NOT add extra rows or duplicate figures.
-- NO ghost images or hallucinations in negative space. Leave empty areas EMPTY.
+- NO FLOATING HEADS. NO GHOST IMAGES. The space above and around the main figures MUST BE EMPTY.
 - Maintain PERFECT facial identity and symmetry across ALL views. No distortion.
 - Output must be crisp, production-ready, and free of artifacts.
+- ABSOLUTELY NO disembodied faces in the negative space.
 `;
 
 const STUDIO_FOLDERS = [
-  { id: 'realism', label: 'Realism', description: "Exact Likeness & Premium CG", image: coverRealism, styles: ['exact_studio', 'premium_cg', 'hyper_real'] },
-  { id: 'anim', label: 'Stylized Cartoon', description: "Family 3D & Claymation", image: coverAnim, styles: ['family_3d', 'pixar', 'claymation'] },
+  { id: 'realism', label: 'Realism', description: "Photorealistic Portraiture & Raw Detail", image: coverRealism, styles: ['exact_studio', 'photorealism', 'dslr_capture'] },
+  { id: 'anim', label: 'Stylized Cartoon', description: "Modern 3D Animation & Soft Lighting", image: coverAnim, styles: ['family_3d', 'pixar', 'claymation'] },
   { id: 'illustration', label: 'Illustration', description: "Anime, Noir & Graphic", image: coverIllustration, styles: ['retro_cel', 'graphic_noir', 'retro_anime', 'comic_book'] },
   { id: 'scifi', label: 'Sci-Fi', description: "Cyberpunk & High Tech", image: coverScifi, styles: ['cyberpunk_neon', 'cyberpunk'] },
   { id: 'uncategorized', label: 'Unsorted', description: "No Specific Style", image: null, styles: [] as string[] }
@@ -277,11 +278,14 @@ const CastingForge = () => {
     dispatch({ type: 'ADD_LOG', payload: { message: "Added to Cast Assets", type: 'success' } });
   };
 
-  const handleSaveToActorLibrary = async (targetFolderOverride?: string) => {
-    if (!state.lastCastedImage) return;
+  const [pendingRefSheet, setPendingRefSheet] = useState<string | null>(null);
 
-    // 1. Determine Content (Cutout vs Raw)
-    const finalUrl = processedPreviewUrl || state.lastCastedImage;
+  const handleSaveToActorLibrary = async (targetFolderOverride?: string) => {
+    // 1. Determine Content (Ref Sheet vs standard Casted Image)
+    const isRefSheet = !!pendingRefSheet;
+    const finalUrl = pendingRefSheet || processedPreviewUrl || state.lastCastedImage;
+
+    if (!finalUrl) return;
 
     // 2. Prepare Metadata
     const targetFolderId = targetFolderOverride || activeFolder || 'uncategorized';
@@ -290,17 +294,19 @@ const CastingForge = () => {
     const assignedStyle = targetFolder ? (targetFolder.styles[0] || 'External Asset') : 'External Asset';
 
     const timestamp = Date.now();
-    const newActorId = `actor-${timestamp}`;
-    const filename = `Actor_${timestamp}.png`;
+    const newActorId = isRefSheet ? `ref-${timestamp}` : `actor-${timestamp}`;
+    const filename = isRefSheet ? `RefSheet_${timestamp}.png` : `Actor_${timestamp}.png`;
+    const name = isRefSheet ? `Ref Sheet ${new Date().toLocaleTimeString()}` : `Actor ${state.actorLibrary.length + 1}`;
+    const identity = isRefSheet ? "Reference Sheet" : (state.lastCastedPrompt || "Unknown Identity");
 
     const newActor: CastMember = {
       id: newActorId,
       url: finalUrl,
       tag: 'front', // Default
-      name: `Actor ${state.actorLibrary.length + 1}`,
+      name: name,
       filename: filename, // Important for disk sync
       profile: {
-        identity: state.lastCastedPrompt || "Unknown Identity",
+        identity: identity,
         wardrobe: "",
         accessories: "",
         style: assignedStyle
@@ -316,6 +322,10 @@ const CastingForge = () => {
       // 4. Save to Disk (if configured)
       // NATIVE
       if (isNativeParams() && state.saveDirectoryPath) {
+        // Ref Sheets go to 'Actors' folder too if added to library, 
+        // OR we could put them in 'ReferenceSheets'. 
+        // For consistency with "Add to Library", we treat them as Actors in the folder structure 
+        // so they appear in the grid.
         const actorsDir = await nativeJoinPath(state.saveDirectoryPath, 'Actors');
         const fullPath = await nativeJoinPath(actorsDir, filename);
         await nativeWriteFile(fullPath, file);
@@ -329,6 +339,7 @@ const CastingForge = () => {
       dispatch({ type: 'ADD_ACTOR_LIBRARY', payload: newActor });
       dispatch({ type: 'ADD_LOG', payload: { message: `Saved to Library (${targetFolderId})`, type: 'success' } });
       setShowSaveModal(false); // Close modal if open
+      setPendingRefSheet(null); // Clear pending state
 
     } catch (e: any) {
       console.error("Save Actor Failed", e);
@@ -338,8 +349,46 @@ const CastingForge = () => {
     }
   };
 
+  // ... (Update Ref Sheet Modal Button below) ...
+
+
+  const [selectedStyleId, setSelectedStyleId] = useState<string | null>(null);
+
   const handleGenerate = async () => {
-    const effectivePrompt = state.lastCastedPrompt || "A character design sheet";
+    // CHANGE: "Character design sheet" triggers text layouts. Use "Full body character portrait" instead.
+    let effectivePrompt = state.lastCastedPrompt || "A full body character portrait";
+    let styleDirectives = "";
+    let negativePrompt = "";
+
+    // INJECT SELECTED STYLE into the prompt if defined
+    if (selectedStyleId) {
+      const folder = STUDIO_FOLDERS.find(f => f.id === selectedStyleId);
+      if (folder) {
+        // e.g. "Realism studio style, Exact Likeness & Premium CG..."
+        const baseStyle = `${folder.label} studio style, ${folder.description}`;
+
+        // STRICT REALISM ENFORCEMENT
+        if (selectedStyleId === 'realism') {
+          // FORCE PHOTOGRAPHY SEMANTICS
+          // PREPEND keywords to prime the model for photography immediately
+          effectivePrompt = effectivePrompt.replace("character", "real person");
+          effectivePrompt = `Raw unedited candid photo, shot on DSLR. ${effectivePrompt}.`;
+
+          // ROBUST PHOTOGRAPHY PROMPT (Safe but detailed)
+          styleDirectives = "Shot on Sony A7R IV, 50mm lens. Harsh realistic lighting, flash photography, visible pores, dermatological details, authentic skin texture, imperfect, grainy, sharp focus. Backlight separation, perfect white balance on subject, no color contamination. DO NOT crop off the top of the head.";
+
+          // BACKGROUND RE-PHRASING (To avoid 'digital green' bias)
+          effectivePrompt += " Standing in front of a solid soft white studio background.";
+
+          // STRICT ANTI-CG CONSTRAINTS
+          negativePrompt = "Do not use: digital art, illustration, painting, drawing, cartoon, anime, 3d render, cgi, unreal engine, smooth skin, airbrushed, beauty filter, perfect lighting, symmetry, plastic, doll-like, artistic adaptation, stylized.";
+        } else {
+          // For other styles, keep the prefix
+          effectivePrompt = `${baseStyle}, ${effectivePrompt}`;
+        }
+      }
+    }
+
     dispatch({ type: 'SET_PROCESSING', payload: true });
     dispatch({ type: 'SET_LAST_CASTED_MASK', payload: null });
     setProcessedPreviewUrl(null);
@@ -352,17 +401,19 @@ const CastingForge = () => {
       if (state.lastCastedImage && state.apiKey) {
         dispatch({ type: 'ADD_LOG', payload: { message: "Applying stylization to character...", type: 'info' } });
         res = await GeminiService.generateImage(
-          `Stylize the subject in [IMAGE 1] to match this character description: ${effectivePrompt}. 
-          CRITICAL: 
-          1. MAINTAIN the subject's identity, hair structure, and key physical features from [IMAGE 1].
-          2. TRANSFORM the render style and clothing to match the prompt.
-          3. FORCE a solid Neon Green background (#39FF14) for perfect subject isolation.`,
+          `Stylize the subject in [IMAGE 1] to match this character description: ${effectivePrompt}.
+          ${styleDirectives}
+          CRITICAL RULES:
+          1. **ABSOLUTELY NO TEXT, LABELS, HUD, OR OVERLAYS.**
+          2. MAINTAIN the subject's identity and key features from [IMAGE 1].
+          3. FORCE a solid soft white background for clear subject isolation.
+          ${negativePrompt}`,
           state.apiKey,
           state.model,
           [{ url: state.lastCastedImage, label: 'Subject Reference' }]
         );
       } else {
-        res = await GeminiService.generateImage(`Character design sheet: ${effectivePrompt}, Use a solid Neon Green background (#39FF14) for perfect subject isolation.`, state.apiKey, 'imagen-4.0-generate-001');
+        res = await GeminiService.generateImage(`Detailed character portrait: ${effectivePrompt}. ${styleDirectives} Use a solid soft white background. **NO TEXT OR OVERLAYS.** ${negativePrompt}`, state.apiKey, 'imagen-4.0-generate-001');
       }
 
       if (generationIdRef.current === currentGenId) {
@@ -1158,17 +1209,17 @@ const CastingForge = () => {
       let finalPrompt = REFERENCE_SHEET_PROMPT;
 
       if (refLayout === 'form_focus') {
-        finalPrompt += " [LAYOUT A - CLASSIC]: Split canvas horizontally. Top 65% height: ROW OF EXACTLY 3 Full Body views (Front, Side, Back). Bottom 35% height: Grid of EXACTLY 4 Headshots. Ensure headshots are MACRO-DETAILED and hyper-sharp.";
+        finalPrompt += " [LAYOUT A - CLASSIC]: Split canvas horizontally. Top 65% height: ROW OF EXACTLY 3 Full Body views with DISTINCT ANGLES (1. Front, 2. Side Profile, 3. Back). Bottom 35% height: Grid of EXACTLY 4 Headshots with VARIED ANGLES (Front, 3/4 Left, 3/4 Right, Profile). Ensure headshots are MACRO-DETAILED and hyper-sharp.";
       } else if (refLayout === 'face_focus') {
-        finalPrompt += " [LAYOUT B - FACE FIRST]: Split canvas horizontally. Top 55% height: Row of EXACTLY 4 Large Headshots (Front, Left, Right, Back). Bottom 45% height: Row of EXACTLY 3 Full Body views. Headshots must maintain perfect identity.";
+        finalPrompt += " [LAYOUT B - FACE FIRST]: Split canvas horizontally. Top 55% height: Row of EXACTLY 4 Large Headshots showing VARIED ANGLES (Front, 3/4 Left, 3/4 Right, Profile). Bottom 45% height: Row of EXACTLY 3 Full Body views with DISTINCT ANGLES (1. Front, 2. Side Profile, 3. Back). Headshots must maintain perfect identity.";
       } else if (refLayout === 'split_focus') {
-        finalPrompt += " [LAYOUT C - STUDIO]: Split canvas vertically. Left 45% width: Vertical stack of EXACTLY 3 Full Body views (Front, Side, Back). DO NOT ADD A FOURTH VIEW. Right 55% width: 2x2 Grid of Large Headshots. Highest possible facial resolution.";
+        finalPrompt += " [LAYOUT C - STUDIO]: Split canvas vertically. Left 45% width: Vertical stack of EXACTLY 3 Full Body views with DISTINCT ANGLES (1. Front, 2. Side Profile, 3. Back). DO NOT ADD A FOURTH VIEW. Right 55% width: 2x2 Grid of Large Headshots with VARIED ANGLES (Front, 3/4 Left, 3/4 Right, Profile). Highest possible facial resolution.";
       }
 
       const res = await GeminiService.generateImage(
         finalPrompt,
         state.apiKey,
-        state.model.includes('imagen') ? 'imagen-4.0-generate-001' : 'gemini-3-pro-image-preview', // Force high-reasoning model if available
+        state.model, // Use the user's selected model (consistent with main generator)
         [{ url: state.lastCastedImage, label: 'Character Reference' }],
         { aspectRatio: '16:9' }
       );
@@ -1668,6 +1719,31 @@ const CastingForge = () => {
             value={state.lastCastedPrompt}
             onChange={(e) => dispatch({ type: 'SET_LAST_CASTED_PROMPT', payload: e.target.value })}
           />
+
+          {/* STYLE SELECTOR */}
+          <div className="mb-4">
+            <label className="text-[10px] text-gray-500 block mb-2 uppercase font-bold flex items-center gap-2">
+              <Sparkles className="w-3 h-3 text-yellow-500" /> Target Studio Style
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              {STUDIO_FOLDERS.filter(f => f.id !== 'uncategorized').map(folder => (
+                <button
+                  key={folder.id}
+                  onClick={() => setSelectedStyleId(selectedStyleId === folder.id ? null : folder.id)}
+                  className={`flex items-center gap-2 p-2 rounded-lg border transition-all ${selectedStyleId === folder.id
+                    ? 'bg-yellow-500/10 border-yellow-500 text-yellow-500 shadow-[0_0_10px_rgba(234,179,8,0.2)]'
+                    : 'bg-[#09090b] border-gray-800 text-gray-500 hover:border-gray-600 hover:text-gray-300'
+                    }`}
+                >
+                  <div className={`w-2 h-2 rounded-full ${selectedStyleId === folder.id ? 'bg-yellow-500' : 'bg-gray-700'}`} />
+                  <div className="text-left overflow-hidden">
+                    <span className="text-[10px] font-bold uppercase block truncate">{folder.label}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div className="grid grid-cols-2 gap-3">
             <button
               onClick={handleGenerate}
@@ -1790,16 +1866,9 @@ const CastingForge = () => {
                 <div className="flex gap-3">
                   <button
                     onClick={() => {
-                      const newMember: CastMember = {
-                        id: `ref-${Date.now()}`,
-                        url: refSheetUrl,
-                        name: `Ref Sheet ${new Date().toLocaleTimeString()}`,
-                        tag: 'front',
-                        profile: { identity: "Reference Sheet", wardrobe: "", accessories: "", style: "" }
-                      };
-                      dispatch({ type: 'ADD_ACTOR_LIBRARY', payload: newMember });
-                      dispatch({ type: 'ADD_ACTOR_LIBRARY', payload: newMember });
-                      showToast("Added to Library");
+                      setPendingRefSheet(refSheetUrl);
+                      setShowSaveModal(true);
+                      // REMOVED duplicate dispatch calls. Now handled via Save Modal.
                     }}
                     className="bg-gray-800 hover:bg-gray-700 text-white px-4 py-2 rounded-lg font-bold uppercase tracking-widest text-[10px] transition-all border border-white/10 flex items-center gap-2"
                   >

@@ -187,10 +187,21 @@ electron.ipcMain.handle("file:read", async (_event, filePath) => {
 });
 electron.ipcMain.handle("file:write", async (_event, filePath, buffer) => {
   try {
+    const dirname = path__namespace.dirname(filePath);
+    await fs__namespace.mkdir(dirname, { recursive: true });
     await fs__namespace.writeFile(filePath, Buffer.from(buffer));
     return true;
   } catch (error) {
     console.error("Write Error:", error);
+    return false;
+  }
+});
+electron.ipcMain.handle("dir:create", async (_event, dirPath) => {
+  try {
+    await fs__namespace.mkdir(dirPath, { recursive: true });
+    return true;
+  } catch (error) {
+    console.error("Create Dir Error:", error);
     return false;
   }
 });
