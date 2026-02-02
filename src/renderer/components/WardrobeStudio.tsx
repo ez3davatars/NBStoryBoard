@@ -965,37 +965,9 @@ const WardrobeStudio = () => {
         { aspectRatio: '1:1' }
       );
       setFittedImage(res);
-      setFittedImage(res);
 
-      // PASS 2: Auto-Isolation (Client Side Parity)
-      // Replaces legacy Gemini B/W Masking
-      try {
-        dispatch({ type: 'ADD_LOG', payload: { message: "Fusion complete. Isolating subject...", type: 'info' } });
-        setIsIsolating(true);
-        setIsolationProgress(0);
-
-        const imgResponse = await fetch(res);
-        const blob = await imgResponse.blob();
-
-        const blobResult = await removeBackground(blob, {
-          progress: (_key: string, current: number, total: number) => {
-            if (total > 0) setIsolationProgress(Math.round((current / total) * 100));
-          }
-        });
-
-        const cutoutUrl = URL.createObjectURL(blobResult);
-        setTryOnMask(cutoutUrl);
-        setRemoveTryOnBg(true); // Auto-enable Isolation View
-        dispatch({ type: 'ADD_LOG', payload: { message: "Subject Isolated Successfully", type: 'success' } });
-
-      } catch (maskErr: any) {
-        console.error("Auto-Isolation Failed:", maskErr);
-        dispatch({ type: 'ADD_LOG', payload: { message: "Auto-isolation failed. You can try manually.", type: 'error' } });
-        // Don't fail the whole try-on, just the mask
-      } finally {
-        setIsIsolating(false);
-        setIsolationProgress(0);
-      }
+      // PASS 2: Auto-Isolation REMOVED per user request (Manual Trigger Only)
+      dispatch({ type: 'ADD_LOG', payload: { message: "Fitting complete. Ready for isolation.", type: 'success' } });
 
     } catch (e: any) {
       dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });

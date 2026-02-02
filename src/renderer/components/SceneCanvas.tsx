@@ -203,7 +203,7 @@ const PropertyField = ({ label, value, onChange, icon: Icon, type = "text", plac
   </div>
 );
 
-const SidebarPanel = ({ id, title, icon: Icon, children, collapsed, onToggle, onDrop, isMaskMode, headerColor = "text-gray-500" }: any) => {
+const SidebarPanel = ({ id, title, icon: Icon, children, collapsed, onToggle, onDragStart, onDrop, isMaskMode, headerColor = "text-gray-500", rightElement, draggable = true }: any) => {
   const isRegionActive = title === 'Region Edit' && isMaskMode;
   const activeBg = isRegionActive ? 'bg-green-500 text-black hover:bg-green-400' : '';
 
@@ -215,23 +215,40 @@ const SidebarPanel = ({ id, title, icon: Icon, children, collapsed, onToggle, on
 
   return (
     <div
-      draggable
-      onDragStart={(e) => { e.dataTransfer.setData('panelId', id); }}
-      onDragOver={(e) => e.preventDefault()}
-      onDrop={(e) => { e.preventDefault(); onDrop && onDrop(id); }}
+      onDragOver={(e) => {
+        if (draggable) e.preventDefault();
+      }}
+      onDrop={(e) => {
+        if (draggable) {
+          e.preventDefault();
+          onDrop && onDrop(id);
+        }
+      }}
       className={`border border-[#27272a] rounded-xl overflow-hidden transition-all duration-300 ${collapsed ? 'h-[42px]' : 'bg-[#09090b]/80 backdrop-blur-md'}`}
     >
       <div
+        draggable={draggable}
+        onDragStart={(e) => {
+          if (!draggable) {
+            e.preventDefault();
+            return;
+          }
+          e.dataTransfer.setData('panelId', id);
+          onDragStart && onDragStart(id);
+        }}
         onClick={() => onToggle && onToggle(id)}
         className={`flex items-center justify-between p-3 cursor-pointer select-none hover:bg-white/5 transition-colors ${activeBg}`}
       >
         <div className="flex items-center gap-2">
-          <GripVertical className={`w-3 h-3 ${gripStyle} opacity-50`} />
+          {draggable && <GripVertical className={`w-3 h-3 ${gripStyle} opacity-50 cursor-grab active:cursor-grabbing`} />}
           {Icon && <Icon className={`w-3.5 h-3.5 ${iconStyle}`} />}
           <span className={`text-[10px] font-bold uppercase tracking-widest ${titleStyle}`}>{title}</span>
         </div>
-        <div className={`${collapsed ? '-rotate-90' : ''} transition-transform duration-300`}>
-          <ChevronDown className={`w-3 h-3 ${chevronStyle}`} />
+        <div className="flex items-center gap-2">
+          {rightElement}
+          <div className={`${collapsed ? '-rotate-90' : ''} transition-transform duration-300`}>
+            <ChevronDown className={`w-3 h-3 ${chevronStyle}`} />
+          </div>
         </div>
       </div>
       {!collapsed && (
@@ -327,8 +344,16 @@ const SceneCanvas = () => {
   }, [state.selection, state.selectionType, dispatch]);
 
   // --- SIDEBAR STATE ---
-  const [panelOrder, setPanelOrder] = useState<string[]>(['region_edit', 'layers', 'specs', 'anchor', 'v3_terminal']);
-  const [collapsedPanels, setCollapsedPanels] = useState<Record<string, boolean>>({});
+  const [panelOrder, setPanelOrder] = useState<string[]>(['specs', 'anchor', 'layers', 'ref_stacks', 'region_edit', 'scene_director']);
+  const [collapsedPanels, setCollapsedPanels] = useState<Record<string, boolean>>({
+    'region_edit': true,
+    'layers': true,
+    'specs': true,
+    'anchor': true,
+    'v3_terminal': false,
+    'scene_director': true,
+    'ref_stacks': true
+  });
   const [draggedPanelId, setDraggedPanelId] = useState<string | null>(null);
 
 
@@ -654,7 +679,7 @@ const SceneCanvas = () => {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [regionEdit?.isMaskMode, regionEdit?.activeLayerId, viewportBox.w, viewportBox.h]);
+  }, [regionEdit?.isMaskMode, regionEdit?.activeLayerId, viewportBox.w, viewportBox.h, activeLayer?.maskDataUrl]);
 
   useEffect(() => {
     const onResize = () => ensureMaskCanvasSize();
@@ -2689,21 +2714,35 @@ const SceneCanvas = () => {
                   headerColor="text-green-500"
                   collapsed={collapsedPanels['region_edit']}
                   onToggle={togglePanel}
+                  onDragStart={setDraggedPanelId}
                   onDrop={handlePanelDrop}
-                  isMaskMode={(state as any).regionEdit?.isMaskMode}
+                  isMaskMode={state.regionEdit?.isMaskMode}
                   rightElement={
+                    (state as any).cursorMode === 'eraser' && (
+                      <span className="text-[9px] font-bold text-red-400 uppercase border border-red-500/30 px-1 rounded bg-red-500/10">Eraser</span>
+                    )
+                  }
+                >
+                  <div className="flex items-center gap-2 mb-3">
                     <button
                       onClick={() => dispatch({ type: 'SET_REGION_EDIT', payload: { isMaskMode: !(state as any).regionEdit?.isMaskMode } } as any)}
-                      className={`px-3 py-1 rounded text-[9px] font-bold uppercase tracking-wider border transition-all duration-300 ${(state as any).regionEdit?.isMaskMode
-                        ? 'bg-green-500 border-green-400 text-black shadow-[0_0_15px_rgba(34,197,94,0.6)]'
+                      className={`flex-1 py-1.5 rounded text-[9px] font-bold uppercase tracking-wider border transition-all duration-300 ${(state as any).regionEdit?.isMaskMode
+                        ? 'bg-green-600 border-green-500 text-white shadow-[0_0_15px_rgba(34,197,94,0.6)]'
                         : 'bg-[#18181b] border-[#27272a] text-gray-500 hover:text-white hover:border-gray-600'
                         }`}
                       title="Toggle mask paint mode"
                     >
                       {(state as any).regionEdit?.isMaskMode ? 'Mask ON' : 'Mask OFF'}
                     </button>
-                  }
-                >
+                    <button
+                      onClick={() => dispatch({ type: 'CLEAR_ALL_REGION_MASKS' } as any)}
+                      className="px-3 py-1.5 bg-[#18181b] hover:bg-red-500/20 border border-[#27272a] text-gray-500 hover:text-red-400 rounded text-[9px] font-bold uppercase transition-colors"
+                      title="Clear all painted masks"
+                    >
+                      Clear All
+                    </button>
+                  </div>
+
                   <div className="flex items-center gap-2 mb-3">
                     <button
                       onClick={() => dispatch({ type: 'SET_REGION_EDIT', payload: { mode: 'paint' } } as any)}
@@ -2951,9 +2990,10 @@ const SceneCanvas = () => {
                   id="layers"
                   title="Stage Layers"
                   icon={Layers}
-                  headerColor="text-orange-500"
+                  headerColor="text-orange-400"
                   collapsed={collapsedPanels['layers']}
                   onToggle={togglePanel}
+                  onDragStart={setDraggedPanelId}
                   onDrop={handlePanelDrop}
                   rightElement={<span className="text-[9px] text-gray-600 font-mono">{stageItemsCount} Items</span>}
                 >
@@ -3132,6 +3172,7 @@ const SceneCanvas = () => {
                   headerColor="text-cyan-400"
                   collapsed={collapsedPanels['specs']}
                   onToggle={togglePanel}
+                  onDragStart={setDraggedPanelId}
                   onDrop={handlePanelDrop}
                 >
                   <div className="space-y-2 px-1">
@@ -3145,31 +3186,50 @@ const SceneCanvas = () => {
                       </div>
 
                       <div className="flex gap-1">
-                        <button
-                          onClick={() => setDirector({ resolution: typeof state.director.resolution === 'object' ? { width: state.director.resolution.width * 2, height: state.director.resolution.height * 2 } : { width: 3840 * 2, height: 2160 * 2 } })}
-                          className="px-2 py-1 rounded bg-[#27272a] hover:bg-[#3f3f46] text-[9px] font-bold text-gray-400 hover:text-cyan-400 transition-colors uppercase"
-                          title="Upscale 2x"
-                        >
-                          2x
-                        </button>
-                        <button
-                          onClick={() => setDirector({ resolution: { width: 1920, height: 1080 } })}
-                          className="px-2 py-1 rounded bg-[#27272a] hover:bg-[#3f3f46] text-[9px] font-bold text-gray-400 hover:text-red-400 transition-colors uppercase"
-                          title="Reset to 1920x1080"
-                        >
-                          Reset
-                        </button>
+                        {[
+                          { label: 'HD', w: 1920, h: 1080 },
+                          { label: '4K', w: 3840, h: 2160 },
+                          { label: '8K', w: 7680, h: 4320 },
+                        ].map((r) => {
+                          const currentW = typeof state.director.resolution === 'object' ? state.director.resolution.width : 1920;
+                          const isActive = currentW === r.w;
+                          return (
+                            <button
+                              key={r.label}
+                              onClick={() => setDirector({ resolution: { width: r.w, height: r.h } })}
+                              className={`px-2 py-1 rounded text-[9px] font-bold transition-colors uppercase border ${isActive
+                                ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/50'
+                                : 'bg-[#27272a] text-gray-400 border-transparent hover:text-white hover:bg-[#3f3f46]'
+                                }`}
+                              title={`Set resolution to ${r.label} (${r.w}x${r.h})`}
+                            >
+                              {r.label}
+                            </button>
+                          );
+                        })}
                       </div>
                     </div>
 
-                    <div className="space-y-3">
-                      <PropertyField
-                        label="Aspect Ratio"
-                        value={state.director.aspectRatio}
-                        onChange={(v: any) => setDirector({ aspectRatio: v as DirectorAspectRatio })}
-                        type="select"
-                        options={['16:9', '9:16', '1:1', '4:3', '3:4', '2.39:1', '4:5']}
-                      />
+                    <div className="space-y-1 mt-2">
+                      <label className="text-[9px] font-bold uppercase tracking-widest text-[#52525b]">Aspect Ratio</label>
+                      <div className="flex gap-1">
+                        {['16:9', '9:16', '1:1', '4:5'].map((ratio) => {
+                          const isActive = state.director.aspectRatio === ratio;
+                          return (
+                            <button
+                              key={ratio}
+                              onClick={() => setDirector({ aspectRatio: ratio as DirectorAspectRatio })}
+                              className={`flex-1 py-1.5 rounded text-[10px] font-bold transition-all uppercase border ${isActive
+                                ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/50'
+                                : 'bg-[#27272a] text-gray-500 border-transparent hover:text-white hover:bg-[#3f3f46]'
+                                }`}
+                              title={`Set aspect ratio to ${ratio}`}
+                            >
+                              {ratio}
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
                   </div>
                 </SidebarPanel>
@@ -3187,6 +3247,7 @@ const SceneCanvas = () => {
                   headerColor="text-purple-500"
                   collapsed={collapsedPanels['anchor']}
                   onToggle={togglePanel}
+                  onDragStart={setDraggedPanelId}
                   onDrop={handlePanelDrop}
                 >
                   <div className="space-y-3">
@@ -3309,31 +3370,183 @@ const SceneCanvas = () => {
               );
             }
 
-            if (panelId === 'v3_terminal') {
-              // --- V3 TERMINAL ---
+
+
+            if (panelId === 'ref_stacks') {
+              // --- REFERENCE STACKS ---
               return (
                 <SidebarPanel
-                  key="v3_terminal"
-                  id="v3_terminal"
-                  title="PROMPT ENGINE"
-                  icon={MonitorPlay}
+                  key="ref_stacks"
+                  id="ref_stacks"
+                  title="Reference Stacks"
+                  icon={RotateCw}
                   headerColor="text-yellow-500"
-                  collapsed={collapsedPanels['v3_terminal']}
+                  collapsed={collapsedPanels['ref_stacks']}
                   onToggle={togglePanel}
+                  onDragStart={setDraggedPanelId}
                   onDrop={handlePanelDrop}
                 >
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="text-[9px] text-gray-600 font-mono">COMPILED OUTPUT</div>
+                  <div className="flex justify-end mb-2">
                     <button
-                      onClick={handleCopyDirectorPrompt}
-                      className="p-1.5 hover:bg-white/10 rounded text-emerald-400 transition-colors"
-                      title="Copy to clipboard"
+                      onClick={() => dispatch({ type: 'CLEAR_REF_SLOTS' })}
+                      className="text-[9px] text-gray-500 hover:text-red-400 font-bold uppercase border border-[#27272a] px-2 py-1 rounded hover:bg-white/5"
                     >
-                      <Copy className="w-3.5 h-3.5" />
+                      Clear All
                     </button>
                   </div>
-                  <div className="bg-[#050505] p-3 rounded border border-[#27272a] font-mono text-[9px] text-emerald-500 leading-relaxed overflow-x-auto whitespace-pre-wrap max-h-60 custom-scrollbar select-text shadow-inner">
-                    {v3DirectorPrompt}
+                  <div className="grid grid-cols-2 gap-3 mb-6">
+                    {state.referenceSlots.map((slot) => (
+                      <div
+                        key={slot.index}
+                        onClick={() => handleRefSlotClick(slot.index)}
+                        onDragOver={(e) => { e.preventDefault(); setDragOverRefSlot(slot.index); }}
+                        onDragLeave={() => setDragOverRefSlot(null)}
+                        onDrop={(e) => handleRefSlotDrop(slot.index, e)}
+                        className={`relative aspect-square rounded-lg border-2 transition-all cursor-pointer overflow-hidden ${slot.active ? 'border-yellow-500 shadow-lg shadow-yellow-900/20' : 'border-[#27272a] opacity-60 hover:opacity-100'} ${dragOverRefSlot === slot.index ? 'border-blue-500 bg-blue-500/10 scale-95' : ''}`}
+                      >
+                        {slot.url ? (
+                          <>
+                            <img src={slot.url} alt={`Ref ${slot.index}`} className="w-full h-full object-contain" />
+                            {!slot.active && <div className="absolute inset-0 bg-black/40 flex items-center justify-center"><div className="w-1.5 h-1.5 rounded-full bg-gray-500" /></div>}
+                            <div className="absolute bottom-1 right-1 flex flex-col gap-1">
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setInspectRefIndex(slot.index); }}
+                                className="p-1 bg-black/60 hover:bg-black rounded text-white transition-colors"
+                              >
+                                <Pencil className="w-2.5 h-2.5" />
+                              </button>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); clearRefSlot(slot.index); }}
+                                className="p-1 bg-black/60 hover:bg-red-500 rounded text-white transition-colors"
+                              >
+                                <X className="w-2.5 h-2.5" />
+                              </button>
+                            </div>
+                          </>
+                        ) : (
+                          <div className="w-full h-full flex flex-col items-center justify-center gap-1 bg-[#18181b]">
+                            <span className="text-[12px] font-bold text-gray-700">{slot.index}</span>
+                            <Upload className="w-3 h-3 text-gray-700" />
+                          </div>
+                        )}
+                        <input
+                          type="file"
+                          ref={el => { refFileInputs.current[slot.index] = el; }}
+
+                          className="hidden"
+                          onChange={(e) => e.target.files?.[0] && handleRefSlotFile(slot.index, e.target.files[0])}
+                        />
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Actor Intelligence List */}
+                  <div className="flex-1 flex flex-col min-h-0">
+                    <div className="flex items-center gap-2 mb-3">
+                      <Sparkles className="w-3 h-3 text-blue-400" />
+                      <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Active Actor Intelligence</h4>
+                    </div>
+                    <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-3">
+                      {state.tokens.length === 0 ? (
+                        <div className="text-[10px] text-gray-600 italic py-4 border border-dashed border-gray-800 rounded-lg text-center">
+                          No actors on stage.
+                        </div>
+                      ) : (
+                        state.tokens.map(token => (
+                          <div key={token.id} className="bg-[#18181b] border border-[#27272a] rounded-lg p-3 group">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-[10px] font-bold text-white uppercase">{token.tag}</span>
+                              <button
+                                onClick={async () => {
+                                  if (!state.apiKey) {
+                                    dispatch({ type: 'ADD_LOG', payload: { message: "API Key required for Auto Analyze.", type: 'error' } });
+                                    return;
+                                  }
+                                  setAnalyzingTokenId(token.id);
+                                  try {
+                                    const intelligence = await GeminiService.analyzeImage(
+                                      "Describe this character's pose, expression, and physical action in this scene context. Be very specific about lighting interaction. Max 30 words.",
+                                      state.apiKey, state.model, token.url
+                                    );
+                                    dispatch({ type: 'UPDATE_TOKEN', payload: { id: token.id, intelligence } });
+                                  } catch { /* error handled by UI state */ }
+                                  setAnalyzingTokenId(null);
+                                }}
+                                disabled={analyzingTokenId === token.id}
+                                className="text-[9px] text-blue-400 hover:text-blue-300 font-bold uppercase flex items-center gap-1"
+                              >
+                                {analyzingTokenId === token.id ? <RefreshCcw className="w-2.5 h-2.5 animate-spin" /> : <Sparkles className="w-2.5 h-2.5" />}
+                                Auto Analyze
+                              </button>
+                            </div>
+                            <textarea
+                              value={token.intelligence || ''}
+                              onChange={(e) => dispatch({ type: 'UPDATE_TOKEN', payload: { id: token.id, intelligence: e.target.value } })}
+                              className="w-full bg-[#09090b] border border-[#27272a] rounded p-2 text-[10px] text-gray-400 focus:border-blue-500 outline-none resize-none"
+                              rows={2}
+                              placeholder="Pose, Action, Lighting DNA..."
+                            />
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </SidebarPanel>
+              );
+            }
+
+            if (panelId === 'scene_director') {
+              // --- SCENE DIRECTOR ---
+              return (
+                <SidebarPanel
+                  key="scene_director"
+                  id="scene_director"
+                  title="Scene Director"
+                  icon={Clapperboard}
+                  headerColor="text-gray-500"
+                  collapsed={collapsedPanels['scene_director']}
+                  onToggle={togglePanel}
+                  onDragStart={setDraggedPanelId}
+                  onDrop={handlePanelDrop}
+                  rightElement={state.director.envAuto && <span className="text-[9px] text-yellow-500 font-mono uppercase border border-yellow-500/30 px-1 rounded">Env Auto</span>}
+                >
+                  <div className="space-y-4">
+                    <PropertyField
+                      label="Subject / Action"
+                      value={state.director.subject}
+                      onChange={(v: any) => setDirector({ subject: v })}
+                      placeholder="Describe the main action..."
+                      type="textarea"
+                    />
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-[10px] uppercase font-bold text-gray-500">Environment</label>
+                        {state.director.envAuto && (
+                          <button onClick={() => setDirector({ envAuto: false })} className="text-[9px] text-gray-500 hover:text-gray-300 uppercase">Unlock</button>
+                        )}
+                      </div>
+                      <textarea
+                        className={`w-full bg-[#18181b] border rounded px-2 py-2 text-xs text-white h-12 resize-none outline-none ${state.director.envAuto ? 'border-yellow-500/50 text-gray-400' : 'border-[#27272a] focus:border-yellow-500'}`}
+                        value={state.director.environment}
+                        onChange={(e) => setDirector({ environment: e.target.value, envAuto: false })}
+                        readOnly={state.director.envAuto}
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <PropertyField label="Lighting" value={state.director.lighting} onChange={(v: any) => setDirector({ lighting: v })} />
+                      <PropertyField label="Camera" value={state.director.camera} onChange={(v: any) => setDirector({ camera: v })} />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <Dropdown
+                        label="Layout"
+                        value={state.director.spatialLayout}
+                        options={['', 'horizontal', 'vertical', 'depth', 'center']}
+                        onChange={(v: any) => setDirector({ spatialLayout: v as DirectorSpatialLayout })}
+                      />
+                    </div>
                   </div>
                 </SidebarPanel>
               );
@@ -3341,395 +3554,140 @@ const SceneCanvas = () => {
             return null;
           })}
         </div>
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <Layers className="w-4 h-4 text-orange-400" />
-            <h3 className="text-xs font-bold text-gray-500 uppercase">Stage Layers</h3>
-          </div>
-          <span className="text-[10px] text-gray-600 font-mono">
-            {state.tokens.length + state.annotations.length} Items
-          </span>
-        </div>
-
-        <div className="space-y-1 max-h-48 overflow-y-auto custom-scrollbar pr-1 mb-2">
-          {[...state.tokens.map(t => ({ ...t, type: 'token' })), ...state.annotations.map(a => ({ ...a, type: 'annotation' }))]
-            .sort((a: any, b: any) => b.zIndex - a.zIndex)
-            .map((layer: any) => {
-              const isSelected = state.selection === layer.id;
-              const isDragging = draggedLayerId === layer.id;
-
-              return (
-                <div
-                  key={layer.id}
-                  draggable
-                  onDragStart={(e) => {
-                    setDraggedLayerId(layer.id);
-                    e.dataTransfer.effectAllowed = 'move';
-                    // Create a ghost image if needed, but default is usually fine
-                  }}
-                  onDragOver={(e) => {
-                    e.preventDefault(); // Must allow drop
-                    e.dataTransfer.dropEffect = 'move';
-                  }}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    if (!draggedLayerId || draggedLayerId === layer.id) return;
-
-                    // Capture current state of full list sorted by Z
-                    const allLayers = [...state.tokens.map(t => ({ ...t, type: 'token' })), ...state.annotations.map(a => ({ ...a, type: 'annotation' }))]
-                      .sort((a: any, b: any) => b.zIndex - a.zIndex);
-
-                    const fromIndex = allLayers.findIndex(l => l.id === draggedLayerId);
-                    const toIndex = allLayers.findIndex(l => l.id === layer.id);
-
-                    if (fromIndex === -1 || toIndex === -1) return;
-
-                    // Reorder array
-                    const item = allLayers[fromIndex];
-                    allLayers.splice(fromIndex, 1);
-                    allLayers.splice(toIndex, 0, item);
-
-                    // Re-assign Z-indices based on new order (Top of list = High Z)
-                    // Max Z is list length
-                    const maxZ = allLayers.length;
-                    allLayers.forEach((l, idx) => {
-                      const newZ = maxZ - idx;
-                      if (l.zIndex !== newZ) {
-                        if (l.type === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: l.id, zIndex: newZ } });
-                        else dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: l.id, zIndex: newZ } });
-                      }
-                    });
-
-                    setDraggedLayerId(null);
-                  }}
-                  onDragEnd={() => setDraggedLayerId(null)}
-                  className={`flex items-center gap-2 p-1.5 rounded border transition-colors cursor-grab active:cursor-grabbing group ${isSelected ? 'bg-orange-500/10 border-orange-500/50' : 'bg-[#18181b] border-[#27272a] hover:bg-[#27272a]'} ${isDragging ? 'opacity-40 border-dashed border-orange-500' : ''}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    dispatch({ type: 'SELECT_ITEM', payload: { id: layer.id, type: layer.type } });
-                  }}
-                >
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (layer.type === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: layer.id, visible: layer.visible === false } });
-                      else dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: layer.id, visible: layer.visible === false } });
-                    }}
-                    className="p-1 text-gray-500 hover:text-white rounded hover:bg-white/10 transition-colors mr-1"
-                    title={layer.visible === false ? "Show Layer" : "Hide Layer"}
-                  >
-                    {layer.visible === false ? <EyeOff className="w-3 h-3 text-gray-600" /> : <Eye className="w-3 h-3" />}
-                  </button>
-
-                  <div className="text-gray-600 group-hover:text-gray-400 cursor-grab active:cursor-grabbing">
-                    <GripVertical className="w-3 h-3" />
-                  </div>
-                  <div className={`p-1 rounded ${isSelected ? 'bg-orange-500 text-black' : 'bg-gray-800 text-gray-400'}`}>
-                    {layer.type === 'token' && <UserPlus className="w-3 h-3" />}
-                    {layer.type === 'annotation' && layer.type === 'note' && <StickyNote className="w-3 h-3" />}
-                    {layer.type === 'annotation' && layer.type === 'zone' && <BoxSelect className="w-3 h-3" />}
-                    {layer.type === 'annotation' && layer.type === 'arrow' && <MoveUpRight className="w-3 h-3" />}
-                  </div>
-                  <span className={`text-[9px] font-bold uppercase truncate flex-1 ${isSelected ? 'text-orange-400' : 'text-gray-400'}`}>
-                    {layer.tag || layer.text || layer.type}
-                  </span>
-                  <span className="text-[9px] font-mono text-gray-600 mr-2">Z:{layer.zIndex}</span>
-
-                  {isSelected && (
-                    <div className="flex items-center gap-1">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (layer.type === 'token') dispatch({ type: 'REMOVE_TOKEN', payload: layer.id });
-                          else dispatch({ type: 'REMOVE_ANNOTATION', payload: layer.id });
-                        }}
-                        className="p-1 hover:bg-red-500/20 text-gray-500 hover:text-red-400 rounded transition-colors"
-                      >
-                        <TrashIcon className="w-3 h-3" />
-                      </button>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          {state.tokens.length === 0 && state.annotations.length === 0 && (
-            <div className="text-[10px] text-gray-600 italic text-center py-4 border border-dashed border-gray-800 rounded">
-              Stage is empty. Add cast or notes.
-            </div>
-          )}
-        </div>
 
 
 
 
 
 
-        {/* v3 Prompt Terminal (Keep existing logic) */}
-        < div className="bg-[#09090b] border border-[#27272a] rounded-xl p-4 shadow-xl flex flex-col shrink-0" >
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2">
-              <div className="p-2 bg-yellow-500/10 rounded-lg">
-                <RotateCw className="w-4 h-4 text-yellow-500" />
-              </div>
-              <h3 className="text-xs font-bold text-white uppercase tracking-widest">Reference Stacks</h3>
-            </div>
+        {/* v3 Prompt Terminal (Fixed at Bottom) */}
+        <SidebarPanel
+          key="v3_terminal"
+          id="v3_terminal"
+          title="PROMPT ENGINE"
+          icon={MonitorPlay}
+          headerColor="text-yellow-500"
+          collapsed={collapsedPanels['v3_terminal']}
+          onToggle={togglePanel}
+          draggable={false} // <--- Disable dragging for Prompt Engine
+        >
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-[9px] text-gray-600 font-mono">COMPILED OUTPUT</div>
             <button
-              onClick={() => dispatch({ type: 'CLEAR_REF_SLOTS' })}
-              className="text-[10px] text-gray-500 hover:text-red-400 font-bold uppercase"
+              onClick={handleCopyDirectorPrompt}
+              className="p-1.5 hover:bg-white/10 rounded text-emerald-400 transition-colors"
+              title="Copy to clipboard"
             >
-              Clear All
+              <Copy className="w-3.5 h-3.5" />
             </button>
           </div>
+          <div className="bg-[#050505] p-3 rounded border border-[#27272a] font-mono text-[9px] text-emerald-500 leading-relaxed overflow-x-auto whitespace-pre-wrap max-h-60 custom-scrollbar select-text shadow-inner">
+            {v3DirectorPrompt}
+          </div>
+        </SidebarPanel>
 
-          <div className="grid grid-cols-2 gap-3 mb-6">
-            {state.referenceSlots.map((slot) => (
-              <div
-                key={slot.index}
-                onClick={() => handleRefSlotClick(slot.index)}
-                onDragOver={(e) => { e.preventDefault(); setDragOverRefSlot(slot.index); }}
-                onDragLeave={() => setDragOverRefSlot(null)}
-                onDrop={(e) => handleRefSlotDrop(slot.index, e)}
-                className={`relative aspect-square rounded-lg border-2 transition-all cursor-pointer overflow-hidden ${slot.active ? 'border-yellow-500 shadow-lg shadow-yellow-900/20' : 'border-[#27272a] opacity-60 hover:opacity-100'} ${dragOverRefSlot === slot.index ? 'border-blue-500 bg-blue-500/10 scale-95' : ''}`}
-              >
-                {slot.url ? (
-                  <>
-                    <img src={slot.url} alt={`Ref ${slot.index}`} className="w-full h-full object-contain" />
-                    {!slot.active && <div className="absolute inset-0 bg-black/40 flex items-center justify-center"><div className="w-1.5 h-1.5 rounded-full bg-gray-500" /></div>}
-                    <div className="absolute bottom-1 right-1 flex flex-col gap-1">
-                      <button
-                        onClick={(e) => { e.stopPropagation(); setInspectRefIndex(slot.index); }}
-                        className="p-1 bg-black/60 hover:bg-black rounded text-white transition-colors"
-                      >
-                        <Pencil className="w-2.5 h-2.5" />
-                      </button>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); clearRefSlot(slot.index); }}
-                        className="p-1 bg-black/60 hover:bg-red-500 rounded text-white transition-colors"
-                      >
-                        <X className="w-2.5 h-2.5" />
-                      </button>
-                    </div>
-                  </>
-                ) : (
-                  <div className="w-full h-full flex flex-col items-center justify-center gap-1 bg-[#18181b]">
-                    <span className="text-[12px] font-bold text-gray-700">{slot.index}</span>
-                    <Upload className="w-3 h-3 text-gray-700" />
-                  </div>
-                )}
-                <input
-                  type="file"
-                  ref={el => { refFileInputs.current[slot.index] = el; }}
 
-                  className="hidden"
-                  onChange={(e) => e.target.files?.[0] && handleRefSlotFile(slot.index, e.target.files[0])}
+
+
+
+
+        {inspectRefIndex !== null && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-8 bg-black/90 backdrop-blur-sm">
+            <div className="bg-[#09090b] border border-[#27272a] rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex shadow-2xl animate-in zoom-in-95 duration-200">
+              {/* Image Preview */}
+              <div className="flex-1 bg-black flex items-center justify-center p-8 relative">
+                <img
+                  src={state.referenceSlots.find(s => s.index === inspectRefIndex)?.url}
+                  alt="Inspector Preview"
+                  className="max-w-full max-h-full object-contain shadow-2xl"
                 />
-              </div>
-            ))}
-          </div>
-
-          {/* Actor Intelligence List */}
-          <div className="flex-1 flex flex-col min-h-0">
-            <div className="flex items-center gap-2 mb-3">
-              <Sparkles className="w-3 h-3 text-blue-400" />
-              <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Active Actor Intelligence</h4>
-            </div>
-            <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-3">
-              {state.tokens.length === 0 ? (
-                <div className="text-[10px] text-gray-600 italic py-4 border border-dashed border-gray-800 rounded-lg text-center">
-                  No actors on stage.
-                </div>
-              ) : (
-                state.tokens.map(token => (
-                  <div key={token.id} className="bg-[#18181b] border border-[#27272a] rounded-lg p-3 group">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-[10px] font-bold text-white uppercase">{token.tag}</span>
-                      <button
-                        onClick={async () => {
-                          if (!state.apiKey) {
-                            dispatch({ type: 'ADD_LOG', payload: { message: "API Key required for Auto Analyze.", type: 'error' } });
-                            return;
-                          }
-                          setAnalyzingTokenId(token.id);
-                          try {
-                            const intelligence = await GeminiService.analyzeImage(
-                              "Describe this character's pose, expression, and physical action in this scene context. Be very specific about lighting interaction. Max 30 words.",
-                              state.apiKey, state.model, token.url
-                            );
-                            dispatch({ type: 'UPDATE_TOKEN', payload: { id: token.id, intelligence } });
-                          } catch { /* error handled by UI state */ }
-                          setAnalyzingTokenId(null);
-                        }}
-                        disabled={analyzingTokenId === token.id}
-                        className="text-[9px] text-blue-400 hover:text-blue-300 font-bold uppercase flex items-center gap-1"
-                      >
-                        {analyzingTokenId === token.id ? <RefreshCcw className="w-2.5 h-2.5 animate-spin" /> : <Sparkles className="w-2.5 h-2.5" />}
-                        Auto Analyze
-                      </button>
-                    </div>
-                    <textarea
-                      value={token.intelligence || ''}
-                      onChange={(e) => dispatch({ type: 'UPDATE_TOKEN', payload: { id: token.id, intelligence: e.target.value } })}
-                      className="w-full bg-[#09090b] border border-[#27272a] rounded p-2 text-[10px] text-gray-400 focus:border-blue-500 outline-none resize-none"
-                      rows={2}
-                      placeholder="Pose, Action, Lighting DNA..."
-                    />
+                <div className="absolute top-4 left-4 flex items-center gap-2">
+                  <div className="px-3 py-1.5 bg-yellow-500 text-black text-[10px] font-bold rounded-full uppercase tracking-widest">
+                    Reference Slot {inspectRefIndex}
                   </div>
-                ))
-              )}
-            </div>
-          </div>
-        </div >
+                </div>
+              </div>
 
-        {/* Stage 03: Scene Director */}
-        < div className="bg-[#09090b] border border-[#27272a] rounded-xl p-4 space-y-4 shrink-0" >
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Clapperboard className="w-4 h-4 text-gray-500" />
-              <h3 className="text-xs font-bold text-gray-500 uppercase">Scene Director</h3>
-            </div>
-            {state.director.envAuto && <span className="text-[9px] text-yellow-500 font-mono uppercase border border-yellow-500/30 px-1 rounded">Env Auto</span>}
-          </div>
+              {/* Metadata Editor */}
+              <div className="w-[400px] border-l border-[#27272a] flex flex-col p-8 bg-[#09090b]">
+                <div className="flex items-center justify-between mb-8">
+                  <h3 className="text-sm font-bold text-white uppercase tracking-[0.2em]">Reference DNA</h3>
+                  <button
+                    onClick={() => setInspectRefIndex(null)}
+                    className="p-2 hover:bg-white/5 rounded-full text-gray-500 hover:text-white transition-colors"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
 
-          <PropertyField
-            label="Subject / Action"
-            value={state.director.subject}
-            onChange={(v: any) => setDirector({ subject: v })}
-            placeholder="Describe the main action..."
-            type="textarea"
-          />
-
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="text-[10px] uppercase font-bold text-gray-500">Environment</label>
-              {state.director.envAuto && (
-                <button onClick={() => setDirector({ envAuto: false })} className="text-[9px] text-gray-500 hover:text-gray-300 uppercase">Unlock</button>
-              )}
-            </div>
-            <textarea
-              className={`w-full bg-[#18181b] border rounded px-2 py-2 text-xs text-white h-12 resize-none outline-none ${state.director.envAuto ? 'border-yellow-500/50 text-gray-400' : 'border-[#27272a] focus:border-yellow-500'}`}
-              value={state.director.environment}
-              onChange={(e) => setDirector({ environment: e.target.value, envAuto: false })}
-              readOnly={state.director.envAuto}
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <PropertyField label="Lighting" value={state.director.lighting} onChange={(v: any) => setDirector({ lighting: v })} />
-            <PropertyField label="Camera" value={state.director.camera} onChange={(v: any) => setDirector({ camera: v })} />
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <Dropdown
-              label="Layout"
-              value={state.director.spatialLayout}
-              options={['', 'horizontal', 'vertical', 'depth', 'center']}
-              onChange={(v: any) => setDirector({ spatialLayout: v as DirectorSpatialLayout })}
-            />
-
-          </div>
-        </div >
-
-
-
-        {/* Reference Inspector Modal */}
-        {
-          inspectRefIndex !== null && (
-            <div className="fixed inset-0 z-[100] flex items-center justify-center p-8 bg-black/90 backdrop-blur-sm">
-              <div className="bg-[#09090b] border border-[#27272a] rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex shadow-2xl animate-in zoom-in-95 duration-200">
-                {/* Image Preview */}
-                <div className="flex-1 bg-black flex items-center justify-center p-8 relative">
-                  <img
-                    src={state.referenceSlots.find(s => s.index === inspectRefIndex)?.url}
-                    alt="Inspector Preview"
-                    className="max-w-full max-h-full object-contain shadow-2xl"
+                <div className="space-y-6 flex-1 overflow-y-auto pr-2 custom-scrollbar">
+                  <PropertyField
+                    label="Alias / Identity"
+                    value={inspectName}
+                    onChange={setInspectName}
+                    placeholder="e.g. Hero Protagonist"
                   />
-                  <div className="absolute top-4 left-4 flex items-center gap-2">
-                    <div className="px-3 py-1.5 bg-yellow-500 text-black text-[10px] font-bold rounded-full uppercase tracking-widest">
-                      Reference Slot {inspectRefIndex}
+                  <PropertyField
+                    label="Subject & Style Analysis"
+                    type="textarea"
+                    value={inspectAnalysis}
+                    onChange={setInspectAnalysis}
+                    placeholder="AI analysis will appear here..."
+                  />
+
+                  <div className="pt-4 border-t border-[#27272a]">
+                    <div className="flex items-center justify-between mb-4">
+                      <label className="text-[10px] uppercase font-bold text-gray-500 flex items-center gap-2">
+                        <Link2 className="w-3 h-3 text-blue-500" /> Subject Replacement
+                      </label>
+                      <div
+                        onClick={() => toggleReplaceMode(!state.director.replaceAnchorSubjects)}
+                        className={`w-10 h-5 rounded-full relative cursor-pointer transition-colors ${state.director.replaceAnchorSubjects ? 'bg-blue-600' : 'bg-gray-800'}`}
+                      >
+                        <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${state.director.replaceAnchorSubjects ? 'left-6' : 'left-1'}`} />
+                      </div>
                     </div>
+                    {state.director.replaceAnchorSubjects && (
+                      <div className="space-y-4 animate-in slide-in-from-top-2 duration-200">
+                        <PropertyField
+                          label="Target in Anchor Scene"
+                          value={inspectTarget}
+                          onChange={setInspectTarget}
+                          placeholder="e.g. the man on the bench"
+                        />
+                        <p className="text-[9px] text-gray-500 italic leading-relaxed">
+                          This character identity will precisely replace the target subject identified in the anchor scene.
+                        </p>
+                      </div>
+                    )}
                   </div>
                 </div>
 
-                {/* Metadata Editor */}
-                <div className="w-[400px] border-l border-[#27272a] flex flex-col p-8 bg-[#09090b]">
-                  <div className="flex items-center justify-between mb-8">
-                    <h3 className="text-sm font-bold text-white uppercase tracking-[0.2em]">Reference DNA</h3>
-                    <button
-                      onClick={() => setInspectRefIndex(null)}
-                      className="p-2 hover:bg-white/5 rounded-full text-gray-500 hover:text-white transition-colors"
-                    >
-                      <X className="w-5 h-5" />
-                    </button>
-                  </div>
-
-                  <div className="space-y-6 flex-1 overflow-y-auto pr-2 custom-scrollbar">
-                    <PropertyField
-                      label="Alias / Identity"
-                      value={inspectName}
-                      onChange={setInspectName}
-                      placeholder="e.g. Hero Protagonist"
-                    />
-                    <PropertyField
-                      label="Subject & Style Analysis"
-                      type="textarea"
-                      value={inspectAnalysis}
-                      onChange={setInspectAnalysis}
-                      placeholder="AI analysis will appear here..."
-                    />
-
-                    <div className="pt-4 border-t border-[#27272a]">
-                      <div className="flex items-center justify-between mb-4">
-                        <label className="text-[10px] uppercase font-bold text-gray-500 flex items-center gap-2">
-                          <Link2 className="w-3 h-3 text-blue-500" /> Subject Replacement
-                        </label>
-                        <div
-                          onClick={() => toggleReplaceMode(!state.director.replaceAnchorSubjects)}
-                          className={`w-10 h-5 rounded-full relative cursor-pointer transition-colors ${state.director.replaceAnchorSubjects ? 'bg-blue-600' : 'bg-gray-800'}`}
-                        >
-                          <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${state.director.replaceAnchorSubjects ? 'left-6' : 'left-1'}`} />
-                        </div>
-                      </div>
-                      {state.director.replaceAnchorSubjects && (
-                        <div className="space-y-4 animate-in slide-in-from-top-2 duration-200">
-                          <PropertyField
-                            label="Target in Anchor Scene"
-                            value={inspectTarget}
-                            onChange={setInspectTarget}
-                            placeholder="e.g. the man on the bench"
-                          />
-                          <p className="text-[9px] text-gray-500 italic leading-relaxed">
-                            This character identity will precisely replace the target subject identified in the anchor scene.
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="pt-8 flex flex-col gap-3">
-                    <button
-                      onClick={() => {
-                        updateRefSlot(inspectRefIndex!, {
-                          name: inspectName,
-                          analysis: inspectAnalysis,
-                          target: inspectTarget || undefined
-                        });
-                        setInspectRefIndex(null);
-                      }}
-                      className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl text-xs uppercase tracking-widest transition-all shadow-lg shadow-blue-900/40"
-                    >
-                      Save DNA Changes
-                    </button>
-                    <button
-                      onClick={() => setInspectRefIndex(null)}
-                      className="w-full bg-transparent hover:bg-white/5 text-gray-400 font-bold py-3 rounded-xl text-xs uppercase tracking-widest transition-all"
-                    >
-                      Cancel
-                    </button>
-                  </div>
+                <div className="pt-8 flex flex-col gap-3">
+                  <button
+                    onClick={() => {
+                      updateRefSlot(inspectRefIndex!, {
+                        name: inspectName,
+                        analysis: inspectAnalysis,
+                        target: inspectTarget || undefined
+                      });
+                      setInspectRefIndex(null);
+                    }}
+                    className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl text-xs uppercase tracking-widest transition-all shadow-lg shadow-blue-900/40"
+                  >
+                    Save DNA Changes
+                  </button>
+                  <button
+                    onClick={() => setInspectRefIndex(null)}
+                    className="w-full bg-transparent hover:bg-white/5 text-gray-400 font-bold py-3 rounded-xl text-xs uppercase tracking-widest transition-all"
+                  >
+                    Cancel
+                  </button>
                 </div>
               </div>
             </div>
-          )
+          </div>
+        )
         }
       </div >
     </div >

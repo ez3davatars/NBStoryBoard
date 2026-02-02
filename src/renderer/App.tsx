@@ -538,7 +538,7 @@ const App = () => {
               </h1>
               <div className="flex items-center gap-2">
                 <p className="text-[10px] font-black text-zinc-500 tracking-[0.3em] uppercase opacity-60">
-                  CAST · WARDROBE · STAGE · ACTION
+                  CAST · WARDROBE · PROPS · STAGE · ACTION
                 </p>
                 <div className="h-px w-4 bg-zinc-800"></div>
                 <span className="text-[9px] text-zinc-600 font-bold uppercase tracking-wider">
@@ -603,114 +603,116 @@ const App = () => {
         </footer>
 
         {/* Settings Modal */}
-        {showSettings && (
-          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[4000] flex items-center justify-center">
-            <div className="bg-[#18181b] border border-gray-700 p-6 rounded-xl w-96 shadow-2xl animate-in fade-in zoom-in duration-200">
-              <h2 className="text-lg font-bold text-white mb-4">Configuration</h2>
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Gemini API Key</label>
-                  <input
-                    type="password"
-                    className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-yellow-500 focus:outline-none"
-                    placeholder="AIzaSy..."
-                    value={tempKey}
-                    onChange={(e) => setTempKey(e.target.value)}
-                  />
-                  <p className="text-[10px] text-gray-500 mt-2">
-                    Required for the Service Layer to connect to Google Cloud. If empty, the app runs in Simulation Mode.
-                  </p>
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Render Save Folder</label>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={async () => {
-                        try {
-                          // NATIVE ELECTRON MODE
-                          if (window.electronAPI) {
-                            const path = await window.electronAPI.selectFolder();
-                            if (path) {
-                              dispatch({ type: 'SET_SAVE_PATH', payload: path });
-                              dispatch({ type: 'ADD_LOG', payload: { message: `Save path set: ${path}`, type: 'success' } });
-                            }
-                            return;
-                          }
-
-                          // WEB MODE
-                          console.log("Requesting directory handle...");
-                          const handle = await (window as any).showDirectoryPicker();
-                          console.log("Directory handle received:", handle);
-                          dispatch({ type: 'SET_SAVE_DIRECTORY', payload: handle });
-                          await StorageService.save('nano_save_handle', handle);
-                          dispatch({ type: 'ADD_LOG', payload: { message: `Save folder set: ${handle.name}`, type: 'success' } });
-                        } catch (e: any) {
-                          console.error("Directory picker error:", e);
-                          if (e.name !== 'AbortError') {
-                            dispatch({ type: 'ADD_LOG', payload: { message: `Failed to set folder: ${e.message}`, type: 'error' } });
-                          }
-                        }
-                      }}
-                      className="flex-1 bg-gray-800 hover:bg-gray-700 text-white py-2 rounded text-xs font-bold transition-colors border border-gray-700truncate"
-                    >
-                      {state.saveDirectoryPath
-                        ? `Folder: ...${state.saveDirectoryPath.split(/[/\\]/).pop()}`
-                        : state.saveDirectoryHandle
-                          ? `Folder: ${state.saveDirectoryHandle.name}`
-                          : 'Choose Save Folder...'}
-                    </button>
-                    {(state.saveDirectoryHandle || state.saveDirectoryPath) && (
+        {
+          showSettings && (
+            <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[4000] flex items-center justify-center">
+              <div className="bg-[#18181b] border border-gray-700 p-6 rounded-xl w-96 shadow-2xl animate-in fade-in zoom-in duration-200">
+                <h2 className="text-lg font-bold text-white mb-4">Configuration</h2>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Gemini API Key</label>
+                    <input
+                      type="password"
+                      className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-yellow-500 focus:outline-none"
+                      placeholder="AIzaSy..."
+                      value={tempKey}
+                      onChange={(e) => setTempKey(e.target.value)}
+                    />
+                    <p className="text-[10px] text-gray-500 mt-2">
+                      Required for the Service Layer to connect to Google Cloud. If empty, the app runs in Simulation Mode.
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Render Save Folder</label>
+                    <div className="flex gap-2">
                       <button
                         onClick={async () => {
-                          dispatch({ type: 'SET_SAVE_DIRECTORY', payload: null });
-                          dispatch({ type: 'SET_SAVE_PATH', payload: null });
-                          await StorageService.remove('nano_save_handle');
-                          localStorage.removeItem('nano_save_path');
+                          try {
+                            // NATIVE ELECTRON MODE
+                            if (window.electronAPI) {
+                              const path = await window.electronAPI.selectFolder();
+                              if (path) {
+                                dispatch({ type: 'SET_SAVE_PATH', payload: path });
+                                dispatch({ type: 'ADD_LOG', payload: { message: `Save path set: ${path}`, type: 'success' } });
+                              }
+                              return;
+                            }
+
+                            // WEB MODE
+                            console.log("Requesting directory handle...");
+                            const handle = await (window as any).showDirectoryPicker();
+                            console.log("Directory handle received:", handle);
+                            dispatch({ type: 'SET_SAVE_DIRECTORY', payload: handle });
+                            await StorageService.save('nano_save_handle', handle);
+                            dispatch({ type: 'ADD_LOG', payload: { message: `Save folder set: ${handle.name}`, type: 'success' } });
+                          } catch (e: any) {
+                            console.error("Directory picker error:", e);
+                            if (e.name !== 'AbortError') {
+                              dispatch({ type: 'ADD_LOG', payload: { message: `Failed to set folder: ${e.message}`, type: 'error' } });
+                            }
+                          }
                         }}
-                        className="bg-red-500/10 hover:bg-red-500/20 text-red-500 px-3 py-2 rounded text-xs transition-colors border border-red-500/30"
-                        title="Reset folder (use browser downloads)"
+                        className="flex-1 bg-gray-800 hover:bg-gray-700 text-white py-2 rounded text-xs font-bold transition-colors border border-gray-700truncate"
                       >
-                        <X className="w-4 h-4" />
+                        {state.saveDirectoryPath
+                          ? `Folder: ...${state.saveDirectoryPath.split(/[/\\]/).pop()}`
+                          : state.saveDirectoryHandle
+                            ? `Folder: ${state.saveDirectoryHandle.name}`
+                            : 'Choose Save Folder...'}
                       </button>
-                    )}
+                      {(state.saveDirectoryHandle || state.saveDirectoryPath) && (
+                        <button
+                          onClick={async () => {
+                            dispatch({ type: 'SET_SAVE_DIRECTORY', payload: null });
+                            dispatch({ type: 'SET_SAVE_PATH', payload: null });
+                            await StorageService.remove('nano_save_handle');
+                            localStorage.removeItem('nano_save_path');
+                          }}
+                          className="bg-red-500/10 hover:bg-red-500/20 text-red-500 px-3 py-2 rounded text-xs transition-colors border border-red-500/30"
+                          title="Reset folder (use browser downloads)"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-[10px] text-gray-500 mt-2">
+                      When set, rendered photos will save directly to this location.
+                    </p>
                   </div>
-                  <p className="text-[10px] text-gray-500 mt-2">
-                    When set, rendered photos will save directly to this location.
-                  </p>
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-gray-400 uppercase mb-2 tracking-wider">Active Engine</label>
-                  <div className="grid grid-cols-1 gap-2">
-                    {[
-                      { id: 'gemini-2.5-flash-image', name: 'Gemini 2.5 Flash (Image)', desc: 'Optimized for efficient image creation' },
-                      { id: 'gemini-3-pro-image-preview', name: 'Gemini 3 Pro (Vision Ultra)', desc: 'Advanced reasoning & high-fidelity output' },
-                      { id: 'imagen-4.0-generate-001', name: 'Imagen 4.0 (Legacy)', desc: 'Text-to-image focus' }
-                    ].map(m => (
-                      <button
-                        key={m.id}
-                        onClick={() => setTempModel(m.id as any)}
-                        className={`text-left p-3 rounded-lg border transition-all ${tempModel === m.id ? 'bg-yellow-500/10 border-yellow-500 shadow-lg shadow-yellow-500/5' : 'bg-[#09090b] border-[#27272a] hover:border-gray-600'}`}
-                      >
-                        <div className="flex justify-between items-center mb-1">
-                          <span className={`text-xs font-bold ${tempModel === m.id ? 'text-yellow-500' : 'text-gray-200'}`}>{m.name}</span>
-                          {tempModel === m.id && <div className="w-2 h-2 rounded-full bg-yellow-500 shadow-[0_0_8px_rgba(234,179,8,0.6)]"></div>}
-                        </div>
-                        <p className="text-[10px] text-gray-500">{m.desc}</p>
-                      </button>
-                    ))}
+                  <div>
+                    <label className="block text-xs font-bold text-gray-400 uppercase mb-2 tracking-wider">Active Engine</label>
+                    <div className="grid grid-cols-1 gap-2">
+                      {[
+                        { id: 'gemini-2.5-flash-image', name: 'Gemini 2.5 Flash (Image)', desc: 'Optimized for efficient image creation' },
+                        { id: 'gemini-3-pro-image-preview', name: 'Gemini 3 Pro (Vision Ultra)', desc: 'Advanced reasoning & high-fidelity output' },
+                        { id: 'imagen-4.0-generate-001', name: 'Imagen 4.0 (Legacy)', desc: 'Text-to-image focus' }
+                      ].map(m => (
+                        <button
+                          key={m.id}
+                          onClick={() => setTempModel(m.id as any)}
+                          className={`text-left p-3 rounded-lg border transition-all ${tempModel === m.id ? 'bg-yellow-500/10 border-yellow-500 shadow-lg shadow-yellow-500/5' : 'bg-[#09090b] border-[#27272a] hover:border-gray-600'}`}
+                        >
+                          <div className="flex justify-between items-center mb-1">
+                            <span className={`text-xs font-bold ${tempModel === m.id ? 'text-yellow-500' : 'text-gray-200'}`}>{m.name}</span>
+                            {tempModel === m.id && <div className="w-2 h-2 rounded-full bg-yellow-500 shadow-[0_0_8px_rgba(234,179,8,0.6)]"></div>}
+                          </div>
+                          <p className="text-[10px] text-gray-500">{m.desc}</p>
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                </div>
-                <div className="flex justify-end gap-2 mt-6">
-                  <button onClick={closeSettings} className="px-4 py-2 text-gray-400 text-xs hover:text-white">Cancel</button>
-                  <button onClick={saveSettings} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded text-xs font-bold">Save Config</button>
+                  <div className="flex justify-end gap-2 mt-6">
+                    <button onClick={closeSettings} className="px-4 py-2 text-gray-400 text-xs hover:text-white">Cancel</button>
+                    <button onClick={saveSettings} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded text-xs font-bold">Save Config</button>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-        )}
+          )
+        }
 
-      </div>
-    </AppContext.Provider>
+      </div >
+    </AppContext.Provider >
   );
 };
 

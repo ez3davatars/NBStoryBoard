@@ -7,8 +7,10 @@ import {
     Scan, Target, User, Layers, Share2,
     ChevronRight, RefreshCw, Cpu, Aperture, CheckCircle2, UserPlus, Upload, Sliders,
     Swords, Zap, Shield, Ghost, Camera as CameraIcon, Ban, RotateCcw,
-    EyeOff, Shirt, Sparkles, LayoutTemplate, Download, X, ChevronDown, Pencil
+    EyeOff, Shirt, Sparkles, LayoutTemplate, Download, X, ChevronDown, Pencil,
+    Trash2, Maximize, RefreshCcw
 } from 'lucide-react';
+import { nativeJoinPath, nativeListFiles, nativeReadFile } from '../utils/NativeFileAssets';
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
 
@@ -171,6 +173,144 @@ const formatHeight = (inches: number) => {
 const NanoCastingDirector = () => {
     const { state, dispatch } = useAppContext();
     const [phase, setPhase] = useState<Phase>(1);
+
+    // --- WARDROBE LIBRARY HANDLERS ---
+    const [confirmDelete, setConfirmDelete] = useState<any | null>(null);
+
+    const scanWardrobe = async () => {
+        // 1. Native Mode
+        if (state.saveDirectoryPath) {
+            try {
+                const wardrobePath = await nativeJoinPath(state.saveDirectoryPath, 'wardrobe');
+                const files = await nativeListFiles(wardrobePath);
+                const items: any[] = []; // Type as WardrobeItem if available
+
+                for (const file of files) {
+                    if (/\.(png|jpg|jpeg|webp)$/i.test(file)) {
+                        const fullPath = await nativeJoinPath(wardrobePath, file);
+                        const dataUrl = await nativeReadFile(fullPath);
+                        if (dataUrl) {
+                            items.push({
+                                id: file,
+                                url: dataUrl,
+                                name: file.replace(/\.[^/.]+$/, "").split('-').slice(1).join(' '),
+                                prompt: "Saved costume asset",
+                                category: "General",
+                                timestamp: Date.now()
+                            });
+                        }
+                    }
+                }
+                dispatch({ type: 'SET_WARDROBE_ITEMS', payload: items });
+                dispatch({ type: 'ADD_LOG', payload: { message: "Wardrobe Library Refreshed", type: 'success' } });
+                return;
+            } catch (err) {
+                console.error("Failed to scan native wardrobe:", err);
+                return;
+            }
+        }
+
+        if (!state.saveDirectoryHandle) return;
+        try {
+            // @ts-ignore
+            if ((await state.saveDirectoryHandle.queryPermission({ mode: 'read' })) !== 'granted') return;
+
+            const wardrobeHandle = await state.saveDirectoryHandle.getDirectoryHandle('wardrobe', { create: true });
+            const items: any[] = [];
+            // @ts-ignore
+            for await (const entry of (wardrobeHandle as any).values()) {
+                if (entry.kind === 'file' && /\.(png|jpg|jpeg|webp)$/i.test(entry.name)) {
+                    const file = await entry.getFile();
+                    const reader = new FileReader();
+                    const dataUrl = await new Promise<string>((resolve) => {
+                        reader.onload = () => resolve(reader.result as string);
+                        reader.readAsDataURL(file);
+                    });
+
+                    items.push({
+                        id: entry.name,
+                        url: dataUrl,
+                        name: entry.name.replace('.png', '').split('-').slice(1).join(' '),
+                        prompt: "Saved costume asset",
+                        category: "General",
+                        timestamp: file.lastModified
+                    });
+                }
+            }
+            dispatch({ type: 'SET_WARDROBE_ITEMS', payload: items.sort((a, b) => b.timestamp - a.timestamp) });
+            dispatch({ type: 'ADD_LOG', payload: { message: "Wardrobe Library Refreshed", type: 'success' } });
+        } catch (e: any) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Wardrobe scan failed: ${e.message}`, type: 'error' } });
+        }
+    };
+
+    const handleUploadCostume = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (!e.target.files || e.target.files.length === 0 || !state.saveDirectoryHandle) return;
+        const file = e.target.files[0];
+
+        try {
+            // DUPLICATE CHECK
+            if (state.wardrobeItems.some((i: any) => i.id.includes(file.name) || i.name === file.name.split('.')[0])) {
+                alert("Item already exists in library.");
+                return;
+            }
+
+            const wardrobeHandle = await state.saveDirectoryHandle.getDirectoryHandle('wardrobe', { create: true });
+            const safeName = `Custom-Costume-${Date.now()}-${file.name.replace(/[^a-z0-9.]/gi, '_')}`;
+            const fileHandle = await wardrobeHandle.getFileHandle(safeName, { create: true });
+            const writable = await fileHandle.createWritable();
+            await writable.write(file);
+            await writable.close();
+
+            // Read for immediate display
+            const reader = new FileReader();
+            reader.onload = () => {
+                const dataUrl = reader.result as string;
+                // setDesignerImage(dataUrl); // Not present in Nano
+                // setDesignerPrompt(file.name.replace(/\.[^/.]+$/, ""));
+
+                const newItem = {
+                    id: safeName,
+                    url: dataUrl,
+                    name: file.name.split('.')[0].substring(0, 20),
+                    prompt: "User Upload",
+                    category: "General",
+                    timestamp: Date.now()
+                };
+
+                dispatch({ type: 'ADD_WARDROBE_ITEM', payload: newItem });
+                dispatch({ type: 'ADD_LOG', payload: { message: `Uploaded & Saved: ${file.name}`, type: 'success' } });
+            };
+            reader.readAsDataURL(file);
+
+        } catch (err: any) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Upload failed: ${err.message}`, type: 'error' } });
+        }
+    };
+
+    const executeDelete = async () => {
+        if (!confirmDelete) return;
+        const item = confirmDelete;
+
+        try {
+            if (state.saveDirectoryHandle) {
+                try {
+                    const wardrobeHandle = await state.saveDirectoryHandle.getDirectoryHandle('wardrobe', { create: false });
+                    await wardrobeHandle.removeEntry(item.id);
+                } catch (e) { console.warn("Disk delete failed or not found", e); }
+            }
+
+            const newItems = state.wardrobeItems.filter((i: any) => i.id !== item.id);
+            dispatch({ type: 'SET_WARDROBE_ITEMS', payload: newItems });
+            if (selectedWardrobeItem?.id === item.id) setSelectedWardrobeItem(null);
+            dispatch({ type: 'ADD_LOG', payload: { message: `Deleted costume: ${item.name}`, type: 'success' } });
+
+        } catch (e: any) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Delete failed: ${e.message}`, type: 'error' } });
+        } finally {
+            setConfirmDelete(null);
+        }
+    };
 
     // --- PHASE 2: BODY ARCHETYPE STATE ---
     const [selectedBody, setSelectedBody] = useState<string | null>(null);
@@ -1300,6 +1440,8 @@ const NanoCastingDirector = () => {
             let promptStyleLabel = styleConfig.label;
             let promptKeywords = safeKeywords;
 
+
+
             if (identitySource === 'biometric') {
                 if (isPhotoMode) {
                     promptStyleLabel = "Photorealistic Source (8k Photography)";
@@ -1630,8 +1772,8 @@ const NanoCastingDirector = () => {
                                     <div className="mb-6 p-3 bg-black/40 rounded-lg border border-border/50">
                                         <h4 className="text-[10px] uppercase font-black text-muted tracking-widest mb-2 flex justify-between">
                                             Storage Link
-                                            <span className={state.saveDirectoryHandle ? 'text-success' : 'text-danger'}>
-                                                {state.saveDirectoryHandle ? 'CONNECTED' : 'NOT LINKED'}
+                                            <span className={state.saveDirectoryHandle || state.saveDirectoryPath ? 'text-success' : 'text-danger'}>
+                                                {state.saveDirectoryHandle || state.saveDirectoryPath ? 'CONNECTED' : 'NOT LINKED'}
                                             </span>
                                         </h4>
                                         <button
@@ -1647,12 +1789,16 @@ const NanoCastingDirector = () => {
                                                     console.log("Folder selection cancelled");
                                                 }
                                             }}
-                                            className={`w-full py-2 rounded text-[10px] font-bold uppercase tracking-widest transition-all border ${state.saveDirectoryHandle
+                                            className={`w-full py-2 rounded text-[10px] font-bold uppercase tracking-widest transition-all border ${state.saveDirectoryHandle || state.saveDirectoryPath
                                                 ? 'bg-success/10 text-success border-success/30 hover:bg-success/20'
                                                 : 'bg-danger/10 text-danger border-danger/30 hover:bg-danger/20'
                                                 }`}
                                         >
-                                            {state.saveDirectoryHandle ? `Linked: ${state.saveDirectoryHandle.name}` : 'Connect Save Folder'}
+                                            {state.saveDirectoryPath
+                                                ? `Linked: ${state.saveDirectoryPath.split(/[\\/]/).pop()}`
+                                                : state.saveDirectoryHandle
+                                                    ? `Linked: ${state.saveDirectoryHandle.name}`
+                                                    : 'Connect Save Folder'}
                                         </button>
                                     </div>
 
@@ -1698,8 +1844,14 @@ const NanoCastingDirector = () => {
                                             </div>
 
                                             <div className="space-y-2">
-                                                <label className="text-xs text-accent uppercase tracking-widest font-black">
-                                                    Basic Outfit Prompt
+                                                <label className="text-xs text-accent uppercase tracking-widest font-black flex justify-between items-center">
+                                                    <span>Basic Outfit Prompt</span>
+                                                    <button
+                                                        onClick={() => setDirectorControls(p => ({ ...p, outfit: '' }))}
+                                                        className="text-[9px] text-zinc-500 hover:text-white transition-colors border border-zinc-700 hover:border-zinc-500 px-2 rounded bg-black/50"
+                                                    >
+                                                        CLEAR
+                                                    </button>
                                                 </label>
                                                 <input
                                                     type="text"
@@ -1813,37 +1965,60 @@ const NanoCastingDirector = () => {
                                             </div>
 
                                             <div className="space-y-4">
-                                                <h4 className="text-[10px] uppercase font-black text-muted tracking-widest border-b border-border pb-2">
-                                                    Wardrobe Library ({state.wardrobeItems.length})
-                                                </h4>
-                                                <div className="grid grid-cols-3 gap-2 max-h-[400px] overflow-y-auto pr-1">
-                                                    {state.wardrobeItems
-                                                        // Show all items regardless of scope to ensure visibility
-                                                        .map(item => {
-                                                            const isSelected = selectedWardrobeItem?.id === item.id;
-                                                            return (
+                                                <div className="flex justify-between items-center border-b border-border pb-2">
+                                                    <h4 className="text-[10px] uppercase font-black text-muted tracking-widest">
+                                                        Wardrobe Library ({state.wardrobeItems.length})
+                                                    </h4>
+                                                    <div className="flex gap-1.5">
+                                                        <label className="p-1.5 hover:bg-surface-3 rounded transition-colors text-muted hover:text-white cursor-pointer" title="Upload Costume">
+                                                            <Upload className="w-3.5 h-3.5" />
+                                                            <input type="file" className="hidden" accept="image/*" onChange={handleUploadCostume} />
+                                                        </label>
+                                                        <button onClick={scanWardrobe} className="p-1.5 hover:bg-surface-3 rounded transition-colors text-muted hover:text-white" title="Scan Folder">
+                                                            <RefreshCcw className="w-3.5 h-3.5" />
+                                                        </button>
+                                                    </div>
+                                                </div>
+
+                                                <div className="grid grid-cols-2 gap-2 max-h-[400px] overflow-y-auto pr-1">
+                                                    {state.wardrobeItems.map((item: any) => (
+                                                        <div
+                                                            key={item.id}
+                                                            onClick={() => setSelectedWardrobeItem(item)}
+                                                            className={`aspect-square rounded-lg border overflow-hidden transition-all group relative cursor-pointer ${selectedWardrobeItem?.id === item.id ? 'border-accent border-2 shadow-lg shadow-accent/20' : 'border-border hover:border-gray-600'}`}
+                                                        >
+                                                            <img src={item.url} className="w-full h-full transition-transform group-hover:scale-110 object-cover" />
+                                                            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
                                                                 <button
-                                                                    key={item.id}
-                                                                    onClick={() => setSelectedWardrobeItem(isSelected ? null : item)}
-                                                                    className={`aspect-square rounded-lg border overflow-hidden relative group transition-all ${isSelected ? 'border-[#39FF14] shadow-[0_0_10px_rgba(57,255,20,0.4)] ring-1 ring-[#39FF14]' : 'border-border hover:border-accent'}`}
+                                                                    onClick={(e) => {
+                                                                        e.preventDefault();
+                                                                        e.stopPropagation();
+                                                                        // @ts-ignore
+                                                                        dispatch({ type: 'SET_INSPECT_IMAGE', payload: item.url });
+                                                                    }}
+                                                                    className="bg-blue-500/80 hover:bg-blue-500 text-white p-1.5 rounded-full shadow-lg cursor-pointer"
+                                                                    title="Inspect Large"
                                                                 >
-                                                                    <img src={item.url} className={`w-full h-full object-cover ${isSelected ? 'opacity-100' : 'opacity-70 group-hover:opacity-100'}`} />
-                                                                    {isSelected && (
-                                                                        <div className="absolute inset-0 flex items-center justify-center bg-black/20">
-                                                                            <div className="bg-[#39FF14] text-black text-[9px] font-bold px-1 rounded">ACTIVE</div>
-                                                                        </div>
-                                                                    )}
-                                                                    {!isSelected && (
-                                                                        <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                                                                            <Shirt className="w-4 h-4 text-white" />
-                                                                        </div>
-                                                                    )}
+                                                                    <Maximize className="w-3.5 h-3.5" />
                                                                 </button>
-                                                            )
-                                                        })}
+
+                                                                <button
+                                                                    onClick={(e) => { e.stopPropagation(); setConfirmDelete(item); }}
+                                                                    className="bg-red-500/80 hover:bg-red-500 text-white p-1.5 rounded-full shadow-lg cursor-pointer transition-transform hover:scale-110"
+                                                                    title="Delete Costume"
+                                                                >
+                                                                    <Trash2 className="w-3.5 h-3.5" />
+                                                                </button>
+                                                            </div>
+
+                                                            <span className="text-[8px] font-bold text-white uppercase truncate absolute bottom-2 left-2 right-2 text-center drop-shadow-md">{item.name}</span>
+                                                        </div>
+                                                    ))}
+
                                                     {state.wardrobeItems.length === 0 && (
-                                                        <div className="col-span-3 text-center py-4 opacity-50 text-[10px]">
-                                                            Library Empty
+                                                        <div className="col-span-2 flex flex-col items-center justify-center py-10 opacity-30">
+                                                            <Shirt className="w-10 h-10 mb-2" />
+                                                            <span className="text-[10px] uppercase font-bold tracking-tighter">Library Empty</span>
                                                         </div>
                                                     )}
                                                 </div>
@@ -2785,6 +2960,36 @@ const NanoCastingDirector = () => {
                         )}
 
                     </AnimatePresence >
+
+                    {/* DELETE CONFIRMATION MODAL */}
+                    <AnimatePresence>
+                        {
+                            confirmDelete && (
+                                <div className="fixed inset-0 z-[3000] bg-black/80 backdrop-blur-sm flex items-center justify-center p-8 animate-in fade-in duration-200">
+                                    <div className="bg-[#18181b] border border-gray-700 p-6 rounded-2xl shadow-2xl max-w-sm w-full relative overflow-hidden">
+                                        <h3 className="text-lg font-black text-white uppercase tracking-wider mb-2">Delete Costume?</h3>
+                                        <p className="text-sm text-gray-400 mb-6">
+                                            Are you sure you want to delete <span className="text-white font-bold">{confirmDelete.name}</span>? This cannot be undone.
+                                        </p>
+                                        <div className="flex justify-end gap-3">
+                                            <button
+                                                onClick={() => setConfirmDelete(null)}
+                                                className="px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider text-gray-400 hover:text-white hover:bg-gray-800 transition-colors"
+                                            >
+                                                Cancel
+                                            </button>
+                                            <button
+                                                onClick={executeDelete}
+                                                className="px-4 py-2 rounded-lg text-xs font-black uppercase tracking-wider bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-900/20"
+                                            >
+                                                Delete Forever
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            )
+                        }
+                    </AnimatePresence>
 
                     {/* TOAST OVERLAY */}
                     <AnimatePresence>
