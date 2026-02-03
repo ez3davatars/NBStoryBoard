@@ -255,7 +255,42 @@ export interface AppState {
 
   // Persist panel open/closed states in memory only (reset on reload)
   stagePanelState: Record<string, boolean>;
+
+  // WARDROBE PERSISTENCE
+  wardrobeState: WardrobeState;
 }
+
+export interface WardrobeState {
+  fittedImage: string | null;
+  tryOnMask: string | null;
+  restorationLayer: string | null;
+  removeBg: boolean;
+  fringeSize: number;
+  brushSize: number;
+  history: string[];
+  historyIndex: number;
+  isBrushActive: boolean;
+  tryOnNote: string;
+  processedTryOnUrl: string | null;
+  selectedCharacter: CastMember | null;
+  selectedCostume: WardrobeItem | null;
+}
+
+const DEFAULT_WARDROBE_STATE: WardrobeState = {
+  fittedImage: null,
+  tryOnMask: null,
+  restorationLayer: null,
+  removeBg: false,
+  fringeSize: 0,
+  brushSize: 20,
+  history: [],
+  historyIndex: -1,
+  isBrushActive: false,
+  tryOnNote: "",
+  processedTryOnUrl: null,
+  selectedCharacter: null,
+  selectedCostume: null
+};
 
 export type Action =
   | { type: 'SET_VIEW'; payload: ViewMode }
@@ -324,6 +359,7 @@ export type Action =
   | { type: 'SET_STORYBOARD_ENABLED'; payload: boolean }
   | { type: 'SET_CUSTOM_COVERS'; payload: Record<string, string> }
   | { type: 'SET_STAGE_PANEL_STATE'; payload: { id: string; isOpen: boolean } }
+  | { type: 'SET_WARDROBE_STATE'; payload: Partial<WardrobeState> }
   ;
 
 // --- HELPERS ---
@@ -498,7 +534,8 @@ export const initialState: AppState = {
     'specs': true,
     'anchor': true,
     'scene_director': true
-  }
+  },
+  wardrobeState: clone(DEFAULT_WARDROBE_STATE)
 };
 
 // --- REDUCER ---
@@ -694,7 +731,10 @@ export const reducer = (state: AppState, action: Action): AppState => {
           ...state.stagePanelState,
           [action.payload.id]: action.payload.isOpen
         }
-      };
+      }
+
+    case 'SET_WARDROBE_STATE':
+      return { ...state, wardrobeState: { ...state.wardrobeState, ...action.payload } };
 
     // --- REGION EDIT ---
     case 'SET_REGION_EDIT':

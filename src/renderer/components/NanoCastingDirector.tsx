@@ -1554,24 +1554,24 @@ const NanoCastingDirector = () => {
             finalPrompt += `REFERENCE SHEET BACKGROUND PROTOCOL:\n`;
             finalPrompt += `Background must be a SOLID, NEUTRAL GREY STUDIO BACKDROP. No maps, no text, no scenery, no patterns.\n\n`;
 
-            finalPrompt += `LAYOUT & COMPOSITION RULES (FRAMING PRIORITY):\n`;
-            finalPrompt += `LAYOUT & COMPOSITION RULES (FRAMING PRIORITY):\n`;
-            // USE REF_LAYOUT DIRECTLY (Decoupled from Camera Controls)
+            finalPrompt += `LAYOUT & COMPOSITION PROTOCOL (AGGRESSIVE ENFORCEMENT):\n`;
+            finalPrompt += `1. VARIATION LOCK: Every panel MUST show a unique viewpoint. NO DUPLICATE ANGLES.\n`;
+            finalPrompt += `2. FORBIDDEN: Do NOT repeat the same camera angle (e.g., do not show 3/4 view twice). Do NOT generate the same expression twice.\n`;
+            finalPrompt += `3. CAMERA ROTATION MATRIX: You are a multi-camera rig capturing different slices of the character. Each lens is unique.\n\n`;
+
             if (refLayout === 'form_focus') {
                 // BODY FOCUS -> Vertical Split (Image 3)
-                finalPrompt += " [LAYOUT A]: COMPOSITION: Two distinct panels separated by a clean white line. DIVIDE VERTICALLY.\n";
-                finalPrompt += " LEFT PANEL (50%): SUBJECT: 3 Full Standing Figures (Front, Side, Back). CAMERA: Long Shot (15 ft distance). LENS: 85mm. ACTION: Show subject from Head to Toe. Feet must be visible.\n";
-                finalPrompt += " RIGHT PANEL (50%): SUBJECT: 2x2 Grid of Headshots. CAMERA: Extreme Close-Up (2 ft distance). LENS: 100mm Macro.\n";
+                finalPrompt += " [LAYOUT A]: Vertical Split.\n";
+                finalPrompt += " LEFT PANEL (50%): 3 Full Standing Figures. LENS 1: Frontal, LENS 2: Left 3/4, LENS 3: Back View.\n";
+                finalPrompt += " RIGHT PANEL (50%): 2x2 Grid of 4 HEADSHOTS. LENS 4: Extreme Close-Up Front, LENS 5: Left Profile, LENS 6: Right Profile, LENS 7: Looking Up.\n";
             } else if (refLayout === 'face_focus') {
-                finalPrompt += " [LAYOUT B]: EXPRESSION SHEET. 8 Distinct Headshots. REQUIREMENT: ALL Headshots must show the COLLAR and SHOULDERS of the Costume. DO NOT show source clothing.\n";
-                finalPrompt += " FRAMING: Close-Up, but wide enough to show the Outfit's Neckline.\n";
-                finalPrompt += " EXPRESSIONS: Front, Side, Smile, Anger, Surprise, Serious, Laughing, Thinking.\n";
-                finalPrompt += " IDENTITY ANCHOR: Change the Emotion, but KEEP THE SKULL STRUCTURE. Do not morph the person. The face must remain [IMAGE 1] in every emotion.\n\n";
+                finalPrompt += " [LAYOUT B]: 8 Distinct Expression Panels. ALL views must show the costume collar.\n";
+                finalPrompt += " MANDATORY UNIQUE LENS ANGLES: [1: Frontal, 2: 45-degree Left, 3: 45-degree Right, 4: 90-degree Left Profile, 5: 90-degree Right Profile, 6: Tilted Up, 7: Tilted Down, 8: High Angle Bird's Eye].\n";
             } else {
                 // HYBRID -> Horizontal Split (Image 4)
-                finalPrompt += " [LAYOUT C]: COMPOSITION: Horizontal Split with a white divider line.\n";
-                finalPrompt += " UPPER SECTION (60%): SUBJECT: 3 Full Standing Figures (Front, Side, Back). CAMERA: Long Shot (15 ft distance). LENS: 85mm. ACTION: Show from Head to Toe.\n";
-                finalPrompt += " LOWER SECTION (40%): SUBJECT: Row of 5 Headshots. CAMERA: Extreme Close-Up (2 ft distance). LENS: 100mm Macro.\n";
+                finalPrompt += " [LAYOUT C]: Horizontal Split.\n";
+                finalPrompt += " UPPER SECTION (60%): 3 Full Standing Figures. LENS 1: Frontal, LENS 2: Right 3/4, LENS 3: Back View.\n";
+                finalPrompt += " LOWER SECTION (40%): Row of 5 Headshots. LENS 4: Frontal, LENS 5: Sharp Left Profile, LENS 6: Sharp Right Profile, LENS 7: 45-degree Left, LENS 8: High Detail Hero Shot.\n";
             }
 
             if (identitySource !== 'biometric') {
@@ -1587,17 +1587,16 @@ const NanoCastingDirector = () => {
             // --- B. COSTUME / WARDROBE ---
 
             if (selectedWardrobeItem && wardrobeRefIndex > 0) {
-                finalPrompt += `COSTUME DIRECTIVE (HIGH PRIORITY):\n`;
+                finalPrompt += `COSTUME DIRECTIVE (PILOT PROTOCOL):\n`;
                 finalPrompt += `Wear the outfit shown in [IMAGE ${wardrobeRefIndex}].\n`;
-                finalPrompt += `CRITICAL: [IMAGE ${wardrobeRefIndex}] contains the OUTFIT ONLY. IGNORE the person, face, and body in [IMAGE ${wardrobeRefIndex}].\n`;
-                finalPrompt += `Match the design, materials, and colors of the costume in [IMAGE ${wardrobeRefIndex}] exactly.\n`;
-                finalPrompt += `Fit the costume naturally to the character's body type (defined by [IMAGE 1]). Ensure the FULL COSTUME is visible in FULL BODY views. Do not crop to the face.\n`;
-                finalPrompt += `REQUIREMENT: The character must wear this costume in ALL VIEWS, including HEADSHOTS and BUSTS. Do NOT show the clothing from [IMAGE 1].\n\n`;
+                finalPrompt += `1. PILOT IN COCKPIT: Treat [IMAGE 1] as a pilot sitting INSIDE the costume [IMAGE ${wardrobeRefIndex}]. The suit is a rigid exterior shell.\n`;
+                finalPrompt += `2. CLEAN SLATE: Strip all external gear (helmets, goggles) from [IMAGE 1] first. Use only bare skin/face.\n`;
+                finalPrompt += `3. RIGID SILHOUETTE LOCK: Do NOT elongate or stretch the costume. Maintain its thick, chunky proportions exactly.\n`;
+                finalPrompt += `4. FORBIDDEN: Do NOT place the human face in the mascot's mouth. The face must stay in the neck/throat area below the suit's chin.\n\n`;
 
                 if (identitySource === 'biometric') {
                     finalPrompt += `RE-ASSERTING IDENTITY LOCK:\n`;
-                    finalPrompt += `Despite the costume reference, the FACE MUST MATCH [IMAGE 1] (Biometric Scan).\n`;
-                    finalPrompt += `IMPORTANT: While maintaining facial identity, YOU MUST RESPECT THE REQUESTED LAYOUT. Do not default to a headshot. Apply the identity to the full-body character as defined by the layout.\n\n`;
+                    finalPrompt += `The FACE in ALL views must be a PIXEL-PERFECT MATCH to [IMAGE 1]. Same person, same likeness, no morphing.\n\n`;
                 }
             }
 

@@ -31,13 +31,56 @@ import coverAnim from '../assets/cover-anim.png';
 import coverIllustration from '../assets/cover-illustration.png';
 import coverScifi from '../assets/cover-scifi.png';
 
-const REFERENCE_SHEET_PROMPT = `Create a professional, 8k resolution character reference sheet based strictly on the uploaded reference image. Use a clean, neutral plain background.
-CRITICAL COMPOSITION RULES:
-- STRICT ADHERENCE to view counts. DO NOT add extra rows or duplicate figures.
-- NO FLOATING HEADS. NO GHOST IMAGES. The space above and around the main figures MUST BE EMPTY.
-- Maintain PERFECT facial identity and symmetry across ALL views. No distortion.
-- Output must be crisp, production-ready, and free of artifacts.
-- ABSOLUTELY NO disembodied faces in the negative space.
+const REFERENCE_SHEET_PROMPT = `
+Create a professional, 8k resolution character reference sheet
+based strictly on the provided fitted character image.
+
+IMPORTANT:
+This is a DOCUMENTATION task, not a refitting task.
+
+ABSOLUTE RULES:
+
+1. NO RE-FITTING
+- Do NOT alter costume proportions, openings, or geometry.
+- Do NOT reposition the face, head, or neck.
+- Do NOT reinterpret anatomy.
+- Preserve the exact fitted result as-is.
+
+2. IDENTITY PRESERVATION
+- The subject must remain the same person across all views.
+- Facial features must remain consistent where visible.
+- Do NOT invent or exaggerate facial structure.
+
+3. COSTUME PRESERVATION
+- The mascot costume is rigid.
+- Jaw, mouth opening, and neck opening must remain fixed.
+- No stretching, sliding, or reshaping across views.
+
+4. VIEW CONSISTENCY
+- Each view shows the SAME fitted character from a different camera angle.
+- No duplicates.
+- No symmetry mirroring tricks.
+
+5. CAMERA SET
+- Full Body: Front, Left Profile, Right Profile, Rear
+- Head Close-ups: Front, Left 3/4, Right 3/4, Side Profile
+
+6. COMPOSITION
+- Clean neutral background.
+- Empty negative space.
+- No floating heads.
+- No disembodied parts.
+- No extra characters.
+
+7. OUTPUT QUALITY
+- Crisp, production-ready.
+- No artifacts.
+- No stylization drift.
+
+NEGATIVE CONSTRAINTS:
+refitting, reinterpreting anatomy, moving openings,
+elongated necks, stretched costume,
+floating heads, mannequins, text, watermarks.
 `;
 
 const STUDIO_FOLDERS = [
@@ -83,10 +126,7 @@ const CastingForge = () => {
   const [aiMaskActive, setAiMaskActive] = useState(false);
 
 
-  // Draggable Panel State
-  const [panelPosition, setPanelPosition] = useState<{ x: number, y: number } | null>(null);
-  const [isDraggingPanel, setIsDraggingPanel] = useState(false);
-  const [panelDragOffset, setPanelDragOffset] = useState({ x: 0, y: 0 });
+  // Draggable Panel State (Removed - Docked Controls)
 
   // Auto-reset UI when image is cleared
   useEffect(() => {
@@ -1236,34 +1276,9 @@ const CastingForge = () => {
   };
 
   const panelDimRef = useRef({ w: 0, h: 0 });
+  void panelDimRef;
 
-  const handlePanelMouseDown = (e: React.MouseEvent) => {
-    e.stopPropagation(); // Stop bubbling to canvas immediately
-    const target = e.target as HTMLElement;
-    if (['INPUT', 'BUTTON', 'LABEL'].includes(target.tagName)) return;
-
-    e.preventDefault();
-    e.stopPropagation();
-    if (!containerRef.current) return;
-
-    const containerRect = containerRef.current.getBoundingClientRect();
-    const panelRect = e.currentTarget.getBoundingClientRect();
-    panelDimRef.current = { w: panelRect.width, h: panelRect.height };
-
-    const offsetX = e.clientX - panelRect.left;
-    const offsetY = e.clientY - panelRect.top;
-
-    setPanelDragOffset({ x: offsetX, y: offsetY });
-    setIsDraggingPanel(true);
-
-    const borderLeft = containerRef.current.clientLeft || 0;
-    const borderTop = containerRef.current.clientTop || 0;
-
-    setPanelPosition({
-      x: panelRect.left - containerRect.left - borderLeft,
-      y: panelRect.top - containerRect.top - borderTop
-    });
-  };
+  // handlePanelMouseDown removed (Docked Controls)
 
   // MOUSE TO IMAGE COORDINATE MAPPER
   const getImgCoords = (clientX: number, clientY: number) => {
@@ -1314,7 +1329,7 @@ const CastingForge = () => {
     // Block interaction if canvas is syncing (prevent race conditions)
     if (isSyncingRef.current) return;
 
-    if (isDraggingPanel) return;
+    // Drag logic removed
 
     // BRUSH INTERACTION
     if (isBrushActive && imgRef.current) {
@@ -1402,19 +1417,7 @@ const CastingForge = () => {
   const moveInteraction = (e: React.MouseEvent) => {
     if (!containerRef.current) return;
 
-    if (isDraggingPanel) {
-      const containerRect = containerRef.current.getBoundingClientRect();
-      let newX = e.clientX - containerRect.left - panelDragOffset.x;
-      let newY = e.clientY - containerRect.top - panelDragOffset.y;
-      const pW = panelDimRef.current.w || 320;
-      const pH = panelDimRef.current.h || 400;
-      const maxX = containerRect.width - pW;
-      const maxY = containerRect.height - pH;
-      newX = Math.max(0, Math.min(newX, maxX));
-      newY = Math.max(0, Math.min(newY, maxY));
-      setPanelPosition({ x: newX, y: newY });
-      return;
-    }
+    // Panel Dragging Logic removed
 
     // BRUSH MOVE (AND CURSOR TRACKING)
     if (isBrushActive) {
@@ -1496,7 +1499,7 @@ const CastingForge = () => {
   };
 
   const endInteraction = () => {
-    isDraggingPanel && setIsDraggingPanel(false);
+    // Panel Drag End removed
 
     // Commit Painting
     if (isPaintingRef.current && restorationCanvasRef.current) {
@@ -2037,104 +2040,127 @@ const CastingForge = () => {
             </div>
           </div>
 
-          <div
-            ref={containerRef}
-            className={`flex-grow relative bg-gradient-to-b from-[#18181b] to-black flex items-center justify-center overflow-hidden select-none group border-4 border-blue-500/30 rounded-2xl m-2 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.15),0_0_30px_rgba(59,130,246,0.1)] ${isBrushActive ? 'cursor-none' : ''}`}
-            onMouseDown={(e) => startInteraction(e)}
-            onMouseMove={moveInteraction}
-            onMouseUp={endInteraction}
-            onMouseLeave={handleMouseLeave}
-          >
-            {/* Visual Feedback Canvas layer */}
-            <canvas ref={uiCanvasRef} className="absolute inset-0 w-full h-full pointer-events-none z-40 opacity-50" />
+          <div className="flex flex-row flex-grow overflow-hidden relative">
+            <div
+              ref={containerRef}
+              className={`flex-grow relative bg-gradient-to-b from-[#18181b] to-black flex items-center justify-center overflow-hidden select-none group border-4 border-blue-500/30 rounded-2xl m-2 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.15),0_0_30px_rgba(59,130,246,0.1)] ${isBrushActive ? 'cursor-none' : ''}`}
+              onMouseDown={(e) => startInteraction(e)}
+              onMouseMove={moveInteraction}
+              onMouseUp={endInteraction}
+              onMouseLeave={handleMouseLeave}
+            >
+              {/* Visual Feedback Canvas layer */}
+              <canvas ref={uiCanvasRef} className="absolute inset-0 w-full h-full pointer-events-none z-40 opacity-50" />
 
-            {isBrushActive && cursorPos && (
-              <div
-                className="absolute pointer-events-none rounded-full border-2 border-white shadow-[0_0_0_1px_rgba(0,0,0,0.5),inset_0_0_0_1px_rgba(0,0,0,0.5)] z-50 transition-none mix-blend-normal"
-                style={{
-                  width: `${brushSize}px`,
-                  height: `${brushSize}px`,
-                  left: cursorPos.x,
-                  top: cursorPos.y,
-                  transform: 'translate(-50%, -50%)'
-                }}
-              />
-            )}
-            {isIsolating && (
-              <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-black/40 backdrop-blur-[2px] animate-in fade-in duration-200">
-                <div className="w-12 h-12 border-4 border-blue-500/30 border-t-blue-500 rounded-full animate-spin mb-4 shadow-[0_0_15px_rgba(59,130,246,0.5)]"></div>
-                <div className="w-48 h-1.5 bg-gray-800 rounded-full overflow-hidden border border-white/10">
-                  <div
-                    className="h-full bg-blue-500 transition-all duration-200 ease-out shadow-[0_0_10px_rgba(59,130,246,0.8)]"
-                    style={{ width: `${isolationProgress}%` }}
-                  />
-                </div>
-                <span className="text-[10px] font-black text-blue-400 mt-2 uppercase tracking-widest animate-pulse">
-                  Processing {isolationProgress}%
-                </span>
-              </div>
-            )}
-
-            {state.lastCastedImage ? (
-              <>
-                <img
-                  ref={imgRef}
-                  src={state.lastCastedImage}
-                  crossOrigin="anonymous"
-                  className={processedPreviewUrl ? 'invisible absolute pointer-events-none' : 'max-w-full max-h-full object-contain pointer-events-none'}
+              {isBrushActive && cursorPos && (
+                <div
+                  className="absolute pointer-events-none rounded-full border-2 border-white shadow-[0_0_0_1px_rgba(0,0,0,0.5),inset_0_0_0_1px_rgba(0,0,0,0.5)] z-50 transition-none mix-blend-normal"
+                  style={{
+                    width: `${brushSize}px`,
+                    height: `${brushSize}px`,
+                    left: cursorPos.x,
+                    top: cursorPos.y,
+                    transform: 'translate(-50%, -50%)'
+                  }}
                 />
-                {processedPreviewUrl && (
-                  <img
-                    ref={previewImgRef}
-                    src={processedPreviewUrl}
-                    className="max-w-full max-h-full object-contain pointer-events-none"
-                  />
-                )}
-                {state.lastCastedMask && (
-                  <img
-                    key={state.lastCastedMask}
-                    ref={maskImgRef}
-                    src={state.lastCastedMask}
-                    crossOrigin="anonymous"
-                    className="hidden"
-                  />
-                )}
-              </>
-            ) : (
-              <div className="flex flex-col items-center justify-center h-full select-none pointer-events-none group">
-                <div className="text-center bg-zinc-900/50 p-8 rounded-3xl backdrop-blur-sm transition-all duration-300 group-hover:bg-zinc-900/70">
-                  {/* Ambient Actor Outline */}
-                  <div className="relative w-32 h-32 mx-auto mb-4 opacity-40 transition-opacity duration-300 group-hover:opacity-70">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-full h-full text-zinc-500" strokeWidth="0.5">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                    </svg>
-                    {/* Subtle glow/tech accents */}
-                    <div className="absolute inset-0 bg-blue-500/5 blur-2xl rounded-full" />
+              )}
+              {isIsolating && (
+                <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-black/40 backdrop-blur-[2px] animate-in fade-in duration-200">
+                  <div className="w-12 h-12 border-4 border-blue-500/30 border-t-blue-500 rounded-full animate-spin mb-4 shadow-[0_0_15px_rgba(59,130,246,0.5)]"></div>
+                  <div className="w-48 h-1.5 bg-gray-800 rounded-full overflow-hidden border border-white/10">
+                    <div
+                      className="h-full bg-blue-500 transition-all duration-200 ease-out shadow-[0_0_10px_rgba(59,130,246,0.8)]"
+                      style={{ width: `${isolationProgress}%` }}
+                    />
                   </div>
+                  <span className="text-[10px] font-black text-blue-400 mt-2 uppercase tracking-widest animate-pulse">
+                    Processing {isolationProgress}%
+                  </span>
+                </div>
+              )}
 
-                  <div className="space-y-4">
-                    <h3 className="text-3xl font-black text-zinc-500 uppercase tracking-[0.2em] drop-shadow-lg">ADD OR GENERATE AN ACTOR</h3>
-                    <div className="space-y-1">
-                      <p className="text-xs font-bold text-zinc-300 uppercase tracking-widest animate-stage-breathe max-w-lg mx-auto leading-relaxed">
-                        Generate a new character or place an existing one<br /> to prepare it for directing.
-                      </p>
-                      <p className="text-[10px] text-zinc-400 font-mono">
-                        Background removal and slicing happen here before staging.
-                      </p>
+              {state.lastCastedImage ? (
+                <>
+                  <img
+                    ref={imgRef}
+                    src={state.lastCastedImage}
+                    crossOrigin="anonymous"
+                    className={processedPreviewUrl ? 'invisible absolute pointer-events-none' : 'max-w-full max-h-full object-contain pointer-events-none'}
+                  />
+                  {processedPreviewUrl && (
+                    <img
+                      ref={previewImgRef}
+                      src={processedPreviewUrl}
+                      className="max-w-full max-h-full object-contain pointer-events-none"
+                    />
+                  )}
+                  {state.lastCastedMask && (
+                    <img
+                      key={state.lastCastedMask}
+                      ref={maskImgRef}
+                      src={state.lastCastedMask}
+                      crossOrigin="anonymous"
+                      className="hidden"
+                    />
+                  )}
+                </>
+              ) : (
+                <div className="flex flex-col items-center justify-center h-full select-none pointer-events-none group">
+                  <div className="text-center bg-zinc-900/50 p-8 rounded-3xl backdrop-blur-sm transition-all duration-300 group-hover:bg-zinc-900/70">
+                    {/* Ambient Actor Outline */}
+                    <div className="relative w-32 h-32 mx-auto mb-4 opacity-40 transition-opacity duration-300 group-hover:opacity-70">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-full h-full text-zinc-500" strokeWidth="0.5">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                      </svg>
+                      {/* Subtle glow/tech accents */}
+                      <div className="absolute inset-0 bg-blue-500/5 blur-2xl rounded-full" />
+                    </div>
+
+                    <div className="space-y-4">
+                      <h3 className="text-3xl font-black text-zinc-500 uppercase tracking-[0.2em] drop-shadow-lg">ADD OR GENERATE AN ACTOR</h3>
+                      <div className="space-y-1">
+                        <p className="text-xs font-bold text-zinc-300 uppercase tracking-widest animate-stage-breathe max-w-lg mx-auto leading-relaxed">
+                          Generate a new character or place an existing one<br /> to prepare it for directing.
+                        </p>
+                        <p className="text-[10px] text-zinc-400 font-mono">
+                          Background removal and slicing happen here before staging.
+                        </p>
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            )}
+              )}
+
+              {/* Floating Panel Removed - Moving to Sidebar */}
+
+              {isCropping && cropRect && (
+                <div
+                  className="absolute border-2 border-yellow-500 bg-yellow-500/20 pointer-events-none"
+                  style={{ left: cropRect.x, top: cropRect.y, width: cropRect.w, height: cropRect.h }}
+                >
+                  <div onMouseDown={(e) => startInteraction(e, 'nw')} className="absolute -top-1.5 -left-1.5 w-3 h-3 bg-white border border-black cursor-nwse-resize pointer-events-auto z-50"></div>
+                  <div onMouseDown={(e) => startInteraction(e, 'ne')} className="absolute -top-1.5 -right-1.5 w-3 h-3 bg-white border border-black cursor-nesw-resize pointer-events-auto z-50"></div>
+                  <div onMouseDown={(e) => startInteraction(e, 'sw')} className="absolute -bottom-1.5 -left-1.5 w-3 h-3 bg-white border border-black cursor-nesw-resize pointer-events-auto z-50"></div>
+                  <div onMouseDown={(e) => startInteraction(e, 'se')} className="absolute -bottom-1.5 -right-1.5 w-3 h-3 bg-white border border-black cursor-nwse-resize pointer-events-auto z-50"></div>
+
+                  {cropRect.w > 20 && (
+                    <div className={`absolute flex gap-1 pointer-events-auto z-40 ${tagsClass}`}>
+                      {['front', 'side', '3/4', 'back'].map((tag: any) => (
+                        <button key={tag} onMouseDown={(e) => { e.stopPropagation(); finalizeCrop(); }} className="bg-[#18181b] text-white text-[10px] px-2 py-1 rounded border border-gray-600 hover:bg-yellow-500 hover:text-black uppercase font-bold">
+                          {tag}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              <canvas ref={previewCanvasRef} className="hidden" />
+            </div>
 
             {state.lastCastedImage && (
-              <div
-                onMouseDown={handlePanelMouseDown}
-                style={panelPosition ? { left: panelPosition.x, top: panelPosition.y, right: 'auto' } : undefined}
-                className={`absolute ${!panelPosition ? 'top-8 right-8' : ''} flex flex-col gap-3 z-[60] bg-black/60 p-4 rounded-3xl border border-white/10 backdrop-blur-md shadow-2xl w-80 animate-in fade-in zoom-in-95 duration-300 cursor-move active:border-blue-500/30 transition-colors pointer-events-auto`}
-              >
-                {/* HEADER: GLOBAL TOGGLE */}
-                <div className="flex items-center justify-between pb-3 border-b border-white/5">
+              <div className="w-80 shrink-0 border-l border-white/10 bg-[#18181b]/50 h-full flex flex-col animate-in slide-in-from-right-10 duration-300">
+                <div className="p-4 border-b border-white/10 flex items-center justify-between shrink-0">
+                  <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-400">Image Adjustments</h3>
                   <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-2 cursor-pointer select-none hover:text-white transition-colors">
                     <input
                       type="checkbox"
@@ -2142,169 +2168,149 @@ const CastingForge = () => {
                       onChange={(e) => setRemoveBg(e.target.checked)}
                       className="w-4 h-4 accent-blue-500 rounded border-white/10 bg-black cursor-pointer"
                     />
-                    <Eraser className="w-3.5 h-3.5" /> Remove Background
+                    <Eraser className="w-3.5 h-3.5" /> Remove BG
                   </label>
                 </div>
 
-                {removeBg && (
-                  <>
-                    {/* SECTION 1: EDGE REFINEMENT */}
-                    <div className="py-2 space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[9px] font-black text-gray-500 uppercase tracking-widest">Edge Refinement</span>
+                <div className="flex-grow overflow-y-auto p-4 space-y-6 scrollbar-thin scrollbar-thumb-gray-800 scrollbar-track-transparent">
+                  {removeBg ? (
+                    <>
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[9px] font-black text-gray-500 uppercase tracking-widest">Edge Refinement</span>
 
-                        {/* Status Badge */}
-                        {state.lastCastedMask ? (
-                          <div className="flex items-center gap-1.5 text-blue-400">
-                            <CheckCircle2 className="w-3 h-3" />
-                            <span className="text-[9px] font-bold uppercase">Isolated</span>
-                          </div>
-                        ) : (
-                          <button
-                            onClick={async () => {
-                              if (!state.lastCastedImage) return;
-                              try {
-                                dispatch({ type: 'ADD_LOG', payload: { message: "Starting isolation...", type: 'info' } });
-                                setIsIsolating(true);
-                                setIsolationProgress(5);
-                                const response = await fetch(state.lastCastedImage);
-                                const blob = await response.blob();
-                                const res = await removeBackground(blob, {
-                                  progress: (_key: string, current: number, total: number) => {
-                                    if (total) setIsolationProgress(Math.round((current / total) * 100));
-                                  }
-                                });
-                                const url = URL.createObjectURL(res);
-                                dispatch({ type: 'SET_LAST_CASTED_MASK', payload: url });
-                                dispatch({ type: 'ADD_LOG', payload: { message: "Isolation Complete", type: 'success' } });
-                                setRemoveBg(true);
-                              } catch (e: any) {
-                                dispatch({ type: 'ADD_LOG', payload: { message: "Isolation Error: " + e.message, type: 'error' } });
-                              } finally {
-                                setIsIsolating(false);
-                                setIsolationProgress(0);
-                              }
-                            }}
-                            className="text-[9px] font-bold text-gray-400 hover:text-white flex items-center gap-1 bg-white/5 px-2 py-0.5 rounded transition-colors"
-                          >
-                            <Sparkles className="w-3 h-3" /> Run
-                          </button>
-                        )}
-                      </div>
-
-                      {/* Fringe Slider */}
-                      <div className="flex items-center gap-3">
-                        <span className="text-[10px] text-gray-400 font-bold w-8 text-right">{fringeSize}px</span>
-                        <input
-                          type="range"
-                          min="0"
-                          max="10"
-                          step="0.5"
-                          value={fringeSize}
-                          onChange={(e) => setFringeSize(parseFloat(e.target.value))}
-                          className="flex-grow h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                        />
-                      </div>
-                    </div>
-
-                    {/* MANUAL RESTORATION */}
-                    <div className="py-2 border-t border-white/5 space-y-3">
-                      <div className="flex flex-col w-full gap-2">
-                        <span className="text-[9px] font-black text-gray-500 uppercase tracking-widest leading-none">Restore</span>
-                        <div className="w-full flex items-center justify-between gap-1 bg-black/40 rounded-lg p-1 border border-white/10">
-                          {/* HISTORY COUNTER (DEBUG/UX) */}
-                          <div className="relative group/history">
-                            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-black border border-gray-700 px-2 py-1 rounded text-[9px] text-gray-300 opacity-0 group-hover/history:opacity-100 pointer-events-none transition-opacity whitespace-nowrap z-50">
-                              History State: {historyIndex}
+                          {state.lastCastedMask ? (
+                            <div className="flex items-center gap-1.5 text-blue-400">
+                              <CheckCircle2 className="w-3 h-3" />
+                              <span className="text-[9px] font-bold uppercase">Isolated</span>
                             </div>
-                            <span className="text-xs font-bold text-blue-400 font-mono px-2 select-none bg-blue-900/30 rounded border border-blue-500/30 min-w-[36px] text-center whitespace-nowrap block">
-                              {historyIndex} / {history.length - 1}
-                            </span>
-                          </div>
-
-                          <button
-                            onClick={() => setIsBrushActive(!isBrushActive)}
-                            className={`p-1.5 rounded transition-all ${isBrushActive
-                              ? 'bg-blue-600 text-white shadow-[0_0_10px_rgba(37,99,235,0.5)]'
-                              : 'text-gray-400 hover:text-white hover:bg-white/10'
-                              }`}
-                            title="Restore Mask Brush"
-                          >
-                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 20a6 6 0 0 0-12 0" /><path d="M12 20v-6" /><path d="M12 14a4 4 0 0 1 4-4V5a4 4 0 0 0-8 0v5a4 4 0 0 1 4 4z" /></svg>
-                          </button>
-                          <div className="w-px h-3 bg-white/10 mx-0.5" />
-                          <button
-                            onClick={handleUndo}
-                            disabled={historyIndex <= 0}
-                            className="p-3 rounded hover:bg-white/10 text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent transition-colors group"
-                          >
-                            <Undo2 className="w-4 h-4 pointer-events-none" />
-                          </button>
-                          <button
-                            onClick={handleRedo}
-                            disabled={historyIndex >= history.length - 1}
-                            className="p-3 rounded hover:bg-white/10 text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent transition-colors group"
-                          >
-                            <Redo2 className="w-4 h-4 pointer-events-none" />
-                          </button>
+                          ) : (
+                            <button
+                              onClick={async () => {
+                                if (!state.lastCastedImage) return;
+                                try {
+                                  dispatch({ type: 'ADD_LOG', payload: { message: "Starting isolation...", type: 'info' } });
+                                  setIsIsolating(true);
+                                  setIsolationProgress(5);
+                                  const response = await fetch(state.lastCastedImage);
+                                  const blob = await response.blob();
+                                  const res = await removeBackground(blob, {
+                                    progress: (_key: string, current: number, total: number) => {
+                                      if (total) setIsolationProgress(Math.round((current / total) * 100));
+                                    }
+                                  });
+                                  const url = URL.createObjectURL(res);
+                                  dispatch({ type: 'SET_LAST_CASTED_MASK', payload: url });
+                                  dispatch({ type: 'ADD_LOG', payload: { message: "Isolation Complete", type: 'success' } });
+                                  setRemoveBg(true);
+                                } catch (e: any) {
+                                  dispatch({ type: 'ADD_LOG', payload: { message: "Isolation Error: " + e.message, type: 'error' } });
+                                } finally {
+                                  setIsIsolating(false);
+                                  setIsolationProgress(0);
+                                }
+                              }}
+                              className="text-[9px] font-bold text-gray-400 hover:text-white flex items-center gap-1 bg-white/5 px-2 py-0.5 rounded transition-colors"
+                            >
+                              <Sparkles className="w-3 h-3" /> Run
+                            </button>
+                          )}
                         </div>
-                      </div>
 
-                      {isBrushActive && (
-                        <div className="flex items-center gap-3 pl-2 animate-in fade-in slide-in-from-top-1">
-                          <span className="text-[9px] font-bold text-gray-500 w-8 text-right">{brushSize}px</span>
+                        <div className="flex items-center gap-3 bg-black/20 p-2 rounded-lg border border-white/5">
+                          <span className="text-[10px] text-gray-400 font-bold w-8 text-right">{fringeSize}px</span>
                           <input
                             type="range"
-                            min="1"
-                            max="100"
-                            value={brushSize}
-                            onChange={(e) => setBrushSize(parseInt(e.target.value))}
-                            onMouseDown={(e) => e.stopPropagation()}
-                            className="flex-grow h-1.5 bg-gray-700 rounded-full appearance-none cursor-pointer accent-blue-500"
+                            min="0"
+                            max="10"
+                            step="0.5"
+                            value={fringeSize}
+                            onChange={(e) => setFringeSize(parseFloat(e.target.value))}
+                            className="flex-grow h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
                           />
                         </div>
-                      )}
-                    </div>
-                  </>
-                )}
+                      </div>
 
-                {/* ACTIONS */}
-                <div className="flex items-center justify-center gap-3 pt-4 border-t border-white/5 mt-auto">
-                  <button onClick={handleAddToCast} className="w-16 h-16 bg-emerald-500/10 hover:bg-emerald-500 text-emerald-500 hover:text-white rounded-2xl transition-all flex items-center justify-center border border-emerald-500/20 hover:shadow-[0_0_15px_rgba(16,185,129,0.4)]" title="Add to Session Cast">
-                    <UserPlus className="w-8 h-8" />
+                      <div className="pt-4 border-t border-white/5 space-y-3">
+                        <div className="flex flex-col w-full gap-2">
+                          <span className="text-[9px] font-black text-gray-500 uppercase tracking-widest leading-none">Restore</span>
+                          <div className="w-full flex items-center justify-between gap-1 bg-black/40 rounded-lg p-1 border border-white/10">
+                            <div className="relative group/history">
+                              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-black border border-gray-700 px-2 py-1 rounded text-[9px] text-gray-300 opacity-0 group-hover/history:opacity-100 pointer-events-none transition-opacity whitespace-nowrap z-50">
+                                History State: {historyIndex}
+                              </div>
+                              <span className="text-xs font-bold text-blue-400 font-mono px-2 select-none bg-blue-900/30 rounded border border-blue-500/30 min-w-[36px] text-center whitespace-nowrap block">
+                                {historyIndex} / {history.length - 1}
+                              </span>
+                            </div>
+
+                            <button
+                              onClick={() => setIsBrushActive(!isBrushActive)}
+                              className={`p-1.5 rounded transition-all ${isBrushActive
+                                ? 'bg-blue-600 text-white shadow-[0_0_10px_rgba(37,99,235,0.5)]'
+                                : 'text-gray-400 hover:text-white hover:bg-white/10'
+                                }`}
+                              title="Restore Mask Brush"
+                            >
+                              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 20a6 6 0 0 0-12 0" /><path d="M12 20v-6" /><path d="M12 14a4 4 0 0 1 4-4V5a4 4 0 0 0-8 0v5a4 4 0 0 1 4 4z" /></svg>
+                            </button>
+                            <div className="w-px h-3 bg-white/10 mx-0.5" />
+                            <button
+                              onClick={handleUndo}
+                              disabled={historyIndex <= 0}
+                              className="p-3 rounded hover:bg-white/10 text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent transition-colors group"
+                            >
+                              <Undo2 className="w-4 h-4 pointer-events-none" />
+                            </button>
+                            <button
+                              onClick={handleRedo}
+                              disabled={historyIndex >= history.length - 1}
+                              className="p-3 rounded hover:bg-white/10 text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent transition-colors group"
+                            >
+                              <Redo2 className="w-4 h-4 pointer-events-none" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {isBrushActive && (
+                          <div className="flex items-center gap-3 pl-2 animate-in fade-in slide-in-from-top-1 bg-black/20 p-2 rounded-lg border border-white/5">
+                            <span className="text-[9px] font-bold text-gray-500 w-8 text-right">{brushSize}px</span>
+                            <input
+                              type="range"
+                              min="1"
+                              max="100"
+                              value={brushSize}
+                              onChange={(e) => setBrushSize(parseInt(e.target.value))}
+                              onMouseDown={(e) => e.stopPropagation()}
+                              className="flex-grow h-1.5 bg-gray-700 rounded-full appearance-none cursor-pointer accent-blue-500"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="flex flex-col items-center justify-center py-10 opacity-30 text-center">
+                      <Eraser className="w-8 h-8 mb-2" />
+                      <span className="text-[10px] font-bold uppercase tracking-widest block max-w-[150px] leading-relaxed">Enable "Remove BG" to access tools</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="p-4 border-t border-white/10 bg-[#09090b]/50 shrink-0 space-y-3">
+                  <button onClick={handleAddToCast} className="w-full bg-emerald-500/10 hover:bg-emerald-500 text-emerald-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-emerald-500/20 hover:shadow-[0_0_15px_rgba(16,185,129,0.4)] text-[10px] font-black uppercase tracking-wider" title="Add to Session Cast">
+                    <UserPlus className="w-4 h-4" /> Add to Cast
                   </button>
-                  <button onClick={handleDownload} className="w-16 h-16 bg-blue-600/10 hover:bg-blue-600 text-blue-500 hover:text-white rounded-2xl transition-all flex items-center justify-center border border-blue-500/20 hover:shadow-[0_0_15px_rgba(37,99,235,0.4)]">
-                    <Download className="w-8 h-8" />
-                  </button>
-                  <button onClick={() => dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: null })} className="w-16 h-16 bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white rounded-2xl transition-all flex items-center justify-center border border-red-500/20 hover:shadow-[0_0_15px_rgba(239,68,68,0.4)]">
-                    <X className="w-8 h-8" />
-                  </button>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button onClick={handleDownload} className="w-full bg-blue-600/10 hover:bg-blue-600 text-blue-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-blue-500/20 hover:shadow-[0_0_15px_rgba(37,99,235,0.4)] text-[10px] font-black uppercase tracking-wider">
+                      <Download className="w-4 h-4" /> Save
+                    </button>
+                    <button onClick={() => dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: null })} className="w-full bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-red-500/20 hover:shadow-[0_0_15px_rgba(239,68,68,0.4)] text-[10px] font-black uppercase tracking-wider">
+                      <X className="w-4 h-4" /> Clear
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
-
-            {isCropping && cropRect && (
-              <div
-                className="absolute border-2 border-yellow-500 bg-yellow-500/20 pointer-events-none"
-                style={{ left: cropRect.x, top: cropRect.y, width: cropRect.w, height: cropRect.h }}
-              >
-                <div onMouseDown={(e) => startInteraction(e, 'nw')} className="absolute -top-1.5 -left-1.5 w-3 h-3 bg-white border border-black cursor-nwse-resize pointer-events-auto z-50"></div>
-                <div onMouseDown={(e) => startInteraction(e, 'ne')} className="absolute -top-1.5 -right-1.5 w-3 h-3 bg-white border border-black cursor-nesw-resize pointer-events-auto z-50"></div>
-                <div onMouseDown={(e) => startInteraction(e, 'sw')} className="absolute -bottom-1.5 -left-1.5 w-3 h-3 bg-white border border-black cursor-nesw-resize pointer-events-auto z-50"></div>
-                <div onMouseDown={(e) => startInteraction(e, 'se')} className="absolute -bottom-1.5 -right-1.5 w-3 h-3 bg-white border border-black cursor-nwse-resize pointer-events-auto z-50"></div>
-
-                {cropRect.w > 20 && (
-                  <div className={`absolute flex gap-1 pointer-events-auto z-40 ${tagsClass}`}>
-                    {['front', 'side', '3/4', 'back'].map((tag: any) => (
-                      <button key={tag} onMouseDown={(e) => { e.stopPropagation(); finalizeCrop(); }} className="bg-[#18181b] text-white text-[10px] px-2 py-1 rounded border border-gray-600 hover:bg-yellow-500 hover:text-black uppercase font-bold">
-                        {tag}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-            <canvas ref={previewCanvasRef} className="hidden" />
           </div>
         </div>
       </div >

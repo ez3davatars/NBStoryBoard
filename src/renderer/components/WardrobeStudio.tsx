@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
-import type { WardrobeItem, CastMember } from '../context/AppContext';
+import type { WardrobeItem, CastMember, WardrobeState } from '../context/AppContext';
 import { nativeJoinPath, nativeListFiles, nativeReadFile, nativeWriteFile } from '../utils/NativeFileAssets';
 import { removeBackground } from "@imgly/background-removal";
 // Style Imports for Save Modal
@@ -23,40 +23,45 @@ import InlineHint from './ui/InlineHint';
 const WardrobeStudio = () => {
   const { state, dispatch } = useAppContext();
   const [activeTab, setActiveTab] = useState<'designer' | 'library'>('designer');
+  // GLOBAL STATE MAPPING
+  const { fittedImage, tryOnMask, restorationLayer, removeBg: removeTryOnBg, fringeSize, brushSize, history, historyIndex, isBrushActive: globalIsBrushActive, tryOnNote, processedTryOnUrl } = state.wardrobeState;
+
+  // Local Helper to update global state
+  const updateState = (updates: Partial<WardrobeState>) => {
+    dispatch({ type: 'SET_WARDROBE_STATE', payload: updates });
+  };
+
+  // Alias for setters (to minimize code churn)
+  const setFittedImage = (val: string | null) => updateState({ fittedImage: val });
+  const setTryOnMask = (val: string | null) => updateState({ tryOnMask: val });
+  const setRestorationLayer = (val: string | null) => updateState({ restorationLayer: val });
+  const setRemoveTryOnBg = (val: boolean) => updateState({ removeBg: val });
+  const setFringeSize = (val: number) => updateState({ fringeSize: val });
+  const setBrushSize = (val: number) => updateState({ brushSize: val });
+  const setHistory = (val: string[]) => updateState({ history: val });
+  const setHistoryIndex = (val: number) => updateState({ historyIndex: val });
+  const setIsBrushActive = (val: boolean) => updateState({ isBrushActive: val });
+  const setTryOnNote = (val: string) => updateState({ tryOnNote: val });
+  const setProcessedTryOnUrl = (val: string | null) => updateState({ processedTryOnUrl: val });
+
+  // Use global isBrushActive
+  const isBrushActive = globalIsBrushActive;
+
+  // Local Transient State
   const [designerPrompt, setDesignerPrompt] = useState("");
   const [designerImage, setDesignerImage] = useState<string | null>(null);
   const [designerMask, setDesignerMask] = useState<string | null>(null);
   const [selectedCostume, setSelectedCostume] = useState<WardrobeItem | null>(null);
   const [selectedCharacter, setSelectedCharacter] = useState<CastMember | null>(null);
-  const [fittedImage, setFittedImage] = useState<string | null>(null);
-  const [tryOnNote, setTryOnNote] = useState("");
-  const [tryOnMask, setTryOnMask] = useState<string | null>(null);
 
-  // Try-On Removal State
-  // Try-On Removal State (Advanced Port from CastingForge)
-  const [removeTryOnBg, setRemoveTryOnBg] = useState(false);
-  // const [tryOnAiMaskActive, setTryOnAiMaskActive] = useState(true); // Deprecated
-
-  // Advanced Composition State
-  const [fringeSize, setFringeSize] = useState(0);
+  // Derived / Transient
   const [erodedUrl, setErodedUrl] = useState<string | null>(null);
-  const [restorationLayer, setRestorationLayer] = useState<string | null>(null);
-  const [processedTryOnUrl, setProcessedTryOnUrl] = useState<string | null>(null);
-
-  // Manual Restoration Tools
-  const [isBrushActive, setIsBrushActive] = useState(false);
-  const [brushSize, setBrushSize] = useState(20);
-  const [history, setHistory] = useState<string[]>([]);
-  const [historyIndex, setHistoryIndex] = useState(-1);
-
-  // Isolation Progress State (Ported from CastingForge)
+  // processedTryOnUrl is now global
   const [isIsolating, setIsIsolating] = useState(false);
   const [isolationProgress, setIsolationProgress] = useState(0);
 
   // Draggable Panel State
-  const [panelPosition, setPanelPosition] = useState<{ x: number, y: number } | null>(null);
-  const [isDraggingPanel, setIsDraggingPanel] = useState(false);
-  const [panelDragOffset, setPanelDragOffset] = useState({ x: 0, y: 0 });
+  // Draggable Panel State Removed
 
   // Refs
   const tryOnImgRef = useRef<HTMLImageElement>(null); // The Base Image (Fitted)
@@ -213,11 +218,16 @@ const WardrobeStudio = () => {
   };
   const uiCanvasRef = useRef<HTMLCanvasElement>(null); // For Brush Cursor
   const restorationCanvasRef = useRef<HTMLCanvasElement>(null); // Offscreen Layer
-  const panelDimRef = useRef({ w: 0, h: 0 });
   const tryOnCanvasRef = useRef<HTMLCanvasElement>(null); // Internal Processing Canvas
   const historyRef = useRef<string[]>([]);
   const historyIndexRef = useRef(-1);
   const isPaintingRef = useRef(false);
+
+  // SYNC REFS WITH GLOBAL STATE ON MOUNT / CHANGE
+  useEffect(() => {
+    historyRef.current = history;
+    historyIndexRef.current = historyIndex;
+  }, [history, historyIndex]);
   const isSyncingRef = useRef(false); // Track async canvas sync state
   const syncRequestId = useRef(0); // Track migration/sync requests to avoid race conditions
   const lastPaintPos = useRef<{ x: number, y: number } | null>(null);
@@ -252,17 +262,7 @@ const WardrobeStudio = () => {
         const w = canvas.width;
         const h = canvas.height;
 
-        // GREEN SUPPRESSION PASS (Fixes internal islands that Imgly misses)
-        // #39FF14 = R:57, G:255, B:20
-        for (let j = 0; j < data.length; j += 4) {
-          const r = data[j];
-          const g = data[j + 1];
-          const b = data[j + 2];
-          // Strict Neon Green Detection (approx #39FF14)
-          if (g > 180 && r < 120 && b < 120) {
-            data[j + 3] = 0; // Set Alpha to 0
-          }
-        }
+        // GREEN SUPPRESSION PASS REMOVED (Was causing artifacts on green costumes)
 
         // Create a copy for reading so we don't read already-modified pixels
         const originalAlphaArr = new Uint8Array(w * h);
@@ -636,41 +636,7 @@ const WardrobeStudio = () => {
     }
   };
 
-  const handlePanelMouseDown = (e: React.MouseEvent) => {
-    e.stopPropagation();
-
-    // prevent drag if interacting with controls
-    const target = e.target as HTMLElement;
-    if (['INPUT', 'BUTTON', 'LABEL'].includes(target.tagName) || target.closest('button') || target.closest('label')) {
-      return;
-    }
-
-    e.preventDefault();
-
-    if (!containerRef.current) return;
-
-    // Use currentTarget to get the card itself
-    const panel = e.currentTarget as HTMLElement;
-    const panelRect = panel.getBoundingClientRect();
-    const containerRect = containerRef.current.getBoundingClientRect();
-
-    // Store Panel Dimensions for Boundary Checks
-    panelDimRef.current = { w: panelRect.width, h: panelRect.height };
-
-    const offsetX = e.clientX - panelRect.left;
-    const offsetY = e.clientY - panelRect.top;
-
-    setPanelDragOffset({ x: offsetX, y: offsetY });
-    setIsDraggingPanel(true);
-
-    const borderLeft = containerRef.current.clientLeft || 0;
-    const borderTop = containerRef.current.clientTop || 0;
-
-    setPanelPosition({
-      x: panelRect.left - containerRect.left - borderLeft,
-      y: panelRect.top - containerRect.top - borderTop
-    });
-  };
+  // handlePanelMouseDown removed
 
 
   // MOUSE TO IMAGE COORDINATE MAPPER
@@ -685,29 +651,66 @@ const WardrobeStudio = () => {
     if (!containerRef.current || !activeImg) return null;
 
     // 2. Get Geometries
-    const container = containerRef.current;
-    const containerRect = container.getBoundingClientRect();
-    const imgRect = activeImg.getBoundingClientRect();
+
+    // We need the ACTUAL rendered dimensions of the image content within the object-fit: contain element
+    // standard getBoundingClientRect on the img tag returns the ELEMENT size (w-full h-full), not the content size
+    const naturalW = activeImg.naturalWidth;
+    const naturalH = activeImg.naturalHeight;
+    const elemW = activeImg.offsetWidth;
+    const elemH = activeImg.offsetHeight;
+
+    const imgRatio = naturalW / naturalH;
+    const containerRatio = elemW / elemH;
+
+    let renderedW, renderedH, renderedLeft, renderedTop;
+
+    if (containerRatio > imgRatio) {
+      // Container is wider than image -> Pillarbox (empty left/right)
+      // Image height matches container height
+      renderedH = elemH;
+      renderedW = elemH * imgRatio;
+      renderedTop = 0;
+      renderedLeft = (elemW - renderedW) / 2;
+    } else {
+      // Container is taller than image -> Letterbox (empty top/bottom)
+      // Image width matches container width
+      renderedW = elemW;
+      renderedH = elemW / imgRatio;
+      renderedLeft = 0;
+      renderedTop = (elemH - renderedH) / 2;
+    }
 
     // 3. Calculate Image Coordinates
-    // relative to the IMAGE element's top-left
-    const mouseX = clientX - imgRect.left;
-    const mouseY = clientY - imgRect.top;
+    // Adjust mouse position by the rendered offset
+    // relative to the activeImg element
+    const imgElementRect = activeImg.getBoundingClientRect();
+    const clientXRelToImg = clientX - imgElementRect.left;
+    const clientYRelToImg = clientY - imgElementRect.top;
+
+    const mouseX = clientXRelToImg - renderedLeft;
+    const mouseY = clientYRelToImg - renderedTop;
 
     // 4. Scale to Natural Dimensions
-    const scale = activeImg.naturalWidth / imgRect.width;
+    const scale = naturalW / renderedW;
 
     // 5. Calculate UI Screen Coordinates (for Cursor Dot)
-    const borderLeft = container.clientLeft || 0;
-    const borderTop = container.clientTop || 0;
-    const screenX = clientX - containerRect.left - borderLeft;
-    const screenY = clientY - containerRect.top - borderTop;
+    // We want the cursor dot to track the mouse EXACTLY
+    // But we should clamp or hide it if outside the image? 
+    // For now, let's just track the mouse on screen relative to canvas
+    let screenX = 0;
+    let screenY = 0;
+
+    if (uiCanvasRef.current) {
+      const canvasRect = uiCanvasRef.current.getBoundingClientRect();
+      screenX = clientX - canvasRect.left;
+      screenY = clientY - canvasRect.top;
+    }
 
     return {
       x: mouseX * scale,
       y: mouseY * scale,
-      w: activeImg.naturalWidth,
-      h: activeImg.naturalHeight,
+      w: naturalW,
+      h: naturalH,
       scale: scale,
       screenX: screenX,
       screenY: screenY,
@@ -717,7 +720,7 @@ const WardrobeStudio = () => {
   const startInteraction = (e: React.MouseEvent) => {
     // Block interaction if canvas is syncing (prevent race conditions)
     if (isSyncingRef.current) return;
-    if (isDraggingPanel) return;
+    // Drag check removed
 
     if (!isBrushActive || !tryOnImgRef.current) return;
 
@@ -785,23 +788,7 @@ const WardrobeStudio = () => {
     if (!containerRef.current) return;
 
     // PANEL DRAG (Priority)
-    if (isDraggingPanel) {
-      const containerRect = containerRef.current.getBoundingClientRect();
-      let newX = e.clientX - containerRect.left - panelDragOffset.x;
-      let newY = e.clientY - containerRect.top - panelDragOffset.y;
-
-      const pW = panelDimRef.current.w || 320;
-      const pH = panelDimRef.current.h || 400;
-
-      const maxX = containerRect.width - pW;
-      const maxY = containerRect.height - pH;
-
-      newX = Math.max(0, Math.min(newX, maxX));
-      newY = Math.max(0, Math.min(newY, maxY));
-
-      setPanelPosition({ x: newX, y: newY });
-      return;
-    }
+    // Panel Drag Logic removed
 
     if (isBrushActive) {
       const coords = getImgCoords(e.clientX, e.clientY);
@@ -839,7 +826,7 @@ const WardrobeStudio = () => {
   };
 
   const endInteraction = () => {
-    setIsDraggingPanel(false); // Stop dragging
+    // Drag state removed
 
     // Commit Painting
     if (isPaintingRef.current && restorationCanvasRef.current) {
@@ -1093,26 +1080,42 @@ const WardrobeStudio = () => {
          [IMAGE 1] is the target SUBJECT. 
          [IMAGE 2] is the standalone COSTUME ASSET to fit.
          
-         PRIMARY DIRECTIVE:
-         WEAR THE COSTUME. The subject from [IMAGE 1] must be WEARING the clothing from [IMAGE 2].
-         Create a natural, realistic fit. The clothing must drape, fold, and stretch according to the subject's body pose.
-         
-         CRITICAL RULES FOR SINGLE_SUBJECT OUTPUT:
-         1. **SOLITARY SUBJECT ONLY**: The output must contain EXACTLY ONE PERSON. 
-         2. **NO MANNEQUINS**: Do NOT include mannequins, dress forms, or clothing racks.
-         3. **NO REFERENCE DISPLAY**: Do NOT show the costume floating next to the person. 
-         4. **NO SPLIT SCREENS**: Do NOT create a before/after split or reference sheet.
-         5. **BACKGROUND**: Use a SOLID NEON GREEN background (#39FF14).
+         1. IDENTITY LOCK — SUBJECT
+            - Preserve the exact facial identity of [IMAGE 1].
+            - Same face, same person, same likeness.
+            - No facial morphing, no age change, no style change.
 
-         EXECUTION DETAILS:
-         1. **INTEGRATION & FIT**: The costume must respect the subject's anatomy. If [IMAGE 2] is a mascot/oversized suit, the subject is INSIDE it. No "floating heads" on top of suits.
-         2. **COSTUME FIDELITY**: Transfer the EXACT textures/logos from [IMAGE 2].
-         3. **SUBJECT PRESERVATION**: Maintain facial identity and body proportions from [IMAGE 1].
-         4. **FULL BODY**: Generate a FULL BODY shot. Hands and feet must be visible and wearing the appropriate parts of the costume (gloves/shoes).
-         5. ${tryOnNote || "Clean professional studio fitting."}
-         
+         2. CLEAN SLATE — SUBJECT PREPARATION
+            - Remove all existing clothing, headwear, goggles, helmets, accessories, and props from [IMAGE 1].
+            - Use only the actor’s face, skin, and basic body volume as the internal wearer.
+
+         3. RIGID COSTUME SILHOUETTE LOCK
+            - Treat [IMAGE 2] as a rigid, non-deformable mascot costume.
+            - Do NOT elongate, slim, stretch, taper, or reshape the costume.
+            - Preserve the exact chunky proportions, neck thickness, and head size of the costume.
+            - The costume is NOT allowed to adapt to the subject.
+
+         4. PROPORTIONAL FITTING (CRITICAL)
+            - The subject is placed INSIDE the costume.
+            - The subject must adapt to the costume’s fixed geometry.
+            - The neck opening must NOT be enlarged or stretched vertically.
+            - No "long neck", "tube neck", or "bridging" artifacts.
+
+         5. COSTUME FIDELITY
+            - Copy the costume exactly as shown in [IMAGE 2].
+            - Maintain original textures, colors, belly patch, and shape.
+            - Mascot head remains large and hollow.
+
+         6. COMPOSITION
+            - Single subject only.
+            - Full body visible.
+            - Do not crop the top of the head or feet.
+            - Solid white background (#FFFFFF).
+
          NEGATIVE CONSTRAINTS:
-         floating head, disembodied head, bad integration, bad fit, mannequin, plastic dummy, dress form, floating clothes, ghost outfit, split view, side by side, reference sheet, grid, collage, text, watermarks, bad anatomy, extra limbs, cropped head, cropped feet.`,
+         original accessories from [IMAGE 1], human shoes, floating head,
+         elongated neck, stretched costume, mannequin, reference panels,
+         text, watermark, extra limbs, cropped anatomy.`,
         state.apiKey,
         state.model,
         [
@@ -1134,8 +1137,8 @@ const WardrobeStudio = () => {
   };
 
   const handleAddToCast = async () => {
-    const freshUrl = await runTryOnIsolation();
-    const finalUrl = freshUrl || processedTryOnUrl || fittedImage;
+    // Strictly use the current visual state. No new processing.
+    const finalUrl = processedTryOnUrl || fittedImage;
     if (!finalUrl || !selectedCharacter) return;
     const newMember: CastMember = {
       id: `fitted-${Date.now()}`,
@@ -1252,7 +1255,7 @@ const WardrobeStudio = () => {
           </button>
         </div>
 
-        <div className="flex-grow overflow-y-auto p-8">
+        <div className={`flex-grow ${activeTab === 'designer' ? 'overflow-y-auto p-8' : 'overflow-hidden p-4 flex flex-col'}`}>
           {activeTab === 'designer' ? (
             <div className="max-w-4xl mx-auto grid grid-cols-2 gap-8">
               <div className="space-y-6">
@@ -1337,12 +1340,12 @@ const WardrobeStudio = () => {
               </div>
             </div>
           ) : (
-            <div className="max-w-6xl mx-auto grid grid-cols-12 gap-8">
+            <div className="w-full h-full flex gap-4">
               {/* SELECTOR COLUMN */}
-              <div className="col-span-4 space-y-6">
-                <div className="bg-[#18181b] p-6 rounded-2xl border border-gray-800 shadow-xl">
-                  <h3 className="text-xs font-black text-gray-400 uppercase mb-4 tracking-widest">1. Selected Subject</h3>
-                  <div className="grid grid-cols-4 gap-2 mb-6 h-32 overflow-y-auto p-2">
+              <div className="w-80 shrink-0 flex flex-col space-y-4 h-full overflow-hidden">
+                <div className="bg-[#18181b] p-4 rounded-2xl border border-gray-800 shadow-xl flex flex-col h-full overflow-hidden">
+                  <h3 className="text-xs font-black text-gray-400 uppercase mb-2 tracking-widest flex-shrink-0">1. Selected Subject</h3>
+                  <div className="grid grid-cols-4 gap-2 mb-4 h-32 overflow-y-auto p-2 flex-shrink-0 border border-gray-800/50 rounded-lg bg-black/20">
                     {state.cast.map(c => (
                       <button
                         key={c.id}
@@ -1353,46 +1356,48 @@ const WardrobeStudio = () => {
                       </button>
                     ))}
                     {state.cast.length === 0 && (
-                      <div className="col-span-4 py-8 text-center text-[10px] text-gray-600 uppercase font-bold">No Cast Members Available</div>
+                      <div className="col-span-4 py-8 text-center text-[10px] text-gray-600 uppercase font-bold">No Cast</div>
                     )}
                   </div>
 
-                  <h3 className="text-xs font-black text-gray-400 uppercase mb-4 tracking-widest border-t border-gray-800 pt-6">2. Active Wardrobe</h3>
-                  <div className="aspect-square bg-[#09090b] rounded-xl border border-gray-800 mb-6 flex items-center justify-center overflow-hidden">
+                  <h3 className="text-xs font-black text-gray-400 uppercase mb-2 tracking-widest border-t border-gray-800 pt-4 flex-shrink-0">2. Active Wardrobe</h3>
+                  <div className="bg-[#09090b] rounded-xl border border-gray-800 mb-4 flex-grow min-h-0 flex items-center justify-center overflow-hidden">
                     {selectedCostume ? (
-                      <img src={selectedCostume.url} className="w-full h-full object-contain" />
+                      <img src={selectedCostume.url} className="w-full h-full object-contain p-2" />
                     ) : (
                       <Shirt className="w-10 h-10 opacity-10" />
                     )}
                   </div>
 
-                  <h3 className="text-xs font-black text-gray-400 uppercase mb-4 tracking-widest border-t border-gray-800 pt-6">3. Fitting Notes</h3>
+                  <h3 className="text-xs font-black text-gray-400 uppercase mb-2 tracking-widest border-t border-gray-800 pt-4 flex-shrink-0">3. Fitting Notes</h3>
                   <textarea
-                    className="w-full bg-[#09090b] border border-[#27272a] p-3 rounded-lg text-xs text-gray-300 h-20 resize-none mb-4 focus:border-yellow-500 focus:outline-none"
-                    placeholder="Optional: adjust the fit (e.g. 'heavy battle damage')..."
+                    className="w-full bg-[#09090b] border border-[#27272a] p-3 rounded-lg text-xs text-gray-300 h-16 resize-none mb-2 focus:border-yellow-500 focus:outline-none flex-shrink-0"
+                    placeholder="Optional: adjust the fit..."
                     value={tryOnNote}
                     onChange={(e) => setTryOnNote(e.target.value)}
                   />
 
-                  <button
-                    onClick={handleTryOn}
-                    disabled={state.isProcessing || !selectedCharacter || !selectedCostume}
-                    className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white py-4 rounded-xl font-black text-[10px] uppercase tracking-[0.3em] shadow-xl shadow-blue-500/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Execute Virtual Try-On
-                  </button>
+                  <div className="mt-auto pt-2 border-t border-gray-800 flex-shrink-0">
+                    <button
+                      onClick={handleTryOn}
+                      disabled={state.isProcessing || !selectedCharacter || !selectedCostume}
+                      className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white py-3 rounded-xl font-black text-[10px] uppercase tracking-[0.3em] shadow-xl shadow-blue-500/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Execute Virtual Try-On
+                    </button>
+                  </div>
                 </div>
               </div>
 
               {/* RESULT COLUMN */}
-              <div className="col-span-8">
+              <div className="flex-grow flex flex-row bg-[#09090b] rounded-2xl overflow-hidden border border-gray-800 shadow-xl relative min-w-0">
                 <div
                   ref={containerRef}
                   onMouseDown={startInteraction}
                   onMouseMove={moveInteraction}
                   onMouseUp={endInteraction}
                   onMouseLeave={endInteraction}
-                  className="aspect-square bg-black flex items-center justify-center overflow-hidden relative group border-4 border-blue-500/30 rounded-2xl m-2 shadow-[0_0_30px_rgba(59,130,246,0.1)] cursor-crosshair"
+                  className="flex-grow h-full bg-black flex items-center justify-center overflow-hidden relative group cursor-crosshair"
                 >
                   {fittedImage ? (
                     <>
@@ -1441,32 +1446,30 @@ const WardrobeStudio = () => {
                     </div>
                   </div>
 
-                  {fittedImage && (
-                    <div
-                      onMouseDown={handlePanelMouseDown}
-                      style={panelPosition ? { left: panelPosition.x, top: panelPosition.y, right: 'auto' } : undefined}
-                      className={`absolute ${!panelPosition ? 'top-6 right-6' : ''} flex flex-col gap-3 z-20 bg-black/60 p-4 rounded-3xl border border-white/10 backdrop-blur-md shadow-2xl w-80`}
-                    >
-                      <div className="flex items-center justify-between pb-3 border-b border-white/5">
-                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-2 cursor-pointer hover:text-white transition-colors">
-                          <input
-                            type="checkbox"
-                            checked={removeTryOnBg}
-                            onChange={(e) => setRemoveTryOnBg(e.target.checked)}
-                            className="w-4 h-4 accent-blue-500 rounded border-white/10 bg-black"
-                          />
-                          <Eraser className="w-3.5 h-3.5" /> Remove Background
-                        </label>
-                      </div>
+                </div>
 
-                      {removeTryOnBg && (
-                        <div className="pt-2 border-t border-white/5 space-y-3">
-                          {/* SECTION 1: EDGE REFINEMENT */}
-                          <div className="space-y-2">
+                {fittedImage && (
+                  <div className="w-80 shrink-0 border-l border-white/10 bg-[#18181b]/50 h-full flex flex-col animate-in slide-in-from-right-10 duration-300">
+                    <div className="p-4 border-b border-white/10 flex items-center justify-between shrink-0">
+                      <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-400">Image Adjustments</h3>
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-2 cursor-pointer select-none hover:text-white transition-colors">
+                        <input
+                          type="checkbox"
+                          checked={removeTryOnBg}
+                          onChange={(e) => setRemoveTryOnBg(e.target.checked)}
+                          className="w-4 h-4 accent-blue-500 rounded border-white/10 bg-black cursor-pointer"
+                        />
+                        <Eraser className="w-3.5 h-3.5" /> Remove BG
+                      </label>
+                    </div>
+
+                    <div className="flex-grow overflow-y-auto p-4 space-y-6 scrollbar-thin scrollbar-thumb-gray-800 scrollbar-track-transparent">
+                      {removeTryOnBg ? (
+                        <>
+                          <div className="space-y-3">
                             <div className="flex items-center justify-between">
                               <span className="text-[9px] font-black text-gray-500 uppercase tracking-widest">Edge Refinement</span>
 
-                              {/* Status Badge */}
                               {tryOnMask ? (
                                 <div className="flex items-center gap-1.5 text-blue-400">
                                   <CheckCircle2 className="w-3 h-3" />
@@ -1482,8 +1485,7 @@ const WardrobeStudio = () => {
                               )}
                             </div>
 
-                            {/* Fringe Slider */}
-                            <div className="flex items-center gap-3">
+                            <div className="flex items-center gap-3 bg-black/20 p-2 rounded-lg border border-white/5">
                               <span className="text-[10px] text-gray-400 font-bold w-8 text-right">{fringeSize}px</span>
                               <input
                                 type="range"
@@ -1497,14 +1499,11 @@ const WardrobeStudio = () => {
                             </div>
                           </div>
 
-                          {/* MANUAL RESTORATION */}
-                          <div className="py-2 border-t border-white/5 space-y-3">
+                          <div className="pt-4 border-t border-white/5 space-y-3">
                             <div className="flex flex-col w-full gap-2">
                               <span className="text-[9px] font-black text-gray-500 uppercase tracking-widest leading-none">Restore</span>
                               <HelpTooltip zone="wardrobe" id="restorationTools">
                                 <div className="w-full flex items-center justify-between gap-1 bg-black/40 rounded-lg p-1 border border-white/10">
-                                  {/* HISTORY COUNTER (DEBUG/UX) */}
-                                  {/* REFACTORED HISTORY CONTROLS */}
                                   <div className="relative group/history">
                                     <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-black border border-gray-700 px-2 py-1 rounded text-[9px] text-gray-300 opacity-0 group-hover/history:opacity-100 pointer-events-none transition-opacity whitespace-nowrap z-50">
                                       History State: {historyIndex}
@@ -1544,7 +1543,7 @@ const WardrobeStudio = () => {
                             </div>
 
                             {isBrushActive && (
-                              <div className="flex items-center gap-3 pl-2 animate-in fade-in slide-in-from-top-1">
+                              <div className="flex items-center gap-3 pl-2 animate-in fade-in slide-in-from-top-1 bg-black/20 p-2 rounded-lg border border-white/5">
                                 <span className="text-[9px] font-bold text-gray-500 w-8 text-right">{brushSize}px</span>
                                 <input
                                   type="range"
@@ -1558,26 +1557,45 @@ const WardrobeStudio = () => {
                               </div>
                             )}
                           </div>
-                          {/* ACTIONS */}
-                          <div className="flex items-center justify-center gap-3 pt-4 border-t border-white/5 mt-auto">
-                            <button onClick={handleAddToCast} className="w-16 h-16 bg-emerald-500/10 hover:bg-emerald-500 text-emerald-500 hover:text-white rounded-2xl transition-all flex items-center justify-center border border-emerald-500/20 hover:shadow-[0_0_15px_rgba(16,185,129,0.4)]" title="Add to Session Cast">
-                              <UserPlus className="w-8 h-8" />
-                            </button>
-                            <button onClick={handleOpenSaveModal} className="w-16 h-16 bg-purple-500/10 hover:bg-purple-500 text-purple-500 hover:text-white rounded-2xl transition-all flex items-center justify-center border border-purple-500/20 hover:shadow-[0_0_15px_rgba(168,85,247,0.4)]" title="Save to Actor Library">
-                              <FolderPlus className="w-8 h-8" />
-                            </button>
-                            <button onClick={() => downloadImage(processedTryOnUrl || fittedImage!, `fitted-${selectedCharacter?.name || 'character'}.png`)} className="w-16 h-16 bg-blue-600/10 hover:bg-blue-600 text-blue-500 hover:text-white rounded-2xl transition-all flex items-center justify-center border border-blue-500/20 hover:shadow-[0_0_15px_rgba(37,99,235,0.4)]" title="Download">
-                              <Download className="w-8 h-8" />
-                            </button>
-                            <button onClick={() => { setFittedImage(null); purgeRestorationState(); }} className="w-16 h-16 bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white rounded-2xl transition-all flex items-center justify-center border border-red-500/20 hover:shadow-[0_0_15px_rgba(239,68,68,0.4)]" title="Clear/Discard">
-                              <X className="w-8 h-8" />
-                            </button>
-                          </div>
+                        </>
+                      ) : (
+                        <div className="flex flex-col items-center justify-center py-10 opacity-30 text-center">
+                          <Eraser className="w-8 h-8 mb-2" />
+                          <span className="text-[10px] font-bold uppercase tracking-widest block max-w-[150px] leading-relaxed">Enable "Remove BG" to access tools</span>
                         </div>
                       )}
                     </div>
-                  )}
-                </div>
+
+                    <div className="p-4 border-t border-white/10 bg-[#09090b]/50 shrink-0 space-y-3">
+                      <button onClick={handleAddToCast} className="w-full bg-emerald-500/10 hover:bg-emerald-500 text-emerald-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-emerald-500/20 hover:shadow-[0_0_15px_rgba(16,185,129,0.4)] text-[10px] font-black uppercase tracking-wider" title="Add to Session Cast">
+                        <UserPlus className="w-4 h-4" /> Add to Cast
+                      </button>
+
+                      <button onClick={handleOpenSaveModal} className="w-full bg-purple-500/10 hover:bg-purple-500 text-purple-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-purple-500/20 hover:shadow-[0_0_15px_rgba(168,85,247,0.4)] text-[10px] font-black uppercase tracking-wider" title="Save to Actor Library">
+                        <FolderPlus className="w-4 h-4" /> Save to Library
+                      </button>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <button onClick={() => downloadImage(processedTryOnUrl || fittedImage!, `fitted-${selectedCharacter?.name || 'character'}.png`)} className="w-full bg-blue-600/10 hover:bg-blue-600 text-blue-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-blue-500/20 hover:shadow-[0_0_15px_rgba(37,99,235,0.4)] text-[10px] font-black uppercase tracking-wider" title="Download">
+                          <Download className="w-4 h-4" /> Save
+                        </button>
+                        <button onClick={() => {
+                          updateState({
+                            fittedImage: null,
+                            tryOnMask: null,
+                            restorationLayer: null,
+                            removeBg: false,
+                            history: [],
+                            historyIndex: -1,
+                            processedTryOnUrl: null
+                          });
+                        }} className="w-full bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-red-500/20 hover:shadow-[0_0_15px_rgba(239,68,68,0.4)] text-[10px] font-black uppercase tracking-wider" title="Clear/Discard">
+                          <X className="w-4 h-4" /> Clear
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -1631,7 +1649,7 @@ const WardrobeStudio = () => {
           scifi: styleScifi
         }}
       />
-    </div>
+    </div >
   );
 };
 
