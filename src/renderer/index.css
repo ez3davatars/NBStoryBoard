@@ -15,16 +15,24 @@
   -moz-osx-font-smoothing: grayscale;
 
   /* Semantic Palette: NanoBanana Pro (Gold/Blue/Dark) */
-  --color-bg: #09090b; /* Zinc 950 - Deepest Black */
-  --color-surface: #18181b; /* Zinc 900 - Surface */
-  --color-surface-2: #27272a; /* Zinc 800 - Highlight Surface */
-  --color-border: #3f3f46; /* Zinc 700 */
-  
-  --color-fg: #fafafa; /* Zinc 50 */
-  --color-muted: #a1a1aa; /* Zinc 400 */
+  --color-bg: #09090b;
+  /* Zinc 950 - Deepest Black */
+  --color-surface: #18181b;
+  /* Zinc 900 - Surface */
+  --color-surface-2: #27272a;
+  /* Zinc 800 - Highlight Surface */
+  --color-border: #3f3f46;
+  /* Zinc 700 */
 
-  --color-accent: #facc15; /* Yellow 400 - Banana Gold (Primary) */
-  --color-accent-2: #3b82f6; /* Blue 500 - Electric Blue (Secondary) */
+  --color-fg: #fafafa;
+  /* Zinc 50 */
+  --color-muted: #a1a1aa;
+  /* Zinc 400 */
+
+  --color-accent: #facc15;
+  /* Yellow 400 - Banana Gold (Primary) */
+  --color-accent-2: #3b82f6;
+  /* Blue 500 - Electric Blue (Secondary) */
 
   --color-success: #22c55e;
   --color-warning: #f59e0b;
@@ -54,6 +62,7 @@ a {
   color: #646cff;
   text-decoration: inherit;
 }
+
 a:hover {
   color: #535bf2;
 }
@@ -80,9 +89,11 @@ button {
   cursor: pointer;
   transition: border-color 0.25s;
 }
+
 button:hover {
   border-color: #646cff;
 }
+
 button:focus,
 button:focus-visible {
   outline: 4px auto -webkit-focus-ring-color;
@@ -93,9 +104,11 @@ button:focus-visible {
     color: #213547;
     background-color: #ffffff;
   }
+
   a:hover {
     color: #747bff;
   }
+
   button {
     background-color: #f9f9f9;
   }
@@ -106,30 +119,39 @@ button:focus-visible {
   from {
     transform: rotate(0deg);
   }
+
   to {
     transform: rotate(-360deg);
   }
 }
 
 @keyframes bounce-slow {
-  0%, 100% {
+
+  0%,
+  100% {
     transform: translateY(0);
   }
+
   50% {
     transform: translateY(-10px);
   }
 }
 
 @keyframes float {
-  0%, 100% {
+
+  0%,
+  100% {
     transform: translate(0, 0) rotate(0deg);
   }
+
   25% {
     transform: translate(2px, -2px) rotate(1deg);
   }
+
   50% {
     transform: translate(-1px, 2px) rotate(-1deg);
   }
+
   75% {
     transform: translate(-2px, -1px) rotate(0.5deg);
   }
@@ -152,36 +174,67 @@ button:focus-visible {
   width: 8px;
   height: 8px;
 }
+
 ::-webkit-scrollbar-track {
   background: #18181b;
 }
+
 ::-webkit-scrollbar-thumb {
   background: #eab308;
   border-radius: 4px;
 }
+
 ::-webkit-scrollbar-thumb:hover {
   background: #ca8a04;
 }
+
 @keyframes shimmer {
-  0% { transform: translateX(-100%); }
-  100% { transform: translateX(100%); }
+  0% {
+    transform: translateX(-100%);
+  }
+
+  100% {
+    transform: translateX(100%);
+  }
 }
 
 @keyframes scan {
-  0%, 100% { top: 0%; opacity: 0; }
-  10% { opacity: 1; }
-  50% { top: 100%; opacity: 1; }
-  90% { opacity: 1; }
+
+  0%,
+  100% {
+    top: 0%;
+    opacity: 0;
+  }
+
+  10% {
+    opacity: 1;
+  }
+
+  50% {
+    top: 100%;
+    opacity: 1;
+  }
+
+  90% {
+    opacity: 1;
+  }
 }
 
 /* Custom Utilities */
 .animate-bounce-x {
-    animation: bounce-x 1s infinite;
+  animation: bounce-x 1s infinite;
 }
 
 @keyframes bounce-x {
-    0%, 100% { transform: translateX(0); }
-    50% { transform: translateX(25%); }
+
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+
+  50% {
+    transform: translateX(25%);
+  }
 }
 
 /* Body Scope Selector Icons */
@@ -191,13 +244,31 @@ button:focus-visible {
 }
 
 .bodyIcon:hover {
-  filter: drop-shadow(0 0 10px rgba(255,200,60,0.35));
+  filter: drop-shadow(0 0 10px rgba(255, 200, 60, 0.35));
 }
 
 .bodyIcon.active {
   color: var(--nano-gold);
   filter:
-    drop-shadow(0 0 14px rgba(255,200,60,0.55))
-    drop-shadow(0 0 24px rgba(80,160,255,0.25));
+    drop-shadow(0 0 14px rgba(255, 200, 60, 0.55)) drop-shadow(0 0 24px rgba(80, 160, 255, 0.25));
   transform: scale(1.04);
+}
+
+@keyframes stage-breathe {
+
+  0%,
+  100% {
+    color: #a1a1aa;
+    opacity: 0.7;
+  }
+
+  50% {
+    color: #60a5fa;
+    opacity: 1;
+    text-shadow: 0 0 12px rgba(96, 165, 250, 0.4);
+  }
+}
+
+.animate-stage-breathe {
+  animation: stage-breathe 4s ease-in-out infinite;
 }

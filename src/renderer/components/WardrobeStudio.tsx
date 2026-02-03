@@ -16,6 +16,8 @@ import styleAnimation from '../assets/styles/style_pixar_masc.png';
 import styleIllustration from '../assets/styles/style_retro_anime_masc.png';
 import styleScifi from '../assets/styles/style_cyberpunk_masc.png';
 import ActorSaveModal from './ActorSaveModal';
+import HelpTooltip from './ui/HelpTooltip';
+import InlineHint from './ui/InlineHint';
 
 // --- WARDROBE STUDIO COMPONENT ---
 const WardrobeStudio = () => {
@@ -1258,12 +1260,15 @@ const WardrobeStudio = () => {
                   <h3 className="text-xs font-black text-gray-400 uppercase mb-4 tracking-widest flex items-center gap-2">
                     <Sparkles className="w-4 h-4 text-yellow-500" /> Designer Workshop
                   </h3>
-                  <textarea
-                    className="w-full bg-[#09090b] border border-[#27272a] p-4 rounded-xl text-sm text-gray-200 focus:border-yellow-500 focus:outline-none transition-colors h-40 resize-none mb-4"
-                    placeholder="Describe the clothing (e.g. 'A futuristic chrome-plated flight suit with neon orange cabling')..."
-                    value={designerPrompt}
-                    onChange={(e) => setDesignerPrompt(e.target.value)}
-                  />
+                  <HelpTooltip zone="wardrobe" id="fabricEditor">
+                    <textarea
+                      className="w-full bg-[#09090b] border border-[#27272a] p-4 rounded-xl text-sm text-gray-200 focus:border-yellow-500 focus:outline-none transition-colors h-40 resize-none mb-4"
+                      placeholder="Describe the clothing (e.g. 'A futuristic chrome-plated flight suit with neon orange cabling')..."
+                      value={designerPrompt}
+                      onChange={(e) => setDesignerPrompt(e.target.value)}
+                    />
+                  </HelpTooltip>
+                  <InlineHint zone="wardrobe" id="fabricEditor" className="mb-4" />
                   <button
                     onClick={handleDesignerGenerate}
                     disabled={state.isProcessing || !designerPrompt}
@@ -1496,44 +1501,46 @@ const WardrobeStudio = () => {
                           <div className="py-2 border-t border-white/5 space-y-3">
                             <div className="flex flex-col w-full gap-2">
                               <span className="text-[9px] font-black text-gray-500 uppercase tracking-widest leading-none">Restore</span>
-                              <div className="w-full flex items-center justify-between gap-1 bg-black/40 rounded-lg p-1 border border-white/10">
-                                {/* HISTORY COUNTER (DEBUG/UX) */}
-                                {/* REFACTORED HISTORY CONTROLS */}
-                                <div className="relative group/history">
-                                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-black border border-gray-700 px-2 py-1 rounded text-[9px] text-gray-300 opacity-0 group-hover/history:opacity-100 pointer-events-none transition-opacity whitespace-nowrap z-50">
-                                    History State: {historyIndex}
+                              <HelpTooltip zone="wardrobe" id="restorationTools">
+                                <div className="w-full flex items-center justify-between gap-1 bg-black/40 rounded-lg p-1 border border-white/10">
+                                  {/* HISTORY COUNTER (DEBUG/UX) */}
+                                  {/* REFACTORED HISTORY CONTROLS */}
+                                  <div className="relative group/history">
+                                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-black border border-gray-700 px-2 py-1 rounded text-[9px] text-gray-300 opacity-0 group-hover/history:opacity-100 pointer-events-none transition-opacity whitespace-nowrap z-50">
+                                      History State: {historyIndex}
+                                    </div>
+                                    <span className="text-xs font-bold text-blue-400 font-mono px-2 select-none bg-blue-900/30 rounded border border-blue-500/30 min-w-[36px] text-center whitespace-nowrap block">
+                                      {historyIndex === -1 ? '0' : historyIndex + 1} / {history.length}
+                                    </span>
                                   </div>
-                                  <span className="text-xs font-bold text-blue-400 font-mono px-2 select-none bg-blue-900/30 rounded border border-blue-500/30 min-w-[36px] text-center whitespace-nowrap block">
-                                    {historyIndex === -1 ? '0' : historyIndex + 1} / {history.length}
-                                  </span>
-                                </div>
 
-                                <button
-                                  onClick={() => setIsBrushActive(!isBrushActive)}
-                                  className={`p-1.5 rounded transition-all ${isBrushActive
-                                    ? 'bg-blue-600 text-white shadow-[0_0_10px_rgba(37,99,235,0.5)]'
-                                    : 'text-gray-400 hover:text-white hover:bg-white/10'
-                                    }`}
-                                  title="Restore Mask Brush"
-                                >
-                                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 20a6 6 0 0 0-12 0" /><path d="M12 20v-6" /><path d="M12 14a4 4 0 0 1 4-4V5a4 4 0 0 0-8 0v5a4 4 0 0 1 4 4z" /></svg>
-                                </button>
-                                <div className="w-px h-3 bg-white/10 mx-0.5" />
-                                <button
-                                  onClick={handleUndo}
-                                  disabled={historyIndex < 0}
-                                  className="p-3 rounded hover:bg-white/10 text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent transition-colors group"
-                                >
-                                  <Undo2 className="w-4 h-4 pointer-events-none" />
-                                </button>
-                                <button
-                                  onClick={handleRedo}
-                                  disabled={historyIndex >= history.length - 1}
-                                  className="p-3 rounded hover:bg-white/10 text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent transition-colors group"
-                                >
-                                  <Redo2 className="w-4 h-4 pointer-events-none" />
-                                </button>
-                              </div>
+                                  <button
+                                    onClick={() => setIsBrushActive(!isBrushActive)}
+                                    className={`p-1.5 rounded transition-all ${isBrushActive
+                                      ? 'bg-blue-600 text-white shadow-[0_0_10px_rgba(37,99,235,0.5)]'
+                                      : 'text-gray-400 hover:text-white hover:bg-white/10'
+                                      }`}
+                                    title="Restore Mask Brush"
+                                  >
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 20a6 6 0 0 0-12 0" /><path d="M12 20v-6" /><path d="M12 14a4 4 0 0 1 4-4V5a4 4 0 0 0-8 0v5a4 4 0 0 1 4 4z" /></svg>
+                                  </button>
+                                  <div className="w-px h-3 bg-white/10 mx-0.5" />
+                                  <button
+                                    onClick={handleUndo}
+                                    disabled={historyIndex < 0}
+                                    className="p-3 rounded hover:bg-white/10 text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent transition-colors group"
+                                  >
+                                    <Undo2 className="w-4 h-4 pointer-events-none" />
+                                  </button>
+                                  <button
+                                    onClick={handleRedo}
+                                    disabled={historyIndex >= history.length - 1}
+                                    className="p-3 rounded hover:bg-white/10 text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent transition-colors group"
+                                  >
+                                    <Redo2 className="w-4 h-4 pointer-events-none" />
+                                  </button>
+                                </div>
+                              </HelpTooltip>
                             </div>
 
                             {isBrushActive && (

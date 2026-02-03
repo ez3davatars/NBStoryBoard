@@ -63,6 +63,7 @@ import {
   compileV3DirectorPrompt,
 
 } from '../utils/promptHelpers';
+import HelpTooltip from './ui/HelpTooltip';
 // --- HELPER FUNCTIONS ---
 const DebouncedHueSlider = ({ color, onChange }: { color: string, onChange: (color: string) => void }) => {
   // Initialize ONLY on mount or when external color changes significantly (if needed)
@@ -2487,92 +2488,94 @@ const SceneCanvas = () => {
           </div>
 
           {/* Center Group: Edit & Add Tools */}
-          <div className="flex items-center gap-2">
-            {/* EDIT TOOLS (Moved here) */}
-            <button
-              onClick={duplicateSelection}
-              disabled={!state.selection}
-              className={`flex flex-col items-center gap-1 group bg-black/80 p-2 rounded-xl border border-white/5 backdrop-blur-md shadow-lg transition-colors ${!state.selection ? 'opacity-50 pointer-events-none' : 'hover:bg-black'}`}
-              title="Duplicate Selection"
-            >
-              <div className="p-2 bg-purple-500/10 rounded-lg group-hover:bg-purple-500/20 transition-colors">
-                <Copy className={`w-4 h-4 ${!state.selection ? 'text-gray-600' : 'text-purple-400'}`} />
-              </div>
-              <span className="text-[8px] font-bold text-gray-500 uppercase group-hover:text-purple-400">Copy</span>
-            </button>
+          <HelpTooltip zone="stage" id="compositionTools">
+            <div className="flex items-center gap-2">
+              {/* EDIT TOOLS (Moved here) */}
+              <button
+                onClick={duplicateSelection}
+                disabled={!state.selection}
+                className={`flex flex-col items-center gap-1 group bg-black/80 p-2 rounded-xl border border-white/5 backdrop-blur-md shadow-lg transition-colors ${!state.selection ? 'opacity-50 pointer-events-none' : 'hover:bg-black'}`}
+                title="Duplicate Selection"
+              >
+                <div className="p-2 bg-purple-500/10 rounded-lg group-hover:bg-purple-500/20 transition-colors">
+                  <Copy className={`w-4 h-4 ${!state.selection ? 'text-gray-600' : 'text-purple-400'}`} />
+                </div>
+                <span className="text-[8px] font-bold text-gray-500 uppercase group-hover:text-purple-400">Copy</span>
+              </button>
 
-            <button
-              onClick={() => {
-                if (confirm('Are you sure you want to clear the entire stage?')) {
-                  dispatch({ type: 'CLEAR_STAGE' });
-                }
-              }}
-              className="flex flex-col items-center gap-1 group bg-black/80 p-2 rounded-xl border border-white/5 backdrop-blur-md shadow-lg hover:bg-black transition-colors"
-              title="Clear Everything"
-            >
-              <div className="p-2 bg-red-500/10 rounded-lg group-hover:bg-red-500/20 transition-colors">
-                <TrashIcon className="w-4 h-4 text-red-500" />
-              </div>
-              <span className="text-[8px] font-bold text-gray-500 uppercase group-hover:text-red-400">CLEAR STAGE</span>
-            </button>
-
-            <div className="w-px h-10 bg-white/10 mx-2" />
-
-            {/* ADD TOOLS */}
-            <button
-              onClick={() => {
-                const id = `ann-${Date.now()}`;
-                dispatch({
-                  type: 'ADD_ANNOTATION', payload: {
-                    id, type: 'note', x: 50, y: 50, width: 150, height: 100, rotation: 0, scaleX: 1, scaleY: 1, zIndex: 10, text: ''
+              <button
+                onClick={() => {
+                  if (confirm('Are you sure you want to clear the entire stage?')) {
+                    dispatch({ type: 'CLEAR_STAGE' });
                   }
-                });
-                dispatch({ type: 'SELECT_ITEM', payload: { id, type: 'annotation' } });
-              }}
-              className="flex flex-col items-center gap-1 group bg-black/80 p-2 rounded-xl border border-white/5 backdrop-blur-md shadow-lg hover:bg-black transition-colors"
-            >
-              <div className="p-2 bg-blue-500/10 rounded-lg group-hover:bg-blue-500/20 transition-colors">
-                <StickyNote className="w-4 h-4 text-blue-400" />
-              </div>
-              <span className="text-[8px] font-bold text-gray-500 uppercase group-hover:text-blue-400">Note</span>
-            </button>
+                }}
+                className="flex flex-col items-center gap-1 group bg-black/80 p-2 rounded-xl border border-white/5 backdrop-blur-md shadow-lg hover:bg-black transition-colors"
+                title="Clear Everything"
+              >
+                <div className="p-2 bg-red-500/10 rounded-lg group-hover:bg-red-500/20 transition-colors">
+                  <TrashIcon className="w-4 h-4 text-red-500" />
+                </div>
+                <span className="text-[8px] font-bold text-gray-500 uppercase group-hover:text-red-400">CLEAR STAGE</span>
+              </button>
 
-            <button
-              onClick={() => {
-                const id = `ann-${Date.now()}`;
-                dispatch({
-                  type: 'ADD_ANNOTATION', payload: {
-                    id, type: 'zone', x: 100, y: 100, width: 200, height: 150, rotation: 0, scaleX: 1, scaleY: 1, zIndex: 5
-                  }
-                });
-                dispatch({ type: 'SELECT_ITEM', payload: { id, type: 'annotation' } });
-              }}
-              className="flex flex-col items-center gap-1 group bg-black/80 p-2 rounded-xl border border-white/5 backdrop-blur-md shadow-lg hover:bg-black transition-colors"
-            >
-              <div className="p-2 bg-emerald-500/10 rounded-lg group-hover:bg-emerald-500/20 transition-colors">
-                <BoxSelect className="w-4 h-4 text-emerald-400" />
-              </div>
-              <span className="text-[8px] font-bold text-gray-500 uppercase group-hover:text-emerald-400">Zone</span>
-            </button>
+              <div className="w-px h-10 bg-white/10 mx-2" />
 
-            <button
-              onClick={() => {
-                const id = `ann-${Date.now()}`;
-                dispatch({
-                  type: 'ADD_ANNOTATION', payload: {
-                    id, type: 'arrow', x: 200, y: 200, width: 60, height: 60, rotation: 0, scaleX: 1, scaleY: 1, zIndex: 11
-                  }
-                });
-                dispatch({ type: 'SELECT_ITEM', payload: { id, type: 'annotation' } });
-              }}
-              className="flex flex-col items-center gap-1 group bg-black/80 p-2 rounded-xl border border-white/5 backdrop-blur-md shadow-lg hover:bg-black transition-colors"
-            >
-              <div className="p-2 bg-purple-500/10 rounded-lg group-hover:bg-purple-500/20 transition-colors">
-                <MoveUpRight className="w-4 h-4 text-purple-400" />
-              </div>
-              <span className="text-[8px] font-bold text-gray-500 uppercase group-hover:text-purple-400">Path</span>
-            </button>
-          </div>
+              {/* ADD TOOLS */}
+              <button
+                onClick={() => {
+                  const id = `ann-${Date.now()}`;
+                  dispatch({
+                    type: 'ADD_ANNOTATION', payload: {
+                      id, type: 'note', x: 50, y: 50, width: 150, height: 100, rotation: 0, scaleX: 1, scaleY: 1, zIndex: 10, text: ''
+                    }
+                  });
+                  dispatch({ type: 'SELECT_ITEM', payload: { id, type: 'annotation' } });
+                }}
+                className="flex flex-col items-center gap-1 group bg-black/80 p-2 rounded-xl border border-white/5 backdrop-blur-md shadow-lg hover:bg-black transition-colors"
+              >
+                <div className="p-2 bg-blue-500/10 rounded-lg group-hover:bg-blue-500/20 transition-colors">
+                  <StickyNote className="w-4 h-4 text-blue-400" />
+                </div>
+                <span className="text-[8px] font-bold text-gray-500 uppercase group-hover:text-blue-400">Note</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  const id = `ann-${Date.now()}`;
+                  dispatch({
+                    type: 'ADD_ANNOTATION', payload: {
+                      id, type: 'zone', x: 100, y: 100, width: 200, height: 150, rotation: 0, scaleX: 1, scaleY: 1, zIndex: 5
+                    }
+                  });
+                  dispatch({ type: 'SELECT_ITEM', payload: { id, type: 'annotation' } });
+                }}
+                className="flex flex-col items-center gap-1 group bg-black/80 p-2 rounded-xl border border-white/5 backdrop-blur-md shadow-lg hover:bg-black transition-colors"
+              >
+                <div className="p-2 bg-emerald-500/10 rounded-lg group-hover:bg-emerald-500/20 transition-colors">
+                  <BoxSelect className="w-4 h-4 text-emerald-400" />
+                </div>
+                <span className="text-[8px] font-bold text-gray-500 uppercase group-hover:text-emerald-400">Zone</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  const id = `ann-${Date.now()}`;
+                  dispatch({
+                    type: 'ADD_ANNOTATION', payload: {
+                      id, type: 'arrow', x: 200, y: 200, width: 60, height: 60, rotation: 0, scaleX: 1, scaleY: 1, zIndex: 11
+                    }
+                  });
+                  dispatch({ type: 'SELECT_ITEM', payload: { id, type: 'annotation' } });
+                }}
+                className="flex flex-col items-center gap-1 group bg-black/80 p-2 rounded-xl border border-white/5 backdrop-blur-md shadow-lg hover:bg-black transition-colors"
+              >
+                <div className="p-2 bg-purple-500/10 rounded-lg group-hover:bg-purple-500/20 transition-colors">
+                  <MoveUpRight className="w-4 h-4 text-purple-400" />
+                </div>
+                <span className="text-[8px] font-bold text-gray-500 uppercase group-hover:text-purple-400">Path</span>
+              </button>
+            </div>
+          </HelpTooltip>
 
           {/* Right Group: Capture */}
           <div>
@@ -2595,115 +2598,117 @@ const SceneCanvas = () => {
             if (panelId === 'shots') {
               // --- SHOTS PANEL ---
               return (
-                <SidebarPanel
-                  key="shots"
-                  id="shots"
-                  title="Shot List"
-                  icon={Film}
-                  headerColor="text-blue-500"
-                  collapsed={collapsedPanels['shots']}
-                  onToggle={togglePanel}
-                  onDrop={handlePanelDrop}
-                >
-                  <div className="flex items-center gap-2 mb-2">
-                    <button
-                      onClick={addShotFromStage}
-                      className="flex-1 bg-blue-600 hover:bg-blue-500 text-white text-[10px] py-2 rounded font-bold uppercase tracking-wider flex items-center justify-center gap-2"
-                    >
-                      <Grid className="w-3 h-3" />
-                      New Shot
-                    </button>
-                    <button
-                      onClick={() => captureAndSetShotFrame('start')}
-                      disabled={!activeShotId}
-                      className="flex-1 bg-blue-600 hover:bg-blue-500 text-white text-[10px] py-2 rounded font-bold uppercase tracking-wider disabled:opacity-50"
-                      title="Capture stage as Start Frame for active shot"
-                    >
-                      Start
-                    </button>
-                    <button
-                      onClick={() => captureAndSetShotFrame('end')}
-                      disabled={!activeShotId}
-                      className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] py-2 rounded font-bold uppercase tracking-wider disabled:opacity-50"
-                      title="Capture stage as End Frame for active shot"
-                    >
-                      End
-                    </button>
-                  </div>
-
-                  {activeShotId && (
-                    <div className="mb-3 space-y-2">
-                      <label className="text-[9px] uppercase font-bold text-gray-500 block">Active Shot Name</label>
-                      <div className="flex gap-2">
-                        <input
-                          value={activeShotNameDraft}
-                          onChange={(e) => setActiveShotNameDraft(e.target.value)}
-                          onBlur={renameActiveShot}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              e.preventDefault();
-                              renameActiveShot();
-                            }
-                          }}
-                          className="flex-1 bg-[#18181b] border border-[#27272a] rounded px-2 py-1 text-[10px] text-yellow-400 outline-none focus:border-yellow-500"
-                        />
-                        <button
-                          onClick={renameActiveShot}
-                          className="px-3 py-2 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] rounded text-[10px] font-bold uppercase text-gray-300"
-                          title="Rename active shot"
-                        >
-                          Save
-                        </button>
-                      </div>
+                <HelpTooltip zone="stage" id="storyboardTimeline">
+                  <SidebarPanel
+                    key="shots"
+                    id="shots"
+                    title="Shot List"
+                    icon={Film}
+                    headerColor="text-blue-500"
+                    collapsed={collapsedPanels['shots']}
+                    onToggle={togglePanel}
+                    onDrop={handlePanelDrop}
+                  >
+                    <div className="flex items-center gap-2 mb-2">
+                      <button
+                        onClick={addShotFromStage}
+                        className="flex-1 bg-blue-600 hover:bg-blue-500 text-white text-[10px] py-2 rounded font-bold uppercase tracking-wider flex items-center justify-center gap-2"
+                      >
+                        <Grid className="w-3 h-3" />
+                        New Shot
+                      </button>
+                      <button
+                        onClick={() => captureAndSetShotFrame('start')}
+                        disabled={!activeShotId}
+                        className="flex-1 bg-blue-600 hover:bg-blue-500 text-white text-[10px] py-2 rounded font-bold uppercase tracking-wider disabled:opacity-50"
+                        title="Capture stage as Start Frame for active shot"
+                      >
+                        Start
+                      </button>
+                      <button
+                        onClick={() => captureAndSetShotFrame('end')}
+                        disabled={!activeShotId}
+                        className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] py-2 rounded font-bold uppercase tracking-wider disabled:opacity-50"
+                        title="Capture stage as End Frame for active shot"
+                      >
+                        End
+                      </button>
                     </div>
-                  )}
 
-                  <div className="space-y-2 max-h-48 overflow-y-auto custom-scrollbar pr-1">
-                    {(shots ?? []).map((s: any) => {
-                      const active = s.id === activeShotId;
-                      return (
-                        <div
-                          key={s.id}
-                          className={`flex items-center gap-2 p-2 rounded border transition-colors ${active ? 'border-yellow-500 bg-yellow-500/5' : 'border-[#27272a] bg-[#0b0b0d] hover:bg-[#18181b]'
-                            }`}
-                        >
+                    {activeShotId && (
+                      <div className="mb-3 space-y-2">
+                        <label className="text-[9px] uppercase font-bold text-gray-500 block">Active Shot Name</label>
+                        <div className="flex gap-2">
+                          <input
+                            value={activeShotNameDraft}
+                            onChange={(e) => setActiveShotNameDraft(e.target.value)}
+                            onBlur={renameActiveShot}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                renameActiveShot();
+                              }
+                            }}
+                            className="flex-1 bg-[#18181b] border border-[#27272a] rounded px-2 py-1 text-[10px] text-yellow-400 outline-none focus:border-yellow-500"
+                          />
                           <button
-                            onClick={() => setActiveShot(s.id)}
-                            className="flex-1 text-left"
-                            title="Load this shot into the stage"
+                            onClick={renameActiveShot}
+                            className="px-3 py-2 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] rounded text-[10px] font-bold uppercase text-gray-300"
+                            title="Rename active shot"
                           >
-                            <div className="text-[10px] font-bold text-gray-200 truncate">{s.name}</div>
-                            <div className="text-[9px] text-gray-600 font-mono">
-                              {s.startFrameUrl ? 'S' : '-'} / {s.endFrameUrl ? 'E' : '-'}
-                            </div>
-                          </button>
-
-                          <button
-                            onClick={() => duplicateShot(s.id)}
-                            className="p-1.5 bg-black/30 hover:bg-white/5 rounded text-gray-400 hover:text-white transition-colors"
-                            title="Duplicate shot"
-                          >
-                            <Link2 className="w-3.5 h-3.5" />
-                          </button>
-
-                          <button
-                            onClick={() => removeShot(s.id)}
-                            className="p-1.5 bg-black/30 hover:bg-red-500/20 rounded text-gray-400 hover:text-red-400 transition-colors"
-                            title="Delete shot"
-                          >
-                            <TrashIcon className="w-3.5 h-3.5" />
+                            Save
                           </button>
                         </div>
-                      );
-                    })}
-
-                    {(shots ?? []).length === 0 && (
-                      <div className="text-[10px] text-gray-600 italic py-2 border border-dashed border-gray-800 rounded text-center">
-                        No shots yet. Add one from the current stage.
                       </div>
                     )}
-                  </div>
-                </SidebarPanel>
+
+                    <div className="space-y-2 max-h-48 overflow-y-auto custom-scrollbar pr-1">
+                      {(shots ?? []).map((s: any) => {
+                        const active = s.id === activeShotId;
+                        return (
+                          <div
+                            key={s.id}
+                            className={`flex items-center gap-2 p-2 rounded border transition-colors ${active ? 'border-yellow-500 bg-yellow-500/5' : 'border-[#27272a] bg-[#0b0b0d] hover:bg-[#18181b]'
+                              }`}
+                          >
+                            <button
+                              onClick={() => setActiveShot(s.id)}
+                              className="flex-1 text-left"
+                              title="Load this shot into the stage"
+                            >
+                              <div className="text-[10px] font-bold text-gray-200 truncate">{s.name}</div>
+                              <div className="text-[9px] text-gray-600 font-mono">
+                                {s.startFrameUrl ? 'S' : '-'} / {s.endFrameUrl ? 'E' : '-'}
+                              </div>
+                            </button>
+
+                            <button
+                              onClick={() => duplicateShot(s.id)}
+                              className="p-1.5 bg-black/30 hover:bg-white/5 rounded text-gray-400 hover:text-white transition-colors"
+                              title="Duplicate shot"
+                            >
+                              <Link2 className="w-3.5 h-3.5" />
+                            </button>
+
+                            <button
+                              onClick={() => removeShot(s.id)}
+                              className="p-1.5 bg-black/30 hover:bg-red-500/20 rounded text-gray-400 hover:text-red-400 transition-colors"
+                              title="Delete shot"
+                            >
+                              <TrashIcon className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        );
+                      })}
+
+                      {(shots ?? []).length === 0 && (
+                        <div className="text-[10px] text-gray-600 italic py-2 border border-dashed border-gray-800 rounded text-center">
+                          No shots yet. Add one from the current stage.
+                        </div>
+                      )}
+                    </div>
+                  </SidebarPanel>
+                </HelpTooltip>
               );
             }
 
@@ -3515,13 +3520,15 @@ const SceneCanvas = () => {
                   rightElement={state.director.envAuto && <span className="text-[9px] text-yellow-500 font-mono uppercase border border-yellow-500/30 px-1 rounded">Env Auto</span>}
                 >
                   <div className="space-y-4">
-                    <PropertyField
-                      label="Subject / Action"
-                      value={state.director.subject}
-                      onChange={(v: any) => setDirector({ subject: v })}
-                      placeholder="Describe the main action..."
-                      type="textarea"
-                    />
+                    <HelpTooltip zone="stage" id="stageInstructions">
+                      <PropertyField
+                        label="Subject / Action"
+                        value={state.director.subject}
+                        onChange={(v: any) => setDirector({ subject: v })}
+                        placeholder="Describe the main action..."
+                        type="textarea"
+                      />
+                    </HelpTooltip>
 
                     <div>
                       <div className="flex items-center justify-between mb-1">

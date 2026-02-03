@@ -24,6 +24,7 @@
     "@mediapipe/camera_utils": "^0.3.1675466862",
     "@mediapipe/drawing_utils": "^0.3.1675466124",
     "@mediapipe/face_mesh": "^0.4.1633559619",
+    "@radix-ui/react-tooltip": "^1.2.8",
     "framer-motion": "^12.26.1",
     "lucide-react": "^0.562.0",
     "react": "^19.2.0",

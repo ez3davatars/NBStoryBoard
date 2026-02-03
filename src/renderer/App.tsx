@@ -19,6 +19,7 @@ import {
   useAppContext,
   AppContext
 } from './context/AppContext';
+import { HelpProvider } from './context/HelpContext';
 import CastingForge from './components/CastingForge';
 import NanoCastingDirector from './components/NanoCastingDirector';
 
@@ -576,201 +577,203 @@ const App = () => {
 
   return (
     <ErrorBoundary>
-      <AppContext.Provider value={{ state, dispatch }}>
-        <div className="flex flex-col h-screen bg-[#0f0f11] text-gray-200 font-sans selection:bg-yellow-500/30">
+      <HelpProvider>
+        <AppContext.Provider value={{ state, dispatch }}>
+          <div className="flex flex-col h-screen bg-[#0f0f11] text-gray-200 font-sans selection:bg-yellow-500/30">
 
-          {/* Header */}
-          <header className="h-20 border-b border-white/5 bg-[#18181b] flex items-center justify-between px-6 z-50 shadow-2xl">
-            <div className="flex items-center gap-3">
-              <div className="relative flex items-center justify-center p-0.5 bg-white/5 rounded-lg border border-white/5 shadow-inner">
-                <img
-                  src={`data:image/png;base64,${LOGO_BASE64}`}
-                  alt="Branding Logo"
-                  className="w-11 h-11 object-contain drop-shadow-[0_0_8px_rgba(234,179,8,0.4)] hover:scale-105 transition-all duration-300 cursor-pointer"
-                />
-              </div>
-              <div className="flex flex-col gap-0.5">
-                <h1 className="font-black text-xl tracking-tight leading-none flex items-center gap-2 whitespace-nowrap">
-                  <span className="text-white">CAST DIRECTOR</span>
-                  <span className="text-yellow-500">STUDIO</span>
-                </h1>
-                <div className="flex items-center gap-2">
-                  <p className="text-[10px] font-black text-zinc-500 tracking-[0.3em] uppercase opacity-60">
-                    CAST · WARDROBE · PROPS · STAGE · ACTION
-                  </p>
-                  <div className="h-px w-4 bg-zinc-800"></div>
-                  <span className="text-[9px] text-zinc-600 font-bold uppercase tracking-wider">
-                    powered by <span className="text-zinc-500">Nanobanana Pro</span>
-                  </span>
+            {/* Header */}
+            <header className="h-20 border-b border-white/5 bg-[#18181b] flex items-center justify-between px-6 z-50 shadow-2xl">
+              <div className="flex items-center gap-3">
+                <div className="relative flex items-center justify-center p-0.5 bg-white/5 rounded-lg border border-white/5 shadow-inner">
+                  <img
+                    src={`data:image/png;base64,${LOGO_BASE64}`}
+                    alt="Branding Logo"
+                    className="w-11 h-11 object-contain drop-shadow-[0_0_8px_rgba(234,179,8,0.4)] hover:scale-105 transition-all duration-300 cursor-pointer"
+                  />
                 </div>
-              </div>
-            </div>
-
-            <nav className="flex bg-[#09090b] p-1 rounded-lg border border-[#27272a]">
-              {(['casting', 'nano_cast', 'wardrobe', 'props', 'staging', 'production', 'veo'] as ViewMode[])
-                .filter(mode => mode !== 'veo' || state.isStoryboardEnabled)
-                .map(mode => (
-                  <button
-                    key={mode}
-                    onClick={() => dispatch({ type: 'SET_VIEW', payload: mode })}
-                    className={`px-4 py-1.5 rounded text-xs font-bold uppercase transition-all flex items-center gap-2 ${state.view === mode ? 'bg-[#27272a] text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}
-                  >
-                    {mode === 'veo' ? (
-                      <>
-                        STORYBOARD
-                        <Clapperboard className={`w-3.5 h-3.5 ${state.view === 'veo' ? 'text-yellow-500' : 'text-yellow-600/50'}`} />
-                      </>
-                    ) : mode === 'casting' ? 'CAST' : mode === 'nano_cast' ? 'NANO CAST' : mode === 'staging' ? 'STAGING' : mode === 'props' ? 'PROPS' : mode}
-                  </button>
-                ))}
-            </nav>
-
-            <button onClick={() => setShowSettings(true)} className="text-gray-400 hover:text-white transition-colors">
-              <Settings className="w-5 h-5" />
-            </button>
-          </header>
-
-          {/* Main Content Area */}
-          <main className="flex-grow overflow-hidden relative">
-            {state.view === 'casting' && <CastingForge />}
-            {state.view === 'nano_cast' && <NanoCastingDirector />}
-            {state.view === 'wardrobe' && <WardrobeStudio />}
-            {state.view === 'props' && <PropAccessoryStudio />}
-            {state.view === 'staging' && <SceneCanvas />}
-            {state.view === 'production' && <ProductionConsole />}
-            {state.view === 'veo' && <VeoGenerator />}
-          </main>
-
-          {/* Cinematic Loading Overlay */}
-          {state.isProcessing && <NanobananaThinking />}
-          <ImageInspector />
-
-          {/* Footer / Logs */}
-          <footer className="h-8 border-t border-[#27272a] bg-black flex items-center px-4 text-[10px] font-mono justify-between">
-            <div className="flex items-center gap-4 text-gray-500">
-              <span>ARCH: REACT_SPA</span>
-              <span>MODE: {state.apiKey ? 'PRO (API ACTIVE)' : 'DEMO (SIMULATION)'}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              {state.logs.length > 0 && (
-                <span className={`${state.logs[state.logs.length - 1].type === 'error' ? 'text-red-500' : 'text-green-500'}`}>
-                  {state.logs[state.logs.length - 1].message}
-                </span>
-              )}
-            </div>
-          </footer>
-
-          {/* Settings Modal */}
-          {
-            showSettings && (
-              <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[4000] flex items-center justify-center">
-                <div className="bg-[#18181b] border border-gray-700 p-6 rounded-xl w-96 shadow-2xl animate-in fade-in zoom-in duration-200">
-                  <h2 className="text-lg font-bold text-white mb-4">Configuration</h2>
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Gemini API Key</label>
-                      <input
-                        type="password"
-                        className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-yellow-500 focus:outline-none"
-                        placeholder="AIzaSy..."
-                        value={tempKey}
-                        onChange={(e) => setTempKey(e.target.value)}
-                      />
-                      <p className="text-[10px] text-gray-500 mt-2">
-                        Required for the Service Layer to connect to Google Cloud. If empty, the app runs in Simulation Mode.
-                      </p>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Render Save Folder</label>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={async () => {
-                            try {
-                              // NATIVE ELECTRON MODE
-                              if (window.electronAPI) {
-                                const path = await window.electronAPI.selectFolder();
-                                if (path) {
-                                  dispatch({ type: 'SET_SAVE_PATH', payload: path });
-                                  dispatch({ type: 'ADD_LOG', payload: { message: `Save path set: ${path}`, type: 'success' } });
-                                }
-                                return;
-                              }
-
-                              // WEB MODE
-                              console.log("Requesting directory handle...");
-                              const handle = await (window as any).showDirectoryPicker();
-                              console.log("Directory handle received:", handle);
-                              dispatch({ type: 'SET_SAVE_DIRECTORY', payload: handle });
-                              await StorageService.save('nano_save_handle', handle);
-                              dispatch({ type: 'ADD_LOG', payload: { message: `Save folder set: ${handle.name}`, type: 'success' } });
-                            } catch (e: any) {
-                              console.error("Directory picker error:", e);
-                              if (e.name !== 'AbortError') {
-                                dispatch({ type: 'ADD_LOG', payload: { message: `Failed to set folder: ${e.message}`, type: 'error' } });
-                              }
-                            }
-                          }}
-                          className="flex-1 bg-gray-800 hover:bg-gray-700 text-white py-2 rounded text-xs font-bold transition-colors border border-gray-700truncate"
-                        >
-                          {state.saveDirectoryPath
-                            ? `Folder: ...${state.saveDirectoryPath.split(/[/\\]/).pop()}`
-                            : state.saveDirectoryHandle
-                              ? `Folder: ${state.saveDirectoryHandle.name}`
-                              : 'Choose Save Folder...'}
-                        </button>
-                        {(state.saveDirectoryHandle || state.saveDirectoryPath) && (
-                          <button
-                            onClick={async () => {
-                              dispatch({ type: 'SET_SAVE_DIRECTORY', payload: null });
-                              dispatch({ type: 'SET_SAVE_PATH', payload: null });
-                              await StorageService.remove('nano_save_handle');
-                              localStorage.removeItem('nano_save_path');
-                            }}
-                            className="bg-red-500/10 hover:bg-red-500/20 text-red-500 px-3 py-2 rounded text-xs transition-colors border border-red-500/30"
-                            title="Reset folder (use browser downloads)"
-                          >
-                            <X className="w-4 h-4" />
-                          </button>
-                        )}
-                      </div>
-                      <p className="text-[10px] text-gray-500 mt-2">
-                        When set, rendered photos will save directly to this location.
-                      </p>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-gray-400 uppercase mb-2 tracking-wider">Active Engine</label>
-                      <div className="grid grid-cols-1 gap-2">
-                        {[
-                          { id: 'gemini-2.5-flash-image', name: 'Gemini 2.5 Flash (Image)', desc: 'Optimized for efficient image creation' },
-                          { id: 'gemini-3-pro-image-preview', name: 'Gemini 3 Pro (Vision Ultra)', desc: 'Advanced reasoning & high-fidelity output' },
-                          { id: 'imagen-4.0-generate-001', name: 'Imagen 4.0 (Legacy)', desc: 'Text-to-image focus' }
-                        ].map(m => (
-                          <button
-                            key={m.id}
-                            onClick={() => setTempModel(m.id as any)}
-                            className={`text-left p-3 rounded-lg border transition-all ${tempModel === m.id ? 'bg-yellow-500/10 border-yellow-500 shadow-lg shadow-yellow-500/5' : 'bg-[#09090b] border-[#27272a] hover:border-gray-600'}`}
-                          >
-                            <div className="flex justify-between items-center mb-1">
-                              <span className={`text-xs font-bold ${tempModel === m.id ? 'text-yellow-500' : 'text-gray-200'}`}>{m.name}</span>
-                              {tempModel === m.id && <div className="w-2 h-2 rounded-full bg-yellow-500 shadow-[0_0_8px_rgba(234,179,8,0.6)]"></div>}
-                            </div>
-                            <p className="text-[10px] text-gray-500">{m.desc}</p>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="flex justify-end gap-2 mt-6">
-                      <button onClick={closeSettings} className="px-4 py-2 text-gray-400 text-xs hover:text-white">Cancel</button>
-                      <button onClick={saveSettings} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded text-xs font-bold">Save Config</button>
-                    </div>
+                <div className="flex flex-col gap-0.5">
+                  <h1 className="font-black text-xl tracking-tight leading-none flex items-center gap-2 whitespace-nowrap">
+                    <span className="text-white">CAST DIRECTOR</span>
+                    <span className="text-yellow-500">STUDIO</span>
+                  </h1>
+                  <div className="flex items-center gap-2">
+                    <p className="text-[10px] font-black text-zinc-500 tracking-[0.3em] uppercase opacity-60">
+                      CAST · WARDROBE · PROPS · STAGE · ACTION
+                    </p>
+                    <div className="h-px w-4 bg-zinc-800"></div>
+                    <span className="text-[9px] text-zinc-600 font-bold uppercase tracking-wider">
+                      powered by <span className="text-zinc-500">Nanobanana Pro</span>
+                    </span>
                   </div>
                 </div>
               </div>
-            )
-          }
 
-        </div >
-      </AppContext.Provider >
+              <nav className="flex bg-[#09090b] p-1 rounded-lg border border-[#27272a]">
+                {(['casting', 'nano_cast', 'wardrobe', 'props', 'staging', 'production', 'veo'] as ViewMode[])
+                  .filter(mode => mode !== 'veo' || state.isStoryboardEnabled)
+                  .map(mode => (
+                    <button
+                      key={mode}
+                      onClick={() => dispatch({ type: 'SET_VIEW', payload: mode })}
+                      className={`px-4 py-1.5 rounded text-xs font-bold uppercase transition-all flex items-center gap-2 ${state.view === mode ? 'bg-[#27272a] text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}
+                    >
+                      {mode === 'veo' ? (
+                        <>
+                          STORYBOARD
+                          <Clapperboard className={`w-3.5 h-3.5 ${state.view === 'veo' ? 'text-yellow-500' : 'text-yellow-600/50'}`} />
+                        </>
+                      ) : mode === 'casting' ? 'CAST' : mode === 'nano_cast' ? 'NANO CAST' : mode === 'staging' ? 'STAGING' : mode === 'props' ? 'PROPS' : mode}
+                    </button>
+                  ))}
+              </nav>
+
+              <button onClick={() => setShowSettings(true)} className="text-gray-400 hover:text-white transition-colors">
+                <Settings className="w-5 h-5" />
+              </button>
+            </header>
+
+            {/* Main Content Area */}
+            <main className="flex-grow overflow-hidden relative">
+              {state.view === 'casting' && <CastingForge />}
+              {state.view === 'nano_cast' && <NanoCastingDirector />}
+              {state.view === 'wardrobe' && <WardrobeStudio />}
+              {state.view === 'props' && <PropAccessoryStudio />}
+              {state.view === 'staging' && <SceneCanvas />}
+              {state.view === 'production' && <ProductionConsole />}
+              {state.view === 'veo' && <VeoGenerator />}
+            </main>
+
+            {/* Cinematic Loading Overlay */}
+            {state.isProcessing && <NanobananaThinking />}
+            <ImageInspector />
+
+            {/* Footer / Logs */}
+            <footer className="h-8 border-t border-[#27272a] bg-black flex items-center px-4 text-[10px] font-mono justify-between">
+              <div className="flex items-center gap-4 text-gray-500">
+                <span>ARCH: REACT_SPA</span>
+                <span>MODE: {state.apiKey ? 'PRO (API ACTIVE)' : 'DEMO (SIMULATION)'}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                {state.logs.length > 0 && (
+                  <span className={`${state.logs[state.logs.length - 1].type === 'error' ? 'text-red-500' : 'text-green-500'}`}>
+                    {state.logs[state.logs.length - 1].message}
+                  </span>
+                )}
+              </div>
+            </footer>
+
+            {/* Settings Modal */}
+            {
+              showSettings && (
+                <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[4000] flex items-center justify-center">
+                  <div className="bg-[#18181b] border border-gray-700 p-6 rounded-xl w-96 shadow-2xl animate-in fade-in zoom-in duration-200">
+                    <h2 className="text-lg font-bold text-white mb-4">Configuration</h2>
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Gemini API Key</label>
+                        <input
+                          type="password"
+                          className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-yellow-500 focus:outline-none"
+                          placeholder="AIzaSy..."
+                          value={tempKey}
+                          onChange={(e) => setTempKey(e.target.value)}
+                        />
+                        <p className="text-[10px] text-gray-500 mt-2">
+                          Required for the Service Layer to connect to Google Cloud. If empty, the app runs in Simulation Mode.
+                        </p>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Render Save Folder</label>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={async () => {
+                              try {
+                                // NATIVE ELECTRON MODE
+                                if (window.electronAPI) {
+                                  const path = await window.electronAPI.selectFolder();
+                                  if (path) {
+                                    dispatch({ type: 'SET_SAVE_PATH', payload: path });
+                                    dispatch({ type: 'ADD_LOG', payload: { message: `Save path set: ${path}`, type: 'success' } });
+                                  }
+                                  return;
+                                }
+
+                                // WEB MODE
+                                console.log("Requesting directory handle...");
+                                const handle = await (window as any).showDirectoryPicker();
+                                console.log("Directory handle received:", handle);
+                                dispatch({ type: 'SET_SAVE_DIRECTORY', payload: handle });
+                                await StorageService.save('nano_save_handle', handle);
+                                dispatch({ type: 'ADD_LOG', payload: { message: `Save folder set: ${handle.name}`, type: 'success' } });
+                              } catch (e: any) {
+                                console.error("Directory picker error:", e);
+                                if (e.name !== 'AbortError') {
+                                  dispatch({ type: 'ADD_LOG', payload: { message: `Failed to set folder: ${e.message}`, type: 'error' } });
+                                }
+                              }
+                            }}
+                            className="flex-1 bg-gray-800 hover:bg-gray-700 text-white py-2 rounded text-xs font-bold transition-colors border border-gray-700truncate"
+                          >
+                            {state.saveDirectoryPath
+                              ? `Folder: ...${state.saveDirectoryPath.split(/[/\\]/).pop()}`
+                              : state.saveDirectoryHandle
+                                ? `Folder: ${state.saveDirectoryHandle.name}`
+                                : 'Choose Save Folder...'}
+                          </button>
+                          {(state.saveDirectoryHandle || state.saveDirectoryPath) && (
+                            <button
+                              onClick={async () => {
+                                dispatch({ type: 'SET_SAVE_DIRECTORY', payload: null });
+                                dispatch({ type: 'SET_SAVE_PATH', payload: null });
+                                await StorageService.remove('nano_save_handle');
+                                localStorage.removeItem('nano_save_path');
+                              }}
+                              className="bg-red-500/10 hover:bg-red-500/20 text-red-500 px-3 py-2 rounded text-xs transition-colors border border-red-500/30"
+                              title="Reset folder (use browser downloads)"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                        <p className="text-[10px] text-gray-500 mt-2">
+                          When set, rendered photos will save directly to this location.
+                        </p>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-gray-400 uppercase mb-2 tracking-wider">Active Engine</label>
+                        <div className="grid grid-cols-1 gap-2">
+                          {[
+                            { id: 'gemini-2.5-flash-image', name: 'Gemini 2.5 Flash (Image)', desc: 'Optimized for efficient image creation' },
+                            { id: 'gemini-3-pro-image-preview', name: 'Gemini 3 Pro (Vision Ultra)', desc: 'Advanced reasoning & high-fidelity output' },
+                            { id: 'imagen-4.0-generate-001', name: 'Imagen 4.0 (Legacy)', desc: 'Text-to-image focus' }
+                          ].map(m => (
+                            <button
+                              key={m.id}
+                              onClick={() => setTempModel(m.id as any)}
+                              className={`text-left p-3 rounded-lg border transition-all ${tempModel === m.id ? 'bg-yellow-500/10 border-yellow-500 shadow-lg shadow-yellow-500/5' : 'bg-[#09090b] border-[#27272a] hover:border-gray-600'}`}
+                            >
+                              <div className="flex justify-between items-center mb-1">
+                                <span className={`text-xs font-bold ${tempModel === m.id ? 'text-yellow-500' : 'text-gray-200'}`}>{m.name}</span>
+                                {tempModel === m.id && <div className="w-2 h-2 rounded-full bg-yellow-500 shadow-[0_0_8px_rgba(234,179,8,0.6)]"></div>}
+                              </div>
+                              <p className="text-[10px] text-gray-500">{m.desc}</p>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="flex justify-end gap-2 mt-6">
+                        <button onClick={closeSettings} className="px-4 py-2 text-gray-400 text-xs hover:text-white">Cancel</button>
+                        <button onClick={saveSettings} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded text-xs font-bold">Save Config</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )
+            }
+
+          </div >
+        </AppContext.Provider >
+      </HelpProvider>
     </ErrorBoundary>
   );
 };

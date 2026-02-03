@@ -15,6 +15,8 @@ import { nativeSelectFolder } from '../utils/NativeFileAssets';
 import type { CastMember } from '../context/AppContext';
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
+import HelpTooltip from './ui/HelpTooltip';
+import InlineHint from './ui/InlineHint';
 
 import BodyScopeSelector from './BodyScopeSelector';
 import type { BodyScope } from './BodyScopeSelector';
@@ -1923,26 +1925,28 @@ const NanoCastingDirector = () => {
                             >
                                 <div className="flex flex-col h-full">
                                     <div className="flex justify-between items-center mb-6">
-                                        <div className="flex bg-surface-2 rounded-lg p-1 gap-1">
-                                            <button
-                                                onClick={() => setSidebarMode('director')}
-                                                className={`px-3 py-1.5 rounded-md text-[10px] uppercase font-black tracking-wider transition-all border ${sidebarMode === 'director'
-                                                    ? 'bg-surface text-accent border-accent shadow-[0_0_10px_rgba(250,204,21,0.2)]'
-                                                    : 'border-transparent text-muted hover:text-fg'
-                                                    }`}
-                                            >
-                                                Director
-                                            </button>
-                                            <button
-                                                onClick={() => setSidebarMode('wardrobe')}
-                                                className={`px-3 py-1.5 rounded-md text-[10px] uppercase font-black tracking-wider transition-all border ${sidebarMode === 'wardrobe'
-                                                    ? 'bg-surface text-accent border-accent shadow-[0_0_10px_rgba(250,204,21,0.2)]'
-                                                    : 'border-transparent text-muted hover:text-fg'
-                                                    }`}
-                                            >
-                                                Wardrobe
-                                            </button>
-                                        </div>
+                                        <HelpTooltip zone="nano" id="directorModeToggle">
+                                            <div className="flex bg-surface-2 rounded-lg p-1 gap-1">
+                                                <button
+                                                    onClick={() => setSidebarMode('director')}
+                                                    className={`px-3 py-1.5 rounded-md text-[10px] uppercase font-black tracking-wider transition-all border ${sidebarMode === 'director'
+                                                        ? 'bg-surface text-accent border-accent shadow-[0_0_10px_rgba(250,204,21,0.2)]'
+                                                        : 'border-transparent text-muted hover:text-fg'
+                                                        }`}
+                                                >
+                                                    Director
+                                                </button>
+                                                <button
+                                                    onClick={() => setSidebarMode('wardrobe')}
+                                                    className={`px-3 py-1.5 rounded-md text-[10px] uppercase font-black tracking-wider transition-all border ${sidebarMode === 'wardrobe'
+                                                        ? 'bg-surface text-accent border-accent shadow-[0_0_10px_rgba(250,204,21,0.2)]'
+                                                        : 'border-transparent text-muted hover:text-fg'
+                                                        }`}
+                                                >
+                                                    Wardrobe
+                                                </button>
+                                            </div>
+                                        </HelpTooltip>
                                         <button onClick={() => setShowSettings(false)} className="text-muted hover:text-fg">&times;</button>
                                     </div>
 
@@ -2049,6 +2053,7 @@ const NanoCastingDirector = () => {
                                                     onChange={(e) => setDirectorControls(p => ({ ...p, outfit: e.target.value }))}
                                                     className="w-full bg-black/50 border border-border rounded-lg px-4 py-3 text-sm text-white focus:border-accent outline-none"
                                                 />
+                                                <InlineHint zone="nano" id="promptInput" />
                                             </div>
 
                                             <div className="space-y-3 pt-6 border-t border-border">
@@ -2236,13 +2241,15 @@ const NanoCastingDirector = () => {
                                     <div className="absolute top-4 right-4 z-20 flex items-center gap-4">
 
                                         {/* Camera Toggle */}
-                                        <button
-                                            onClick={() => setCameraEnabled(!cameraEnabled)}
-                                            className={`p-3 rounded-full border transition-all ${cameraEnabled ? 'bg-surface border-accent text-accent shadow-[0_0_15px_rgba(250,204,21,0.3)]' : 'bg-black border-white/20 text-white/50 hover:text-white'}`}
-                                            title={cameraEnabled ? "Disable Camera" : "Enable Camera"}
-                                        >
-                                            {cameraEnabled ? <CameraIcon className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
-                                        </button>
+                                        <HelpTooltip zone="nano" id="cameraControl">
+                                            <button
+                                                onClick={() => setCameraEnabled(!cameraEnabled)}
+                                                className={`p-3 rounded-full border transition-all ${cameraEnabled ? 'bg-surface border-accent text-accent shadow-[0_0_15px_rgba(250,204,21,0.3)]' : 'bg-black border-white/20 text-white/50 hover:text-white'}`}
+                                                title={cameraEnabled ? "Disable Camera" : "Enable Camera"}
+                                            >
+                                                {cameraEnabled ? <CameraIcon className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                                            </button>
+                                        </HelpTooltip>
 
                                         <div className="flex bg-black/90 backdrop-blur rounded-full border border-border p-2 gap-2 shadow-xl">
                                             <button

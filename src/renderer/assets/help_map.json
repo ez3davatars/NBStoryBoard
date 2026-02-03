@@ -1,0 +1,178 @@
+{
+    "version": "1.0",
+    "zones": {
+        "global": {
+            "renderSaveFolderStatus": {
+                "type": "inline",
+                "text": "Assets are saved locally to your selected project folder."
+            },
+            "renderSaveFolderNotLinked": {
+                "type": "tooltip",
+                "text": "When not linked, assets are stored in temporary memory only."
+            },
+            "scanRefreshButton": {
+                "type": "tooltip",
+                "text": "Forces a re-scan of the project folder."
+            },
+            "settingsSaveFolder": {
+                "type": "help",
+                "title": "Unified Storage Link",
+                "text": "The Unified Storage Link connects all studios to a single project directory on your local machine."
+            }
+        },
+        "cast": {
+            "generateActorButton": {
+                "type": "tooltip",
+                "text": "Generates a new actor based on your prompt and selected studio style."
+            },
+            "studioStyleSelector": {
+                "type": "tooltip",
+                "text": "Defines the global visual aesthetic for character generation."
+            },
+            "addToLibraryButton": {
+                "type": "tooltip",
+                "text": "Saves the actor using a collision-safe filename with metadata stored separately."
+            },
+            "actorNameDisplay": {
+                "type": "tooltip",
+                "text": "File names are generic. Display names are stored in metadata."
+            },
+            "sendToDirectorButton": {
+                "type": "inline",
+                "text": "Locks this actor’s identity for downstream stages."
+            }
+        },
+        "nanoCast": {
+            "cameraToggle": {
+                "type": "tooltip",
+                "text": "Enables live capture for biometric acquisition."
+            },
+            "captureProgressIndicator": {
+                "type": "inline",
+                "text": "All three angles improve facial stability and accuracy."
+            },
+            "uploadToggle": {
+                "type": "tooltip",
+                "text": "Uploading high-resolution photos yields higher quality results than webcam frames."
+            },
+            "identityLockSlider": {
+                "type": "tooltip",
+                "text": "Higher values increase facial accuracy but reduce stylization flexibility."
+            },
+            "saveCharacterButton": {
+                "type": "tooltip",
+                "text": "Finalizes identity blending and saves the character to the library."
+            }
+        },
+        "wardrobe": {
+            "generateOutfitButton": {
+                "type": "tooltip",
+                "text": "Generates a clothing asset on a neutral studio background."
+            },
+            "saveToWardrobeButton": {
+                "type": "tooltip",
+                "text": "Saves this item for use in Virtual Try-On."
+            },
+            "tryOnExecuteButton": {
+                "type": "tooltip",
+                "text": "Single-subject enforcement prevents mannequins or floating heads."
+            },
+            "subjectSelector": {
+                "type": "inline",
+                "text": "One actor per try-on."
+            },
+            "fittingNotesInput": {
+                "type": "tooltip",
+                "text": "Add contextual instructions such as wear, damage, or fit."
+            },
+            "removeBackgroundToggle": {
+                "type": "tooltip",
+                "text": "Uses AI segmentation to isolate the subject."
+            },
+            "restoreBrush": {
+                "type": "tooltip",
+                "text": "Restores areas removed unintentionally."
+            },
+            "saveProcessedImage": {
+                "type": "inline",
+                "text": "The edited version replaces the raw render."
+            }
+        },
+        "props": {
+            "generatePropButton": {
+                "type": "tooltip",
+                "text": "Creates a standalone prop asset."
+            },
+            "removeBackgroundProp": {
+                "type": "tooltip",
+                "text": "Isolates the prop for staging."
+            },
+            "savePropButton": {
+                "type": "inline",
+                "text": "Saved props are available in the Stage."
+            }
+        },
+        "stage": {
+            "stageHeader": {
+                "type": "inline",
+                "text": "Direct intent, not pixels."
+            },
+            "canvasFooter": {
+                "type": "inline",
+                "text": "Placement is interpreted directionally."
+            },
+            "dragToken": {
+                "type": "tooltip",
+                "text": "Use for exploratory layout and composition."
+            },
+            "zDepthControl": {
+                "type": "tooltip",
+                "text": "Controls narrative priority, not physical depth."
+            },
+            "referenceStackHeader": {
+                "type": "inline",
+                "text": "Precision Directing (Recommended for consistent results)."
+            },
+            "actorNameField": {
+                "type": "tooltip",
+                "text": "Naming actors allows the AI to bind instructions to the correct face."
+            },
+            "directorsNote": {
+                "type": "tooltip",
+                "text": "Text instructions override canvas placement when using Precision Directing."
+            },
+            "unnamedActorWarning": {
+                "type": "inline",
+                "text": "Unnamed actors reduce placement accuracy."
+            }
+        },
+        "action": {
+            "renderButton": {
+                "type": "tooltip",
+                "text": "Generates a single cinematic frame from the current stage."
+            },
+            "anchorDNAToggle": {
+                "type": "tooltip",
+                "text": "Locks lighting and style references, not pose or camera position."
+            },
+            "renderOutput": {
+                "type": "inline",
+                "text": "ACTION produces still frames only."
+            }
+        },
+        "library": {
+            "libraryView": {
+                "type": "tooltip",
+                "text": "Displays assets detected in the linked project folder."
+            },
+            "libraryRefreshButton": {
+                "type": "tooltip",
+                "text": "Re-indexes files on disk."
+            },
+            "missingAssetIndicator": {
+                "type": "inline",
+                "text": "Asset may be missing or renamed externally."
+            }
+        }
+    }
+}

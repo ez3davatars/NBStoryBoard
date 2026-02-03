@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Scissors, Image as ImageIcon,
+  Scissors,
   Trash2, Upload, RotateCw, MonitorPlay,
   Eraser, RefreshCw, X,
   Target, Download, UserPlus, Sparkles,
@@ -13,6 +13,8 @@ import {
 import { useAppContext } from '../context/AppContext';
 import { removeBackground } from "@imgly/background-removal";
 import { GeminiService } from '../services/GeminiService';
+import HelpTooltip from './ui/HelpTooltip';
+import InlineHint from './ui/InlineHint';
 
 // Types are exported from AppContext
 import type { CastMember } from '../context/AppContext';
@@ -1704,7 +1706,10 @@ const CastingForge = () => {
         {/* Source Material */}
         <div className="bg-[#18181b] p-6 rounded-xl border border-gray-800 shadow-xl shrink-0">
           <div className="flex justify-between items-center mb-4">
-            <h2 className="text-sm font-bold text-gray-400 uppercase tracking-wider">1. Source Material</h2>
+            <div>
+              <h2 className="text-lg font-black text-white uppercase tracking-wide mb-1">Character Generator</h2>
+              <p className="text-[10px] text-zinc-400 font-bold">Create or refine an actor before staging.</p>
+            </div>
             <button
               onClick={() => dispatch({ type: 'SET_LAST_CASTED_PROMPT', payload: '' })}
               className="text-xs text-gray-600 hover:text-white transition-colors flex items-center gap-1 uppercase font-bold"
@@ -1727,35 +1732,38 @@ const CastingForge = () => {
             </label>
             <div className="grid grid-cols-2 gap-2">
               {STUDIO_FOLDERS.filter(f => f.id !== 'uncategorized').map(folder => (
-                <button
-                  key={folder.id}
-                  onClick={() => setSelectedStyleId(selectedStyleId === folder.id ? null : folder.id)}
-                  className={`flex items-center gap-2 p-2 rounded-lg border transition-all ${selectedStyleId === folder.id
-                    ? 'bg-yellow-500/10 border-yellow-500 text-yellow-500 shadow-[0_0_10px_rgba(234,179,8,0.2)]'
-                    : 'bg-[#09090b] border-gray-800 text-gray-500 hover:border-gray-600 hover:text-gray-300'
-                    }`}
-                >
-                  <div className={`w-2 h-2 rounded-full ${selectedStyleId === folder.id ? 'bg-yellow-500' : 'bg-gray-700'}`} />
-                  <div className="text-left overflow-hidden">
-                    <span className="text-[10px] font-bold uppercase block truncate">{folder.label}</span>
-                  </div>
-                </button>
+                <HelpTooltip key={folder.id} zone="cast" id="studioStyleSelector">
+                  <button
+                    onClick={() => setSelectedStyleId(selectedStyleId === folder.id ? null : folder.id)}
+                    className={`flex items-center gap-2 p-2 rounded-lg border transition-all ${selectedStyleId === folder.id
+                      ? 'bg-yellow-500/10 border-yellow-500 text-yellow-500 shadow-[0_0_10px_rgba(234,179,8,0.2)]'
+                      : 'bg-[#09090b] border-gray-800 text-gray-500 hover:border-gray-600 hover:text-gray-300'
+                      }`}
+                  >
+                    <div className={`w-2 h-2 rounded-full ${selectedStyleId === folder.id ? 'bg-yellow-500' : 'bg-gray-700'}`} />
+                    <div className="text-left overflow-hidden">
+                      <span className="text-[10px] font-bold uppercase block truncate">{folder.label}</span>
+                    </div>
+                  </button>
+                </HelpTooltip>
               ))}
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
-            <button
-              onClick={handleGenerate}
-              disabled={state.isProcessing}
-              className={`flex items-center justify-center gap-2 py-3 rounded-lg text-[10px] font-black transition-all border uppercase tracking-wider active:scale-95 ${state.lastCastedImage
-                ? 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white border-blue-400/50 shadow-[0_0_15px_rgba(59,130,246,0.3)] hover:shadow-[0_0_25px_rgba(59,130,246,0.5)]'
-                : 'bg-gradient-to-r from-[#27272a] to-[#18181b] hover:from-[#3f3f46] hover:to-[#27272a] text-white border-[#3f3f46] hover:border-gray-500 shadow-lg'
-                }`}
-            >
-              {state.isProcessing ? <RotateCw className="animate-spin w-4 h-4" /> : state.lastCastedImage ? <RefreshCw className="w-4 h-4" /> : <MonitorPlay className="w-4 h-4" />}
-              {state.lastCastedImage ? 'Stylize' : 'Generate'}
-            </button>
+            <HelpTooltip zone="cast" id="generateActorButton">
+              <button
+                onClick={handleGenerate}
+                disabled={state.isProcessing}
+                className={`flex items-center justify-center gap-2 py-3 rounded-lg text-[10px] font-black transition-all border uppercase tracking-wider active:scale-95 ${state.lastCastedImage
+                  ? 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white border-blue-400/50 shadow-[0_0_15px_rgba(59,130,246,0.3)] hover:shadow-[0_0_25px_rgba(59,130,246,0.5)]'
+                  : 'bg-gradient-to-r from-[#27272a] to-[#18181b] hover:from-[#3f3f46] hover:to-[#27272a] text-white border-[#3f3f46] hover:border-gray-500 shadow-lg'
+                  }`}
+              >
+                {state.isProcessing ? <RotateCw className="animate-spin w-4 h-4" /> : state.lastCastedImage ? <RefreshCw className="w-4 h-4" /> : <MonitorPlay className="w-4 h-4" />}
+                {state.lastCastedImage ? 'Stylize' : 'Generate'}
+              </button>
+            </HelpTooltip>
             <label className="flex items-center justify-center gap-2 bg-[#27272a] hover:bg-[#3f3f46] text-white py-2.5 rounded-lg text-xs font-bold transition-all border border-[#3f3f46] hover:border-gray-500 cursor-pointer">
               <Upload className="w-4 h-4" />
               Upload
@@ -1767,8 +1775,8 @@ const CastingForge = () => {
         {/* Turnaround Completer */}
         <div className="bg-[#18181b] p-6 rounded-xl border border-gray-800 shadow-xl shrink-0">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-sm font-bold text-blue-400 uppercase tracking-wider flex items-center gap-2">
-              <RefreshCw className="w-4 h-4" /> 2. Turnaround Completer
+            <h2 className="text-xs font-bold text-blue-500/50 uppercase tracking-normal flex items-center gap-2">
+              <RefreshCw className="w-3.5 h-3.5 opacity-50" /> Turnaround Completer
             </h2>
             <button
               onClick={() => setShowTurnaround(!showTurnaround)}
@@ -1812,8 +1820,8 @@ const CastingForge = () => {
 
         {/* Reference Sheet Generator */}
         <div className="bg-[#18181b] p-6 rounded-xl border border-gray-800 shadow-xl shrink-0">
-          <h2 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-            <LayoutTemplate className="w-4 h-4" /> 3. Actor Reference Sheet
+          <h2 className="text-xs font-bold text-gray-600 uppercase tracking-normal mb-4 flex items-center gap-2">
+            <LayoutTemplate className="w-3.5 h-3.5 opacity-50" /> Actor Reference Sheet
             <div className="group relative">
               <Info className="w-3.5 h-3.5 text-gray-400 hover:text-white cursor-help transition-colors" />
               <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 p-3 bg-gray-900 border border-gray-700 rounded-lg shadow-xl text-[10px] text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
@@ -1999,12 +2007,14 @@ const CastingForge = () => {
             <div className="flex items-center gap-4">
               {state.lastCastedImage && (
                 <div className="flex items-center gap-3 pr-4 border-r border-white/10">
-                  <button
-                    onClick={() => setShowSaveModal(true)}
-                    className="bg-emerald-500/10 hover:bg-emerald-500 text-emerald-500 hover:text-white px-4 py-1.5 rounded-full text-[9px] font-black flex items-center gap-2 transition-all uppercase tracking-widest active:scale-95 border border-emerald-500/20"
-                  >
-                    <UserPlus className="w-4 h-4" /> Add to Library
-                  </button>
+                  <HelpTooltip zone="cast" id="addToLibraryButton">
+                    <button
+                      onClick={() => setShowSaveModal(true)}
+                      className="bg-emerald-500/10 hover:bg-emerald-500 text-emerald-500 hover:text-white px-4 py-1.5 rounded-full text-[9px] font-black flex items-center gap-2 transition-all uppercase tracking-widest active:scale-95 border border-emerald-500/20"
+                    >
+                      <UserPlus className="w-4 h-4" /> Add to Library
+                    </button>
+                  </HelpTooltip>
                   <button
                     onClick={handleDownload}
                     className="text-gray-500 hover:text-white transition-all transform hover:scale-110 active:scale-90"
@@ -2029,7 +2039,7 @@ const CastingForge = () => {
 
           <div
             ref={containerRef}
-            className={`flex-grow relative bg-black flex items-center justify-center overflow-hidden select-none group border-4 border-blue-500/30 rounded-2xl m-2 shadow-[0_0_30px_rgba(59,130,246,0.1)] ${isBrushActive ? 'cursor-none' : ''}`}
+            className={`flex-grow relative bg-gradient-to-b from-[#18181b] to-black flex items-center justify-center overflow-hidden select-none group border-4 border-blue-500/30 rounded-2xl m-2 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.15),0_0_30px_rgba(59,130,246,0.1)] ${isBrushActive ? 'cursor-none' : ''}`}
             onMouseDown={(e) => startInteraction(e)}
             onMouseMove={moveInteraction}
             onMouseUp={endInteraction}
@@ -2091,9 +2101,29 @@ const CastingForge = () => {
                 )}
               </>
             ) : (
-              <div className="text-gray-700 flex flex-col items-center">
-                <ImageIcon className="w-12 h-12 mb-2 opacity-20" />
-                <p className="text-sm font-mono opacity-40">No Reference Image Loaded</p>
+              <div className="flex flex-col items-center justify-center h-full select-none pointer-events-none group">
+                <div className="text-center bg-zinc-900/50 p-8 rounded-3xl backdrop-blur-sm transition-all duration-300 group-hover:bg-zinc-900/70">
+                  {/* Ambient Actor Outline */}
+                  <div className="relative w-32 h-32 mx-auto mb-4 opacity-40 transition-opacity duration-300 group-hover:opacity-70">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-full h-full text-zinc-500" strokeWidth="0.5">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                    </svg>
+                    {/* Subtle glow/tech accents */}
+                    <div className="absolute inset-0 bg-blue-500/5 blur-2xl rounded-full" />
+                  </div>
+
+                  <div className="space-y-4">
+                    <h3 className="text-3xl font-black text-zinc-500 uppercase tracking-[0.2em] drop-shadow-lg">ADD OR GENERATE AN ACTOR</h3>
+                    <div className="space-y-1">
+                      <p className="text-xs font-bold text-zinc-300 uppercase tracking-widest animate-stage-breathe max-w-lg mx-auto leading-relaxed">
+                        Generate a new character or place an existing one<br /> to prepare it for directing.
+                      </p>
+                      <p className="text-[10px] text-zinc-400 font-mono">
+                        Background removal and slicing happen here before staging.
+                      </p>
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -2529,19 +2559,22 @@ const CastingForge = () => {
                     <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 transition-all duration-300 flex flex-col items-center justify-center gap-2 backdrop-blur-md">
                       {/* Top Row: 3 Actions */}
                       <div className="flex gap-2">
-                        <button
-                          onClick={() => {
-                            dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: actor.url });
-                            dispatch({ type: 'SET_LAST_CASTED_PROMPT', payload: actor.profile?.identity || "" });
-                            dispatch({ type: 'SET_LAST_CASTED_MASK', payload: null });
-                            setProcessedPreviewUrl(null);
-                            dispatch({ type: 'ADD_LOG', payload: { message: `Loaded ${actor.name} into Viewport`, type: 'info' } });
-                          }}
-                          className="bg-[#27272a] hover:bg-orange-600 w-8 h-8 rounded-lg border border-white/10 hover:border-orange-400/50 shadow-xl transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
-                          title="Load to Forge / Turnaround"
-                        >
-                          <Hammer className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
-                        </button>
+                        <HelpTooltip zone="cast" id="sendToDirectorButton">
+                          <button
+                            onClick={() => {
+                              dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: actor.url });
+                              dispatch({ type: 'SET_LAST_CASTED_PROMPT', payload: actor.profile?.identity || "" });
+                              dispatch({ type: 'SET_LAST_CASTED_MASK', payload: null });
+                              setProcessedPreviewUrl(null);
+                              dispatch({ type: 'ADD_LOG', payload: { message: `Loaded ${actor.name} into Viewport`, type: 'info' } });
+                            }}
+                            className="bg-[#27272a] hover:bg-orange-600 w-8 h-8 rounded-lg border border-white/10 hover:border-orange-400/50 shadow-xl transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
+                            title="Load to Forge / Turnaround"
+                          >
+                            <Hammer className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
+                          </button>
+                        </HelpTooltip>
+                        <InlineHint zone="cast" id="sendToDirectorButton" className="hidden" />
                         <button
                           onClick={() => dispatch({ type: 'SET_INSPECT_IMAGE', payload: actor.url })}
                           className="bg-[#27272a] hover:bg-blue-600 w-8 h-8 rounded-lg border border-white/10 hover:border-blue-400/50 shadow-xl transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
@@ -2577,24 +2610,27 @@ const CastingForge = () => {
                           <Trash2 className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
                         </button>
                       </div>
+                      <span className="text-[9px] font-black uppercase tracking-widest text-white/60 mt-3 pointer-events-none">Add to Stage</span>
                     </div>
                     {/* Centered Editable Label */}
                     <div className="absolute bottom-0 inset-x-0 bg-black/60 backdrop-blur-md border-t border-white/5 p-1.5 flex justify-center items-center">
-                      <input
-                        className="bg-transparent text-[10px] font-black uppercase text-center text-white/70 hover:text-white focus:text-white focus:outline-none w-full tracking-wider transition-colors"
-                        value={actor.name}
-                        onChange={(e) => dispatch({
-                          type: 'UPDATE_ACTOR_LIBRARY',
-                          payload: { id: actor.id, updates: { name: e.target.value } }
-                        })}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.currentTarget.blur();
-                          }
-                        }}
-                        onFocus={(e) => e.target.select()}
-                        title="Click to Rename Actor"
-                      />
+                      <HelpTooltip zone="cast" id="actorNameDisplay">
+                        <input
+                          className="bg-transparent text-[10px] font-black uppercase text-center text-white/70 hover:text-white focus:text-white focus:outline-none w-full tracking-wider transition-colors"
+                          value={actor.name}
+                          onChange={(e) => dispatch({
+                            type: 'UPDATE_ACTOR_LIBRARY',
+                            payload: { id: actor.id, updates: { name: e.target.value } }
+                          })}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.currentTarget.blur();
+                            }
+                          }}
+                          onFocus={(e) => e.target.select()}
+                          title="Click to Rename Actor"
+                        />
+                      </HelpTooltip>
                     </div>
                   </div>
                 ))}
