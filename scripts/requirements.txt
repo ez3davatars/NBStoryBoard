@@ -1,0 +1,7 @@
+torch
+torchvision
+opencv-python
+pillow
+numpy
+# For Depth Anything V2, user might need to install from source or a specific wheel
+# depth-anything-v2

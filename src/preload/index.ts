@@ -7,5 +7,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     exists: (path: string) => ipcRenderer.invoke('file:exists', path),
     listFiles: (path: string) => ipcRenderer.invoke('file:list', path),
     createDir: (path: string) => ipcRenderer.invoke('dir:create', path),
-    joinPath: (...args: string[]) => ipcRenderer.invoke('path:join', ...args)
+    joinPath: (...args: string[]) => ipcRenderer.invoke('path:join', ...args),
+    hashFile: (path: string) => ipcRenderer.invoke('file:hash', path),
+    generateDepth: (inputPath: string) => ipcRenderer.invoke('depth:generate', inputPath)
 });

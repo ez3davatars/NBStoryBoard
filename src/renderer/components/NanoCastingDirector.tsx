@@ -17,6 +17,7 @@ import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
 import HelpTooltip from './ui/HelpTooltip';
 import InlineHint from './ui/InlineHint';
+import ConfirmDialog from './ui/ConfirmDialog';
 
 import BodyScopeSelector from './BodyScopeSelector';
 import type { BodyScope } from './BodyScopeSelector';
@@ -93,13 +94,13 @@ const REF_SHEET_STYLES = {
     family_3d: {
         id: 'family_3d',
         label: 'Family 3D Animation',
-        keywords: "High-end studio 3D character, stylized facial features, vibrant colors, soft subsurface scattering, clean stylized materials, high-end CG render, smooth shading, cinematic depth",
+        keywords: "High-end studio 3D character, stylized facial features, vibrant colors, soft subsurface scattering, clean stylized materials, high-end CG render, smooth shading",
         lighting: "Golden hour, cinematic bounce light"
     },
     premium_cg: {
         id: 'premium_cg',
         label: 'Premium CG Realism',
-        keywords: "photorealistic CG, exact facial structure preservation, highly detailed skin pores, 85mm lens look, f/1.8 depth of field, cinematic natural lighting, sharp focus, biometric fidelity",
+        keywords: "photorealistic CG, exact facial structure preservation, highly detailed skin pores, 85mm lens look, cinematic natural lighting, sharp focus, biometric fidelity",
         lighting: "High-contrast studio lighting"
     },
     exact_studio: {
@@ -182,6 +183,7 @@ const NanoCastingDirector = () => {
 
     // --- WARDROBE LIBRARY HANDLERS ---
     const [confirmDelete, setConfirmDelete] = useState<any | null>(null);
+    const [showCoverDeleteConfirm, setShowCoverDeleteConfirm] = useState<string | null>(null);
 
     const scanWardrobe = async () => {
         // 1. Native Mode
@@ -355,7 +357,7 @@ const NanoCastingDirector = () => {
         try {
             // DUPLICATE CHECK
             if (state.wardrobeItems.some((i: any) => i.id.includes(file.name) || i.name === file.name.split('.')[0])) {
-                alert("Item already exists in library.");
+                showToast("Item already exists in library.");
                 return;
             }
 
@@ -499,7 +501,13 @@ const NanoCastingDirector = () => {
 
     const handleArchetypeCoverDelete = async (storageKey: string, e: React.MouseEvent) => {
         e.stopPropagation();
-        if (!confirm("Remove custom cover and revert to default?")) return;
+        setShowCoverDeleteConfirm(storageKey);
+    };
+
+    const confirmCoverDelete = async () => {
+        if (!showCoverDeleteConfirm) return;
+        const storageKey = showCoverDeleteConfirm;
+        setShowCoverDeleteConfirm(null);
 
         if (!state.saveDirectoryHandle) return;
 
@@ -1371,7 +1379,7 @@ const NanoCastingDirector = () => {
         const targetName = nameOverride || newActorName;
         const targetCategory = categoryOverride || saveCategory;
 
-        alert(`Debug: Confirm Save Reached. Target: ${targetName}`);
+        showToast(`Save Identity: ${targetName}`);
         console.log("confirmSaveToLibrary called with:", { targetName, targetCategory, hasHandle: !!state.saveDirectoryHandle, hasUrl: !!finalCharacterUrl });
 
         if (!state.saveDirectoryHandle || !finalCharacterUrl) {
@@ -1557,7 +1565,7 @@ const NanoCastingDirector = () => {
             finalPrompt += `LAYOUT & COMPOSITION PROTOCOL (AGGRESSIVE ENFORCEMENT):\n`;
             finalPrompt += `1. VARIATION LOCK: Every panel MUST show a unique viewpoint. NO DUPLICATE ANGLES.\n`;
             finalPrompt += `2. FORBIDDEN: Do NOT repeat the same camera angle (e.g., do not show 3/4 view twice). Do NOT generate the same expression twice.\n`;
-            finalPrompt += `3. CAMERA ROTATION MATRIX: You are a multi-camera rig capturing different slices of the character. Each lens is unique.\n\n`;
+            finalPrompt += `3. MULTI-ANGLE CAMERA RIG: Each panel shows a different viewpoint of the character. Each lens is unique.\n\n`;
 
             if (refLayout === 'form_focus') {
                 // BODY FOCUS -> Vertical Split (Image 3)
@@ -1834,7 +1842,7 @@ const NanoCastingDirector = () => {
     };
 
     return (
-        <div className="flex h-screen bg-bg text-fg overflow-hidden relative font-sans select-none">
+        <div className="flex h-full bg-bg text-fg overflow-hidden relative font-sans select-none">
             {/* Background Grid - Subtle */}
             <div className="absolute inset-0 z-0 pointer-events-none opacity-[0.05]"
                 style={{
@@ -3163,7 +3171,7 @@ const NanoCastingDirector = () => {
                             </div>
                         )}
 
-                    </AnimatePresence >
+                    </AnimatePresence>
 
                     {/* SAVE TO LIBRARY MODAL (Refactored) */}
                     <ActorSaveModal
@@ -3183,60 +3191,49 @@ const NanoCastingDirector = () => {
                         }}
                     />
 
-                    {/* DELETE CONFIRMATION MODAL */}
+                    <ConfirmDialog
+                        isOpen={!!confirmDelete}
+                        onClose={() => setConfirmDelete(null)}
+                        onConfirm={executeDelete}
+                        title="Delete Costume?"
+                        message={confirmDelete ? `Are you sure you want to delete ${confirmDelete.name}? This action cannot be undone.` : ""}
+                        confirmText="Delete"
+                        cancelText="Cancel"
+                        variant="danger"
+                    />
 
-                    {/* DELETE CONFIRMATION MODAL */}
-                    <AnimatePresence>
-                        {
-                            confirmDelete && (
-                                <div className="fixed inset-0 z-[3000] bg-black/80 backdrop-blur-sm flex items-center justify-center p-8 animate-in fade-in duration-200">
-                                    <div className="bg-[#18181b] border border-gray-700 p-6 rounded-2xl shadow-2xl max-w-sm w-full relative overflow-hidden">
-                                        <h3 className="text-lg font-black text-white uppercase tracking-wider mb-2">Delete Costume?</h3>
-                                        <p className="text-sm text-gray-400 mb-6">
-                                            Are you sure you want to delete <span className="text-white font-bold">{confirmDelete.name}</span>? This cannot be undone.
-                                        </p>
-                                        <div className="flex justify-end gap-3">
-                                            <button
-                                                onClick={() => setConfirmDelete(null)}
-                                                className="px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider text-gray-400 hover:text-white hover:bg-gray-800 transition-colors"
-                                            >
-                                                Cancel
-                                            </button>
-                                            <button
-                                                onClick={executeDelete}
-                                                className="px-4 py-2 rounded-lg text-xs font-black uppercase tracking-wider bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-900/20"
-                                            >
-                                                Confirm
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                            )
-                        }
-                    </AnimatePresence>
+                    <ConfirmDialog
+                        isOpen={!!showCoverDeleteConfirm}
+                        onClose={() => setShowCoverDeleteConfirm(null)}
+                        onConfirm={confirmCoverDelete}
+                        title="Remove Custom Cover?"
+                        message="This will delete the uploaded image and revert this archetype to its original default look. This action cannot be undone."
+                        confirmText="Remove Cover"
+                        cancelText="Keep Custom"
+                        variant="danger"
+                    />
 
                     {/* TOAST OVERLAY */}
                     <AnimatePresence>
-                        {
-                            notification && (
-                                <motion.div
-                                    initial={{ opacity: 0, y: 50 }}
-                                    animate={{ opacity: 1, y: 0 }}
-                                    exit={{ opacity: 0, y: 20 }}
-                                    className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-surface border border-accent/50 text-fg px-6 py-3 rounded-full shadow-2xl backdrop-blur-xl z-[5000] flex items-center gap-3"
-                                >
-                                    <CheckCircle2 className="w-5 h-5 text-accent" />
-                                    <span className="text-xs font-bold uppercase tracking-widest">{notification}</span>
-                                </motion.div>
-                            )
-                        }
-                    </AnimatePresence >
-                </main >
-
-            </div >
-        </div >
+                        {notification && (
+                            <motion.div
+                                initial={{ opacity: 0, y: 50 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, y: 20 }}
+                                className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-surface border border-accent/50 text-fg px-6 py-3 rounded-full shadow-2xl backdrop-blur-xl z-[5000] flex items-center gap-3"
+                            >
+                                <CheckCircle2 className="w-5 h-5 text-accent" />
+                                <span className="text-xs font-bold uppercase tracking-widest">{notification}</span>
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
+                </main>
+            </div>
+        </div>
     );
 };
 
-// End of file
 export default NanoCastingDirector;
+
+
+

@@ -1,6 +1,7 @@
-import React, { createContext, useContext, useReducer, useEffect } from 'react';
+import { createContext, useContext, useReducer, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { StorageService } from '../services/StorageService';
+import { computeDepthScore } from '../utils/spatialHelpers';
 
 export const APP_SCHEMA_VERSION = 4; // bump when persisted state shape changes
 // --- SHARED TYPES ---
@@ -50,6 +51,49 @@ export interface CastMember {
   filename?: string;
   profile?: WhitelistProfile;
 }
+import type { SpatialAuthorityStatus, PlacementAuthority } from '../services/SpatialIntelligence';
+export type { SpatialAuthorityStatus, PlacementAuthority };
+
+export interface FloorPlane {
+  depth: number;
+  confidence: 'high' | 'fallback';
+  computedAt: number;
+}
+
+export interface Rect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface PlacementResolutionResult {
+  status: 'accepted' | 'adjusted' | 'rejected';
+  finalPosition: { x: number; y: number };
+  finalDepth?: number;
+  reason?: string;
+  adjustmentVector?: { dx: number; dy: number };
+}
+
+export interface OccupiedVolume {
+  id: string;
+  footprint: Rect;
+  minDepth: number; // 0-255 derived from depth map
+  maxDepth: number;
+  heightEstimate: number;
+  confidence: 'high' | 'approximate';
+}
+
+export interface GroundingAudit {
+  overriddenAt: number;
+  confidenceAtTime: 'high' | 'fallback';
+}
+
+export interface ActorSpatialDescriptor {
+  depthScore: number;
+  depthLayer: 'foreground' | 'midground' | 'background';
+  zIndex: number;
+}
 
 export interface StageToken {
   id: string;
@@ -73,6 +117,16 @@ export interface StageToken {
   uniformScale: boolean;
   zIndex: number;
   visible?: boolean;
+  depth?: number; // 0.0 (Near) to 1.0 (Far)
+  groundingEnabled?: boolean;
+  manualGroundingOverride?: boolean;
+  placementAuthority?: PlacementAuthority;
+  hasUserCommittedIntent?: boolean;
+  hasConfirmedPlacement?: boolean;
+  resolvedPosition?: { x: number; y: number } | null;
+  groundingAudit?: GroundingAudit;
+  anchorLayer?: 'foreground' | 'midground' | 'background';
+  spatialDescriptor?: ActorSpatialDescriptor;
 }
 
 export interface StageAnnotation {
@@ -106,7 +160,7 @@ export interface ReferenceSlot {
 }
 
 export type DirectorMergeStrategy = 'Character Identity' | 'Style Transfer' | 'Composition Reference' | 'Photo Merge';
-export type DirectorSpatialLayout = '' | 'horizontal' | 'vertical' | 'depth' | 'center';
+export type DirectorSpatialLayout = '' | 'horizontal' | 'vertical' | 'center';
 export type DirectorMarkerType =
   | ''
   | 'Colored Bounding Boxes'
@@ -193,6 +247,11 @@ export interface Shot {
   updatedAt: number; // epoch ms
 
   backgroundUrl: string | null;
+  depthMapUrl?: string | null; // Associated monocular depth
+  depthMapHash?: string | null; // SHA-256 hash for integrity contract
+  sourceBackgroundHash?: string | null; // Binding invariant link
+  floorPlane?: FloorPlane | null; // Floor authority
+  occupiedVolumes: OccupiedVolume[]; // Derived 3D bounds
   tokens: StageToken[];
   annotations: StageAnnotation[];
   referenceSlots: ReferenceSlot[];
@@ -225,6 +284,11 @@ export interface AppState {
   selection: string | null;
   selectionType: 'token' | 'annotation' | null;
   backgroundUrl: string | null;
+  depthMapUrl: string | null;
+  depthMapHash: string | null;
+  sourceBackgroundHash: string | null;
+  floorPlane: FloorPlane | null;
+  occupiedVolumes: OccupiedVolume[];
   resultImage: string | null;
   logs: LogEntry[];
   isProcessing: boolean;
@@ -242,6 +306,7 @@ export interface AppState {
   actorLibrary: CastMember[];
   propItems: PropItem[];
   customCovers: Record<string, string>; // Studio ID -> Data URI/Blob URL
+  isDepthProcessing: boolean;
 
   regionEdit: RegionEditState;
 
@@ -274,6 +339,8 @@ export interface WardrobeState {
   processedTryOnUrl: string | null;
   selectedCharacter: CastMember | null;
   selectedCostume: WardrobeItem | null;
+  brandingLogo: string | null;
+  logoPosition: string;
 }
 
 const DEFAULT_WARDROBE_STATE: WardrobeState = {
@@ -289,7 +356,9 @@ const DEFAULT_WARDROBE_STATE: WardrobeState = {
   tryOnNote: "",
   processedTryOnUrl: null,
   selectedCharacter: null,
-  selectedCostume: null
+  selectedCostume: null,
+  brandingLogo: null,
+  logoPosition: "Center Chest"
 };
 
 export type Action =
@@ -311,6 +380,9 @@ export type Action =
   | { type: 'SELECT_ITEM'; payload: { id: string | null; type: 'token' | 'annotation' | null } }
   | { type: 'CLEAR_STAGE' }
   | { type: 'SET_BG'; payload: string | null }
+  | { type: 'SET_DEPTH_MAP'; payload: { url: string | null; hash?: string | null; sourceHash?: string | null } | string | null }
+  | { type: 'SET_FLOOR_PLANE'; payload: FloorPlane | null }
+  | { type: 'SET_OCCUPIED_VOLUMES'; payload: OccupiedVolume[] }
   | { type: 'SET_RESULT_IMAGE'; payload: string | null }
   | { type: 'ADD_LOG'; payload: Omit<LogEntry, 'id' | 'timestamp'> }
   | { type: 'SET_PROCESSING'; payload: boolean }
@@ -360,6 +432,8 @@ export type Action =
   | { type: 'SET_CUSTOM_COVERS'; payload: Record<string, string> }
   | { type: 'SET_STAGE_PANEL_STATE'; payload: { id: string; isOpen: boolean } }
   | { type: 'SET_WARDROBE_STATE'; payload: Partial<WardrobeState> }
+  | { type: 'SET_DEPTH_PROCESSING'; payload: boolean }
+  | { type: 'SYNC_SPATIAL_DESCRIPTORS' }
   ;
 
 // --- HELPERS ---
@@ -379,6 +453,11 @@ const loadJson = <T,>(key: string, fallback: T): T => {
 // --- UNDO / REDO HISTORY (paid-launch safety) ---
 export type HistorySnapshot = {
   backgroundUrl: string | null;
+  depthMapUrl: string | null;
+  depthMapHash: string | null;
+  sourceBackgroundHash: string | null;
+  floorPlane: FloorPlane | null; // Floor authority
+  occupiedVolumes: OccupiedVolume[]; // Derived 3D bounds
   tokens: StageToken[];
   annotations: StageAnnotation[];
   referenceSlots: ReferenceSlot[];
@@ -393,6 +472,7 @@ const MAX_HISTORY = 30;
 
 const snapshotOf = (s: AppState): HistorySnapshot => ({
   backgroundUrl: s.backgroundUrl,
+  depthMapUrl: s.depthMapUrl,
   tokens: clone(s.tokens),
   annotations: clone(s.annotations),
   referenceSlots: clone(s.referenceSlots),
@@ -401,6 +481,10 @@ const snapshotOf = (s: AppState): HistorySnapshot => ({
   shots: clone(s.shots),
   activeShotId: s.activeShotId,
   resultImage: s.resultImage,
+  depthMapHash: s.depthMapHash,
+  sourceBackgroundHash: s.sourceBackgroundHash,
+  floorPlane: s.floorPlane,
+  occupiedVolumes: clone(s.occupiedVolumes),
 });
 
 const applySnapshot = (s: AppState, snap: HistorySnapshot): AppState => ({
@@ -517,6 +601,12 @@ export const initialState: AppState = {
   actorLibrary: [],
   propItems: loadJson<PropItem[]>('nano_props', []),
   customCovers: {},
+  depthMapUrl: localStorage.getItem('nano_depth_url') || null,
+  depthMapHash: localStorage.getItem('nano_depth_hash') || null,
+  sourceBackgroundHash: localStorage.getItem('nano_source_hash') || null,
+  floorPlane: loadJson<FloorPlane | null>('nano_floor_plane', null),
+  occupiedVolumes: loadJson<OccupiedVolume[]>('nano_occupied_volumes', []),
+  isDepthProcessing: false,
 
   regionEdit: clone(DEFAULT_REGION_EDIT),
 
@@ -619,6 +709,11 @@ export const reducer = (state: AppState, action: Action): AppState => {
         tokens: [],
         annotations: [],
         backgroundUrl: null,
+        depthMapUrl: null,
+        depthMapHash: null,
+        sourceBackgroundHash: null,
+        floorPlane: null,
+        occupiedVolumes: [],
         selection: null,
         selectionType: null,
         storyboardSource: null,
@@ -633,12 +728,75 @@ export const reducer = (state: AppState, action: Action): AppState => {
         historyFuture: [],
       };
 
+    case 'SYNC_SPATIAL_DESCRIPTORS': {
+      const STAGE_H = 540;
+
+      // 1. Recompute depthScore for all actors
+      // Using ONLY: scale, y, anchorLayer (Authority #1 & #2)
+      const withScores = state.tokens.map(t => ({
+        ...t,
+        _depthScore: computeDepthScore(
+          {
+            scale: t.scaleX,
+            position: { y: t.y },
+            height: t.height,
+            depthLayer: t.anchorLayer // Using input constraint as bias (Authority #1)
+          },
+          { height: STAGE_H }
+        )
+      }));
+
+      // 2. Sort actors by depthScore descending
+      const sorted = [...withScores].sort((a, b) => b._depthScore - a._depthScore);
+
+      // 3. Assign derived layers (Authority #3 - Read Only)
+      const count = sorted.length;
+      const nextTokens = state.tokens.map(t => {
+        const sortedItem = sorted.find(s => s.id === t.id);
+        const index = sorted.findIndex(s => s.id === t.id);
+        const score = sortedItem?._depthScore || 0.5;
+
+        // "Assign: top third -> foreground, middle third -> midground, bottom third -> background"
+        let derivedLayer: 'foreground' | 'midground' | 'background' = 'midground';
+        if (index < count / 3) derivedLayer = 'foreground';
+        else if (index > (count * 2) / 3) derivedLayer = 'background';
+
+        // Authority #3 assignment (zIndex)
+        const newZ = (count - index) + 10;
+
+        return {
+          ...t,
+          zIndex: newZ,
+          spatialDescriptor: {
+            depthScore: score,
+            depthLayer: derivedLayer, // This is the READ-ONLY derived layer (Authority #3)
+            zIndex: newZ
+          }
+        };
+      });
+
+      return { ...state, tokens: nextTokens };
+    }
+
     case 'SET_BG':
       return { ...state, backgroundUrl: action.payload };
+    case 'SET_DEPTH_MAP': {
+      const { url, hash, sourceHash } = typeof action.payload === 'string' || action.payload === null
+        ? { url: action.payload, hash: null, sourceHash: null }
+        : action.payload;
+      // Invalidate floor plane when depth map changes
+      return { ...state, depthMapUrl: url, depthMapHash: hash || null, sourceBackgroundHash: sourceHash || null, floorPlane: null };
+    }
+    case 'SET_FLOOR_PLANE':
+      return { ...state, floorPlane: action.payload };
+    case 'SET_OCCUPIED_VOLUMES':
+      return { ...state, occupiedVolumes: action.payload };
     case 'SET_RESULT_IMAGE':
       return { ...state, resultImage: action.payload };
     case 'SET_PROCESSING':
       return { ...state, isProcessing: action.payload };
+    case 'SET_DEPTH_PROCESSING':
+      return { ...state, isDepthProcessing: action.payload };
     case 'ADD_LOG':
       return { ...state, logs: [...state.logs, { ...action.payload, id: Math.random().toString(), timestamp: new Date() }] };
     case 'SET_SAVE_DIRECTORY':
@@ -774,6 +932,11 @@ export const reducer = (state: AppState, action: Action): AppState => {
         createdAt: now,
         updatedAt: now,
         backgroundUrl: state.backgroundUrl,
+        depthMapUrl: state.depthMapUrl,
+        depthMapHash: state.depthMapHash,
+        sourceBackgroundHash: state.sourceBackgroundHash,
+        floorPlane: state.floorPlane,
+        occupiedVolumes: clone(state.occupiedVolumes),
         tokens: clone(state.tokens),
         annotations: clone(state.annotations),
         referenceSlots: clone(state.referenceSlots),
@@ -804,10 +967,13 @@ export const reducer = (state: AppState, action: Action): AppState => {
         shots: [...state.shots, copy],
         activeShotId: copy.id,
         backgroundUrl: copy.backgroundUrl,
+        depthMapUrl: copy.depthMapUrl || null,
         tokens: clone(copy.tokens),
         annotations: clone(copy.annotations),
         referenceSlots: clone(copy.referenceSlots),
         director: clone(copy.director),
+        floorPlane: copy.floorPlane || null,
+        occupiedVolumes: clone(copy.occupiedVolumes),
         regionEdit: clone(copy.regionEdit ?? DEFAULT_REGION_EDIT),
         selection: null,
         selectionType: null,
@@ -828,6 +994,11 @@ export const reducer = (state: AppState, action: Action): AppState => {
         shots: remaining,
         activeShotId: nextActive.id,
         backgroundUrl: nextActive.backgroundUrl,
+        depthMapUrl: nextActive.depthMapUrl || null,
+        depthMapHash: nextActive.depthMapHash || null,
+        sourceBackgroundHash: nextActive.sourceBackgroundHash || null,
+        floorPlane: nextActive.floorPlane || null,
+        occupiedVolumes: clone(nextActive.occupiedVolumes),
         tokens: clone(nextActive.tokens),
         annotations: clone(nextActive.annotations),
         referenceSlots: clone(nextActive.referenceSlots),
@@ -849,10 +1020,13 @@ export const reducer = (state: AppState, action: Action): AppState => {
         ...state,
         activeShotId: shot.id,
         backgroundUrl: shot.backgroundUrl,
+        depthMapUrl: shot.depthMapUrl || null,
         tokens: clone(shot.tokens),
         annotations: clone(shot.annotations),
         referenceSlots: clone(shot.referenceSlots),
         director: clone(shot.director),
+        floorPlane: shot.floorPlane || null,
+        occupiedVolumes: clone(shot.occupiedVolumes),
         regionEdit: clone(shot.regionEdit ?? DEFAULT_REGION_EDIT),
         selection: null,
         selectionType: null,
@@ -869,10 +1043,13 @@ export const reducer = (state: AppState, action: Action): AppState => {
         return {
           ...s,
           backgroundUrl: state.backgroundUrl,
+          depthMapUrl: state.depthMapUrl,
           tokens: clone(state.tokens),
           annotations: clone(state.annotations),
           referenceSlots: clone(state.referenceSlots),
           director: clone(state.director),
+          floorPlane: state.floorPlane,
+          occupiedVolumes: clone(state.occupiedVolumes),
           regionEdit: clone(state.regionEdit),
           updatedAt: touch ? now : s.updatedAt,
         };
@@ -916,6 +1093,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         localStorage.setItem('nano_model', state.model);
         localStorage.setItem('nano_director_v3', JSON.stringify(state.director));
         localStorage.setItem('nano_bg_url', state.backgroundUrl || '');
+        localStorage.setItem('nano_depth_url', state.depthMapUrl || '');
+        localStorage.setItem('nano_depth_hash', state.depthMapHash || '');
+        localStorage.setItem('nano_source_hash', state.sourceBackgroundHash || '');
+        localStorage.setItem('nano_floor_plane', JSON.stringify(state.floorPlane));
+        localStorage.setItem('nano_occupied_volumes', JSON.stringify(state.occupiedVolumes));
         localStorage.setItem('nano_active_shot_id', state.activeShotId || '');
 
         localStorage.setItem('nano_tokens', JSON.stringify(state.tokens));
@@ -941,6 +1123,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     state.tokens,
     state.annotations,
     state.backgroundUrl,
+    state.depthMapUrl,
+    state.depthMapHash,
+    state.sourceBackgroundHash,
+    state.floorPlane,
     state.activeShotId,
   ]);
 
@@ -980,3 +1166,5 @@ export const useAppContext = () => {
   if (!context) throw new Error('useAppContext must be used within an AppProvider');
   return context;
 };
+
+

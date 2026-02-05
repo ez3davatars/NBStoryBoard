@@ -1,7 +1,9 @@
 "use strict";
 const electron = require("electron");
 const path = require("path");
+const child_process = require("child_process");
 const fs = require("fs/promises");
+const crypto = require("crypto");
 function _interopNamespaceDefault(e) {
   const n = Object.create(null, { [Symbol.toStringTag]: { value: "Module" } });
   if (e) {
@@ -20,6 +22,7 @@ function _interopNamespaceDefault(e) {
 }
 const path__namespace = /* @__PURE__ */ _interopNamespaceDefault(path);
 const fs__namespace = /* @__PURE__ */ _interopNamespaceDefault(fs);
+const crypto__namespace = /* @__PURE__ */ _interopNamespaceDefault(crypto);
 const is = {
   dev: !electron.app.isPackaged
 };
@@ -223,4 +226,130 @@ electron.ipcMain.handle("file:list", async (_event, folderPath) => {
 });
 electron.ipcMain.handle("path:join", async (_event, ...args) => {
   return path__namespace.join(...args);
+});
+electron.ipcMain.handle("file:hash", async (_event, filePath) => {
+  try {
+    const buffer = await fs__namespace.readFile(filePath);
+    return crypto__namespace.createHash("sha256").update(buffer).digest("hex");
+  } catch (error) {
+    console.error("Hash Error:", error);
+    return null;
+  }
+});
+electron.ipcMain.handle("depth:generate", async (_event, input) => {
+  let inputPath = input;
+  let isTemp = false;
+  let inputBuffer;
+  try {
+    if (input.startsWith("data:")) {
+      const mimeType = input.substring(input.indexOf(":") + 1, input.indexOf(";"));
+      const ext2 = mimeType.split("/")[1] || "png";
+      const b64Data = input.split("base64,")[1];
+      inputBuffer = Buffer.from(b64Data, "base64");
+      const tempDir = path__namespace.join(app.getPath("userData"), "depth_temp");
+      await fs__namespace.mkdir(tempDir, { recursive: true });
+      inputPath = path__namespace.join(tempDir, `input_${Date.now()}.${ext2}`);
+      await fs__namespace.writeFile(inputPath, inputBuffer);
+      isTemp = true;
+      console.log(`[IPC] Saved Data URL to temp path: ${inputPath}`);
+    } else {
+      inputBuffer = await fs__namespace.readFile(inputPath);
+    }
+    const sourceHash = crypto__namespace.createHash("sha256").update(inputBuffer).digest("hex");
+    const ext = path__namespace.extname(inputPath);
+    const outputPath = inputPath.replace(ext, `_depth.png`);
+    const metaPath = inputPath.replace(ext, `_depth.json`);
+    try {
+      const metaExists = await fs__namespace.access(metaPath).then(() => true).catch(() => false);
+      if (metaExists) {
+        const metaRaw = await fs__namespace.readFile(metaPath, "utf-8");
+        const meta = JSON.parse(metaRaw);
+        if (meta.sourceHash !== sourceHash) {
+          console.warn(`[IPC] GEOMETRIC BINDING VIOLATION detected. Background changed. Invalidating depth map: ${outputPath}`);
+          await fs__namespace.chmod(outputPath, 438).catch(() => {
+          });
+          await fs__namespace.chmod(metaPath, 438).catch(() => {
+          });
+          await fs__namespace.unlink(outputPath).catch(() => {
+          });
+          await fs__namespace.unlink(metaPath).catch(() => {
+          });
+        } else {
+          console.log(`[IPC] Valid depth binding found for source: ${sourceHash}. Returning cached result.`);
+          const outputBuffer = await fs__namespace.readFile(outputPath);
+          const dataUrl = `data:image/png;base64,${outputBuffer.toString("base64")}`;
+          if (isTemp) await fs__namespace.unlink(inputPath).catch(() => {
+          });
+          return { dataUrl, hash: meta.depthHash, sourceHash };
+        }
+      }
+    } catch (e) {
+      console.error("[IPC] Binding check failed, proceeding to full regeneration.", e);
+    }
+    return new Promise((resolve, reject) => {
+      const scriptPath = is.dev ? path__namespace.join(app.getAppPath(), "scripts", "depth_inference.py") : path__namespace.join(process.resourcesPath, "scripts", "depth_inference.py");
+      console.log(`[IPC] Triggering depth generation for: ${inputPath}`);
+      const pythonPath = process.env.VIRTUAL_ENV ? path__namespace.join(process.env.VIRTUAL_ENV, "Scripts", "python.exe") : "python";
+      console.log(`[IPC] Using Python interpreter: ${pythonPath}`);
+      const pythonProcess = child_process.spawn(pythonPath, [
+        scriptPath,
+        "--input",
+        inputPath,
+        "--output",
+        outputPath
+      ]);
+      let errorData = "";
+      let stdoutData = "";
+      pythonProcess.stdout.on("data", (data) => {
+        stdoutData += data.toString();
+      });
+      pythonProcess.stderr.on("data", (data) => {
+        errorData += data.toString();
+      });
+      pythonProcess.on("close", async (code) => {
+        if (code === 0) {
+          console.log(`[IPC] Depth Generation Success: ${stdoutData}`);
+          try {
+            const outputBuffer = await fs__namespace.readFile(outputPath);
+            const depthHash = crypto__namespace.createHash("sha256").update(outputBuffer).digest("hex");
+            const metadata = {
+              sourceHash,
+              depthHash,
+              timestamp: Date.now()
+            };
+            await fs__namespace.writeFile(metaPath, JSON.stringify(metadata, null, 2));
+            await fs__namespace.chmod(outputPath, 292);
+            await fs__namespace.chmod(metaPath, 292);
+            console.log(`[IPC] Depth Map & Metadata marked as READ-ONLY: ${outputPath}`);
+            const dataUrl = `data:image/png;base64,${outputBuffer.toString("base64")}`;
+            if (isTemp) {
+              await fs__namespace.unlink(inputPath).catch(() => {
+              });
+              await fs__namespace.chmod(outputPath, 438).catch(() => {
+              });
+              await fs__namespace.chmod(metaPath, 438).catch(() => {
+              });
+              await fs__namespace.unlink(outputPath).catch(() => {
+              });
+              await fs__namespace.unlink(metaPath).catch(() => {
+              });
+            }
+            resolve({ dataUrl, hash: depthHash, sourceHash });
+          } catch (readErr) {
+            reject(new Error(`Failed to process generated depth map: ${readErr}`));
+          }
+        } else {
+          console.error(`[IPC] Depth Generation Failed Code ${code}:`, errorData);
+          reject(new Error(`Depth generation failed (Code ${code}): ${errorData}`));
+        }
+      });
+      pythonProcess.on("error", (err) => {
+        console.error("[IPC] Failed to spawn Python process:", err);
+        reject(new Error(`Failed to start Python inference. Ensure 'python' is in PATH.`));
+      });
+    });
+  } catch (err) {
+    console.error("[IPC] Depth Generation Error:", err);
+    throw err;
+  }
 });

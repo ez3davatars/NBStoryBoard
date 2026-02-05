@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Clapperboard, Trash2, MonitorPlay, Image as ImageIcon,
   X, Lock, Unlock, Sparkles, RotateCw, Film, Copy, ArrowRight, Download
@@ -70,19 +70,19 @@ const VeoGenerator = () => {
       id: 'extreme_closeup',
       label: 'Extreme Close-Up',
       suffix:
-        'Reframe only. EXTREME CLOSE-UP of the prop/hand/trigger area; crop out most of face. Camera 0.3–0.5m away, 100mm macro lens, shallow DOF. Subject fills 80–90% of frame.'
+        'Reframe only. EXTREME CLOSE-UP of the prop/hand/trigger area; crop out most of face. Camera 0.3–0.5m away, 100mm macro lens. Subject fills 80–90% of frame.'
     },
     {
       id: 'closeup_subject',
       label: 'Close-Up (Subject)',
       suffix:
-        'Reframe only. CLOSE-UP head-and-shoulders. Camera 1–1.3m away, 85mm lens. Eyes on upper third. Background heavily defocused.'
+        'Reframe only. CLOSE-UP head-and-shoulders. Camera 1–1.3m away, 85mm lens. Eyes on upper third. Clear separation of subject.'
     },
     {
       id: 'low_wide_hero',
       label: 'Low Wide (Hero)',
       suffix:
-        'Reframe only. LOW-ANGLE WIDE hero framing. Camera 4–6m away, 0.7m height, 24mm lens. Subject dominates foreground; environment visible.'
+        'Reframe only. LOW-ANGLE WIDE hero framing. Camera 4–6m away, 0.7m height, 24mm lens. Subject is the primary focus; environment visible.'
     },
 
     {
@@ -95,7 +95,7 @@ const VeoGenerator = () => {
       id: 'over_shoulder',
       label: 'Over-The-Shoulder',
       suffix:
-        'Reframe only. OVER-THE-SHOULDER. Foreground shoulder/head occupies 20–30% of frame; main subject mid-frame. Camera 1.5–2.5m away, 50mm lens.'
+        'Reframe only. OVER-THE-SHOULDER. Near-camera shoulder/head occupies 20–30% of frame; main subject mid-frame. Camera 1.5–2.5m away, 50mm lens.'
     },
     {
       id: 'top_down',
@@ -114,13 +114,13 @@ const VeoGenerator = () => {
       id: 'profile_side',
       label: 'Profile Side',
       suffix:
-        'Reframe only. SIDE PROFILE (90°) medium close-up. Camera 2–3m away, 50mm lens. Subject profile dominates; background falls off.'
+        'Reframe only. SIDE PROFILE (90°) medium close-up. Camera 2–3m away, 50mm lens. Subject profile is prominent.'
     },
     {
-      id: 'foreground_object',
-      label: 'Foreground Object',
+      id: 'composition_object',
+      label: 'Depth-Neutral Composition',
       suffix:
-        'Reframe only. FOREGROUND object/prop in extreme foreground, main subject in mid-background. Camera 0.5–1m from foreground object, 35mm lens. Rack focus style implied (but keep single frame sharpness).'
+        'Reframe only. Object/prop in the lower area of the frame, main subject centered. Camera 0.5–1m from primary object, 35mm lens. Sharp focus on all elements.'
     }
   ];
 
@@ -703,3 +703,6 @@ const VeoGenerator = () => {
 };
 
 export default VeoGenerator;
+
+
+

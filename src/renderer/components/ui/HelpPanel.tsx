@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useHelp } from '../../context/HelpContext';
 import { HelpCircle, X } from 'lucide-react';
 
@@ -56,3 +56,6 @@ const HelpPanel: React.FC<HelpPanelProps> = ({ zone, id, className = '' }) => {
 };
 
 export default HelpPanel;
+
+
+

@@ -1,4 +1,4 @@
-import React from 'react';
+
 import { useHelp } from '../../context/HelpContext';
 
 interface InlineHintProps {
@@ -23,3 +23,6 @@ const InlineHint: React.FC<InlineHintProps> = ({ zone, id, className = '' }) => 
 };
 
 export default InlineHint;
+
+
+
