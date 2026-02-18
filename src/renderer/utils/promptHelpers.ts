@@ -1,4 +1,5 @@
 import type { DirectorSettings, ReferenceSlot, StageToken } from '../context/AppContext';
+import { computeDepthScore } from './spatialHelpers';
 
 export const SCENE_LOCK_NEGATIVE_TOKENS = "scene alteration, background change, lighting shift, camera angle change, style deviation, new composition, structural change, reimagined scene, time of day shift, seasonal change, architectural alteration, furniture movement, lens flares, color grading shift";
 
@@ -54,7 +55,10 @@ export const compileV3DirectorPrompt = (director: DirectorSettings, slots: Refer
   const tech = buildMasterStyleKeywords(director);
   if (tech.length > 0) segments.push(`(Master Style: ${tech.join(', ')})`);
 
-  // 2) Replacement / Mapping priority: Marker > Spatial > Replace
+  // 2) Spatial Protocol (Authority #1-3 enforcement)
+  segments.push(`(SPATIAL PROTOCOL: Actors are positioned using explicit anchor regions and user-defined layout. Relative distance is determined by scale and vertical placement. Foreground, midground, and background layers are preassigned. Do not reposition actors. Do not reinterpret spatial layout. Lighting respects layer separation.)`);
+
+  // 3) Replacement / Mapping priority: Marker > Spatial > Replace
   if (director.markerType) {
     const markerDirectives: string[] = [];
     activeRefs.forEach(ref => {
@@ -75,7 +79,6 @@ export const compileV3DirectorPrompt = (director: DirectorSettings, slots: Refer
     let layoutPrompt = '';
     if (director.spatialLayout === 'horizontal') layoutPrompt = `(COMPOSITION: SPLIT-SCREEN. LEFT SIDE: ${p1}. RIGHT SIDE: ${p2}. Distinct separation.)`;
     if (director.spatialLayout === 'vertical') layoutPrompt = `(COMPOSITION: VERTICAL STACK. TOP HALF: ${p1}. BOTTOM HALF: ${p2}.)`;
-    if (director.spatialLayout === 'depth') layoutPrompt = `(COMPOSITION: DEPTH OF FIELD. FOREGROUND (Close to Camera): ${p1}. BACKGROUND (Distance): ${p2}.)`;
     if (director.spatialLayout === 'center') layoutPrompt = `(COMPOSITION: HERO SHOT. CENTER: ${p1}. SURROUNDING/PERIPHERY: All other reference elements.)`;
     if (layoutPrompt) segments.push(layoutPrompt);
   } else if (director.replaceAnchorSubjects) {
@@ -97,14 +100,25 @@ export const compileV3DirectorPrompt = (director: DirectorSettings, slots: Refer
 
   // 2.5) Actor Intelligence (Pose, Lighting interaction per actor)
   tokens.forEach(token => {
-    if (token.intelligence) {
+    let intelligence = token.intelligence || '';
+    if (token.spatialDescriptor) {
+      // Authority #4: Lighting rules derived from semantic layers
+      let spatialLighting = '';
+      if (token.spatialDescriptor.depthLayer === 'foreground') spatialLighting = 'higher contrast, sharper shadows';
+      if (token.spatialDescriptor.depthLayer === 'midground') spatialLighting = 'neutral lighting';
+      if (token.spatialDescriptor.depthLayer === 'background') spatialLighting = 'softer lighting, lower contrast';
+
+      intelligence += ` (STAGING: ${token.spatialDescriptor.depthLayer}. LIGHTING: ${spatialLighting})`;
+    }
+
+    if (intelligence) {
       // Resolve name if it looks like a ref slot
       let name = token.tag;
       if (token.castId?.startsWith('refslot-') || token.tag.toLowerCase().startsWith('ref_')) {
-          const match = activeRefs.find(r => r.castId === token.castId);
-          if (match) name = match.name || `Ref ${match.index}`;
+        const match = activeRefs.find(r => r.castId === token.castId);
+        if (match) name = match.name || `Ref ${match.index}`;
       }
-      segments.push(`[Actor Intelligence for ${name}: ${token.intelligence}]`);
+      segments.push(`[Actor Intelligence for ${name}: ${intelligence.trim()}]`);
     }
   });
 
@@ -182,4 +196,32 @@ export const buildContinuityLockBlock = (opts: ContinuityLockOptions = {}): stri
   if (opts.noExtraObjects) lines.push('- Do NOT add extra objects, text, watermarks, logos, or random people.');
   if (opts.noMorph) lines.push('- Do NOT duplicate limbs/heads, do NOT change anatomy, do NOT change clothing unexpectedly.');
   return lines.join('\n');
+};
+
+/**
+ * DERIVE SPATIAL DESCRIPTOR
+ * Consolidates depth, layer, and z-index into a single descriptor for actor instances.
+ */
+export const deriveSpatialDescriptor = (token: StageToken): { depthScore: number; depthLayer: 'foreground' | 'midground' | 'background'; zIndex: number } => {
+  const STAGE_H = 540;
+  const score = computeDepthScore(
+    {
+      scale: token.scaleX,
+      position: { y: token.y },
+      height: token.height,
+      depthLayer: token.anchorLayer
+    },
+    { height: STAGE_H }
+  );
+
+  // depthLayer mapping (manual override takes precedence)
+  let depthLayer: 'foreground' | 'midground' | 'background' = 'midground';
+  if (score < 0.33) depthLayer = 'foreground';
+  else if (score > 0.66) depthLayer = 'background';
+
+  return {
+    depthScore: score,
+    depthLayer: token.anchorLayer || depthLayer, // Authority #1 takes precedence
+    zIndex: token.zIndex
+  };
 };

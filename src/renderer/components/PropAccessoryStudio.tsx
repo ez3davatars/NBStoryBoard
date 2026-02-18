@@ -831,10 +831,13 @@ const PropAccessoryStudio = () => {
             </div>
           )
         }
-      </AnimatePresence >
-    </div >
+      </AnimatePresence>
+    </div>
 
   );
 };
 
 export default PropAccessoryStudio;
+
+
+

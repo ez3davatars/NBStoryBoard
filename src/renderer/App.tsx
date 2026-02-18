@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState, Component } from 'react';
+import type { ReactNode, ErrorInfo } from 'react';
 // ... existing imports ...
 
 
@@ -223,7 +224,7 @@ const ImageInspector = () => {
 };
 
 // --- ERROR BOUNDARY ---
-class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean, error: Error | null }> {
+class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean, error: Error | null }> {
   constructor(props: any) {
     super(props);
     this.state = { hasError: false, error: null };
@@ -233,7 +234,7 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
     return { hasError: true, error };
   }
 
-  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error("Uncaught error:", error, errorInfo);
   }
 
@@ -771,11 +772,14 @@ const App = () => {
               )
             }
 
-          </div >
-        </AppContext.Provider >
+          </div>
+        </AppContext.Provider>
       </HelpProvider>
     </ErrorBoundary>
   );
 };
 
 export default App;
+
+
+

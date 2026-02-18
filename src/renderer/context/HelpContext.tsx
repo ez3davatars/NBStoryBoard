@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useMemo } from 'react';
+import { createContext, useContext, useMemo } from 'react';
 import helpMapRaw from '../assets/help_map.json';
 
 // Types derived directly from JSON structure
@@ -70,3 +70,6 @@ export const useHelp = (zone: string, id: string): HelpConfig | null => {
     }
     return context.useHelp(zone, id);
 };
+
+
+

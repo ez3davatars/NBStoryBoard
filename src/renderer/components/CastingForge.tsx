@@ -4,11 +4,11 @@ import {
   Scissors,
   Trash2, Upload, RotateCw, MonitorPlay,
   Eraser, RefreshCw, X,
-  Target, Download, UserPlus, Sparkles,
+  Download, UserPlus, Sparkles,
   Search, Calendar, Type, Layers, Folder, HelpCircle,
   Maximize, LayoutTemplate, Share2, Info, CheckCircle2,
   ArrowDownUp, Edit2, FolderInput, Hammer, Lock,
-  Undo2, Redo2
+  Undo2, Redo2, Zap
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { removeBackground } from "@imgly/background-removal";
@@ -138,14 +138,15 @@ const CastingForge = () => {
 
   const [processedPreviewUrl, setProcessedPreviewUrl] = useState<string | null>(null);
   const [activeHandle, setActiveHandle] = useState<string | null>(null);
-  const [targetAngle, setTargetAngle] = useState<'front' | 'back' | 'left side' | 'right side' | '3/4 left' | '3/4 right' | null>(null);
-  const [showTurnaround, setShowTurnaround] = useState(false);
+
   const [showRefSheet, setShowRefSheet] = useState(false);
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [refLayout, setRefLayout] = useState<'form_focus' | 'face_focus' | 'split_focus'>('form_focus');
   const [fringeSize, setFringeSize] = useState(0); // 0-10 pixels
   const [isIsolating, setIsIsolating] = useState(false);
   const [isolationProgress, setIsolationProgress] = useState(0);
+  const [brandingLogo, setBrandingLogo] = useState<string | null>(null);
+  const [logoPosition, setLogoPosition] = useState<string>('');
 
   // MASK RESTORATION STATE
   const [isBrushActive, setIsBrushActive] = useState(false);
@@ -689,12 +690,12 @@ const CastingForge = () => {
     if (Object.keys(loaded).length > 0) {
       dispatch({ type: 'SET_CUSTOM_COVERS', payload: { ...state.customCovers, ...loaded } });
     }
-  }, [state.saveDirectoryHandle, state.saveDirectoryPath, state.customCovers, dispatch]);
+  }, [state.saveDirectoryHandle, state.saveDirectoryPath, dispatch]);
 
   useEffect(() => {
-    loadDiskCovers(false); // Initial Silent Load
-    // The cleanup for Object URLs is removed as per instructions.
-  }, [loadDiskCovers]);
+    loadDiskCovers(false);
+  }, []);
+
 
   const handleCoverUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1069,92 +1070,7 @@ const CastingForge = () => {
 
 
 
-  const handleGenerateMissing = async () => {
-    if (!targetAngle || !state.lastCastedImage) return;
-    dispatch({ type: 'SET_PROCESSING', payload: true });
-    dispatch({ type: 'SET_LAST_CASTED_MASK', payload: null });
-    setProcessedPreviewUrl(null);
 
-    const currentGenId = Date.now();
-    generationIdRef.current = currentGenId;
-    const effectivePrompt = state.lastCastedPrompt || "this character";
-
-    try {
-      let imgUrl;
-      dispatch({ type: 'ADD_LOG', payload: { message: `Generating isolated ${targetAngle} view...`, type: 'info' } });
-
-      let anglePrompt = "";
-      if (targetAngle === 'left side') anglePrompt = "FULL BODY LEFT PROFILE VIEW. Facing profile left at a sharp 90-degree angle.";
-      if (targetAngle === 'right side') anglePrompt = "FULL BODY RIGHT PROFILE VIEW. Facing profile right at a sharp 90-degree angle.";
-      if (targetAngle === 'front') anglePrompt = "FULL BODY FRONT VIEW. Facing directly forward.";
-      if (targetAngle === 'back') anglePrompt = "FULL BODY BACK VIEW. Seen directly from behind at a 180-degree angle.";
-      if (targetAngle === '3/4 left') anglePrompt = "FULL BODY THREE-QUARTER FRONT-LEFT VIEW. Facing at a 45-degree angle to the left.";
-      if (targetAngle === '3/4 right') anglePrompt = "FULL BODY THREE-QUARTER FRONT-RIGHT VIEW. Facing at a 45-degree angle to the right.";
-
-      if (state.apiKey) {
-        imgUrl = await GeminiService.generateImage(
-          `ROTATE the character to a ${anglePrompt}.
-                CRITICAL DIRECTIONAL RULES: 
-                1. CHANGE THE POSE. The reference is Front View, but you MUST generate: ${anglePrompt}.
-                2. STRICTLY follow the geometric angle specified: ${anglePrompt}.
-                3. Draw ONLY one figure.
-                4. STRICTLY maintain all costume details, colors, and features from the reference.
-                5. FORCE a solid Neon Green background (#39FF14) for perfect subject isolation.
-                Character description: ${effectivePrompt}`,
-          state.apiKey,
-          'gemini-2.5-flash-image', // Specialized image generation model
-          [{ url: state.lastCastedImage, label: 'Character Reference' }]
-        );
-      } else {
-        imgUrl = await GeminiService.generateImage(
-          `Character concept art, single isolated ${targetAngle} view of ${effectivePrompt}, FORCE a solid Neon Green background (#39FF14).`,
-          state.apiKey,
-          'imagen-4.0-generate-001'
-        );
-      }
-
-      if (generationIdRef.current === currentGenId) {
-        dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: imgUrl });
-        try {
-          // Auto-run isolation using imgly (Client Side) for consistent transparent cutouts
-          // This replaces the deprecated Gemini text-mask generation which was returning B/W images
-          dispatch({ type: 'ADD_LOG', payload: { message: "Auto-isolating subject...", type: 'info' } });
-
-          setIsIsolating(true);
-          setIsolationProgress(0);
-
-          const response = await fetch(imgUrl);
-          const blob = await response.blob();
-
-          const blobResult = await removeBackground(blob, {
-            progress: (_key: string, current: number, total: number) => {
-              if (total > 0) setIsolationProgress(Math.round((current / total) * 100));
-            }
-          });
-
-          const cutoutUrl = URL.createObjectURL(blobResult);
-
-
-          if (generationIdRef.current === currentGenId) {
-            dispatch({ type: 'SET_LAST_CASTED_MASK', payload: cutoutUrl });
-            // Auto-enable view so user sees the isolation immediately, fixing the "badge says isolated but screen is green" confusion
-            setRemoveBg(true);
-          }
-        } catch (maskErr: any) {
-          console.error("Auto-Isolation Failed:", maskErr);
-          // Silent fail on mask, user can try again manually
-        } finally {
-          setIsIsolating(false);
-          setIsolationProgress(0);
-        }
-      }
-      dispatch({ type: 'ADD_LOG', payload: { message: `Generated ${targetAngle} view.`, type: 'success' } });
-    } catch (e: any) {
-      dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });
-    } finally {
-      dispatch({ type: 'SET_PROCESSING', payload: false });
-    }
-  };
 
 
 
@@ -1258,11 +1174,25 @@ const CastingForge = () => {
         finalPrompt += " [LAYOUT C - STUDIO]: Split canvas vertically. Left 45% width: Vertical stack of EXACTLY 3 Full Body views with DISTINCT ANGLES (1. Front, 2. Side Profile, 3. Back). DO NOT ADD A FOURTH VIEW. Right 55% width: 2x2 Grid of Large Headshots with VARIED ANGLES (Front, 3/4 Left, 3/4 Right, Profile). Highest possible facial resolution.";
       }
 
+      // BRANDING INJECTION
+      let inputImages = [{ url: state.lastCastedImage, label: 'Character Reference' }];
+
+      if (brandingLogo) {
+        inputImages.push({ url: brandingLogo, label: 'Branding Logo' });
+        finalPrompt += `
+        
+        8. BRANDING & IDENTITY (OVERRIDE)
+           - Place the logo from [IMAGE 2] onto the character's clothing in EVERY view.
+           - EXACT PLACEMENT: ${logoPosition || "Chest/Torso"}.
+           - Integrate the logo realistically: it must wrap with the fabric's folds, match the lighting, and follow the texture of the garment.
+           - The logo must be visible and consistent across all angles (Front, Side, Back).`;
+      }
+
       const res = await GeminiService.generateImage(
         finalPrompt,
         state.apiKey,
         state.model, // Use the user's selected model (consistent with main generator)
-        [{ url: state.lastCastedImage, label: 'Character Reference' }],
+        inputImages,
         { aspectRatio: '16:9' }
       );
       setRefSheetUrl(res);
@@ -1775,50 +1705,7 @@ const CastingForge = () => {
           </div>
         </div>
 
-        {/* Turnaround Completer */}
-        <div className="bg-[#18181b] p-6 rounded-xl border border-gray-800 shadow-xl shrink-0">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xs font-bold text-blue-500/50 uppercase tracking-normal flex items-center gap-2">
-              <RefreshCw className="w-3.5 h-3.5 opacity-50" /> Turnaround Completer
-            </h2>
-            <button
-              onClick={() => setShowTurnaround(!showTurnaround)}
-              className={`w-10 h-5 rounded-full transition-all relative ${showTurnaround ? 'bg-blue-600' : 'bg-gray-700'}`}
-            >
-              <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full transition-all ${showTurnaround ? 'left-5.5' : 'left-0.5'}`} />
-            </button>
-          </div>
 
-          {showTurnaround && (
-            <div className="animate-in fade-in slide-in-from-top-2 duration-300">
-              <div className="mb-4">
-                <label className="text-[10px] text-gray-500 block mb-2 uppercase font-bold">Select Angle to Generate</label>
-                <div className="grid grid-cols-2 gap-2">
-                  {['front', 'back', 'left side', 'right side', '3/4 left', '3/4 right'].map((view: any) => (
-                    <button
-                      key={view}
-                      onClick={() => setTargetAngle(targetAngle === view ? null : view)}
-                      className={`py-2 rounded text-xs font-bold capitalize transition-all border ${targetAngle === view ? 'bg-blue-600 border-blue-500 text-white' : 'bg-black border-gray-700 text-gray-400 hover:border-gray-500'}`}
-                    >
-                      {view}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <button
-                onClick={handleGenerateMissing}
-                disabled={state.isProcessing || !targetAngle || !state.lastCastedImage}
-                className={`w-full py-4 rounded-xl text-[10px] font-black flex justify-center items-center gap-2 transition-all shadow-xl uppercase tracking-wider active:scale-95 ${!targetAngle || !state.lastCastedImage
-                  ? 'bg-gray-800 text-gray-500 cursor-not-allowed border border-gray-700 opacity-50'
-                  : 'bg-gradient-to-r from-yellow-500 to-orange-500 hover:from-yellow-400 hover:to-orange-400 text-black shadow-[0_0_20px_rgba(234,179,8,0.2)] hover:shadow-[0_0_30px_rgba(234,179,8,0.4)] border border-yellow-400/30'
-                  }`}
-              >
-                {state.isProcessing ? <RotateCw className="animate-spin w-4 h-4" /> : <Target className="w-4 h-4" />}
-                {!state.lastCastedImage ? "Load Source First" : !targetAngle ? "Select an Angle" : `Generate ${targetAngle?.toUpperCase()} View`}
-              </button>
-            </div>
-          )}
-        </div>
 
 
         {/* Reference Sheet Generator */}
@@ -1851,6 +1738,62 @@ const CastingForge = () => {
                 {l.label}
               </button>
             ))}
+          </div>
+
+          {/* BRANDING SECTION */}
+          <div className="bg-black/40 border border-white/5 rounded-xl p-3 mb-4 space-y-3">
+            <div className="flex items-center gap-2 mb-1">
+              <Zap className="w-3.5 h-3.5 text-[#eab308] fill-[#eab308]" />
+              <h3 className="text-[10px] font-black uppercase tracking-widest text-[#eab308]">
+                Branding & Identity
+              </h3>
+            </div>
+
+            <div className="flex items-start gap-3">
+              <label className="relative group cursor-pointer shrink-0">
+                <div className="w-12 h-12 rounded-lg border-2 border-dashed border-white/10 group-hover:border-blue-500/50 flex flex-col items-center justify-center transition-all bg-black/20 overflow-hidden">
+                  {brandingLogo ? (
+                    <img src={brandingLogo} className="w-full h-full object-contain" alt="Branding Logo" />
+                  ) : (
+                    <Upload className="w-4 h-4 text-gray-500 group-hover:text-blue-400" />
+                  )}
+                </div>
+                <input
+                  type="file"
+                  className="hidden"
+                  accept="image/*"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      const reader = new FileReader();
+                      reader.onload = (ev) => setBrandingLogo(ev.target?.result as string);
+                      reader.readAsDataURL(file);
+                    }
+                  }}
+                />
+                {brandingLogo && (
+                  <button
+                    onClick={(e) => {
+                      e.preventDefault();
+                      setBrandingLogo(null);
+                    }}
+                    className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5 shadow-lg hover:bg-red-600 transition-colors"
+                  >
+                    <X className="w-2.5 h-2.5" />
+                  </button>
+                )}
+              </label>
+
+              <div className="flex-grow space-y-1">
+                <input
+                  type="text"
+                  value={logoPosition}
+                  onChange={(e) => setLogoPosition(e.target.value)}
+                  placeholder="Logo Placement (e.g. Chest)"
+                  className="w-full bg-black/40 border border-white/10 rounded px-2 py-1.5 text-[10px] text-white placeholder:text-gray-600 focus:outline-none focus:border-blue-500/50 transition-all font-bold"
+                />
+              </div>
+            </div>
           </div>
 
           <button
@@ -2116,8 +2059,13 @@ const CastingForge = () => {
                       <div className="absolute inset-0 bg-blue-500/5 blur-2xl rounded-full" />
                     </div>
 
-                    <div className="space-y-4">
-                      <h3 className="text-3xl font-black text-zinc-500 uppercase tracking-[0.2em] drop-shadow-lg">ADD OR GENERATE AN ACTOR</h3>
+                    <div className="space-y-4 flex flex-col items-center">
+                      <div className="w-fit">
+                        {/* Brand Highlight Line (matches scrollbar) */}
+                        <div className="w-full h-0.5 mb-3 bg-[#eab308] opacity-80 rounded-full" />
+
+                        <h3 className="text-3xl font-black text-zinc-500 uppercase tracking-[0.2em] drop-shadow-lg text-center whitespace-nowrap">ADD OR GENERATE AN ACTOR</h3>
+                      </div>
                       <div className="space-y-1">
                         <p className="text-xs font-bold text-zinc-300 uppercase tracking-widest animate-stage-breathe max-w-lg mx-auto leading-relaxed">
                           Generate a new character or place an existing one<br /> to prepare it for directing.
@@ -2313,7 +2261,7 @@ const CastingForge = () => {
             )}
           </div>
         </div>
-      </div >
+      </div>
 
       {/* SAVE MODAL */}
       {
@@ -2780,9 +2728,12 @@ const CastingForge = () => {
             </div>
           )
         }
-      </AnimatePresence >
-    </div >
+      </AnimatePresence>
+    </div>
   );
 };
 
 export default CastingForge;
+
+
+

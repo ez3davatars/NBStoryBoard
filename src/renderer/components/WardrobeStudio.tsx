@@ -1,9 +1,9 @@
 
-import React, { useState, useEffect, useRef } from 'react';
-import { AnimatePresence } from 'framer-motion';
+import { useState, useEffect, useRef } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
   Upload, RefreshCcw, Maximize, Shirt, Sparkles, Download,
-  UserPlus, X, Eraser, Trash2, Undo2, Redo2, CheckCircle2, FolderPlus
+  UserPlus, X, Eraser, Trash2, Undo2, Redo2, CheckCircle2, FolderPlus, Zap
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
@@ -18,13 +18,18 @@ import styleScifi from '../assets/styles/style_cyberpunk_masc.png';
 import ActorSaveModal from './ActorSaveModal';
 import HelpTooltip from './ui/HelpTooltip';
 import InlineHint from './ui/InlineHint';
+import ConfirmDialog from './ui/ConfirmDialog';
 
 // --- WARDROBE STUDIO COMPONENT ---
 const WardrobeStudio = () => {
   const { state, dispatch } = useAppContext();
   const [activeTab, setActiveTab] = useState<'designer' | 'library'>('designer');
   // GLOBAL STATE MAPPING
-  const { fittedImage, tryOnMask, restorationLayer, removeBg: removeTryOnBg, fringeSize, brushSize, history, historyIndex, isBrushActive: globalIsBrushActive, tryOnNote, processedTryOnUrl } = state.wardrobeState;
+  const {
+    fittedImage, tryOnMask, restorationLayer, removeBg: removeTryOnBg,
+    fringeSize, brushSize, history, historyIndex, isBrushActive: globalIsBrushActive,
+    tryOnNote, processedTryOnUrl, brandingLogo, logoPosition
+  } = state.wardrobeState;
 
   // Local Helper to update global state
   const updateState = (updates: Partial<WardrobeState>) => {
@@ -43,6 +48,8 @@ const WardrobeStudio = () => {
   const setIsBrushActive = (val: boolean) => updateState({ isBrushActive: val });
   const setTryOnNote = (val: string) => updateState({ tryOnNote: val });
   const setProcessedTryOnUrl = (val: string | null) => updateState({ processedTryOnUrl: val });
+  const setBrandingLogo = (val: string | null) => updateState({ brandingLogo: val });
+  const setLogoPosition = (val: string) => updateState({ logoPosition: val });
 
   // Use global isBrushActive
   const isBrushActive = globalIsBrushActive;
@@ -59,6 +66,12 @@ const WardrobeStudio = () => {
   // processedTryOnUrl is now global
   const [isIsolating, setIsIsolating] = useState(false);
   const [isolationProgress, setIsolationProgress] = useState(0);
+  const [notification, setNotification] = useState<string | null>(null);
+
+  const showToast = (msg: string) => {
+    setNotification(msg);
+    setTimeout(() => setNotification(null), 3000);
+  };
 
   // Draggable Panel State
   // Draggable Panel State Removed
@@ -85,7 +98,7 @@ const WardrobeStudio = () => {
     const hasStorage = !!state.saveDirectoryHandle || !!state.saveDirectoryPath;
 
     if (!hasStorage || !fittedImage) {
-      alert("Save Failed: No Save Folder selected in Settings or Image is missing.");
+      showToast("Save Folder & Image Required");
       dispatch({ type: 'ADD_LOG', payload: { message: "Save Failed: Missing Save Folder or Image", type: 'error' } });
       return;
     }
@@ -1004,7 +1017,7 @@ const WardrobeStudio = () => {
     try {
       // DUPLICATE CHECK
       if (state.wardrobeItems.some(i => i.id.includes(file.name) || i.name === file.name.split('.')[0])) {
-        alert("Item already exists in library.");
+        showToast("Item already exists in library.");
         return;
       }
 
@@ -1074,54 +1087,81 @@ const WardrobeStudio = () => {
     purgeRestorationState(); // Reset Paint History
     dispatch({ type: 'SET_PROCESSING', payload: true });
     try {
-      // PASS 1: Generate Fusion on Neon Green for best edge isolation
+      // Build Dynamic Context
+      const subjectIdentity = selectedCharacter.profile?.identity || selectedCharacter.name;
+      const subjectStyle = selectedCharacter.profile?.style || "Matching Style";
+      const costumeName = selectedCostume.name;
+
+      // Build Image Array for pass 1
+      const inputImages = [
+        { url: selectedCharacter.url, label: "Subject Reference" },
+        { url: selectedCostume.url, label: "Costume Reference" }
+      ];
+
+      let brandingInstruction = "";
+      if (brandingLogo) {
+        inputImages.push({ url: brandingLogo, label: "Branding Logo" });
+        brandingInstruction = `
+          8. BRANDING & IDENTITY (OVERRIDE)
+             - Place the logo from [IMAGE 3] onto the character's clothing.
+             - EXACT PLACEMENT: ${logoPosition}.
+             - Integrate the logo realistically: it must wrap with the fabric's folds, match the lighting, and follow the texture of the garment.
+             - If the clothing already has a logo at that position, replace it with the one from [IMAGE 3].
+        `;
+      }
+
+      // PASS 1: Generate Fusion
       const res = await GeminiService.generateImage(
         `Perform a professional virtual try-on and fashion fitting. 
-         [IMAGE 1] is the target SUBJECT. 
-         [IMAGE 2] is the standalone COSTUME ASSET to fit.
+         [IMAGE 1] is the target SUBJECT: ${subjectIdentity}.
+         The target STYLE/AESTHETIC for the final result is: ${subjectStyle}.
+         [IMAGE 2] is the standalone COSTUME ASSET: ${costumeName}.
          
          1. IDENTITY LOCK — SUBJECT
-            - Preserve the exact facial identity of [IMAGE 1].
+            - Preserve the exact facial identity, features, and ethnicity of the person in [IMAGE 1].
             - Same face, same person, same likeness.
             - No facial morphing, no age change, no style change.
 
-         2. CLEAN SLATE — SUBJECT PREPARATION
+         2. SUBJECT ANATOMY & GENDER PRESERVATION (CRITICAL)
+            - Preserve the specific body type, gender, and anatomy of the subject in [IMAGE 1].
+            - DO NOT change the subject's gender or physical build to match the costume's source character.
+            - The subject's biological sex and physical frame must remain identical to [IMAGE 1].
+
+         3. ADAPTIVE COSTUME FITTING (CROSS-COMPATIBLE)
+            - Convert and adapt the apparel from [IMAGE 2] to fit the subject's body naturally and appropriately.
+            - Tailor the clothing to the subject's specific gender-specific anatomy (e.g. feminine tailoring for females, masculine for males).
+            - The clothing must feel LIKE IT WAS DESIGNED FOR the person in [IMAGE 1].
+            - No "rigid mascot" effects unless explicitly requested. The clothing should be flexible fabric unless [IMAGE 2] is clearly metal armor.
+
+         4. STYLE TRANSLATION & UNIFICATION
+            - Match the overall rendering style, realism, and aesthetic of the subject in [IMAGE 1].
+            - STYLE RULE: If [IMAGE 1] is a realistic photograph, the costume from [IMAGE 2] must be rendered as realistic clothing with realistic fabric textures, even if [IMAGE 2] is a cartoon, 3D render, or illustration.
+            - The final output must be a single, cohesive image with no clashing styles.
+
+         5. CLEAN SLATE SUBJECT PREPARATION
             - Remove all existing clothing, headwear, goggles, helmets, accessories, and props from [IMAGE 1].
             - Use only the actor’s face, skin, and basic body volume as the internal wearer.
 
-         3. RIGID COSTUME SILHOUETTE LOCK
-            - Treat [IMAGE 2] as a rigid, non-deformable mascot costume.
-            - Do NOT elongate, slim, stretch, taper, or reshape the costume.
-            - Preserve the exact chunky proportions, neck thickness, and head size of the costume.
-            - The costume is NOT allowed to adapt to the subject.
+         6. COSTUME FIDELITY
+            - Maintain the key design elements of the costume in [IMAGE 2] (colors, logos, textures, specific patterns).
+            - Integrate these elements seamlessly into the new fitted garment.
 
-         4. PROPORTIONAL FITTING (CRITICAL)
-            - The subject is placed INSIDE the costume.
-            - The subject must adapt to the costume’s fixed geometry.
-            - The neck opening must NOT be enlarged or stretched vertically.
-            - No "long neck", "tube neck", or "bridging" artifacts.
+         7. COMPOSITION
+            - Single subject only. Full body visible. No cropping head/feet.
+            - Solid white studio background (#FFFFFF).
+            
+         ${brandingInstruction}
 
-         5. COSTUME FIDELITY
-            - Copy the costume exactly as shown in [IMAGE 2].
-            - Maintain original textures, colors, belly patch, and shape.
-            - Mascot head remains large and hollow.
-
-         6. COMPOSITION
-            - Single subject only.
-            - Full body visible.
-            - Do not crop the top of the head or feet.
-            - Solid white background (#FFFFFF).
+         [FITTING NOTES]: ${tryOnNote || "Ensure a perfect tailored fit."}
 
          NEGATIVE CONSTRAINTS:
          original accessories from [IMAGE 1], human shoes, floating head,
-         elongated neck, stretched costume, mannequin, reference panels,
-         text, watermark, extra limbs, cropped anatomy.`,
+         elongated neck, mannequin, reference panels, text, watermark, 
+         extra limbs, cropped anatomy, changing subject gender, 
+         clashing rendering styles, distorted proportions.`,
         state.apiKey,
         state.model,
-        [
-          { url: selectedCharacter.url, label: "Subject Reference" },
-          { url: selectedCostume.url, label: "Costume Reference" }
-        ],
+        inputImages,
         { aspectRatio: '1:1' }
       );
       setFittedImage(res);
@@ -1566,6 +1606,69 @@ const WardrobeStudio = () => {
                       )}
                     </div>
 
+                    {/* BRANDING & IDENTITY SECTION */}
+                    <div className="p-4 border-t border-white/10 space-y-4">
+                      <div className="flex items-center gap-2">
+                        <Zap className="w-4 h-4 text-[#eab308] fill-[#eab308]" />
+                        <h3 className="text-[10px] font-black uppercase tracking-widest text-[#eab308]">
+                          Branding & Identity
+                        </h3>
+                      </div>
+
+                      <div className="bg-black/40 border border-white/5 rounded-xl p-4 space-y-4">
+                        <div className="flex items-start gap-4">
+                          <label className="relative group cursor-pointer shrink-0">
+                            <div className="w-16 h-16 rounded-lg border-2 border-dashed border-white/10 group-hover:border-blue-500/50 flex flex-col items-center justify-center transition-all bg-black/20 overflow-hidden">
+                              {brandingLogo ? (
+                                <img src={brandingLogo} className="w-full h-full object-contain" alt="Branding Logo" />
+                              ) : (
+                                <Upload className="w-6 h-6 text-gray-500 group-hover:text-blue-400" />
+                              )}
+                            </div>
+                            <input
+                              type="file"
+                              className="hidden"
+                              accept="image/*"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  const reader = new FileReader();
+                                  reader.onload = (ev) => setBrandingLogo(ev.target?.result as string);
+                                  reader.readAsDataURL(file);
+                                }
+                              }}
+                            />
+                            {brandingLogo && (
+                              <button
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  setBrandingLogo(null);
+                                }}
+                                className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5 shadow-lg hover:bg-red-600 transition-colors"
+                              >
+                                <X className="w-3 h-3" />
+                              </button>
+                            )}
+                          </label>
+
+                          <div className="flex-grow space-y-1">
+                            <span className="text-[9px] font-bold text-gray-500 uppercase tracking-wider">Logo Position</span>
+                            <input
+                              type="text"
+                              value={logoPosition}
+                              onChange={(e) => setLogoPosition(e.target.value)}
+                              placeholder="e.g. Center Chest"
+                              className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white placeholder:text-gray-600 focus:outline-none focus:border-blue-500/50 transition-all font-bold"
+                            />
+                          </div>
+                        </div>
+
+                        <p className="text-[9px] text-gray-500 leading-relaxed italic">
+                          Upload a PNG logo (transparent background recommended). Specify exact placement for the weaver.
+                        </p>
+                      </div>
+                    </div>
+
                     <div className="p-4 border-t border-white/10 bg-[#09090b]/50 shrink-0 space-y-3">
                       <button onClick={handleAddToCast} className="w-full bg-emerald-500/10 hover:bg-emerald-500 text-emerald-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-emerald-500/20 hover:shadow-[0_0_15px_rgba(16,185,129,0.4)] text-[10px] font-black uppercase tracking-wider" title="Add to Session Cast">
                         <UserPlus className="w-4 h-4" /> Add to Cast
@@ -1630,7 +1733,7 @@ const WardrobeStudio = () => {
             </div>
           )
         }
-      </AnimatePresence >
+      </AnimatePresence>
 
       {/* SAVE TO LIBRARY MODAL (Refactored) */}
       <ActorSaveModal
@@ -1649,8 +1752,36 @@ const WardrobeStudio = () => {
           scifi: styleScifi
         }}
       />
-    </div >
+      <ConfirmDialog
+        isOpen={!!confirmDelete}
+        onClose={() => setConfirmDelete(null)}
+        onConfirm={executeDelete}
+        title="Delete Costume?"
+        message={confirmDelete ? `Are you sure you want to delete ${confirmDelete.name}? This action cannot be undone.` : ""}
+        confirmText="Delete"
+        cancelText="Cancel"
+        variant="danger"
+      />
+
+      {/* TOAST OVERLAY */}
+      <AnimatePresence>
+        {notification && (
+          <motion.div
+            initial={{ opacity: 0, y: 50 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 20 }}
+            className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-[#09090b] border border-yellow-500/50 text-white px-6 py-3 rounded-full shadow-2xl backdrop-blur-xl z-[5000] flex items-center gap-3"
+          >
+            <CheckCircle2 className="w-5 h-5 text-yellow-500" />
+            <span className="text-xs font-bold uppercase tracking-widest">{notification}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
   );
 };
 
 export default WardrobeStudio;
+
+
+

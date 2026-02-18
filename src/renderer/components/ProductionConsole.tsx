@@ -831,11 +831,7 @@ const ProductionConsole: React.FC = () => {
       if (relX < 0.33) posH = "on the left";
       if (relX > 0.66) posH = "on the right";
 
-      let posD = "midground";
-      if (relY > 0.8) posD = "foreground (close to camera)";
-      if (relY < 0.4) posD = "background (far away)";
-
-      p += `Character ${i + 1} (${t.tag}) is ${posH} in the ${posD}`;
+      p += `Character ${i + 1} (${t.tag}) is ${posH} at vertical level ${(relY * 100).toFixed(0)}%`;
       if (t.actionNote) p += `, doing action: ${t.actionNote}`;
       if (t.intelligence) p += `, with intelligence directives: ${t.intelligence}`;
       p += ". ";
@@ -1515,3 +1511,5 @@ const ProductionConsole: React.FC = () => {
 };
 
 export default ProductionConsole;
+
+
