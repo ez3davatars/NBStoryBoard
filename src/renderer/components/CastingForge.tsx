@@ -690,12 +690,12 @@ const CastingForge = () => {
     if (Object.keys(loaded).length > 0) {
       dispatch({ type: 'SET_CUSTOM_COVERS', payload: { ...state.customCovers, ...loaded } });
     }
-  }, [state.saveDirectoryHandle, state.saveDirectoryPath, state.customCovers, dispatch]);
+  }, [state.saveDirectoryHandle, state.saveDirectoryPath, dispatch]);
 
   useEffect(() => {
-    loadDiskCovers(false); // Initial Silent Load
-    // The cleanup for Object URLs is removed as per instructions.
-  }, [loadDiskCovers]);
+    loadDiskCovers(false);
+  }, []);
+
 
   const handleCoverUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];

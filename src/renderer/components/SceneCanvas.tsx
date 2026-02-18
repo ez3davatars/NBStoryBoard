@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import SceneSpecOverlay from "./SceneSpecOverlay"
+
 import {
   RotateCw,
   RefreshCcw,
@@ -54,8 +56,14 @@ import { RefInspectorModal } from './panels/RefInspectorModal';
 
 import { DEPTH_BAND_RADIUS } from '../services/SpatialIntelligence';
 
+import { useSceneSpec } from "../../scene/useSceneSpec"
+
 // B. Scene Blocking Component
+
 const SceneCanvas = () => {
+
+
+
   const { state, dispatch } = useAppContext();
   const stageRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -68,6 +76,35 @@ const SceneCanvas = () => {
     w: 1,
     h: 1
   });
+  useEffect(() => {
+    const store = useSceneSpec.getState();
+
+    if (store.scene.actors.length === 0 && state.tokens.length > 0) {
+      state.tokens.forEach((t: any) => {
+        store.addActor({
+          id: t.id,
+          boundingBox: {
+            x: (viewportBox.x + (t.x - t.width / 2) * viewportBox.w) / 960,
+            y: (viewportBox.y + (t.y - t.height / 2) * viewportBox.h) / 540,
+            width: (t.width * viewportBox.w) / 960,
+            height: (t.height * viewportBox.h) / 540
+          },
+
+
+          depthLayer: 2,
+          cameraZone: "midground",
+          scaleLock: true,
+          positionLock: true,
+          plane: "grounded",
+          occlusion: {
+            mayOcclude: [],
+            mayBeOccludedBy: []
+          },
+          poseLock: true
+        });
+      });
+    }
+  }, [state.tokens, viewportBox]);
 
   // TECHNICAL DEBUG VISUALIZATION (Non-persistent, DEV only)
   const [showDebugDepthMap, setShowDebugDepthMap] = useState(false);
@@ -88,7 +125,7 @@ const SceneCanvas = () => {
     return 'DEGRADED'; // Default to degraded if floor is missing but depth exists
   }, [state.depthMapUrl, state.isDepthProcessing, state.sourceBackgroundHash, state.floorPlane]);
 
-  const [tokenMasks, setTokenMasks] = useState<Record<string, string>>({});
+  const tokenMasks: Record<string, string> = {};
 
   // GROUND PLANE (Derived Authoritative Depth)
   const [groundDepth, setGroundDepth] = useState<number | null>(null);
@@ -129,72 +166,7 @@ const SceneCanvas = () => {
     initialRotation: number
   } | null>(null);
 
-  // Effect to generate occlusion masks when depth or layout changes
-  useEffect(() => {
-    if (dragItem) return; // ⛔️ Do not generate masks while dragging
-    if (!state.depthMapUrl) {
-      setTokenMasks({});
-      return;
-    }
 
-    const updateMasks = async () => {
-      const nextMasks: Record<string, string> = { ...tokenMasks };
-      let changed = false;
-
-      for (const token of state.tokens) {
-        // SAFETY GATE: Disable occlusion for newly placed actors until confirmed
-        if (token.hasConfirmedPlacement === false) {
-          if (nextMasks[token.id]) {
-            delete nextMasks[token.id];
-            changed = true;
-          }
-          continue;
-        }
-
-        if (token.depth !== undefined) {
-          // Calculate screen bounding box for safety clamp sampling
-          const tokenRect = {
-            x: token.x - (token.width * token.anchorX),
-            y: token.y - (token.height * token.anchorY),
-            w: token.width,
-            h: token.height
-          };
-
-          const { maskUrl, visibilityRatio } = await DepthService.generateOcclusionMask(
-            state.depthMapUrl!,
-            token.depth,
-            viewportBox.w,
-            viewportBox.h,
-            tokenRect
-          );
-
-          // 5. Safety Clamp (FAIL-SAFE)
-          // If occlusion mask would hide more than 60% of the actor, abort occlusion
-          if (visibilityRatio < 0.4) {
-            if (nextMasks[token.id]) {
-              delete nextMasks[token.id];
-              changed = true;
-            }
-            // @ts-ignore
-            if (import.meta.env?.DEV) {
-              console.warn(`[Occlusion Guard] SAFETY CLAMP TRIGGERED: Token ${token.tag} (${token.id}) would be >60% occluded. Aborting mask.`);
-            }
-            continue;
-          }
-
-          if (maskUrl !== nextMasks[token.id]) {
-            nextMasks[token.id] = maskUrl;
-            changed = true;
-          }
-        }
-      }
-
-      if (changed) setTokenMasks(nextMasks);
-    };
-
-    const timer = setTimeout(updateMasks, 100); // Debounce
-    return () => clearTimeout(timer);
-  }, [state.depthMapUrl, state.tokens, viewportBox.w, viewportBox.h, dragItem]);
 
   // SPATIAL INTELLIGENCE: Auto-Generate Depth Map on Background Change
   const lastBgRef = useRef<string | null>(state.backgroundUrl);
@@ -306,11 +278,20 @@ const SceneCanvas = () => {
       // Respect manual overrides / disabling
       if (!token.groundingEnabled) return;
 
+      const footY =
+        token.y + token.height * (token.anchorY ?? 1.0);
+
+      const footYClamped = Math.min(
+        Math.max(footY, 0),
+        viewportBox.h - 1
+      );
+
       const rawDepth = DepthService.getDepthAtPointSync(
         state.depthMapUrl,
         token.x,
-        token.y
+        footYClamped
       );
+
 
       const clamped = DepthService.clampDepthToGround(rawDepth, groundDepth);
 
@@ -1116,6 +1097,21 @@ const SceneCanvas = () => {
         ctx.restore();
       }
 
+      // --- INVERT MASK (Foreground → Transparent, Background → Visible) ---
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const data = imageData.data;
+
+      for (let i = 0; i < data.length; i += 4) {
+        data[i] = 255 - data[i];     // R
+        data[i + 1] = 255 - data[i + 1]; // G
+        data[i + 2] = 255 - data[i + 2]; // B
+        // leave alpha unchanged
+      }
+
+      ctx.putImageData(imageData, 0, 0);
+      // --- END INVERSION ---
+
+
       return canvas.toDataURL('image/png');
     } catch (err) {
       console.error('[captureStage] FAILED:', err);
@@ -1485,6 +1481,9 @@ const SceneCanvas = () => {
 
   return (
     <>
+
+      <SceneSpecOverlay />
+
       <div className="flex h-full gap-4 p-4 overflow-hidden select-none">
         {/* 1. LEFT SIDEBAR: ACTIVE ACTOR INTELLIGENCE & PROPERTIES */}
         <div className="w-96 flex flex-col gap-4 overflow-y-auto pr-2 custom-scrollbar shrink-0">
@@ -2247,13 +2246,14 @@ const SceneCanvas = () => {
                     transform: `rotate(${token.rotation}deg) scale(${token.scaleX}, ${token.scaleY})`,
                     zIndex: token.zIndex,
                     WebkitMaskImage: tokenMasks[token.id] ? `url(${tokenMasks[token.id]})` : 'none',
-                    WebkitMaskSize: `${viewportBox.w}px ${viewportBox.h}px`,
-                    WebkitMaskPosition: `${-(token.x - (token.width * token.anchorX))}px ${-(token.y - (token.height * token.anchorY))}px`,
+                    WebkitMaskSize: `${token.width}px ${token.height}px`,
+                    WebkitMaskPosition: `0px 0px`,
                     WebkitMaskRepeat: 'no-repeat',
-                    maskImage: tokenMasks[token.id] ? `url(${tokenMasks[token.id]})` : 'none',
-                    maskSize: `${viewportBox.w}px ${viewportBox.h}px`,
-                    maskPosition: `${-(token.x - (token.width * token.anchorX))}px ${-(token.y - (token.height * token.anchorY))}px`,
-                    maskRepeat: 'no-repeat'
+                    WebkitMaskComposite: 'source-over',
+                    maskSize: `${token.width}px ${token.height}px`,
+                    maskPosition: `0px 0px`,
+                    maskRepeat: 'no-repeat',
+
                   }}
                   onMouseDown={(e) => {
                     if ((state as any).regionEdit?.isMaskMode) return;

@@ -29,7 +29,8 @@
     "lucide-react": "^0.562.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "react-webcam": "^7.2.0"
+    "react-webcam": "^7.2.0",
+    "zustand": "^5.0.11"
   },
   "devDependencies": {
     "@electron-toolkit/preload": "^3.0.2",
