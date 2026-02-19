@@ -57,6 +57,10 @@
   --color-danger: var(--color-danger);
 }
 
+html {
+  overflow-y: scroll;
+}
+
 a {
   font-weight: 500;
   color: #646cff;

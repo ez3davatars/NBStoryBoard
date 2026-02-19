@@ -1,0 +1,9 @@
+﻿origin	https://github.com/ez3davatars/NBStoryBoard.git (fetch)
+origin	https://github.com/ez3davatars/NBStoryBoard.git (push)
+* feature/layout-2_5d-depth fe9cc36 Portrait Studio Feature Added
+  main                      edec0aa [origin/main: behind 4] Chat GPT fix
+commit fe9cc369229a5386a0b33cac457302325166a696
+Author: Erik Del Villar <erik@ez3davatars.com>
+Date:   Wed Feb 18 23:32:03 2026 -0500
+
+    Portrait Studio Feature Added
