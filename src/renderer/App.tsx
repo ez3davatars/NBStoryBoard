@@ -7,6 +7,7 @@ import SceneCanvas from './components/SceneCanvas';
 import ProductionConsole from './components/ProductionConsole';
 import WardrobeStudio from './components/WardrobeStudio';
 import PropAccessoryStudio from './components/PropAccessoryStudio';
+import PortraitStudio from './components/PortraitStudio';
 import VeoGenerator from './components/VeoGenerator';
 import { StorageService } from './services/StorageService';
 import { LOGO_BASE64 } from './assets/logo';
@@ -36,43 +37,7 @@ import {
 
 // --- 1. TYPES & INTERFACES ---
 
-const NanobananaThinking = () => {
-  return (
-    <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/70 backdrop-blur-xl animate-in fade-in duration-500 select-none">
-      <div className="relative flex items-center justify-center">
-        {/* Cinematic Outer Glow/Ring */}
-        <div className="absolute w-64 h-64 bg-yellow-500/5 rounded-full blur-3xl animate-pulse"></div>
-
-        {/* Outer Cinematic Spinner */}
-        <div className="w-56 h-56 border-[3px] border-transparent border-t-yellow-500 border-b-yellow-500 rounded-full animate-spin shadow-[0_0_40px_rgba(234,179,8,0.2)]"></div>
-
-        {/* Inner Reverse Spinner */}
-        <div className="absolute w-44 h-44 border-[3px] border-transparent border-l-blue-500 border-r-blue-500 rounded-full animate-spin-reverse shadow-[0_0_30px_rgba(59,130,246,0.2)]"></div>
-
-        {/* Central Core (Banana) */}
-        <div className="absolute flex flex-col items-center">
-          <div className="text-[72px] animate-bounce-slow drop-shadow-[0_0_20px_rgba(234,179,8,0.6)] filter brightness-110">
-            🍌
-          </div>
-        </div>
-
-        {/* Text Terminal Indicator */}
-        <div className="absolute -bottom-24 left-1/2 -translate-x-1/2 flex flex-col items-center gap-1 w-full text-center">
-          <div className="flex items-center justify-center gap-3">
-            <span className="w-8 h-[1px] bg-gradient-to-r from-transparent to-yellow-500/50"></span>
-            <p className="text-yellow-500 font-black tracking-[0.4em] uppercase text-[11px] animate-pulse">
-              Nanobanana is thinking
-            </p>
-            <span className="w-8 h-[1px] bg-gradient-to-l from-transparent to-yellow-500/50"></span>
-          </div>
-          <p className="text-white/20 text-[8px] font-mono uppercase tracking-[0.2em] animate-float">
-            Analyzing cinematic parameters...
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-};
+import { NanobananaThinking } from './components/ui/NanobananaThinking';
 
 const ImageInspector = () => {
   const { state, dispatch } = useAppContext();
@@ -610,7 +575,7 @@ const App = () => {
               </div>
 
               <nav className="flex bg-[#09090b] p-1 rounded-lg border border-[#27272a]">
-                {(['casting', 'nano_cast', 'wardrobe', 'props', 'staging', 'production', 'veo'] as ViewMode[])
+                {(['casting', 'nano_cast', 'portrait', 'wardrobe', 'props', 'staging', 'production', 'veo'] as ViewMode[])
                   .filter(mode => mode !== 'veo' || state.isStoryboardEnabled)
                   .map(mode => (
                     <button
@@ -637,6 +602,7 @@ const App = () => {
             <main className="flex-grow overflow-hidden relative">
               {state.view === 'casting' && <CastingForge />}
               {state.view === 'nano_cast' && <NanoCastingDirector />}
+              {state.view === 'portrait' && <PortraitStudio />}
               {state.view === 'wardrobe' && <WardrobeStudio />}
               {state.view === 'props' && <PropAccessoryStudio />}
               {state.view === 'staging' && <SceneCanvas />}
