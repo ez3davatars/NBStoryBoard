@@ -16,7 +16,8 @@ export type ViewMode =
   | 'production'
   | 'settings'
   | 'blocking'
-  | 'nano_cast';
+  | 'nano_cast'
+  | 'portrait';
 
 export interface WardrobeItem {
   id: string;

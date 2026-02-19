@@ -68,12 +68,14 @@ export const SceneDirectorPanel = ({
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
-                    <Dropdown
-                        label="Layout"
-                        value={state.director.spatialLayout}
-                        options={['', 'horizontal', 'vertical', 'center']}
-                        onChange={(v: any) => setDirector({ spatialLayout: v as DirectorSpatialLayout })}
-                    />
+                    <div className="flex flex-col gap-1">
+                        <label className="text-[10px] uppercase font-bold text-gray-500">Layout</label>
+                        <Dropdown
+                            value={state.director.spatialLayout}
+                            options={['', 'horizontal', 'vertical', 'center'].map(v => ({ type: "option", label: v || "Default", value: v }))}
+                            onChange={(v) => setDirector({ spatialLayout: v as DirectorSpatialLayout })}
+                        />
+                    </div>
                 </div>
             </div>
         </SidebarPanel>

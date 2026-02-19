@@ -111,12 +111,12 @@ export const AnchorRefPanel = ({
                         </button>
                     </div>
                     <div className="mt-4 flex gap-2 items-end">
-                        <div className="flex-1">
+                        <div className="flex-1 flex flex-col gap-1">
+                            <label className="text-[10px] uppercase font-bold text-gray-500">Merge Strategy</label>
                             <Dropdown
-                                label="Merge Strategy"
                                 value={state.director.mergeStrategy}
-                                options={['Character Identity', 'Style Transfer', 'Composition Reference', 'Photo Merge']}
-                                onChange={(v: any) => setDirector({ mergeStrategy: v as DirectorMergeStrategy })}
+                                options={['Character Identity', 'Style Transfer', 'Composition Reference', 'Photo Merge'].map(v => ({ type: "option", label: v, value: v }))}
+                                onChange={(v) => setDirector({ mergeStrategy: v as DirectorMergeStrategy })}
                             />
                         </div>
                         <button

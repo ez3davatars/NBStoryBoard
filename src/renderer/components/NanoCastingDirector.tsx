@@ -1367,23 +1367,31 @@ const NanoCastingDirector = () => {
     const [showSaveModal, setShowSaveModal] = useState(false);
     const [saveCategory, setSaveCategory] = useState("Realism");
     const [newActorName, setNewActorName] = useState("");
+    const [saveMode, setSaveMode] = useState<'actor' | 'ref_sheet'>('actor');
 
-    const handleOpenSaveModal = () => {
-        if (!finalCharacterUrl) return;
-        const promptSummary = state.lastCastedPrompt ? state.lastCastedPrompt.substring(0, 15) : "Generated Actor";
-        setNewActorName(promptSummary);
+    const handleOpenSaveModal = (mode: 'actor' | 'ref_sheet' = 'actor') => {
+        const urlToUse = mode === 'ref_sheet' ? refSheetUrl : finalCharacterUrl;
+        if (!urlToUse) return;
+
+        setSaveMode(mode);
+        if (mode === 'ref_sheet') {
+            setNewActorName(`RefSheet-${Date.now()}`);
+        } else {
+            const promptSummary = state.lastCastedPrompt ? state.lastCastedPrompt.substring(0, 15) : "Generated Actor";
+            setNewActorName(promptSummary);
+        }
         setShowSaveModal(true);
     };
 
     const confirmSaveToLibrary = async (nameOverride?: string, categoryOverride?: string) => {
         const targetName = nameOverride || newActorName;
         const targetCategory = categoryOverride || saveCategory;
+        const targetUrl = saveMode === 'ref_sheet' ? refSheetUrl : finalCharacterUrl;
 
         showToast(`Save Identity: ${targetName}`);
-        console.log("confirmSaveToLibrary called with:", { targetName, targetCategory, hasHandle: !!state.saveDirectoryHandle, hasUrl: !!finalCharacterUrl });
 
-        if (!state.saveDirectoryHandle || !finalCharacterUrl) {
-            console.warn("Save aborted: No Directory Handle or Character URL");
+        if (!state.saveDirectoryHandle || !targetUrl) {
+            console.warn("Save aborted: No Directory Handle or URL");
             showToast("No Save Folder or Image! Link Storage in Sidebar.");
             return;
         }
@@ -1400,15 +1408,23 @@ const NanoCastingDirector = () => {
             const safeName = targetName.replace(/[^a-z0-9\s-_]/gi, '').trim() || `Actor-${Date.now()}`;
             const actorDir = await catDir.getDirectoryHandle(safeName, { create: true });
 
-            // 4. Save Portrait
+            // 4. Save Main Image (as portrait.png for consistency in library)
             const fileHandle = await actorDir.getFileHandle('portrait.png', { create: true });
             const writable = await fileHandle.createWritable();
 
-            const res = await fetch(finalCharacterUrl);
+            const res = await fetch(targetUrl);
             const blob = await res.blob();
 
             await writable.write(blob);
             await writable.close();
+
+            // 4b. If Reference Sheet, save backup copy with distinct name
+            if (saveMode === 'ref_sheet') {
+                const refHandle = await actorDir.getFileHandle('reference_sheet.png', { create: true });
+                const refWritable = await refHandle.createWritable();
+                await refWritable.write(blob); // Same blob
+                await refWritable.close();
+            }
 
             // 5. Save Metadata (actor.json)
             const metaHandle = await actorDir.getFileHandle('actor.json', { create: true });
@@ -1416,15 +1432,15 @@ const NanoCastingDirector = () => {
             const metadata = {
                 id: crypto.randomUUID(),
                 name: safeName,
-                description: state.lastCastedPrompt || "Nano Cast Generation",
-                tags: [targetCategory, "Nano Cast", selectedBody || "Unknown Class"],
+                description: saveMode === 'ref_sheet' ? "Nano Reference Sheet" : (state.lastCastedPrompt || "Nano Cast Generation"),
+                tags: [targetCategory, "Nano Cast", selectedBody || "Unknown Class", saveMode === 'ref_sheet' ? 'Reference Sheet' : 'Portrait'],
                 version: "1.0",
                 created: Date.now(),
                 dna: {
                     weight: weightLbs,
                     height: heightIn,
-                    identity_lock: directorControls.identityStrength, // Corrected from biometicStrength
-                    stylization: directorControls.stylization // Corrected from stylization
+                    identity_lock: directorControls.identityStrength,
+                    stylization: directorControls.stylization
                 }
             };
             await metaWritable.write(JSON.stringify(metadata, null, 2));
@@ -1477,13 +1493,12 @@ const NanoCastingDirector = () => {
             }
         }
 
+
+
         dispatch({ type: 'SET_PROCESSING', payload: true });
         dispatch({ type: 'ADD_LOG', payload: { message: "Generating Character Reference Sheet...", type: 'info' } });
 
         try {
-
-
-            if (identitySource !== 'biometric' && !selectedBody) return;
 
             // 1. PREPARE IMAGE REFERENCES FIRST
             const imageRefs: { url: string; label: string }[] = [];
@@ -3116,41 +3131,7 @@ const NanoCastingDirector = () => {
                                                 <Download className="w-4 h-4" /> Download
                                             </button>
                                             <button
-                                                onClick={async () => {
-                                                    if (state.saveDirectoryHandle) {
-                                                        try {
-                                                            // @ts-ignore - Verify permission
-                                                            if ((await state.saveDirectoryHandle.queryPermission({ mode: 'readwrite' })) !== 'granted') {
-                                                                // @ts-ignore
-                                                                if ((await state.saveDirectoryHandle.requestPermission({ mode: 'readwrite' })) !== 'granted') {
-                                                                    throw new Error("Permission denied");
-                                                                }
-                                                            }
-
-                                                            const root = await state.saveDirectoryHandle.getDirectoryHandle('ReferenceSheets', { create: true });
-                                                            const filename = `RefSheet-${Date.now()}.png`;
-                                                            const handle = await root.getFileHandle(filename, { create: true });
-                                                            const writable = await handle.createWritable();
-                                                            const res = await fetch(refSheetUrl);
-                                                            const blob = await res.blob();
-                                                            await writable.write(blob);
-                                                            await writable.close();
-                                                            showToast("Saved to ReferenceSheets/");
-                                                        } catch (e: any) {
-                                                            showToast("Save failed. Downloading instead...");
-                                                            const a = document.createElement('a');
-                                                            a.href = refSheetUrl;
-                                                            a.download = `RefSheet-Backup-${Date.now()}.png`;
-                                                            a.click();
-                                                        }
-                                                    } else {
-                                                        showToast("No Save Folder. Downloading instead...");
-                                                        const a = document.createElement('a');
-                                                        a.href = refSheetUrl;
-                                                        a.download = `RefSheet-${Date.now()}.png`;
-                                                        a.click();
-                                                    }
-                                                }}
+                                                onClick={() => handleOpenSaveModal('ref_sheet')}
                                                 className="bg-accent hover:bg-white text-green-900 px-6 py-2 rounded-lg font-bold uppercase tracking-widest text-[10px] transition-all flex items-center gap-2"
                                             >
                                                 <Share2 className="w-4 h-4" /> Save
