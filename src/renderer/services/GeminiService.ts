@@ -2,38 +2,52 @@ export const GeminiService = {
 
   // Helper: Convert Blob/Data URL to Base64
   async _resolveImageData(url: string): Promise<{ mimeType: string; data: string }> {
+    if (!url) throw new Error("No URL provided to _resolveImageData");
+
     // 1. Handle Base64 Data URL
     if (url.startsWith('data:')) {
-      const mimeType = url.substring(url.indexOf(':') + 1, url.indexOf(';'));
-      const data = url.split('base64,')[1];
-      return { mimeType, data };
+      try {
+        const mimeType = url.substring(url.indexOf(':') + 1, url.indexOf(';'));
+        const data = url.split('base64,')[1];
+        if (!data) throw new Error("Invalid base64 data");
+        return { mimeType, data };
+      } catch (e) {
+        throw new Error("Failed to parse base64 data URL");
+      }
     }
 
     // 2. Handle Blob URL (or any fetchable URL)
     if (url.startsWith('blob:') || url.startsWith('http')) {
       try {
         const response = await fetch(url);
+        if (!response.ok) throw new Error(`Fetch failed: ${response.statusText}`);
         const blob = await response.blob();
         return new Promise((resolve, reject) => {
           const reader = new FileReader();
           reader.onloadend = () => {
             const result = reader.result as string;
-            const mimeType = result.substring(result.indexOf(':') + 1, result.indexOf(';'));
-            const data = result.split('base64,')[1];
-            resolve({ mimeType, data });
+            try {
+              const mimeType = result.substring(result.indexOf(':') + 1, result.indexOf(';'));
+              const data = result.split('base64,')[1];
+              resolve({ mimeType, data });
+            } catch (e) {
+              reject(new Error("Failed to parse blob to base64"));
+            }
           };
-          reader.onerror = reject;
+          reader.onerror = () => reject(new Error("FileReader error"));
           reader.readAsDataURL(blob);
         });
-      } catch (e) {
-        console.warn("Failed to fetch image data from URL:", url, e);
-        // Fallback: try to pass it through if it looks like a b64 string already
-        return { mimeType: 'image/png', data: url };
+      } catch (e: any) {
+        throw new Error(`Failed to resolve image data from ${url.startsWith('blob:') ? 'blob' : 'URL'}: ${e.message}`);
       }
     }
 
     // 3. Handle Raw Base64 (Assume PNG)
-    return { mimeType: 'image/png', data: url };
+    if (url.length > 100) { // Simple heuristic for raw base64
+      return { mimeType: 'image/png', data: url };
+    }
+
+    throw new Error(`Invalid image URL format: ${url.substring(0, 50)}...`);
   },
 
   async generateImage(
@@ -56,10 +70,18 @@ export const GeminiService = {
 
       const contentsParts: any[] = [];
 
+      // Debug log in dev
+      console.log("Multimodal images attached:", referenceImages.length);
+
       // Inject references first
       let imgIndex = 1;
       for (const ref of referenceImages) {
         if (imgIndex > 14) break;
+
+        if (!ref.url) {
+          throw new Error(`Multimodal Error: Reference image ${imgIndex} has no URL.`);
+        }
+
         contentsParts.push({ text: `[IMAGE ${imgIndex}] ${ref.label}` });
         const inline = await GeminiService._resolveImageData(ref.url);
         contentsParts.push({

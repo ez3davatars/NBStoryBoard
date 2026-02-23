@@ -10,7 +10,7 @@ import {
     EyeOff, Shirt, Sparkles, LayoutTemplate, Download, X, ChevronDown, Pencil,
     Trash2, Maximize, RefreshCcw, FolderPlus
 } from 'lucide-react';
-import { nativeJoinPath, nativeListFiles, nativeReadFile } from '../utils/NativeFileAssets';
+import { nativeJoinPath, nativeListFiles, nativeReadFile, nativeWriteFile } from '../utils/NativeFileAssets';
 import { nativeSelectFolder } from '../utils/NativeFileAssets';
 import type { CastMember } from '../context/AppContext';
 import { useAppContext } from '../context/AppContext';
@@ -726,6 +726,7 @@ const NanoCastingDirector = () => {
         stylization: 50,      // 0-100
         age: 25,              // 10-90
         outfit: "Black polo shirt, jeans, and black and yellow casual shoes",
+        hairStyle: "",
         lighting: "studio_default",
         shotFraming: "full_body" as 'bust' | 'half_body' | 'full_body',
         logoImage: null as string | null,
@@ -1002,14 +1003,55 @@ const NanoCastingDirector = () => {
         });
     };
 
+
+
+    // ... existing imports ...
+
     // --- SAVING FUNCTIONS ---
 
     const handleSaveToActors = async () => {
-        if (!finalCharacterUrl || !state.saveDirectoryHandle) {
-            if (!state.saveDirectoryHandle) dispatch({ type: 'ADD_LOG', payload: { message: "No save folder configured in settings.", type: 'error' } });
+        if (!finalCharacterUrl || (!state.saveDirectoryHandle && !state.saveDirectoryPath)) {
+            if (!state.saveDirectoryHandle && !state.saveDirectoryPath) dispatch({ type: 'ADD_LOG', payload: { message: "No save folder configured in settings.", type: 'error' } });
             return;
         }
+
         try {
+            // NATIVE MODE
+            if (state.saveDirectoryPath) {
+                const root = state.saveDirectoryPath;
+                const actorsDir = await nativeJoinPath(root, 'Actors');
+                // Ensure directory existence is handled by nativeWriteFile or we might need a mkdir equivalent if strictly required, 
+                // but WardrobeStudio says "nativeWriteFile handles directory creation recursively".
+
+                const safeName = "NanoCast_" + Date.now();
+                const filename = `${safeName}.png`;
+                const filePath = await nativeJoinPath(actorsDir, filename);
+
+                const res = await fetch(finalCharacterUrl);
+                const blob = await res.blob();
+
+                await nativeWriteFile(filePath, blob);
+
+                const newActor = {
+                    id: `actor-${Date.now()}`,
+                    url: finalCharacterUrl,
+                    tag: 'front',
+                    name: "Nano Cast",
+                    profile: {
+                        identity: "Generated",
+                        wardrobe: "Standard",
+                        accessories: "",
+                        style: (selectedStyle && styleMatrix[selectedStyle as keyof typeof styleMatrix]?.label) || "Cinematic"
+                    }
+                };
+                // @ts-ignore
+                dispatch({ type: 'ADD_ACTOR_LIBRARY', payload: newActor });
+                dispatch({ type: 'ADD_LOG', payload: { message: `Saved to Actors (Native): ${filename}`, type: 'success' } });
+                return;
+            }
+
+            // WEB MODE
+            if (!state.saveDirectoryHandle) return;
             const actorsDir = await state.saveDirectoryHandle.getDirectoryHandle('Actors', { create: true });
             const safeName = "NanoCast_" + Date.now();
             const filename = `${safeName}.png`;
@@ -1041,13 +1083,41 @@ const NanoCastingDirector = () => {
     };
 
     const handleSaveToWardrobe = async () => {
-        if (!finalCharacterUrl || !state.saveDirectoryHandle) {
-            if (!state.saveDirectoryHandle) dispatch({ type: 'ADD_LOG', payload: { message: "No save folder configured in settings.", type: 'error' } });
+        if (!finalCharacterUrl || (!state.saveDirectoryHandle && !state.saveDirectoryPath)) {
+            if (!state.saveDirectoryHandle && !state.saveDirectoryPath) dispatch({ type: 'ADD_LOG', payload: { message: "No save folder configured in settings.", type: 'error' } });
             return;
         }
         try {
-            const wardrobeDir = await state.saveDirectoryHandle.getDirectoryHandle('wardrobe', { create: true });
             const filename = `WARDROBE-${Date.now()}.png`;
+
+            // NATIVE MODE
+            if (state.saveDirectoryPath) {
+                const root = state.saveDirectoryPath;
+                const wardrobeDir = await nativeJoinPath(root, 'wardrobe');
+                const filePath = await nativeJoinPath(wardrobeDir, filename);
+
+                const res = await fetch(finalCharacterUrl);
+                const blob = await res.blob();
+                await nativeWriteFile(filePath, blob);
+
+                const newItem = {
+                    id: filename,
+                    url: finalCharacterUrl,
+                    name: "Nano Creation",
+                    prompt: "Generated from NanoCasting",
+                    category: "Nano",
+                    timestamp: Date.now()
+                };
+
+                // @ts-ignore
+                dispatch({ type: 'ADD_WARDROBE_ITEM', payload: newItem });
+                dispatch({ type: 'ADD_LOG', payload: { message: `Saved to Wardrobe (Native): ${filename}`, type: 'success' } });
+                return;
+            }
+
+            // WEB MODE
+            if (!state.saveDirectoryHandle) return;
+            const wardrobeDir = await state.saveDirectoryHandle.getDirectoryHandle('wardrobe', { create: true });
             const fileHandle = await wardrobeDir.getFileHandle(filename, { create: true });
             const writable = await fileHandle.createWritable();
             const res = await fetch(finalCharacterUrl);
@@ -1236,6 +1306,7 @@ const NanoCastingDirector = () => {
                 DIRECTOR OVERRIDES:
                 - Age Appearance: Approx ${directorControls.age} years old.
                 - Outfit: ${directorControls.outfit || "Style-appropriate default attire"}.
+                - Hair Style: ${directorControls.hairStyle || "Style-appropriate default hairstyle"}.
                 - Identity Match Priority: ${directorControls.identityStrength}%.
                 - Stylization Intensity: ${directorControls.stylization}%.
 
@@ -1390,13 +1461,59 @@ const NanoCastingDirector = () => {
 
         showToast(`Save Identity: ${targetName}`);
 
-        if (!state.saveDirectoryHandle || !targetUrl) {
+        if ((!state.saveDirectoryHandle && !state.saveDirectoryPath) || !targetUrl) {
             console.warn("Save aborted: No Directory Handle or URL");
             showToast("No Save Folder or Image! Link Storage in Sidebar.");
             return;
         }
 
         try {
+            // NATIVE MODE
+            if (state.saveDirectoryPath) {
+                const root = state.saveDirectoryPath;
+                const actorsDir = await nativeJoinPath(root, 'Actors');
+                const catDir = await nativeJoinPath(actorsDir, targetCategory);
+
+                const safeName = targetName.replace(/[^a-z0-9\s-_]/gi, '').trim() || `Actor-${Date.now()}`;
+                const portraitPath = await nativeJoinPath(catDir, safeName, 'portrait.png');
+
+                const res = await fetch(targetUrl);
+                const blob = await res.blob();
+
+                await nativeWriteFile(portraitPath, blob); // Handles partial directory creation
+
+                // Reference Sheet Backup
+                if (saveMode === 'ref_sheet') {
+                    const refPath = await nativeJoinPath(catDir, safeName, 'reference_sheet.png');
+                    await nativeWriteFile(refPath, blob);
+                }
+
+                // Metadata
+                const metaPath = await nativeJoinPath(catDir, safeName, 'actor.json');
+                const metadata = {
+                    id: crypto.randomUUID(),
+                    name: safeName,
+                    description: saveMode === 'ref_sheet' ? "Nano Reference Sheet" : (state.lastCastedPrompt || "Nano Cast Generation"),
+                    tags: [targetCategory, "Nano Cast", selectedBody || "Unknown Class", saveMode === 'ref_sheet' ? 'Reference Sheet' : 'Portrait'],
+                    version: "1.0",
+                    created: Date.now(),
+                    dna: {
+                        weight: weightLbs,
+                        height: heightIn,
+                        identity_lock: directorControls.identityStrength,
+                        stylization: directorControls.stylization
+                    }
+                };
+                const metaBlob = new Blob([JSON.stringify(metadata, null, 2)], { type: 'application/json' });
+                await nativeWriteFile(metaPath, metaBlob);
+
+                showToast(`Saved to Library (Native): ${targetCategory}/${safeName}`);
+                setShowSaveModal(false);
+                return;
+            }
+
+            // WEB MODE
+            if (!state.saveDirectoryHandle) return;
             // 1. Get/Create "Actors" folder
             const root = state.saveDirectoryHandle;
             const actorsDir = await root.getDirectoryHandle('Actors', { create: true });
@@ -1519,6 +1636,15 @@ const NanoCastingDirector = () => {
 
             // Capture the count of biometric/identity images BEFORE adding the logo
             const identityRefLimit = imageRefs.length;
+
+            // CRITICAL VALIDATION: Ensure we actually have identity images
+            if (identitySource === 'biometric' && identityRefLimit === 0) {
+                throw new Error("No biometric scans found. Please re-scan logic.");
+            }
+            if (identitySource === 'generated' && identityRefLimit === 0) {
+                throw new Error("No portrait found. Please generate a portrait first.");
+            }
+
             const identityRangeText = identityRefLimit === 1 ? "[IMAGE 1]" : `[IMAGE 1] to [IMAGE ${identityRefLimit}]`;
 
             // B1. Add Wardrobe Reference if exists
@@ -1601,6 +1727,7 @@ const NanoCastingDirector = () => {
                 // GENERATED IDENTITY
                 finalPrompt += `GENERATE CHARACTER REFERENCE SHEET:\n`;
                 finalPrompt += `Subject: ${selectedBody ? bodyArchetypes.find(b => b.id === selectedBody)?.name : "Character"}.\n`;
+                finalPrompt += `Hair Style: ${directorControls.hairStyle || "Style-appropriate hairstyle"}.\n`;
                 finalPrompt += `Reference: Use [IMAGE 1] as the base character.\n`;
             } else {
                 // BIOMETRIC IDENTITY STRENGTH INJECTION
@@ -1714,7 +1841,11 @@ const NanoCastingDirector = () => {
                 const isRealistic = ['hyper_real', 'exact_studio', 'cyberpunk', 'premium_cg'].includes(targetStyleKey);
                 if (isRealistic) {
                     finalPrompt += `FINAL INSTRUCTION: The face in ALL views must be a PIXEL-PERFECT MATCH to [IMAGE 1]. PRESERVE FACIAL GEOMETRY ABOVE ALL ELSE. Apply the Material/Lighting of the style, but DO NOT ALTER THE SKULL SHAPE.\n`;
-                    finalPrompt += `GROOMING LOCK: The Hairstyle (or lack thereof) and Facial Hair must match [IMAGE 1] exactly. IMPORTANT: If the subject is BALD in [IMAGE 1], they MUST BE BALD in the output. Do not add hair. Do not change the beard style.\n`;
+                    if (directorControls.hairStyle) {
+                        finalPrompt += `GROOMING OVERRIDE: Apply the hairstyle "${directorControls.hairStyle}". Preserve facial hair from [IMAGE 1] but override head hair.\n`;
+                    } else {
+                        finalPrompt += `GROOMING LOCK: The Hairstyle (or lack thereof) and Facial Hair must match [IMAGE 1] exactly. IMPORTANT: If the subject is BALD in [IMAGE 1], they MUST BE BALD in the output. Do not add hair. Do not change the beard style.\n`;
+                    }
                     finalPrompt += `TEXTURE PROJECTION: Treat [IMAGE 1] as the SOURCE TEXTURE MAP. Project the exact features (Eyes, Nose, Mouth, Skin Details) onto the model. Do not use a fallback generic face.\n`;
 
                     finalPrompt += `MODE: EXACT REPLICATION. Ignore style-based facial adjustments. Pure Biometric fidelity required.\n`;
@@ -2076,6 +2207,25 @@ const NanoCastingDirector = () => {
                                                     className="w-full bg-black/50 border border-border rounded-lg px-4 py-3 text-sm text-white focus:border-accent outline-none"
                                                 />
                                                 <InlineHint zone="nano" id="promptInput" />
+                                            </div>
+
+                                            <div className="space-y-2">
+                                                <label className="text-xs text-accent uppercase tracking-widest font-black flex justify-between items-center">
+                                                    <span>Hair Style Prompt</span>
+                                                    <button
+                                                        onClick={() => setDirectorControls(p => ({ ...p, hairStyle: '' }))}
+                                                        className="text-[9px] text-zinc-500 hover:text-white transition-colors border border-zinc-700 hover:border-zinc-500 px-2 rounded bg-black/50"
+                                                    >
+                                                        CLEAR
+                                                    </button>
+                                                </label>
+                                                <input
+                                                    type="text"
+                                                    placeholder="e.g. Buzz cut, messy hair, slicked back"
+                                                    value={directorControls.hairStyle}
+                                                    onChange={(e) => setDirectorControls(p => ({ ...p, hairStyle: e.target.value }))}
+                                                    className="w-full bg-black/50 border border-border rounded-lg px-4 py-3 text-sm text-white focus:border-accent outline-none"
+                                                />
                                             </div>
 
                                             <div className="space-y-3 pt-6 border-t border-border">
@@ -2698,6 +2848,16 @@ const NanoCastingDirector = () => {
                                                     // Immediately set default scope to prevent null-state flicker/jump
                                                     const rules = STYLE_SCOPE_RULES[normalizedId] || STYLE_SCOPE_RULES.default;
                                                     setBodyScope(rules.default);
+
+                                                    // AUTO-SETTINGS for Exact Likeness
+                                                    if (normalizedId === 'exact_studio') {
+                                                        setDirectorControls(prev => ({
+                                                            ...prev,
+                                                            identityStrength: 100,
+                                                            stylization: 0
+                                                        }));
+                                                        showToast("Exact Likeness: Auto-locked Identity to 100%");
+                                                    }
                                                 }}
                                                 className={`group relative h-56 border rounded-xl transition-all duration-300 overflow-hidden flex flex-col justify-end cursor-pointer ${isSelected
                                                     ? 'bg-surface border-blue-500 shadow-[0_0_20px_rgba(59,130,246,0.3)] scale-[1.02] z-10'
@@ -2901,7 +3061,7 @@ const NanoCastingDirector = () => {
                                         </button>
 
                                         <button
-                                            onClick={handleOpenSaveModal}
+                                            onClick={() => handleOpenSaveModal('actor')}
                                             className="col-span-1 py-4 bg-surface-2 hover:bg-surface text-purple-400 font-black uppercase tracking-widest text-xs rounded-xl transition-all shadow-lg shadow-purple-500/10 border border-purple-500/30 hover:border-purple-500 flex flex-col items-center gap-1"
                                         >
                                             <FolderPlus className="w-5 h-5" />

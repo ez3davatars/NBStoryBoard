@@ -1,19 +1,20 @@
 
 import { useState, useEffect, useMemo } from "react";
-import { Copy, Save, Calculator, RefreshCw, Layers, Fingerprint, Aperture, Terminal, Activity, ScanFace, Wand2, Sparkles, X, Download, Maximize2, UserPlus, Hammer, Check } from "lucide-react";
+import { RefreshCw, Terminal, Activity, Wand2, Sparkles, X, Download, UserPlus, Hammer, Fingerprint, Maximize2, Save, Calculator, ScanFace, Aperture, Check, RotateCcw, Copy, Lock, Unlock } from "lucide-react";
 // Remove GlassCard import
 import { Input } from "./ui/Input";
 import { Slider } from "./ui/Slider";
 import { Dropdown } from "./ui/Dropdown";
 import type { CharacterDNA } from "../../types/characterDNA";
 import { computeBMI, deriveBuildDescription } from "../../types/characterDNA";
-import { buildPortraitPrompt, LIGHTING_PRESETS, CAMERA_PRESETS } from "../../prompts/portraitPrompts";
 import { useAppContext } from "../context/AppContext";
-// Assuming GeminiService is here based on other components
 import { GeminiService } from "../services/GeminiService";
 import { NanobananaThinking } from "./ui/NanobananaThinking";
 import ConfirmDialog from "./ui/ConfirmDialog";
 import {
+    buildPortraitPrompt,
+    LIGHTING_PRESETS,
+    CAMERA_PRESETS,
     FACE_SHAPE_PRESETS,
     EYE_PRESETS,
     NOSE_PRESETS,
@@ -46,7 +47,8 @@ const DEFAULT_DNA: CharacterDNA = {
     skin: {
         freckles: 0,
         scars: 0,
-        skinAge: 25,
+        dermalAge: 25,
+        surfaceUnderEyeControl: true
     },
     hair: {
         style: "Long waves",
@@ -60,6 +62,14 @@ const DEFAULT_DNA: CharacterDNA = {
         realismLevel: 100,
         stylizationLevel: 0,
     },
+    // --- REFERENCE MODE DEFAULTS ---
+    identityMode: "synthetic",
+    refEditMode: "enhance",
+    allowRefMorphology: true,
+    allowRefHair: false,
+    allowRefFace: false,
+    allowRefSkin: false,
+    likenessLock: 100
 };
 
 const LIFE_STAGES = {
@@ -78,48 +88,97 @@ function SolidPanel({ children, className = "" }: { children: React.ReactNode; c
     );
 }
 
+// --- RNG HELPERS ---
+function mulberry32(a: number) {
+    return function () {
+        let t = (a += 0x6d2b79f5);
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+}
+
+const randFloat = (rng: () => number, min: number, max: number) => {
+    return rng() * (max - min) + min;
+};
+
+const randInt = (rng: () => number, min: number, max: number) => {
+    return Math.floor(randFloat(rng, min, max + 1));
+};
+
+const pick = <T,>(rng: () => number, arr: T[]): T => {
+    return arr[Math.floor(rng() * arr.length)];
+};
+
 export default function PortraitStudio() {
     const { state, dispatch } = useAppContext();
     const [dna, setDna] = useState<CharacterDNA>(() => {
         const saved = localStorage.getItem("portrait_session_state");
-        return saved ? JSON.parse(saved).dna : DEFAULT_DNA;
+        if (!saved) return DEFAULT_DNA;
+        try {
+            const parsed = JSON.parse(saved);
+            return parsed.dna || DEFAULT_DNA;
+        } catch (e) {
+            return DEFAULT_DNA;
+        }
     });
     const [presets, setPresets] = useState<Record<string, { id: string; name: string; dna: CharacterDNA }>>({});
-    const [variations, setVariations] = useState<{ id: string; prompt: string; dna: CharacterDNA }[]>(() => {
-        const saved = localStorage.getItem("portrait_session_state");
-        return saved ? JSON.parse(saved).variations : [];
-    });
+    const [randomSeed, setRandomSeed] = useState<number>(() => Date.now());
+    const [lastDnaSnapshot, setLastDnaSnapshot] = useState<CharacterDNA | null>(null);
     const [generatedImage, setGeneratedImage] = useState<string | null>(() => {
         const saved = localStorage.getItem("portrait_session_state");
-        return saved ? JSON.parse(saved).generatedImage : null;
+        if (!saved) return null;
+        try {
+            const parsed = JSON.parse(saved);
+            return parsed.generatedImage || null;
+        } catch (e) {
+            return null;
+        }
     });
     const [isGenerating, setIsGenerating] = useState(false);
     const [isCompiling, setIsCompiling] = useState(false);
     const [isInspecting, setIsInspecting] = useState(false);
+    // --- CHARACTER STATE ---
 
     // --- PRESET SYSTEM (PHASE 4) ---
     useEffect(() => {
-        const saved = localStorage.getItem("portrait_dna_presets");
-        if (saved) {
-            try {
+        try {
+            const saved = localStorage.getItem("portrait_dna_presets");
+            if (saved) {
                 // Ensure legacy presets don't break the app
                 const parsed = JSON.parse(saved);
                 setPresets(parsed);
-            } catch (e) {
-                console.error("Failed to load presets", e);
+            }
+        } catch (e) {
+            console.error("Failed to load presets or storage full", e);
+            // If storage is completely full/corrupted, we might need to clear specific keys
+            if (e instanceof DOMException && e.name === 'QuotaExceededError') {
+                console.warn("Storage quota reached. Clearing session state to make room.");
+                localStorage.removeItem("portrait_session_state");
             }
         }
     }, []);
 
     // --- SESSION PERSISTENCE (PHASE 8) ---
     useEffect(() => {
-        const sessionState = {
-            dna,
-            generatedImage,
-            variations
-        };
-        localStorage.setItem("portrait_session_state", JSON.stringify(sessionState));
-    }, [dna, generatedImage, variations]);
+        try {
+            // CRITICAL: Prune binary/base64 data to avoid QuotaExceededError (5MB limit)
+            const prunedDna = {
+                ...dna,
+                referenceImageUrl: undefined // Never store reference image in localStorage
+            };
+
+            const sessionState = {
+                dna: prunedDna,
+                generatedImage: generatedImage
+            };
+            localStorage.setItem("portrait_session_state", JSON.stringify(sessionState));
+        } catch (e) {
+            console.warn("Session persistence failed (Storage likely full):", e);
+        }
+    }, [dna]);
+    // Note: If generatedImage/variations are needed across refresh, they should be stored 
+    // in IndexedDB or as local files, not localStorage.
 
     const [isSavingPreset, setIsSavingPreset] = useState(false);
     const [newPresetName, setNewPresetName] = useState("");
@@ -130,14 +189,22 @@ export default function PortraitStudio() {
 
         // Functional update to ensure stability
         setPresets(prev => {
+            // CRITICAL: Ensure reference photo isn't stored in presets (quota exhaustion)
+            const cleanDna = { ...dna, referenceImageUrl: undefined };
+
             const newPreset = {
                 id: crypto.randomUUID(),
                 name,
-                dna: JSON.parse(JSON.stringify(dna)) // Deep copy
+                dna: cleanDna
             };
 
             const newPresets = { ...prev, [name]: newPreset };
-            localStorage.setItem("portrait_dna_presets", JSON.stringify(newPresets));
+            try {
+                localStorage.setItem("portrait_dna_presets", JSON.stringify(newPresets));
+            } catch (e) {
+                console.error("Failed to save preset to storage:", e);
+                // Alert might be appropriate here if it's a manual user action
+            }
             console.log("Saved preset:", newPreset);
             return newPresets;
         });
@@ -179,7 +246,6 @@ export default function PortraitStudio() {
 
             // Reset transient UI state
             setGeneratedImage(null);
-            setVariations([]);
         }
     };
 
@@ -190,9 +256,16 @@ export default function PortraitStudio() {
             identity: { ...prev.identity, [key]: value },
             // Auto-sync skin age if it matches chronological age (heuristic)
             skin:
-                key === "age" && prev.skin.skinAge === prev.identity.age
-                    ? { ...prev.skin, skinAge: Number(value) }
+                key === "age" && prev.skin.dermalAge === prev.identity.age
+                    ? { ...prev.skin, dermalAge: Number(value) }
                     : prev.skin,
+        }));
+    };
+
+    const toggleHairLock = () => {
+        setDna(prev => ({
+            ...prev,
+            allowRefHair: !prev.allowRefHair
         }));
     };
 
@@ -238,6 +311,10 @@ export default function PortraitStudio() {
         setDna((prev) => ({ ...prev, render: { ...prev.render, [key]: value } }));
     };
 
+    const updateReferenceFlags = (flags: Partial<Pick<CharacterDNA, "allowRefHair" | "allowRefFace" | "allowRefSkin" | "allowRefMorphology">>) => {
+        setDna(prev => ({ ...prev, ...flags }));
+    };
+
     // --- COMPILER (PHASE 2) ---
     const compiledPrompt = useMemo(() => buildPortraitPrompt(dna), [dna]);
 
@@ -247,56 +324,109 @@ export default function PortraitStudio() {
         return () => clearTimeout(timer);
     }, [dna]);
 
-    // --- VARIATION SYSTEM (PHASE 5) ---
-    const generateVariations = () => {
-        const definitions = [
-            {
-                label: "Variation A",
-                context: "Neutral expression, centered key lighting, straight head orientation.",
-                mods: (d: CharacterDNA) => {
-                    d.render.lighting = "Studio Softbox";
+    // --- RANDOMIZATION SYSTEM ---
+    const handleRandomizeDNA = () => {
+        // 1. Snapshot for Undo
+        setLastDnaSnapshot(JSON.parse(JSON.stringify(dna)));
+
+        // 2. Setup RNG
+        const newSeed = Date.now();
+        const rng = mulberry32(newSeed);
+        setRandomSeed(newSeed);
+
+        setDna(prev => {
+            const next = JSON.parse(JSON.stringify(prev));
+            next.randomSeed = newSeed;
+
+            const isRef = next.identityMode === "reference";
+
+            // --- RENDER (Both Modes) ---
+            next.render.lighting = pick(rng, LIGHTING_PRESETS.filter(p => !p.disabled)).key;
+            next.render.camera = pick(rng, CAMERA_PRESETS.filter(p => !p.disabled)).key;
+
+            if (!isRef) {
+                // --- SYNTHETIC MODE ONLY ---
+
+                // Identity
+                next.identity.sex = pick(rng, ["Female", "Male"]);
+                next.identity.ethnicity = pick(rng, ["Caucasian", "Black", "East Asian", "South Asian", "Hispanic", "Middle Eastern", "Pacific Islander", "Mixed Race", "Fantasy Skin"]);
+                next.identity.skinTone = pick(rng, ["Type I", "Type II", "Type III", "Type IV", "Type V", "Type VI"]);
+
+                const stage = pick(rng, ["child", "teen", "adult", "elder"]) as "child" | "teen" | "adult" | "elder";
+                next.identity.lifeStage = stage;
+                const range = LIFE_STAGES[stage];
+                next.identity.age = randInt(rng, range.min, range.max);
+
+                // Morphology
+                const ft = randInt(rng, 4, 7);
+                const inch = randInt(rng, 0, 11);
+                next.morphology.heightCm = Math.round(((ft * 12) + inch) * 2.54);
+
+                const weightLbs = randInt(rng, 90, 280);
+                next.morphology.weightKg = weightLbs * 0.453592;
+
+                // Sync BMI
+                next.morphology.bmi = computeBMI(next.morphology.heightCm, next.morphology.weightKg);
+                next.morphology.buildDescription = deriveBuildDescription(next.morphology.bmi);
+
+                // Facial Architecture
+                next.face.faceShape = pick(rng, FACE_SHAPE_PRESETS).key;
+                next.face.eyes = pick(rng, EYE_PRESETS).key;
+                next.face.nose = pick(rng, NOSE_PRESETS).key;
+                next.face.lips = pick(rng, LIP_PRESETS).key;
+                next.face.jaw = pick(rng, JAW_PRESETS).key;
+
+                // Skin
+                next.skin.freckles = pick(rng, [0, 0, 0, 5, 10, 15, 25, 35]); // Weighted towards 0
+                next.skin.scars = pick(rng, [0, 0, 0, 5, 10, 15, 25]); // Weighted towards 0
+                next.skin.skinAge = Math.max(0, next.identity.age + randInt(rng, -5, 10));
+
+                // Hair
+                next.hair.color = pick(rng, ["Black", "Dark Brown", "Brown", "Blonde", "Auburn", "Red", "Gray"]);
+                next.hair.style = pick(rng, ["Short crop", "Medium length", "Long waves", "Braided", "Bob cut", "Tapered fade"]);
+                next.hair.length = pick(rng, ["Short", "Medium", "Long"]);
+                next.hair.texture = pick(rng, ["Straight", "Wavy", "Curly", "Coily"]);
+
+                // Render Levels
+                next.render.realismLevel = randInt(rng, 80, 100);
+                next.render.stylizationLevel = randInt(rng, 0, 20);
+
+            } else {
+                // --- REFERENCE MODE ONLY ---
+
+                // Safe Hair Override
+                if (next.refEditMode === "override" && next.allowRefHair) {
+                    next.hair.style = pick(rng, ["Short crop", "Medium length", "Long waves", "Braided", "Bob cut", "Tapered fade"]);
                 }
-            },
-            {
-                label: "Variation B",
-                context: "Slight smile, warmer side lighting, 5-degree left head tilt, tighter crop.",
-                mods: (d: CharacterDNA) => {
-                    d.render.lighting = "Warm Key Left";
-                    d.render.camera = "85mm (Tight)";
-                }
-            },
-            {
-                label: "Variation C",
-                context: "Subtle serious expression, rim lighting, 5-degree right head tilt.",
-                mods: (d: CharacterDNA) => {
-                    d.render.lighting = "Rim Light (Cool)";
+
+                // Reference-aware Render
+                const lock = next.likenessLock || 100;
+                if (lock >= 90) {
+                    next.render.stylizationLevel = randInt(rng, 0, 20);
+                    next.render.realismLevel = randInt(rng, 70, 100);
                 }
             }
-        ];
 
-        const vars = definitions.map((def) => {
-            const varDna = JSON.parse(JSON.stringify(dna)); // Deep clone
-            def.mods(varDna);
-
-            // Append variation context to prompt
-            let basePrompt = buildPortraitPrompt(varDna);
-            basePrompt += `\n\nVARIATION MICRO-ADJUSTMENTS: ${def.context}`;
-
-            return {
-                id: `${def.label}`,
-                dna: varDna,
-                prompt: basePrompt
-            };
+            return next;
         });
 
-        setVariations(vars);
+        dispatch({ type: "ADD_LOG", payload: { message: `DNA randomized (seed: ${newSeed})`, type: "info" } });
+    };
+
+    const handleUndoRandomize = () => {
+        if (lastDnaSnapshot) {
+            setDna(lastDnaSnapshot);
+            setLastDnaSnapshot(null);
+            dispatch({ type: "ADD_LOG", payload: { message: "Randomize reverted", type: "success" } });
+        }
+    };
+
+    const handleCopySeed = () => {
+        navigator.clipboard.writeText(randomSeed.toString());
+        dispatch({ type: "ADD_LOG", payload: { message: "Seed copied to clipboard", type: "success" } });
     };
 
     // --- ACTIONS ---
-    const handleCopy = () => {
-        navigator.clipboard.writeText(compiledPrompt);
-        dispatch({ type: "ADD_LOG", payload: { message: "Prompt copied to clipboard", type: "success" } });
-    };
 
     const handleGenerate = async () => {
         if (!state.apiKey) {
@@ -307,7 +437,12 @@ export default function PortraitStudio() {
         dispatch({ type: "ADD_LOG", payload: { message: "Generating Portrait...", type: "info" } });
 
         try {
-            const url = await GeminiService.generateImage(compiledPrompt, state.apiKey, state.model);
+            // MULTIMODAL WIRING: Pass reference image if in Reference Mode
+            const referenceImages = dna.identityMode === "reference" && dna.referenceImageUrl
+                ? [{ url: dna.referenceImageUrl, label: "Identity Reference" }]
+                : [];
+
+            const url = await GeminiService.generateImage(compiledPrompt, state.apiKey, state.model, referenceImages);
             setGeneratedImage(url); // Set local state for preview
             dispatch({ type: "SET_LAST_CASTED_IMAGE", payload: url });
             dispatch({ type: "SET_LAST_CASTED_PROMPT", payload: compiledPrompt });
@@ -322,7 +457,6 @@ export default function PortraitStudio() {
     const handleStartNew = () => {
         setDna(DEFAULT_DNA);
         setGeneratedImage(null);
-        setVariations([]);
     };
 
     const sendToNanoCast = () => {
@@ -369,141 +503,347 @@ export default function PortraitStudio() {
                 {/* MAIN CONTROLS GROUP */}
                 <SolidPanel className="p-10 flex flex-col gap-12 overflow-visible">
 
-                    {/* IDENTITY - Stronger Header */}
                     <section className="flex flex-col gap-8">
-                        <h3 className="text-base font-black text-white/80 uppercase tracking-[0.15em] flex items-center gap-3 border-l-4 border-yellow-500/50 pl-4">
-                            <Fingerprint className="w-5 h-5 opacity-70" /> Identity Matrix
-                        </h3>
-
-                        {/* PRESET CONTROLS ROW */}
-                        <div className="flex items-end gap-4 pb-6 border-b border-white/5 mb-2">
-                            <div className="flex-1 flex flex-col gap-1.5 relative z-40">
-                                <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest pl-1">Load Preset</label>
-                                <Dropdown
-                                    options={Object.keys(presets).map(k => ({
-                                        type: "option",
-                                        label: k,
-                                        value: k,
-                                        onDelete: () => deletePreset(k)
+                        {/* IDENTITY - Stronger Header */}
+                        <div className="flex justify-between items-center">
+                            <h3 className="text-base font-black text-white/80 uppercase tracking-[0.15em] flex items-center gap-3 border-l-4 border-yellow-500/50 pl-4">
+                                <Fingerprint className="w-5 h-5 opacity-70" /> Identity Matrix
+                            </h3>
+                            {/* MODE TOGGLE (FOR TESTING/V1.2) */}
+                            <div className="flex bg-black/40 p-1 rounded-lg border border-white/5">
+                                <button
+                                    onClick={() => setDna(prev => ({
+                                        ...prev,
+                                        identityMode: "synthetic",
+                                        referenceImageUrl: undefined,
+                                        likenessLock: 100,
+                                        refEditMode: "enhance",
+                                        allowRefMorphology: true,
+                                        allowRefHair: true,
+                                        skin: { ...prev.skin, surfaceUnderEyeControl: true }
                                     }))}
-                                    value=""
-                                    onChange={(val) => loadPreset(val)}
-                                    placeholder="Select Preset..."
-                                />
+                                    className={`px-4 py-1.5 rounded-lg text-[10px] uppercase tracking-wider transition-all duration-200 ${dna.identityMode === "synthetic"
+                                        ? 'bg-gradient-to-r from-yellow-500 to-yellow-600 text-white font-semibold shadow-md'
+                                        : 'text-white/60 hover:bg-white/5 font-medium'
+                                        }`}
+                                >
+                                    Synthetic
+                                </button>
+                                <button
+                                    onClick={() => setDna(prev => ({
+                                        ...prev,
+                                        identityMode: "reference",
+                                        allowRefHair: false,
+                                        allowRefFace: false,
+                                        allowRefSkin: false,
+                                        allowRefMorphology: false
+                                    }))}
+                                    className={`px-4 py-1.5 rounded-lg text-[10px] uppercase tracking-wider transition-all duration-200 ${dna.identityMode === "reference"
+                                        ? 'bg-gradient-to-r from-yellow-500 to-yellow-600 text-white font-semibold shadow-md'
+                                        : 'text-white/60 hover:bg-white/5 font-medium'
+                                        }`}
+                                >
+                                    Reference
+                                </button>
                             </div>
-                            <div className="h-[34px] flex items-center mb-0.5">
-                                {isSavingPreset ? (
-                                    <div className="flex items-center gap-2 animate-in fade-in slide-in-from-right-4 duration-200">
-                                        <input
-                                            type="text"
-                                            value={newPresetName}
-                                            onChange={(e) => setNewPresetName(e.target.value)}
-                                            placeholder="Preset Name..."
-                                            className="h-[34px] px-3 bg-[#0f1117] border border-white/20 rounded-lg text-xs text-white focus:outline-none focus:border-yellow-500/50 min-w-[140px] placeholder:text-gray-600"
-                                            autoFocus
-                                            onKeyDown={(e) => e.key === "Enter" && handleSavePreset()}
+                        </div>
+
+                        {/* PRESETS & REFERENCE MANAGEMENT */}
+                        <div className="flex flex-col gap-6 pt-2 border-b border-white/5 pb-8 mb-2">
+                            {/* PRESET ROW (Synthetic only) */}
+                            {dna.identityMode === "synthetic" && (
+                                <div className="flex items-end gap-3 relative z-40 animate-in fade-in slide-in-from-top-2 duration-300">
+                                    <div className="flex-1 flex flex-col gap-1.5 text-white">
+                                        <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest pl-1">Load Preset</label>
+                                        <Dropdown
+                                            options={Object.keys(presets).map(k => ({
+                                                type: "option",
+                                                label: k,
+                                                value: k,
+                                                onDelete: () => deletePreset(k)
+                                            }))}
+                                            value=""
+                                            onChange={(val) => loadPreset(val)}
+                                            placeholder="Select Preset..."
                                         />
-                                        <button onClick={handleSavePreset} className="h-[34px] px-3 bg-green-500/10 hover:bg-green-500/20 text-green-500 rounded-lg border border-green-500/20 transition-colors flex items-center justify-center">
-                                            <Check className="w-3.5 h-3.5" />
-                                        </button>
-                                        <button onClick={() => setIsSavingPreset(false)} className="h-[34px] px-3 bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded-lg border border-red-500/20 transition-colors flex items-center justify-center">
-                                            <X className="w-3.5 h-3.5" />
-                                        </button>
                                     </div>
-                                ) : (
-                                    <button
-                                        onClick={() => setIsSavingPreset(true)}
-                                        className="h-[34px] px-4 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-xs font-bold uppercase tracking-wider text-gray-400 hover:text-white transition-colors flex items-center gap-2"
-                                    >
-                                        <Save className="w-3.5 h-3.5" /> Save Preset
-                                    </button>
-                                )}
-                            </div>
+                                    <div className="h-[34px] flex items-center mb-0.5">
+                                        {isSavingPreset ? (
+                                            <div className="flex items-center gap-2 animate-in fade-in slide-in-from-right-4 duration-200">
+                                                <input
+                                                    type="text"
+                                                    value={newPresetName}
+                                                    onChange={(e) => setNewPresetName(e.target.value)}
+                                                    placeholder="Preset Name..."
+                                                    className="h-[34px] px-3 bg-[#0f1117] border border-white/20 rounded-lg text-xs text-white focus:outline-none focus:border-yellow-500/50 min-w-[140px] placeholder:text-gray-600 shadow-xl ring-1 ring-yellow-500/10"
+                                                    onKeyDown={(e) => e.key === "Enter" && handleSavePreset()}
+                                                    autoFocus
+                                                />
+                                                <button
+                                                    onClick={handleSavePreset}
+                                                    className="h-[34px] px-3 bg-green-500/10 hover:bg-green-500/20 text-green-500 rounded-lg border border-green-500/20 transition-colors flex items-center justify-center"
+                                                >
+                                                    <Check className="w-3.5 h-3.5" />
+                                                </button>
+                                                <button
+                                                    onClick={() => setIsSavingPreset(false)}
+                                                    className="h-[34px] px-3 bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded-lg border border-red-500/20 transition-colors flex items-center justify-center"
+                                                >
+                                                    <X className="w-3.5 h-3.5" />
+                                                </button>
+                                            </div>
+                                        ) : (
+                                            <button
+                                                onClick={() => setIsSavingPreset(true)}
+                                                className="h-[34px] px-4 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-xs font-bold uppercase tracking-wider text-gray-400 hover:text-white transition-colors flex items-center gap-2"
+                                                title="Save Preset"
+                                            >
+                                                <Save className="w-3.5 h-3.5" /> Save Preset
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* REFERENCE MODE UPLOAD & FIDELITY (Reference only) */}
+                            {dna.identityMode === "reference" && (
+                                <div className="flex flex-col gap-6 animate-in fade-in slide-in-from-top-2 duration-300">
+                                    {/* DRAG & DROP UPLOAD CARD */}
+                                    <div className="flex flex-col gap-2">
+                                        <label className="text-[10px] font-bold text-blue-400/60 uppercase tracking-widest pl-1 mb-1">Identity Reference Photo</label>
+                                        {!dna.referenceImageUrl ? (
+                                            <div
+                                                className="min-h-[140px] border-2 border-dashed border-white/10 rounded-2xl bg-[#0f1117] hover:bg-white/[0.02] hover:border-blue-500/30 transition-all flex flex-col items-center justify-center gap-3 cursor-pointer group"
+                                                onClick={() => {
+                                                    const input = document.createElement('input');
+                                                    input.type = 'file';
+                                                    input.accept = 'image/*';
+                                                    input.onchange = (e: any) => {
+                                                        const file = e.target.files[0];
+                                                        if (file) {
+                                                            const reader = new FileReader();
+                                                            reader.onload = (re: any) => {
+                                                                setDna(prev => ({ ...prev, referenceImageUrl: re.target.result }));
+                                                            };
+                                                            reader.readAsDataURL(file);
+                                                        }
+                                                    };
+                                                    input.click();
+                                                }}
+                                                onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                                                onDrop={(e) => {
+                                                    e.preventDefault();
+                                                    e.stopPropagation();
+                                                    const file = e.dataTransfer.files[0];
+                                                    if (file && file.type.startsWith('image/')) {
+                                                        const reader = new FileReader();
+                                                        reader.onload = (re: any) => {
+                                                            setDna(prev => ({ ...prev, referenceImageUrl: re.target.result }));
+                                                        };
+                                                        reader.readAsDataURL(file);
+                                                    }
+                                                }}
+                                            >
+                                                <div className="w-10 h-10 rounded-full bg-blue-500/10 flex items-center justify-center text-blue-400 group-hover:scale-110 transition-transform">
+                                                    <Download className="w-5 h-5" />
+                                                </div>
+                                                <div className="flex flex-col items-center gap-1">
+                                                    <p className="text-xs font-bold text-white/80">Drag & drop a reference photo here</p>
+                                                    <p className="text-[10px] text-white/40 font-medium">or click to upload from your device</p>
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div className="relative group rounded-2xl overflow-hidden border border-white/10 bg-black/40 min-h-[140px] flex items-center justify-center">
+                                                <img src={dna.referenceImageUrl} alt="Reference" className="max-w-full max-h-[200px] object-contain" />
+                                                <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-4">
+                                                    <button
+                                                        onClick={() => {
+                                                            const input = document.createElement('input');
+                                                            input.type = 'file';
+                                                            input.accept = 'image/*';
+                                                            input.onchange = (e: any) => {
+                                                                const file = e.target.files[0];
+                                                                if (file) {
+                                                                    const reader = new FileReader();
+                                                                    reader.onload = (re: any) => {
+                                                                        setDna(prev => ({ ...prev, referenceImageUrl: re.target.result }));
+                                                                    };
+                                                                    reader.readAsDataURL(file);
+                                                                }
+                                                            };
+                                                            input.click();
+                                                        }}
+                                                        className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg text-[10px] font-bold uppercase tracking-wider transition-colors border border-white/10"
+                                                    >
+                                                        Replace
+                                                    </button>
+                                                    <button
+                                                        onClick={() => setDna(prev => ({ ...prev, referenceImageUrl: undefined }))}
+                                                        className="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-colors border border-red-500/20"
+                                                    >
+                                                        Remove
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <div className="flex flex-col gap-3 pt-2">
+                                        <Slider
+                                            label="Likeness Fidelity Lock"
+                                            min={0} max={100}
+                                            value={dna.likenessLock || 100}
+                                            valueDisplay={`${dna.likenessLock || 100}%`}
+                                            onChange={(e) => setDna(prev => ({ ...prev, likenessLock: Number(e.target.value) }))}
+                                            className="accent-blue-500"
+                                        />
+                                        <p className="text-[9px] text-blue-400/60 font-bold uppercase tracking-tight pl-1 leading-none">Controls how strongly the reference photo influences the generative output.</p>
+                                    </div>
+                                </div>
+                            )}
                         </div>
 
 
-                        <div className="grid grid-cols-2 gap-10">
-                            <div className="flex flex-col gap-8">
-                                <div className="flex flex-col gap-1.5 relative z-30">
-                                    <label className="text-xs font-bold text-gray-500 uppercase tracking-widest pl-1">Biosign: Sex</label>
-                                    <Dropdown
-                                        options={[{ type: "option", label: "Female", value: "Female" }, { type: "option", label: "Male", value: "Male" }]}
-                                        value={dna.identity.sex}
-                                        onChange={(val) => updateIdentity("sex", val)}
-                                    />
+                        {dna.identityMode === "reference" ? (
+                            <div className="flex flex-col gap-6 p-5 bg-white/5 rounded-2xl border border-white/10 animate-in fade-in slide-in-from-top-4 duration-500">
+                                <h4 className="text-[10px] font-black text-blue-400 uppercase tracking-[0.2em] flex items-center gap-2">
+                                    <Activity className="w-3 h-3" /> Age Transform
+                                </h4>
+
+                                <div className="grid grid-cols-2 gap-10">
+                                    <div className="flex flex-col gap-1.5 relative z-20">
+                                        <label className="text-xs font-bold text-gray-500 uppercase tracking-widest pl-1">Life Stage</label>
+                                        <Dropdown
+                                            options={[
+                                                { type: "option", label: "Child", value: "child" },
+                                                { type: "option", label: "Teen", value: "teen" },
+                                                { type: "option", label: "Adult", value: "adult" },
+                                                { type: "option", label: "Elder", value: "elder" }
+                                            ]}
+                                            value={dna.identity.lifeStage}
+                                            onChange={(val) => setLifeStage(val as any)}
+                                        />
+                                    </div>
+
+                                    <div className="flex flex-col gap-2">
+                                        <Slider
+                                            label="Chronological Age"
+                                            min={LIFE_STAGES[dna.identity.lifeStage].min}
+                                            max={LIFE_STAGES[dna.identity.lifeStage].max}
+                                            value={dna.identity.age}
+                                            valueDisplay={`${dna.identity.age} yrs`}
+                                            onChange={(e) => updateIdentity("age", Number(e.target.value))}
+                                            className="accent-blue-500"
+                                        />
+                                    </div>
                                 </div>
-                                <div className="flex flex-col gap-1.5 relative z-20">
-                                    <label className="text-xs font-bold text-gray-500 uppercase tracking-widest pl-1">Biosign: Ethnicity</label>
-                                    <Dropdown
-                                        options={[
-                                            { type: "option", label: "Caucasian", value: "Caucasian" },
-                                            { type: "option", label: "Black / African", value: "Black" },
-                                            { type: "option", label: "East Asian", value: "East Asian" },
-                                            { type: "option", label: "South Asian", value: "South Asian" },
-                                            { type: "option", label: "Hispanic / Latino", value: "Hispanic" },
-                                            { type: "option", label: "Middle Eastern", value: "Middle Eastern" },
-                                            { type: "option", label: "Pacific Islander", value: "Pacific Islander" },
-                                            { type: "option", label: "Mixed", value: "Mixed Race" },
-                                            { type: "option", label: "Fantasy / Alien", value: "Fantasy Skin" }
-                                        ]}
-                                        value={dna.identity.ethnicity}
-                                        onChange={(val) => updateIdentity("ethnicity", val)}
+
+                                <div className="flex items-start gap-3 bg-blue-500/5 p-3 rounded-lg border border-blue-500/10">
+                                    <span className="text-[10px] text-blue-400/80 font-medium leading-relaxed">
+                                        Reference photo controls identity. Life Stage and Age apply an age progression/regression while preserving exact likeness.
+                                    </span>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="grid grid-cols-2 gap-10">
+                                <div className="flex flex-col gap-8">
+                                    <div className="flex flex-col gap-1.5 relative z-30">
+                                        <label className="text-xs font-bold text-gray-500 uppercase tracking-widest pl-1">Biosign: Sex</label>
+                                        <Dropdown
+                                            options={[{ type: "option", label: "Female", value: "Female" }, { type: "option", label: "Male", value: "Male" }]}
+                                            value={dna.identity.sex}
+                                            onChange={(val) => updateIdentity("sex", val)}
+                                        />
+                                    </div>
+                                    <div className="flex flex-col gap-1.5 relative z-20">
+                                        <label className="text-xs font-bold text-gray-500 uppercase tracking-widest pl-1">Biosign: Ethnicity</label>
+                                        <Dropdown
+                                            options={[
+                                                { type: "option", label: "Caucasian", value: "Caucasian" },
+                                                { type: "option", label: "Black / African", value: "Black" },
+                                                { type: "option", label: "East Asian", value: "East Asian" },
+                                                { type: "option", label: "South Asian", value: "South Asian" },
+                                                { type: "option", label: "Hispanic / Latino", value: "Hispanic" },
+                                                { type: "option", label: "Middle Eastern", value: "Middle Eastern" },
+                                                { type: "option", label: "Pacific Islander", value: "Pacific Islander" },
+                                                { type: "option", label: "Mixed", value: "Mixed Race" },
+                                                { type: "option", label: "Fantasy / Alien", value: "Fantasy Skin" }
+                                            ]}
+                                            value={dna.identity.ethnicity}
+                                            onChange={(val) => updateIdentity("ethnicity", val)}
+                                        />
+                                    </div>
+                                </div>
+                                <div className="flex flex-col gap-8">
+                                    <div className="flex flex-col gap-1.5 relative z-30">
+                                        <label className="text-xs font-bold text-gray-500 uppercase tracking-widest pl-1">Dermal: Tone</label>
+                                        <Dropdown
+                                            options={[
+                                                { type: "option", label: "Type I (Pale White)", value: "Type I" },
+                                                { type: "option", label: "Type II (White)", value: "Type II" },
+                                                { type: "option", label: "Type III (White to Olive)", value: "Type III" },
+                                                { type: "option", label: "Type IV (Olive / Brown)", value: "Type IV" },
+                                                { type: "option", label: "Type V (Dark Brown)", value: "Type V" },
+                                                { type: "option", label: "Type VI (Black)", value: "Type VI" },
+                                            ]}
+                                            value={dna.identity.skinTone}
+                                            onChange={(val) => updateIdentity("skinTone", val)}
+                                        />
+                                    </div>
+
+                                    <div className="flex flex-col gap-1.5 relative z-20">
+                                        <label className="text-xs font-bold text-gray-500 uppercase tracking-widest pl-1">Life Stage</label>
+                                        <Dropdown
+                                            options={[
+                                                { type: "option", label: "Child", value: "child" },
+                                                { type: "option", label: "Teen", value: "teen" },
+                                                { type: "option", label: "Adult", value: "adult" },
+                                                { type: "option", label: "Elder", value: "elder" }
+                                            ]}
+                                            value={dna.identity.lifeStage}
+                                            onChange={(val) => setLifeStage(val as any)}
+                                        />
+                                    </div>
+
+                                    <Slider
+                                        label="Chronological Age"
+                                        min={LIFE_STAGES[dna.identity.lifeStage].min}
+                                        max={LIFE_STAGES[dna.identity.lifeStage].max}
+                                        value={dna.identity.age}
+                                        valueDisplay={`${dna.identity.age} yrs`}
+                                        onChange={(e) => updateIdentity("age", Number(e.target.value))}
                                     />
                                 </div>
                             </div>
-                            <div className="flex flex-col gap-8">
-                                <div className="flex flex-col gap-1.5 relative z-30">
-                                    <label className="text-xs font-bold text-gray-500 uppercase tracking-widest pl-1">Dermal: Tone</label>
-                                    <Dropdown
-                                        options={[
-                                            { type: "option", label: "Type I (Pale White)", value: "Type I" },
-                                            { type: "option", label: "Type II (White)", value: "Type II" },
-                                            { type: "option", label: "Type III (White to Olive)", value: "Type III" },
-                                            { type: "option", label: "Type IV (Olive / Brown)", value: "Type IV" },
-                                            { type: "option", label: "Type V (Dark Brown)", value: "Type V" },
-                                            { type: "option", label: "Type VI (Black)", value: "Type VI" },
-                                        ]}
-                                        value={dna.identity.skinTone}
-                                        onChange={(val) => updateIdentity("skinTone", val)}
-                                    />
-                                </div>
-
-                                <div className="flex flex-col gap-1.5 relative z-20">
-                                    <label className="text-xs font-bold text-gray-500 uppercase tracking-widest pl-1">Life Stage</label>
-                                    <Dropdown
-                                        options={[
-                                            { type: "option", label: "Child", value: "child" },
-                                            { type: "option", label: "Teen", value: "teen" },
-                                            { type: "option", label: "Adult", value: "adult" },
-                                            { type: "option", label: "Elder", value: "elder" }
-                                        ]}
-                                        value={dna.identity.lifeStage}
-                                        onChange={(val) => setLifeStage(val as any)}
-                                    />
-                                </div>
-
-                                <Slider
-                                    label="Chronological Age"
-                                    min={LIFE_STAGES[dna.identity.lifeStage].min}
-                                    max={LIFE_STAGES[dna.identity.lifeStage].max}
-                                    value={dna.identity.age}
-                                    valueDisplay={`${dna.identity.age} yrs`}
-                                    onChange={(e) => updateIdentity("age", Number(e.target.value))}
-                                />
-                            </div>
-                        </div>
+                        )}
                     </section>
 
                     {/* MORPHOLOGY - Visual emphasis Upgrade */}
-                    <section className="flex flex-col gap-8 bg-black/20 -mx-10 px-10 py-10 border-y border-white/5 relative group">
+                    <section className={`flex flex-col gap-8 bg-black/20 -mx-10 px-10 py-10 border-y border-white/5 relative group transition-all duration-500 ${!dna.allowRefMorphology ? 'opacity-40 pointer-events-none' : ''}`}>
                         <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none group-hover:opacity-10 transition-opacity">
                             <Activity className="w-32 h-32" />
                         </div>
 
                         <div className="flex justify-between items-center z-10">
-                            <h3 className="text-sm font-black text-yellow-500/90 uppercase tracking-[0.2em] flex items-center gap-3">
-                                <Calculator className="w-4 h-4" /> Morphology
-                            </h3>
+                            <div className="flex items-center gap-6">
+                                <h3 className="text-sm font-black text-yellow-500/90 uppercase tracking-[0.2em] flex items-center gap-3">
+                                    <Calculator className="w-4 h-4" /> Morphology
+                                </h3>
+                                {dna.identityMode === "reference" && (
+                                    <button
+                                        onClick={() => updateReferenceFlags({ allowRefMorphology: !dna.allowRefMorphology })}
+                                        className={`flex items-center gap-1.5 px-2 py-1 rounded border transition-all duration-200 ${dna.allowRefMorphology
+                                            ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-500'
+                                            : 'bg-white/5 border-white/10 text-gray-500 hover:text-gray-300'
+                                            }`}
+                                    >
+                                        {dna.allowRefMorphology ? <Unlock className="w-3 h-3" /> : <Lock className="w-3 h-3" />}
+                                        <span className="text-[8px] font-black uppercase tracking-widest leading-none">
+                                            {dna.allowRefMorphology ? 'Edits Enabled' : 'Locked to Reference'}
+                                        </span>
+                                    </button>
+                                )}
+                            </div>
                             {/* Prominent BMI Badge */}
                             <div className="flex items-center gap-4 bg-yellow-500/5 px-5 py-3 rounded-lg border border-yellow-500/10 shadow-[0_4px_20px_rgba(0,0,0,0.2)] hover:border-yellow-500/30 transition-colors cursor-help group/bmi">
                                 <div className="flex flex-col gap-0.5 text-right border-r border-yellow-500/20 pr-4 mr-1">
@@ -576,10 +916,31 @@ export default function PortraitStudio() {
 
                     {/* FACIAL STRUCTURE - Lighter Touch */}
                     <section className="flex flex-col gap-8">
-                        <h3 className="text-xs font-bold text-gray-500 uppercase tracking-[0.2em] flex items-center gap-2 pl-1">
-                            <ScanFace className="w-4 h-4 opacity-50" /> Facial Architecture
-                        </h3>
-                        <div className="grid grid-cols-2 gap-x-10 gap-y-8 pl-2">
+                        <div className="flex justify-between items-center pr-2">
+                            <h3 className="text-xs font-bold text-gray-500 uppercase tracking-[0.2em] flex items-center gap-2 pl-1">
+                                <ScanFace className="w-4 h-4 opacity-50" /> Facial Architecture
+                            </h3>
+                            {dna.identityMode === "reference" && (
+                                <button
+                                    onClick={() => updateReferenceFlags({ allowRefFace: !dna.allowRefFace })}
+                                    className={`flex items-center gap-1.5 px-2 py-1 rounded border transition-all duration-200 ${dna.allowRefFace
+                                        ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-500'
+                                        : 'bg-white/5 border-white/10 text-gray-500 hover:text-gray-300'
+                                        }`}
+                                >
+                                    {dna.allowRefFace ? <Unlock className="w-3 h-3" /> : <Lock className="w-3 h-3" />}
+                                    <span className="text-[8px] font-black uppercase tracking-widest leading-none">
+                                        {dna.allowRefFace ? 'Edits Enabled' : 'Locked to Reference'}
+                                    </span>
+                                </button>
+                            )}
+                        </div>
+                        {dna.identityMode === "reference" && !dna.allowRefFace && (
+                            <p className="text-[9px] text-blue-400/60 font-medium uppercase tracking-tight -mt-4 mb-2 animate-in fade-in duration-500 ml-1">
+                                Face shape, eyes, nose, and lips are preserved from the reference photo.
+                            </p>
+                        )}
+                        <div className={`grid grid-cols-2 gap-x-10 gap-y-8 pl-2 transition-all duration-500 ${(!dna.allowRefFace && dna.identityMode === "reference") ? 'opacity-40 pointer-events-none' : ''}`}>
 
 
                             {/* Feature Selectors */}
@@ -595,8 +956,11 @@ export default function PortraitStudio() {
                                 const isPreset = feature.presets.some((p: any) => p.key === currentValue);
                                 const dropdownValue = isPreset ? (currentValue as string) : "custom_input";
 
+                                const isStructuralField = feature.field === "faceShape" || feature.field === "nose" || feature.field === "jaw";
+                                const isLocked = dna.identityMode === "reference" && (dna.likenessLock || 100) === 100 && isStructuralField;
+
                                 return (
-                                    <div key={feature.field} className="flex flex-col gap-1.5 animate-in fade-in duration-500">
+                                    <div key={feature.field} className={`flex flex-col gap-1.5 animate-in fade-in duration-500 transition-opacity ${isLocked ? 'opacity-40 pointer-events-none' : ''}`}>
                                         <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest pl-1">{feature.label}</label>
                                         <div className="flex flex-col gap-2">
                                             <Dropdown
@@ -605,6 +969,7 @@ export default function PortraitStudio() {
                                                     { type: "option" as const, label: "Custom...", value: "custom_input" }
                                                 ]}
                                                 value={dropdownValue}
+                                                disabled={isLocked}
                                                 onChange={(val) => {
                                                     if (val === "custom_input") {
                                                         if (isPreset) updateFace(feature.field, "");
@@ -641,13 +1006,34 @@ export default function PortraitStudio() {
                     </section>
 
                     {/* SKIN & HAIR GROUP - Two Columns */}
-                    <div className="grid grid-cols-2 gap-12 pt-4 border-t border-white/5">
+                    <div className="grid grid-cols-2 gap-12 pt-4 border-t border-white/5 transition-all duration-500">
                         {/* SKIN DETAILS */}
                         <section className="flex flex-col gap-6">
-                            <h3 className="text-[10px] font-black text-gray-600 uppercase tracking-[0.2em]">
-                                Surface Imperfections
-                            </h3>
-                            <div className="flex flex-col gap-6">
+                            <div className="flex justify-between items-center pr-2">
+                                <h3 className="text-[10px] font-black text-gray-600 uppercase tracking-[0.2em]">
+                                    Surface Imperfections
+                                </h3>
+                                {dna.identityMode === "reference" && (
+                                    <button
+                                        onClick={() => updateReferenceFlags({ allowRefSkin: !dna.allowRefSkin })}
+                                        className={`flex items-center gap-1.5 px-2 py-1 rounded border transition-all duration-200 ${dna.allowRefSkin
+                                            ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-500'
+                                            : 'bg-white/5 border-white/10 text-gray-500 hover:text-gray-300'
+                                            }`}
+                                    >
+                                        {dna.allowRefSkin ? <Unlock className="w-3 h-3" /> : <Lock className="w-3 h-3" />}
+                                        <span className="text-[8px] font-black uppercase tracking-widest leading-none">
+                                            {dna.allowRefSkin ? 'Edits Enabled' : 'Locked to Reference'}
+                                        </span>
+                                    </button>
+                                )}
+                            </div>
+                            {dna.identityMode === "reference" && !dna.allowRefSkin && (
+                                <p className="text-[9px] text-blue-400/60 font-medium uppercase tracking-tight -mt-4 mb-2 animate-in fade-in duration-500">
+                                    Freckles, scars, and skin age are preserved from the reference photo.
+                                </p>
+                            )}
+                            <div className={`flex flex-col gap-6 transition-all duration-500 ${(!dna.allowRefSkin && dna.identityMode === "reference") ? 'opacity-40 pointer-events-none' : ''}`}>
                                 <Slider
                                     label="Freckles Density"
                                     min={0} max={10}
@@ -665,19 +1051,54 @@ export default function PortraitStudio() {
                                 <Slider
                                     label="Dermal Age"
                                     min={0} max={100}
-                                    value={dna.skin.skinAge}
-                                    valueDisplay={`${dna.skin.skinAge}y`}
-                                    onChange={(e) => updateSkin("skinAge", Number(e.target.value))}
+                                    value={dna.skin.dermalAge}
+                                    valueDisplay={`${dna.skin.dermalAge}y`}
+                                    onChange={(e) => updateSkin("dermalAge", Number(e.target.value))}
                                 />
+                                {dna.identityMode === "reference" && (
+                                    <div className="flex items-center gap-2 pl-1 animate-in fade-in slide-in-from-left-2 duration-300">
+                                        <input
+                                            id="ref-under-eye"
+                                            type="checkbox"
+                                            checked={dna.skin.surfaceUnderEyeControl}
+                                            onChange={(e) => updateSkin("surfaceUnderEyeControl", e.target.checked)}
+                                            className="w-3.5 h-3.5 rounded border-white/10 bg-black/40 text-yellow-500 focus:ring-yellow-500/50"
+                                        />
+                                        <label htmlFor="ref-under-eye" className="text-[10px] font-bold text-gray-500 uppercase tracking-widest cursor-pointer hover:text-gray-300 transition-colors">
+                                            Treat under-eye bags as surface aging
+                                        </label>
+                                    </div>
+                                )}
                             </div>
                         </section>
 
                         {/* HAIR */}
                         <section className="flex flex-col gap-6">
-                            <h3 className="text-[10px] font-black text-gray-600 uppercase tracking-[0.2em]">
-                                Follicle System
-                            </h3>
-                            <div className="grid grid-cols-2 gap-6">
+                            <div className="flex justify-between items-center">
+                                <h3 className="text-[10px] font-black text-gray-600 uppercase tracking-[0.2em]">
+                                    Follicle System
+                                </h3>
+                                {dna.identityMode === "reference" && (
+                                    <button
+                                        onClick={toggleHairLock}
+                                        className={`flex items-center gap-1.5 px-2 py-1 rounded border transition-all duration-200 pointer-events-auto ${dna.allowRefHair
+                                            ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-500'
+                                            : 'bg-white/5 border-white/10 text-gray-500 hover:text-gray-300'
+                                            }`}
+                                    >
+                                        {dna.allowRefHair ? <Unlock className="w-3 h-3" /> : <Lock className="w-3 h-3" />}
+                                        <span className="text-[8px] font-black uppercase tracking-widest leading-none">
+                                            {dna.allowRefHair ? 'Edits Enabled' : 'Locked to Reference'}
+                                        </span>
+                                    </button>
+                                )}
+                            </div>
+                            {dna.identityMode === "reference" && !dna.allowRefHair && (
+                                <p className="text-[9px] text-blue-400/60 font-medium uppercase tracking-tight -mt-4 mb-2 animate-in fade-in duration-500">
+                                    Hair, facial hair, and eyewear are preserved from the reference photo.
+                                </p>
+                            )}
+                            <div className={`grid grid-cols-2 gap-6 transition-all duration-500 ${(!dna.allowRefHair && dna.identityMode === "reference") ? 'opacity-40 pointer-events-none' : ''}`}>
                                 <Input label="Color" value={dna.hair.color} onChange={(e) => updateHair("color", e.target.value)} />
                                 <Input label="Style" value={dna.hair.style} onChange={(e) => updateHair("style", e.target.value)} />
                                 <Input label="Length" value={dna.hair.length} onChange={(e) => updateHair("length", e.target.value)} />
@@ -766,8 +1187,12 @@ export default function PortraitStudio() {
                     </div>
                     <div className="flex justify-between items-end relative z-10">
                         <div className="flex flex-col gap-0.5">
-                            <div className="text-lg font-black text-white leading-none">{dna.identity.ethnicity}</div>
-                            <div className="text-xs text-gray-400 font-medium">{dna.identity.sex}, {dna.identity.age} years</div>
+                            <div className="text-lg font-black text-white leading-none">
+                                {dna.identityMode === "reference" ? "IDENTITY REFERENCE" : dna.identity.ethnicity}
+                            </div>
+                            <div className="text-xs text-gray-400 font-medium">
+                                {dna.identityMode === "reference" ? "Locked to source photograph" : `${dna.identity.sex}, ${dna.identity.age} years`}
+                            </div>
                         </div>
                         <div className="flex flex-col items-end gap-0.5">
                             <div className="text-sm font-bold text-white font-mono">{dna.morphology.heightCm}cm / {dna.morphology.weightKg}kg</div>
@@ -852,18 +1277,65 @@ export default function PortraitStudio() {
                         <div className="flex flex-col gap-4 mt-2">
                             {/* Primary Action - Dominant */}
                             {!generatedImage ? (
-                                <button
-                                    onClick={handleGenerate}
-                                    disabled={isGenerating}
-                                    className="w-full bg-gradient-to-r from-yellow-500 to-yellow-600 text-white font-semibold rounded-xl px-6 py-3 shadow-md hover:shadow-lg hover:brightness-110 transition-all duration-200 ease-out flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:brightness-100 disabled:hover:shadow-md group relative"
-                                >
-                                    {isGenerating ? (
-                                        <RefreshCw className="w-5 h-5 animate-spin relative z-10" />
-                                    ) : (
-                                        <Wand2 className="w-5 h-5 shadow-[0_0_6px_rgba(255,215,0,0.35)] transition-transform duration-200 group-hover:-translate-y-px relative z-10" />
+                                <div className="flex flex-col gap-3">
+                                    <button
+                                        onClick={handleGenerate}
+                                        disabled={isGenerating || (dna.identityMode === "reference" && !dna.referenceImageUrl)}
+                                        className={`w-full bg-gradient-to-r from-yellow-500 to-yellow-600 text-white font-semibold rounded-xl px-6 py-3 shadow-md hover:shadow-lg hover:brightness-110 transition-all duration-200 ease-out flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:brightness-100 disabled:hover:shadow-md group relative
+                                            ${(dna.identityMode === "reference" && !dna.referenceImageUrl) ? 'grayscale opacity-30 shadow-none' : ''}`}
+                                    >
+                                        {isGenerating ? (
+                                            <RefreshCw className="w-5 h-5 animate-spin relative z-10" />
+                                        ) : (
+                                            <Wand2 className="w-5 h-5 shadow-[0_0_6px_rgba(255,215,0,0.35)] transition-transform duration-200 group-hover:-translate-y-px relative z-10" />
+                                        )}
+                                        <span className="relative z-10">{isGenerating ? "Synthesizing DNA..." : "Generate DNA Portrait"}</span>
+                                    </button>
+
+                                    {/* Randomize row */}
+                                    <div className="flex items-center gap-2">
+                                        <button
+                                            onClick={handleRandomizeDNA}
+                                            disabled={isGenerating}
+                                            className="flex-1 bg-white/5 hover:bg-white/10 text-white border border-white/10 font-bold rounded-xl px-4 py-3 transition-all flex items-center justify-center gap-2 uppercase tracking-widest text-[10px] disabled:opacity-30"
+                                        >
+                                            <span>🎲 Randomize DNA</span>
+                                        </button>
+
+                                        {lastDnaSnapshot && (
+                                            <button
+                                                onClick={handleUndoRandomize}
+                                                className="bg-white/5 hover:bg-white/10 text-white border border-white/10 rounded-xl px-4 py-3 transition-all flex items-center justify-center gap-2 group"
+                                                title="Undo Randomize"
+                                            >
+                                                <RotateCcw className="w-3.5 h-3.5 text-gray-400 group-hover:text-white transition-colors" />
+                                                <span className="text-[10px] uppercase font-bold tracking-widest text-gray-400 group-hover:text-white">Undo</span>
+                                            </button>
+                                        )}
+
+                                        <div className="h-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 flex items-center gap-3">
+                                            <div className="flex flex-col">
+                                                <span className="text-[8px] text-gray-500 font-bold uppercase tracking-tight leading-none">Seed</span>
+                                                <span className="text-[10px] font-mono text-yellow-500/80 tracking-wider">
+                                                    {randomSeed.toString().slice(-6)}
+                                                </span>
+                                            </div>
+                                            <button
+                                                onClick={handleCopySeed}
+                                                className="text-gray-500 hover:text-white transition-colors"
+                                                title="Copy Full Seed"
+                                            >
+                                                <Copy className="w-3 h-3" />
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {dna.identityMode === "reference" && !dna.referenceImageUrl && (
+                                        <p className="text-[10px] text-red-400 font-bold uppercase tracking-tight text-center animate-pulse">
+                                            Reference image required in Reference Mode.
+                                        </p>
                                     )}
-                                    <span className="relative z-10">{isGenerating ? "Synthesizing DNA..." : "Generate DNA Portrait"}</span>
-                                </button>
+                                </div>
                             ) : (
                                 <div className="flex flex-col gap-3">
                                     <div className="flex gap-3">
@@ -881,25 +1353,6 @@ export default function PortraitStudio() {
                                         </button>
                                     </div>
                                     {/* Removed redundant Download Button */}
-                                </div>
-                            )}
-
-                            {/* Secondary Actions */}
-                            {!generatedImage && (
-                                <div className="flex justify-between items-center gap-3">
-                                    <button
-                                        onClick={generateVariations}
-                                        className="flex-1 text-[10px] font-bold text-gray-400 hover:text-white uppercase tracking-widest bg-white/5 hover:bg-white/10 border border-white/5 py-3 rounded-lg transition-all flex items-center justify-center gap-2"
-                                    >
-                                        <Layers className="w-3.5 h-3.5" /> 3 Variations
-                                    </button>
-                                    <button
-                                        onClick={handleCopy}
-                                        className="w-12 flex items-center justify-center text-gray-600 hover:text-white transition-colors py-3 rounded-lg hover:bg-white/5"
-                                        title="Copy to Clipboard"
-                                    >
-                                        <Copy className="w-4 h-4" />
-                                    </button>
                                 </div>
                             )}
 
@@ -924,23 +1377,7 @@ export default function PortraitStudio() {
 
 
 
-                {/* VARIATIONS OUTPUT */}
-                {variations.length > 0 && !generatedImage && (
-                    <div className="flex flex-col gap-3 animate-in slide-in-from-bottom-10 fade-in duration-500 max-h-[180px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-white/10">
-                        <h3 className="text-[10px] font-bold text-gray-600 uppercase tracking-widest pl-2">Alternative DNA Strands</h3>
-                        {variations.map((v) => (
-                            <div key={v.id} className="p-4 rounded-lg bg-white/5 border border-white/5 hover:border-yellow-500/20 transition-colors group cursor-pointer" onClick={() => setDna(v.dna)}>
-                                <div className="flex justify-between items-center mb-2">
-                                    <span className="text-[9px] font-mono text-yellow-600/70">{v.id}</span>
-                                    <span className="text-[9px] opacity-0 group-hover:opacity-100 transition-opacity text-yellow-500 font-bold uppercase tracking-wider">Load DNA</span>
-                                </div>
-                                <p className="text-[10px] text-gray-500 font-mono line-clamp-2 leading-relaxed opacity-60 group-hover:opacity-100 transition-opacity">
-                                    {v.prompt.split("MICRO-ADJUSTMENTS:")[1] || v.prompt}
-                                </p>
-                            </div>
-                        ))}
-                    </div>
-                )}
+                {/* Integration Actions (Ghost) */}
 
             </div>
 
@@ -959,7 +1396,7 @@ export default function PortraitStudio() {
                         />
                     </div>
 
-                    {/* Floating Action Bar (Bottom Center) - Matches App.tsx ImageInspector */}
+                    {/* Floating Action Bar */}
                     <div className="fixed bottom-12 left-1/2 -translate-x-1/2 flex gap-4 z-[2001] bg-black/40 backdrop-blur-2xl border border-white/10 p-2 rounded-2xl shadow-2xl" onClick={(e) => e.stopPropagation()}>
                         <button
                             onClick={() => {
@@ -1028,7 +1465,6 @@ export default function PortraitStudio() {
                 confirmText="Delete"
                 variant="danger"
             />
-
         </div>
     );
 }

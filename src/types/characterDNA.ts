@@ -29,7 +29,8 @@ export type CharacterDNA = {
     skin: {
         freckles: number;
         scars: number;
-        skinAge: number;
+        dermalAge: number;
+        surfaceUnderEyeControl?: boolean;
     };
 
     hair: {
@@ -46,6 +47,18 @@ export type CharacterDNA = {
         stylizationLevel: number;
         additionalNotes?: string;
     };
+
+    // --- REFERENCE MODE FIELDS (V1.2) ---
+    identityMode?: "synthetic" | "reference";
+    referenceImageUrl?: string;
+    refEditMode?: "enhance" | "override";
+    allowRefMorphology?: boolean;
+    allowRefHair?: boolean;
+    allowRefFace?: boolean;
+    allowRefSkin?: boolean;
+    likenessLock?: number;
+    variationId?: string;
+    randomSeed?: number;
 };
 
 export const computeBMI = (heightCm: number, weightKg: number): number => {

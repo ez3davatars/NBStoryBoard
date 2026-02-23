@@ -11,9 +11,10 @@ interface DropdownProps {
     onChange: (value: string) => void;
     placeholder?: string;
     className?: string;
+    disabled?: boolean;
 }
 
-export function Dropdown({ value, options, onChange, placeholder = "Select...", className = "", forceUpward = false, closeOnMouseLeave = false, variant = "default" }: DropdownProps & { forceUpward?: boolean; closeOnMouseLeave?: boolean; variant?: "default" | "render" }) {
+export function Dropdown({ value, options, onChange, placeholder = "Select...", className = "", forceUpward = false, closeOnMouseLeave = false, variant = "default", disabled = false }: DropdownProps & { forceUpward?: boolean; closeOnMouseLeave?: boolean; variant?: "default" | "render" }) {
     const [isOpen, setIsOpen] = useState(false);
     const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({});
     const [animateClass, setAnimateClass] = useState("opacity-0 translate-y-1");
@@ -231,9 +232,11 @@ export function Dropdown({ value, options, onChange, placeholder = "Select...", 
             <button
                 ref={triggerRef}
                 onClick={(e) => {
+                    if (disabled) return;
                     e.stopPropagation();
                     setIsOpen(!isOpen);
                 }}
+                disabled={disabled}
                 onMouseEnter={handleMouseEnter}
                 onMouseLeave={handleMouseLeave}
                 className={`w-full bg-[#0f1117] text-white border rounded-xl px-3 py-2 text-xs 
@@ -241,6 +244,7 @@ export function Dropdown({ value, options, onChange, placeholder = "Select...", 
                 ${isOpen
                         ? "border-yellow-500 ring-1 ring-yellow-500/50 shadow-[0_0_10px_rgba(234,179,8,0.2)]"
                         : "border-white/10 hover:border-white/20"} 
+                ${disabled ? "opacity-40 cursor-not-allowed grayscale-[0.5]" : ""}
                 ${className}`}
             >
                 <span className="truncate mr-2 opacity-90">

@@ -125,7 +125,7 @@ const SceneCanvas = () => {
     return 'DEGRADED'; // Default to degraded if floor is missing but depth exists
   }, [state.depthMapUrl, state.isDepthProcessing, state.sourceBackgroundHash, state.floorPlane]);
 
-  const tokenMasks: Record<string, string> = {};
+  const [tokenMasks, setTokenMasks] = useState<Record<string, string>>({});
 
   // GROUND PLANE (Derived Authoritative Depth)
   const [groundDepth, setGroundDepth] = useState<number | null>(null);
@@ -303,6 +303,137 @@ const SceneCanvas = () => {
       }
     });
   }, [state.depthMapUrl, state.tokens, groundDepth, dispatch]);
+
+  /**
+   * OCCLUSION MASKS (PER-TOKEN)
+   * Generates a per-token alpha mask derived ONLY from the depth map (background), so actors never self-occlude.
+   * Mask semantics: alpha=255 means token pixel is visible; alpha=0 means occluded by a nearer background pixel.
+   */
+  useEffect(() => {
+    // Avoid heavy work while dragging (masks will refresh on drag end)
+    if (dragItem) return;
+
+    // Nothing to do until we have a real viewport + depth map
+    if (!state.depthMapUrl || viewportBox.w <= 1 || viewportBox.h <= 1) {
+      setTokenMasks(prev => (Object.keys(prev).length ? {} : prev));
+      return;
+    }
+
+    let cancelled = false;
+
+    const timer = window.setTimeout(() => {
+      (async () => {
+        const nextMasks: Record<string, string> = {};
+
+        // Tuning knobs (keep conservative for perf)
+        const MAX_MASK_DIM = 256; // cap largest dimension of generated mask
+        const EPS = 0.01; // depth threshold to reduce flicker (depth is 0..1)
+
+        for (const token of state.tokens) {
+          if (cancelled) return;
+
+          if (token.visible === false) continue;
+          if (token.depth === undefined) continue;
+
+          // Safety gate: don't occlude brand-new placements until user confirms
+          if ((token as any).hasConfirmedPlacement === false) continue;
+
+          const tokenW = Math.max(1, Number((token as any).width) || 1);
+          const tokenH = Math.max(1, Number((token as any).height) || 1);
+          if (!Number.isFinite(tokenW) || !Number.isFinite(tokenH)) continue;
+
+          // Downscale masks for performance, then rely on CSS mask-size to upscale.
+          const scaleFactor = Math.max(1, Math.max(tokenW, tokenH) / MAX_MASK_DIM);
+          const maskW = Math.max(1, Math.round(tokenW / scaleFactor));
+          const maskH = Math.max(1, Math.round(tokenH / scaleFactor));
+
+          const canvas = document.createElement('canvas');
+          canvas.width = maskW;
+          canvas.height = maskH;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) continue;
+
+          const imgData = ctx.createImageData(maskW, maskH);
+          const d = imgData.data;
+
+          // Stage placement (untransformed top-left)
+          const anchorX = (token as any).anchorX ?? 0.5;
+          const anchorY = (token as any).anchorY ?? 0.8;
+          const left = (token.x || 0) - (tokenW * anchorX);
+          const top = (token.y || 0) - (tokenH * anchorY);
+
+          // Transform mapping so occlusion stays correct under rotate/scale
+          const originX = tokenW * anchorX;
+          const originY = tokenH * anchorY;
+          const rot = ((token.rotation || 0) * Math.PI) / 180;
+          const cos = Math.cos(rot);
+          const sin = Math.sin(rot);
+          const sx = (token.scaleX ?? 1);
+          const sy = (token.scaleY ?? 1);
+
+          const stepX = tokenW / maskW;
+          const stepY = tokenH / maskH;
+          const tokenDepth = token.depth;
+
+          for (let y = 0; y < maskH; y++) {
+            const localY = (y + 0.5) * stepY;
+            const dy0 = (localY - originY) * sy;
+
+            for (let x = 0; x < maskW; x++) {
+              const localX = (x + 0.5) * stepX;
+              const dx0 = (localX - originX) * sx;
+
+              // Apply scale -> rotate around origin
+              const rx = (dx0 * cos) - (dy0 * sin);
+              const ry = (dx0 * sin) + (dy0 * cos);
+
+              const stageX = left + originX + rx;
+              const stageY = top + originY + ry;
+
+              const stageXClamped = Math.min(Math.max(stageX, 0), viewportBox.w - 1);
+              const stageYClamped = Math.min(Math.max(stageY, 0), viewportBox.h - 1);
+
+              // Depth map convention: White=Near, Black=Far (near is higher).
+              const sceneDepth = DepthService.getDepthAtPointSync(
+                state.depthMapUrl,
+                stageXClamped,
+                stageYClamped
+              );
+
+              const occluded = sceneDepth > (tokenDepth + EPS);
+
+              const idx = (y * maskW + x) * 4;
+              d[idx] = 0;
+              d[idx + 1] = 0;
+              d[idx + 2] = 0;
+              d[idx + 3] = occluded ? 0 : 255;
+            }
+          }
+
+          ctx.putImageData(imgData, 0, 0);
+          nextMasks[token.id] = canvas.toDataURL('image/png');
+        }
+
+        if (cancelled) return;
+
+        setTokenMasks(prev => {
+          const prevKeys = Object.keys(prev);
+          const nextKeys = Object.keys(nextMasks);
+          if (prevKeys.length !== nextKeys.length) return nextMasks;
+          for (const k of prevKeys) {
+            if (prev[k] !== nextMasks[k]) return nextMasks;
+          }
+          return prev;
+        });
+      })().catch(err => console.warn('[occlusionMasks] generation failed', err));
+    }, 100);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [state.depthMapUrl, state.tokens, viewportBox.w, viewportBox.h, dragItem]);
+
 
   const parseAspectRatioToNumber = (ar: DirectorAspectRatio | string | undefined): number => {
     const raw = String(ar || '16:9');
