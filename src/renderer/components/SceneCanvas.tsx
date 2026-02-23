@@ -78,19 +78,32 @@ const SceneCanvas = () => {
   });
   useEffect(() => {
     const store = useSceneSpec.getState();
+    const currentActors = store.scene.actors;
+    const tokens = state.tokens;
 
-    if (store.scene.actors.length === 0 && state.tokens.length > 0) {
-      state.tokens.forEach((t: any) => {
+    // 1. Remove actors that no longer exist in tokens
+    const tokenIds = new Set(tokens.map(t => t.id));
+    currentActors.forEach(actor => {
+      if (!tokenIds.has(actor.id)) {
+        store.removeActor(actor.id);
+      }
+    });
+
+    // 2. Add or Update actors from tokens
+    tokens.forEach(t => {
+      const existingActor = currentActors.find(a => a.id === t.id);
+
+      const boundingBox = {
+        x: (t.x - (t.width * (t.anchorX ?? 0.5))) / viewportBox.w,
+        y: (t.y - (t.height * (t.anchorY ?? 0.8))) / viewportBox.h,
+        width: t.width / viewportBox.w,
+        height: t.height / viewportBox.h
+      };
+
+      if (!existingActor) {
         store.addActor({
           id: t.id,
-          boundingBox: {
-            x: (viewportBox.x + (t.x - t.width / 2) * viewportBox.w) / 960,
-            y: (viewportBox.y + (t.y - t.height / 2) * viewportBox.h) / 540,
-            width: (t.width * viewportBox.w) / 960,
-            height: (t.height * viewportBox.h) / 540
-          },
-
-
+          boundingBox,
           depthLayer: 2,
           cameraZone: "midground",
           scaleLock: true,
@@ -102,8 +115,19 @@ const SceneCanvas = () => {
           },
           poseLock: true
         });
-      });
-    }
+      } else {
+        // Differential update for bounding box
+        const boxChanged =
+          Math.abs(existingActor.boundingBox.x - boundingBox.x) > 0.001 ||
+          Math.abs(existingActor.boundingBox.y - boundingBox.y) > 0.001 ||
+          Math.abs(existingActor.boundingBox.width - boundingBox.width) > 0.001 ||
+          Math.abs(existingActor.boundingBox.height - boundingBox.height) > 0.001;
+
+        if (boxChanged) {
+          store.updateActor(t.id, { boundingBox });
+        }
+      }
+    });
   }, [state.tokens, viewportBox]);
 
   // TECHNICAL DEBUG VISUALIZATION (Non-persistent, DEV only)
@@ -271,8 +295,19 @@ const SceneCanvas = () => {
    * GROUNDING SYNCHRONIZATION (AUTHORITATIVE)
    * Clamps actors to the floor plane to prevent clipping, while allowing natural depth.
    */
+  const lastGroundingKeyRef = useRef<string>('');
+
   useEffect(() => {
     if (groundDepth === null || !state.depthMapUrl) return;
+
+    // 1. Generate a key of properties that SHOULD trigger a re-grounding.
+    // We intentionally EXCLUDE 'token.depth' to prevent infinite loops.
+    const currentKey = state.tokens
+      .map(t => `${t.id}:${t.x}:${t.y}:${t.groundingEnabled}:${t.anchorY}`)
+      .join('|') + `:${groundDepth}:${state.depthMapUrl}`;
+
+    if (currentKey === lastGroundingKeyRef.current) return;
+    lastGroundingKeyRef.current = currentKey;
 
     state.tokens.forEach(token => {
       // Respect manual overrides / disabling
@@ -288,8 +323,8 @@ const SceneCanvas = () => {
 
       const rawDepth = DepthService.getDepthAtPointSync(
         state.depthMapUrl,
-        token.x,
-        footYClamped
+        token.x / viewportBox.w,
+        footYClamped / viewportBox.h
       );
 
 
@@ -302,7 +337,7 @@ const SceneCanvas = () => {
         });
       }
     });
-  }, [state.depthMapUrl, state.tokens, groundDepth, dispatch]);
+  }, [state.depthMapUrl, state.tokens, groundDepth, viewportBox.h, dispatch]);
 
   /**
    * OCCLUSION MASKS (PER-TOKEN)
@@ -396,8 +431,8 @@ const SceneCanvas = () => {
               // Depth map convention: White=Near, Black=Far (near is higher).
               const sceneDepth = DepthService.getDepthAtPointSync(
                 state.depthMapUrl,
-                stageXClamped,
-                stageYClamped
+                stageXClamped / viewportBox.w,
+                stageYClamped / viewportBox.h
               );
 
               const occluded = sceneDepth > (tokenDepth + EPS);
@@ -1414,7 +1449,7 @@ const SceneCanvas = () => {
     if (raw) {
       try {
         const item = JSON.parse(raw) as CastMember;
-        const id = `token-${Date.now()}`;
+        const id = `token-${Date.now()}-${Math.random().toString(16).slice(2)}`;
         dispatch({
           type: 'ADD_TOKEN',
           payload: {
@@ -1576,7 +1611,7 @@ const SceneCanvas = () => {
       const original = state.tokens.find(t => t.id === state.selection);
       if (!original) return;
 
-      const newId = `token-${Date.now()}`;
+      const newId = `token-${Date.now()}-${Math.random().toString(16).slice(2)}`;
       // Find max zIndex to place on top (optional, or just +1)
       const maxZ = Math.max(...state.tokens.map(t => t.zIndex), 10);
 
@@ -1613,7 +1648,7 @@ const SceneCanvas = () => {
   return (
     <>
 
-      <SceneSpecOverlay />
+
 
       <div className="flex h-full gap-4 p-4 overflow-hidden select-none">
         {/* 1. LEFT SIDEBAR: ACTIVE ACTOR INTELLIGENCE & PROPERTIES */}
@@ -2260,6 +2295,8 @@ const SceneCanvas = () => {
                 </div>
               )}
 
+              <SceneSpecOverlay />
+
               {/* SPATIAL DEBUG OVERLAYS (DEV ONLY) */}
               {import.meta.env.DEV && (
                 <div
@@ -2367,23 +2404,26 @@ const SceneCanvas = () => {
               {[...state.tokens].filter(t => t.visible !== false).sort((a, b) => a.zIndex - b.zIndex).map(token => (
                 <div
                   key={token.id}
-                  className={`absolute cursor-move group/token ${state.selection === token.id ? 'ring-2 ring-yellow-500 ring-offset-2 ring-offset-[#09090b] z-50' : ''}`}
+                  className={`absolute cursor-move group/token ${state.selection === token.id ? 'ring-2 ring-yellow-500 ring-offset-2 ring-offset-[#09090b]' : ''}`}
                   style={{
-                    left: token.x - (token.width * token.anchorX),
-                    top: token.y - (token.height * token.anchorY),
+                    left: token.x - (token.width * (token.anchorX ?? 0.5)),
+                    top: token.y - (token.height * (token.anchorY ?? 0.8)),
                     width: token.width,
                     height: token.height,
-                    transformOrigin: `${token.anchorX * 100}% ${token.anchorY * 100}%`,
+                    transformOrigin: `${(token.anchorX ?? 0.5) * 100}% ${(token.anchorY ?? 0.8) * 100}%`,
                     transform: `rotate(${token.rotation}deg) scale(${token.scaleX}, ${token.scaleY})`,
-                    zIndex: token.zIndex,
-                    WebkitMaskImage: tokenMasks[token.id] ? `url(${tokenMasks[token.id]})` : 'none',
-                    WebkitMaskSize: `${token.width}px ${token.height}px`,
-                    WebkitMaskPosition: `0px 0px`,
-                    WebkitMaskRepeat: 'no-repeat',
-                    WebkitMaskComposite: 'source-over',
-                    maskSize: `${token.width}px ${token.height}px`,
-                    maskPosition: `0px 0px`,
-                    maskRepeat: 'no-repeat',
+                    zIndex: state.selection === token.id ? 1000 : (token.zIndex ?? 10),
+                    ...((tokenMasks[token.id] && dragItem?.id !== token.id && resizeItem?.id !== token.id && rotateItem?.id !== token.id) ? {
+                      WebkitMaskImage: `url(${tokenMasks[token.id]})`,
+                      WebkitMaskSize: `${token.width}px ${token.height}px`,
+                      WebkitMaskPosition: `0px 0px`,
+                      WebkitMaskRepeat: 'no-repeat',
+                      WebkitMaskComposite: 'source-over',
+                      maskImage: `url(${tokenMasks[token.id]})`,
+                      maskSize: `${token.width}px ${token.height}px`,
+                      maskPosition: `0px 0px`,
+                      maskRepeat: 'no-repeat',
+                    } : {})
 
                   }}
                   onMouseDown={(e) => {
@@ -2395,8 +2435,7 @@ const SceneCanvas = () => {
                       payload: {
                         id: token.id,
                         placementAuthority: 'user',
-                        hasUserCommittedIntent: false,
-                        resolvedPosition: null
+                        hasUserCommittedIntent: false
                       }
                     });
                     setDragItem({

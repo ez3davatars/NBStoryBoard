@@ -1,4 +1,4 @@
-import { createContext, useContext, useReducer, useEffect } from 'react';
+import { createContext, useContext, useReducer, useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { StorageService } from '../services/StorageService';
 import { computeDepthScore } from '../utils/spatialHelpers';
@@ -434,6 +434,8 @@ export type Action =
   | { type: 'SET_STAGE_PANEL_STATE'; payload: { id: string; isOpen: boolean } }
   | { type: 'SET_WARDROBE_STATE'; payload: Partial<WardrobeState> }
   | { type: 'SET_DEPTH_PROCESSING'; payload: boolean }
+  | { type: 'SET_TOKENS'; payload: StageToken[] }
+  | { type: 'SET_ANNOTATIONS'; payload: StageAnnotation[] }
   | { type: 'SYNC_SPATIAL_DESCRIPTORS' }
   ;
 
@@ -443,9 +445,24 @@ const loadJson = <T,>(key: string, fallback: T): T => {
   try {
     const raw = localStorage.getItem(key);
     if (!raw) return fallback;
+
     const parsed = JSON.parse(raw);
-    if (Array.isArray(fallback)) return parsed as T;
-    return { ...(fallback as any), ...(parsed as any) } as T;
+
+    // ✅ preserve explicit nulls
+    if (parsed === null) return fallback;
+
+    // Arrays: require array shape
+    if (Array.isArray(fallback)) {
+      return Array.isArray(parsed) ? (parsed as T) : fallback;
+    }
+
+    // Objects: merge only when both are plain-ish objects
+    if (typeof fallback === 'object' && fallback !== null && typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      return { ...(fallback as any), ...(parsed as any) } as T;
+    }
+
+    // Primitives / fallback=null cases: return parsed as-is
+    return parsed as T;
   } catch {
     return fallback;
   }
@@ -467,6 +484,27 @@ export type HistorySnapshot = {
   shots: Shot[];
   activeShotId: string | null;
   resultImage: string | null;
+};
+
+export const deduplicateTokens = (tokens: StageToken[]): StageToken[] => {
+  const seenIds = new Set<string>();
+  const seenPos = new Set<string>();
+  const unique: StageToken[] = [];
+
+  tokens.forEach(t => {
+    // 1. Strict ID uniqueness
+    if (seenIds.has(t.id)) return;
+
+    // 2. Content-based de-duplication (heuristic for bug-induced duplicates)
+    // If exact same cast member at exact same position/scale/z-index
+    const posKey = `${t.castId}-${t.x.toFixed(2)}-${t.y.toFixed(2)}-${t.zIndex}`;
+    if (seenPos.has(posKey)) return;
+
+    unique.push(t);
+    seenIds.add(t.id);
+    seenPos.add(posKey);
+  });
+  return unique;
 };
 
 const MAX_HISTORY = 30;
@@ -578,8 +616,8 @@ export const initialState: AppState = {
   model: getInitialModel(),
   view: 'casting',
   cast: [],
-  tokens: loadJson<StageToken[]>('nano_tokens', []),
-  annotations: loadJson<StageAnnotation[]>('nano_annotations', []),
+  tokens: [],
+  annotations: [],
   referenceSlots: defaultRefSlots,
   director: loadJson<DirectorSettings>('nano_director_v3', defaultDirector),
   selection: null,
@@ -590,7 +628,7 @@ export const initialState: AppState = {
   isProcessing: false,
   saveDirectoryHandle: null,
   saveDirectoryPath: localStorage.getItem('nano_save_path') || null,
-  wardrobeItems: loadJson<WardrobeItem[]>('nano_wardrobe', []),
+  wardrobeItems: [], // initialize empty, load async
   storyboardSource: null,
   storyboardEndSource: null,
   storyboardGenerations: [],
@@ -600,7 +638,7 @@ export const initialState: AppState = {
   inspectImage: null,
   inspectMask: null,
   actorLibrary: [],
-  propItems: loadJson<PropItem[]>('nano_props', []),
+  propItems: [], // initialize empty, load async
   customCovers: {},
   depthMapUrl: localStorage.getItem('nano_depth_url') || null,
   depthMapHash: localStorage.getItem('nano_depth_hash') || null,
@@ -628,6 +666,30 @@ export const initialState: AppState = {
   },
   wardrobeState: clone(DEFAULT_WARDROBE_STATE)
 };
+
+// --- DATA SANITIZATION ---
+
+function sanitizeTokens(tokens: StageToken[]): StageToken[] {
+  return tokens.map(t => ({
+    ...t,
+    // Ensure we don't store heavy base64 strings in the persistence layer
+    url: typeof t.url === 'string' && t.url.startsWith('data:') ? '' : t.url,
+  }));
+}
+
+function sanitizeAnnotations(ann: StageAnnotation[]): StageAnnotation[] {
+  return ann.map(a => ({
+    ...a,
+  }));
+}
+
+function sanitizeShots(shots: Shot[]): Shot[] {
+  return shots.map(s => ({
+    ...s,
+    tokens: sanitizeTokens(s.tokens),
+    annotations: sanitizeAnnotations(s.annotations),
+  }));
+}
 
 // --- REDUCER ---
 
@@ -668,8 +730,11 @@ export const reducer = (state: AppState, action: Action): AppState => {
     case 'REMOVE_CAST':
       return { ...state, cast: state.cast.filter(c => c.id !== action.payload) };
 
-    case 'ADD_TOKEN':
+    case 'ADD_TOKEN': {
+      // Safety: Prevent adding a token that already exists in the array (ID check)
+      if (state.tokens.some(t => t.id === action.payload.id)) return state;
       return { ...state, tokens: [...state.tokens, action.payload] };
+    }
     case 'UPDATE_TOKEN':
       return { ...state, tokens: state.tokens.map(t => (t.id === action.payload.id ? { ...t, ...action.payload } : t)) };
     case 'REMOVE_TOKEN': {
@@ -683,6 +748,12 @@ export const reducer = (state: AppState, action: Action): AppState => {
       return { ...state, annotations: [...state.annotations, action.payload] };
     case 'UPDATE_ANNOTATION':
       return { ...state, annotations: state.annotations.map(a => (a.id === action.payload.id ? { ...a, ...action.payload } : a)) };
+    case 'SET_TOKENS':
+      return { ...state, tokens: deduplicateTokens(action.payload) };
+
+    case 'SET_ANNOTATIONS':
+      return { ...state, annotations: action.payload };
+
     case 'REMOVE_ANNOTATION': {
       const nextAnnotations = state.annotations.filter(a => a.id !== action.payload);
       const nextSelection = state.selection === action.payload ? null : state.selection;
@@ -1022,7 +1093,7 @@ export const reducer = (state: AppState, action: Action): AppState => {
         activeShotId: shot.id,
         backgroundUrl: shot.backgroundUrl,
         depthMapUrl: shot.depthMapUrl || null,
-        tokens: clone(shot.tokens),
+        tokens: deduplicateTokens(clone(shot.tokens)),
         annotations: clone(shot.annotations),
         referenceSlots: clone(shot.referenceSlots),
         director: clone(shot.director),
@@ -1045,7 +1116,7 @@ export const reducer = (state: AppState, action: Action): AppState => {
           ...s,
           backgroundUrl: state.backgroundUrl,
           depthMapUrl: state.depthMapUrl,
-          tokens: clone(state.tokens),
+          tokens: deduplicateTokens(clone(state.tokens)),
           annotations: clone(state.annotations),
           referenceSlots: clone(state.referenceSlots),
           director: clone(state.director),
@@ -1087,77 +1158,153 @@ export const AppContext = createContext<{ state: AppState; dispatch: React.Dispa
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [state, dispatch] = useReducer(reducer, initialState);
 
+  const hydratedRef = useRef(false);
+  const persistTimerRef = useRef<number | null>(null);
+
+  // --- EFFECT 1: Restore / Migration ---
   useEffect(() => {
-    const persist = async () => {
+    let cancelled = false;
+
+    const migrateOrLoad = async <T,>(
+      key: string,
+      sanitize?: (v: any) => any
+    ): Promise<T | null> => {
+      // 1) try IndexedDB
+      const fromDb = await StorageService.load<T>(key, null as any);
+      if (fromDb != null) {
+        // ✅ cleanup legacy localStorage regardless
+        if (localStorage.getItem(key) != null) localStorage.removeItem(key);
+        return fromDb;
+      }
+
+      // 2) migrate from localStorage if present
+      const fromLsRaw = localStorage.getItem(key);
+      if (!fromLsRaw) return null;
+
       try {
-        localStorage.setItem('nano_api_key', state.apiKey);
-        localStorage.setItem('nano_model', state.model);
-        localStorage.setItem('nano_director_v3', JSON.stringify(state.director));
-        localStorage.setItem('nano_bg_url', state.backgroundUrl || '');
-        localStorage.setItem('nano_depth_url', state.depthMapUrl || '');
-        localStorage.setItem('nano_depth_hash', state.depthMapHash || '');
-        localStorage.setItem('nano_source_hash', state.sourceBackgroundHash || '');
-        localStorage.setItem('nano_floor_plane', JSON.stringify(state.floorPlane));
-        localStorage.setItem('nano_occupied_volumes', JSON.stringify(state.occupiedVolumes));
-        localStorage.setItem('nano_active_shot_id', state.activeShotId || '');
-
-        localStorage.setItem('nano_tokens', JSON.stringify(state.tokens));
-        localStorage.setItem('nano_annotations', JSON.stringify(state.annotations));
-
-        await StorageService.save('nano_wardrobe', state.wardrobeItems);
-        await StorageService.save('nano_actors', state.actorLibrary);
-        await StorageService.save('nano_props', state.propItems);
-        await StorageService.save('nano_shots', state.shots);
-      } catch (e) {
-        console.error('Persistence failed', e);
+        const parsed = JSON.parse(fromLsRaw);
+        const value = sanitize ? sanitize(parsed) : parsed;
+        await StorageService.save(key, value);
+        localStorage.removeItem(key);
+        return value as T;
+      } catch {
+        localStorage.removeItem(key);
+        return null;
       }
     };
-    persist();
-  }, [
-    state.apiKey,
-    state.model,
-    state.director,
-    state.wardrobeItems,
-    state.actorLibrary,
-    state.propItems,
-    state.shots,
-    state.tokens,
-    state.annotations,
-    state.backgroundUrl,
-    state.depthMapUrl,
-    state.depthMapHash,
-    state.sourceBackgroundHash,
-    state.floorPlane,
-    state.activeShotId,
-  ]);
 
-  useEffect(() => {
     const restore = async () => {
       try {
-        const actors = await StorageService.load<CastMember[]>('nano_actors', []);
-        const wardrobe = await StorageService.load<WardrobeItem[]>('nano_wardrobe', []);
-        const props = await StorageService.load<PropItem[]>('nano_props', []);
-        const shots = await StorageService.load<Shot[]>('nano_shots', []);
+        const [_tokens, _annotations, actors, wardrobe, props, shots] = await Promise.all([
+          migrateOrLoad<StageToken[]>('nano_tokens', sanitizeTokens),
+          migrateOrLoad<StageAnnotation[]>('nano_annotations', sanitizeAnnotations),
+          StorageService.load<CastMember[]>('nano_actors', []),
+          StorageService.load<WardrobeItem[]>('nano_wardrobe', []),
+          StorageService.load<PropItem[]>('nano_props', []),
+          StorageService.load<Shot[]>('nano_shots', []),
+        ]);
 
+        if (cancelled) return;
+
+        // CLEAR TRANSIENT STAGE (USER REQUEST)
+        // We no longer restore nano_tokens or nano_annotations on cold start to ensure a clean stage.
+        // Persistence is now entirely shot-authoritative.
+        /* 
+        if (tokens) dispatch({ type: 'SET_TOKENS', payload: deduplicateTokens(tokens) });
+        if (annotations) dispatch({ type: 'SET_ANNOTATIONS', payload: annotations });
+        */
         if (actors.length > 0) dispatch({ type: 'SET_ACTOR_LIBRARY', payload: actors });
         if (wardrobe.length > 0) dispatch({ type: 'SET_WARDROBE_ITEMS', payload: wardrobe });
         if (props.length > 0) dispatch({ type: 'SET_PROP_ITEMS', payload: props });
 
         if (shots.length > 0) {
           dispatch({ type: 'SET_SHOTS', payload: shots });
-
           const savedActive = localStorage.getItem('nano_active_shot_id');
           const preferred = savedActive ? shots.find(s => s.id === savedActive) : null;
           const fallback = shots[shots.length - 1];
-
           dispatch({ type: 'SET_ACTIVE_SHOT', payload: { id: (preferred || fallback).id } });
         }
+
+        hydratedRef.current = true;
       } catch (e) {
         console.error('Restore failed', e);
+        if (!cancelled) hydratedRef.current = true;
       }
     };
     restore();
+
+    return () => { cancelled = true; };
   }, []);
+
+  // --- EFFECT 2: Persistence (Tokens & Annotations) - Debounced ---
+  useEffect(() => {
+    if (!hydratedRef.current) return;
+
+    if (persistTimerRef.current) {
+      window.clearTimeout(persistTimerRef.current);
+    }
+
+    persistTimerRef.current = window.setTimeout(async () => {
+      try {
+        await StorageService.save('nano_tokens', sanitizeTokens(state.tokens));
+        await StorageService.save('nano_annotations', sanitizeAnnotations(state.annotations));
+      } catch (e) {
+        console.error('Token/Annotation persistence failed', e);
+      }
+    }, 400);
+
+    return () => {
+      if (persistTimerRef.current) window.clearTimeout(persistTimerRef.current);
+    };
+  }, [state.tokens, state.annotations]);
+
+  // --- EFFECT 3: Persistence (Small Config / localStorage) ---
+  useEffect(() => {
+    try {
+      localStorage.setItem('nano_api_key', state.apiKey);
+      localStorage.setItem('nano_model', state.model);
+      localStorage.setItem('nano_director_v3', JSON.stringify(state.director));
+      localStorage.setItem('nano_bg_url', state.backgroundUrl || '');
+      localStorage.setItem('nano_depth_url', state.depthMapUrl || '');
+      localStorage.setItem('nano_depth_hash', state.depthMapHash || '');
+      localStorage.setItem('nano_source_hash', state.sourceBackgroundHash || '');
+      localStorage.setItem('nano_floor_plane', JSON.stringify(state.floorPlane));
+      localStorage.setItem('nano_occupied_volumes', JSON.stringify(state.occupiedVolumes));
+      localStorage.setItem('nano_active_shot_id', state.activeShotId || '');
+    } catch (e) {
+      console.warn('Config persistence failed', e);
+    }
+  }, [
+    state.apiKey,
+    state.model,
+    state.director,
+    state.backgroundUrl,
+    state.depthMapUrl,
+    state.depthMapHash,
+    state.sourceBackgroundHash,
+    state.floorPlane,
+    state.occupiedVolumes,
+    state.activeShotId
+  ]);
+
+  // --- EFFECT 4: Persistence (Large Collections / StorageService) ---
+  useEffect(() => {
+    if (!hydratedRef.current) return;
+
+    const persistCollections = async () => {
+      try {
+        await Promise.all([
+          StorageService.save('nano_wardrobe', state.wardrobeItems),
+          StorageService.save('nano_actors', state.actorLibrary),
+          StorageService.save('nano_props', state.propItems),
+          StorageService.save('nano_shots', sanitizeShots(state.shots)),
+        ]);
+      } catch (e) {
+        console.error('Collections persistence failed', e);
+      }
+    };
+    persistCollections();
+  }, [state.wardrobeItems, state.actorLibrary, state.propItems, state.shots]);
 
   return <AppContext.Provider value={{ state, dispatch }}>{children}</AppContext.Provider>;
 };
