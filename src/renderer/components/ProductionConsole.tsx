@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   RotateCw, MonitorPlay, Maximize, ImagePlus, Download,
-  BoxSelect, Clapperboard, Trash2, Image as ImageIcon, User
+  BoxSelect, Clapperboard, Trash2, Image as ImageIcon, User, FileText
 } from 'lucide-react';
 import { useAppContext, APP_SCHEMA_VERSION } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
@@ -1477,6 +1477,19 @@ const ProductionConsole: React.FC = () => {
                         >
                           <Clapperboard className="w-6 h-6" />
                           END
+                        </button>
+                      )}
+
+                      {state.isStoryboardEnabled && (
+                        <button
+                          onClick={() => {
+                            dispatch({ type: 'SET_VIEW', payload: 'veo' });
+                          }}
+                          className="w-16 h-16 bg-emerald-500/20 hover:bg-emerald-600 text-emerald-400 hover:text-white rounded-2xl transition-all font-black text-[9px] flex flex-col items-center justify-center border border-emerald-500/30 gap-1"
+                          title="Open Prompt Builder"
+                        >
+                          <FileText className="w-6 h-6" />
+                          PROMPT
                         </button>
                       )}
 

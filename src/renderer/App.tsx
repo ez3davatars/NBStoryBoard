@@ -8,7 +8,7 @@ import ProductionConsole from './components/ProductionConsole';
 import WardrobeStudio from './components/WardrobeStudio';
 import PropAccessoryStudio from './components/PropAccessoryStudio';
 import PortraitStudio from './components/PortraitStudio';
-import VeoGenerator from './components/VeoGenerator';
+import VeoPromptStudio from './components/VeoPromptStudio';
 import { StorageService } from './services/StorageService';
 import { LOGO_BASE64 } from './assets/logo';
 
@@ -607,7 +607,7 @@ const App = () => {
               {state.view === 'props' && <PropAccessoryStudio />}
               {state.view === 'staging' && <SceneCanvas />}
               {state.view === 'production' && <ProductionConsole />}
-              {state.view === 'veo' && <VeoGenerator />}
+              {state.view === 'veo' && <VeoPromptStudio />}
             </main>
 
             {/* Cinematic Loading Overlay */}
@@ -728,6 +728,26 @@ const App = () => {
                           ))}
                         </div>
                       </div>
+
+                      {/* VEO STORYBOARD TOGGLE */}
+                      <div className="pt-2 border-t border-white/5">
+                        <div className="flex items-center justify-between">
+                          <label className="text-xs font-bold text-gray-500 uppercase">Enable Storyboard (Veo 3.1)</label>
+                          <button
+                            onClick={() => dispatch({ type: 'SET_STORYBOARD_ENABLED', payload: !state.isStoryboardEnabled })}
+                            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors`}
+                            style={{ backgroundColor: state.isStoryboardEnabled ? '#eab308' : '#52525b' }}
+                          >
+                            <span
+                              className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${state.isStoryboardEnabled ? 'translate-x-5' : 'translate-x-1'}`}
+                            />
+                          </button>
+                        </div>
+                        <p className="text-[10px] text-gray-500 mt-1">
+                          Unlocks the experimental Veo 3.1 storyboarding interface under the Storyboard tab.
+                        </p>
+                      </div>
+
                       <div className="flex justify-end gap-2 mt-6">
                         <button onClick={closeSettings} className="px-4 py-2 text-gray-400 text-xs hover:text-white">Cancel</button>
                         <button onClick={saveSettings} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded text-xs font-bold">Save Config</button>

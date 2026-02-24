@@ -3,6 +3,8 @@ import type { ReactNode } from 'react';
 import { StorageService } from '../services/StorageService';
 import { computeDepthScore } from '../utils/spatialHelpers';
 
+import type { VeoFivePartDraft, VeoAudioBlock, VeoTimestampBeat } from '../promptEngine/veoFivePart';
+
 export const APP_SCHEMA_VERSION = 4; // bump when persisted state shape changes
 // --- SHARED TYPES ---
 
@@ -261,6 +263,8 @@ export interface Shot {
   startFrameUrl?: string | null;
   endFrameUrl?: string | null;
   notes?: string;
+  veoPromptDraft?: VeoFivePartDraft & { audio?: VeoAudioBlock, concept?: string, negativePrompt?: string };
+  veoTimeline?: VeoTimestampBeat[];
 
   // ✅ store full region edit state per shot (optional for backwards compatibility)
   regionEdit?: RegionEditState;
@@ -425,7 +429,7 @@ export type Action =
   | { type: 'REMOVE_SHOT'; payload: { id: string } }
   | { type: 'SET_ACTIVE_SHOT'; payload: { id: string | null } }
   | { type: 'SAVE_ACTIVE_SHOT'; payload?: { touchUpdatedAt?: boolean } }
-  | { type: 'UPDATE_SHOT_META'; payload: { id: string; updates: Partial<Pick<Shot, 'name' | 'notes'>> } }
+  | { type: 'UPDATE_SHOT_META'; payload: { id: string; updates: Partial<Pick<Shot, 'name' | 'notes' | 'veoPromptDraft' | 'veoTimeline'>> } }
   | { type: 'SET_SHOT_FRAME'; payload: { id: string; which: 'start' | 'end'; url: string | null } }
   | { type: 'UNDO' }
   | { type: 'REDO' }
@@ -655,7 +659,7 @@ export const initialState: AppState = {
 
   shots: [],
   activeShotId: localStorage.getItem('nano_active_shot_id') || null,
-  isStoryboardEnabled: false, // ADMIN: MASTER TOGGLE OFF
+  isStoryboardEnabled: loadJson<boolean>('nano_storyboard_enabled', false), // Persistent setting
   stagePanelState: {
     'ref_stacks': true,
     'region_edit': true,
@@ -850,6 +854,10 @@ export const reducer = (state: AppState, action: Action): AppState => {
       return { ...state, tokens: nextTokens };
     }
 
+    case 'SET_STORYBOARD_ENABLED':
+      localStorage.setItem('nano_storyboard_enabled', JSON.stringify(action.payload));
+      return { ...state, isStoryboardEnabled: action.payload };
+
     case 'SET_BG':
       return { ...state, backgroundUrl: action.payload };
     case 'SET_DEPTH_MAP': {
@@ -895,12 +903,6 @@ export const reducer = (state: AppState, action: Action): AppState => {
         ...state,
         storyboardGenerations: state.storyboardGenerations.map(g => (g.id === action.payload.id ? { ...g, ...action.payload } : g)),
       };
-
-
-    case 'SET_STORYBOARD_ENABLED':
-      // ADMIN LOCK: Prevent changes via action
-      return state;
-    // return { ...state, isStoryboardEnabled: action.payload };
 
     case 'SET_LAST_CASTED_IMAGE':
       return { ...state, lastCastedImage: action.payload };
@@ -1131,9 +1133,17 @@ export const reducer = (state: AppState, action: Action): AppState => {
     }
 
     case 'UPDATE_SHOT_META': {
-      const now = Date.now();
-      const nextShots = state.shots.map(s => (s.id === action.payload.id ? { ...s, ...action.payload.updates, updatedAt: now } : s));
-      return { ...state, shots: nextShots };
+      return {
+        ...state,
+        shots: state.shots.map(s => {
+          if (s.id !== action.payload.id) return s;
+          return {
+            ...s,
+            ...action.payload.updates,
+            updatedAt: Date.now()
+          };
+        })
+      };
     }
 
     case 'SET_SHOT_FRAME': {

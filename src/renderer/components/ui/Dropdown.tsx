@@ -1,5 +1,6 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useLayoutEffect } from "react";
 import ReactDOM from "react-dom";
+import { autoUpdate, computePosition, offset, flip, shift, size } from "@floating-ui/dom";
 
 export type DropdownOption =
     | { type: "group"; label: string }
@@ -16,12 +17,13 @@ interface DropdownProps {
 
 export function Dropdown({ value, options, onChange, placeholder = "Select...", className = "", forceUpward = false, closeOnMouseLeave = false, variant = "default", disabled = false }: DropdownProps & { forceUpward?: boolean; closeOnMouseLeave?: boolean; variant?: "default" | "render" }) {
     const [isOpen, setIsOpen] = useState(false);
-    const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({});
     const [animateClass, setAnimateClass] = useState("opacity-0 translate-y-1");
 
     // Unique ID for this dropdown instance to manage single-open state
     const id = React.useId();
     const triggerRef = useRef<HTMLButtonElement>(null);
+    const menuRef = useRef<HTMLDivElement>(null);
+    const cleanupRef = useRef<null | (() => void)>(null);
     const closeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
     // Global listener for closing other dropdowns
@@ -36,64 +38,16 @@ export function Dropdown({ value, options, onChange, placeholder = "Select...", 
         return () => window.removeEventListener("dropdown-open", handleOpenEvent as EventListener);
     }, [id]);
 
-    // Handle Open/Close Logic
+    // Handle Open/Close Logic & Animation
     useEffect(() => {
         if (isOpen && triggerRef.current) {
             // Notify others to close
             window.dispatchEvent(new CustomEvent("dropdown-open", { detail: { id } }));
 
-            const updatePosition = () => {
-                if (!triggerRef.current) return;
-                const rect = triggerRef.current.getBoundingClientRect();
-
-                if (forceUpward) {
-                    setMenuStyle({
-                        position: "fixed",
-                        bottom: `${window.innerHeight - rect.top + 6}px`,
-                        left: `${rect.left}px`,
-                        width: `${rect.width}px`,
-                        maxHeight: "280px",
-                        overflowY: "auto",
-                        zIndex: 9999,
-                    });
-                } else {
-                    const spaceBelow = window.innerHeight - rect.bottom;
-                    // Determine direction (fixed threshold as requested)
-                    const direction = spaceBelow < 280 ? "up" : "down";
-
-                    // Calculate fixed position
-                    const top = direction === "down"
-                        ? rect.bottom + 6
-                        : rect.top - 286; // 280px height + 6px gap
-
-                    setMenuStyle({
-                        position: "fixed",
-                        top: `${top}px`,
-                        left: `${rect.left}px`,
-                        width: `${rect.width}px`,
-                        maxHeight: "280px",
-                        overflowY: "auto",
-                        zIndex: 9999,
-                    });
-                }
-            };
-
-            // Initial position
-            updatePosition();
-
-            // Update on scroll/resize
-            window.addEventListener("scroll", updatePosition, true);
-            window.addEventListener("resize", updatePosition);
-
             // Trigger animation frame
             requestAnimationFrame(() => {
                 setAnimateClass("opacity-100 translate-y-0");
             });
-
-            return () => {
-                window.removeEventListener("scroll", updatePosition, true);
-                window.removeEventListener("resize", updatePosition);
-            };
         } else {
             // Reset animation state when closed
             setAnimateClass("opacity-0 translate-y-1");
@@ -104,9 +58,59 @@ export function Dropdown({ value, options, onChange, placeholder = "Select...", 
                 closeTimeoutRef.current = null;
             }
         }
-    }, [isOpen, id, forceUpward]);
+    }, [isOpen, id]);
 
-    // Close on outside click & Escape
+    // Floating UI Positioning
+    const updatePosition = async () => {
+        const ref = triggerRef.current;
+        const floating = menuRef.current;
+        if (!ref || !floating) return;
+
+        const { x, y } = await computePosition(ref, floating, {
+            placement: forceUpward ? "top-start" : "bottom-start",
+            strategy: "fixed",
+            middleware: [
+                offset(6),
+                flip(),
+                shift({ padding: 8 }),
+                size({
+                    apply({ rects, elements }) {
+                        Object.assign(elements.floating.style, {
+                            minWidth: `${rects.reference.width}px`,
+                        });
+                    },
+                }),
+            ],
+        });
+
+        Object.assign(floating.style, {
+            position: "fixed",
+            left: `${x}px`,
+            top: `${y}px`,
+            zIndex: "9999",
+        });
+    };
+
+    useLayoutEffect(() => {
+        if (!isOpen) return;
+
+        // Ensure portal has mounted
+        requestAnimationFrame(() => {
+            updatePosition();
+            const ref = triggerRef.current;
+            const floating = menuRef.current;
+            if (!ref || !floating) return;
+
+            cleanupRef.current = autoUpdate(ref, floating, updatePosition);
+        });
+
+        return () => {
+            cleanupRef.current?.();
+            cleanupRef.current = null;
+        };
+    }, [isOpen, forceUpward]);
+
+    // Close on outside click, Escape, & scroll out of view
     useEffect(() => {
         if (!isOpen) return;
 
@@ -127,9 +131,23 @@ export function Dropdown({ value, options, onChange, placeholder = "Select...", 
         document.addEventListener("mousedown", handleClickOutside);
         document.addEventListener("keydown", handleKeyDown);
 
+        // Auto-close if trigger scrolls entirely out of viewport
+        const observer = new IntersectionObserver((entries) => {
+            for (const entry of entries) {
+                if (!entry.isIntersecting && isOpen) {
+                    setIsOpen(false);
+                }
+            }
+        }, { threshold: 0 });
+
+        if (triggerRef.current) {
+            observer.observe(triggerRef.current);
+        }
+
         return () => {
             document.removeEventListener("mousedown", handleClickOutside);
             document.removeEventListener("keydown", handleKeyDown);
+            observer.disconnect();
         };
     }, [isOpen]);
 
@@ -167,7 +185,8 @@ export function Dropdown({ value, options, onChange, placeholder = "Select...", 
 
     const Menu = (
         <div
-            style={menuStyle}
+            ref={menuRef}
+            style={{ maxHeight: "280px", overflowY: "auto", overscrollBehavior: "contain" }}
             className={menuClasses}
             onMouseDown={(e) => e.stopPropagation()} // Prevent closing when clicking scrollbar or empty space in menu
             onMouseEnter={handleMouseEnter}

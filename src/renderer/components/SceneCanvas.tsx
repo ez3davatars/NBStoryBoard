@@ -2828,6 +2828,7 @@ const SceneCanvas = () => {
                       onToggle={togglePanel}
                       onDrop={handlePanelDrop}
                       isProcessing={state.isProcessing ?? false}
+                      onOpenStoryboard={() => dispatch({ type: 'SET_VIEW', payload: 'veo' })}
                     />
                   );
                 }

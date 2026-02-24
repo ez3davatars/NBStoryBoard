@@ -1,3 +1,5 @@
+import type { VeoFivePartDraft, VeoAudioBlock } from '../promptEngine/veoFivePart';
+
 export const GeminiService = {
 
   // Helper: Convert Blob/Data URL to Base64
@@ -154,7 +156,7 @@ export const GeminiService = {
   ): Promise<string> {
     if (!apiKey) throw new Error("No API Key provided.");
     // Force a vision-text model for analysis to avoid modality errors with generation models
-    const useModel = 'gemini-2.0-flash';
+    const useModel = 'gemini-2.5-flash';
     const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${useModel}:generateContent`;
 
     const inline = await GeminiService._resolveImageData(imageUrl);
@@ -194,7 +196,7 @@ export const GeminiService = {
   ): Promise<string> {
     if (!apiKey) throw new Error("No API Key provided.");
     // Multi-frame reasoning requires a vision-capable text model
-    const useModel = 'gemini-2.0-flash';
+    const useModel = 'gemini-2.5-flash';
     const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${useModel}:generateContent`;
 
     const parts: any[] = [];
@@ -349,6 +351,101 @@ Hard constraints:
     if (!imgData) throw new Error('No edited image returned from Gemini.');
 
     return `data:image/png;base64,${imgData}`;
+  },
+
+  async generateText(prompt: string, apiKey: string): Promise<string> {
+    if (!apiKey) throw new Error("No API Key provided.");
+    const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent`;
+
+    const response = await fetch(`${baseUrl}?key=${apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }]
+      })
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      let cleanMsg = errText;
+      try { cleanMsg = JSON.parse(errText).error?.message || cleanMsg; } catch { }
+      throw new Error(`Gemini Text Error: ${cleanMsg}`);
+    }
+
+    const result = await response.json();
+    const textOut = result.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join('') || '';
+    if (!textOut) throw new Error("No text generated.");
+    return textOut;
+  },
+
+  async generateJson<T>(prompt: string, apiKey: string): Promise<T> {
+    const strictPrompt = `${prompt}\n\nCRITICAL INSTRUCTION: Return ONLY valid JSON. No markdown formatting. No code fences. No commentary.`;
+
+    let rawText = await this.generateText(strictPrompt, apiKey);
+
+    const tryParse = (text: string) => {
+      const cleaned = text.replace(/```json/gi, '').replace(/```/g, '').trim();
+      const firstBrace = cleaned.indexOf('{');
+      const lastBrace = cleaned.lastIndexOf('}');
+      if (firstBrace === -1 || lastBrace === -1) throw new Error("No JSON object found.");
+      return JSON.parse(cleaned.substring(firstBrace, lastBrace + 1)) as T;
+    };
+
+    try {
+      return tryParse(rawText);
+    } catch (e) {
+      console.warn("First JSON parse failed, attempting repair... Raw text was:", rawText);
+      const repairPrompt = `The following text was supposed to be valid JSON but failed to parse. Please fix it and return ONLY valid JSON.\n\n${rawText}`;
+      rawText = await this.generateText(repairPrompt, apiKey);
+      try {
+        return tryParse(rawText);
+      } catch (e2) {
+        throw new Error("Gemini failed to return valid JSON even after repair.");
+      }
+    }
+  },
+
+  async generateVeoFivePartDraft(concept: string, apiKey: string, optionalContext?: string): Promise<VeoFivePartDraft & { audio?: VeoAudioBlock }> {
+    if (!apiKey) {
+      console.warn("No API Key. Returning mocked Veo prompt.");
+      await new Promise(r => setTimeout(r, 1000));
+      return {
+        cinematography: "A wide establishing shot, 4k resolution, cinematic lighting.",
+        subject: "A highly detailed robot standing in a neon-lit alley.",
+        action: "The robot slowly turns its head towards the camera.",
+        context: "Rain is pouring down, reflecting neon signs.",
+        styleAmbiance: "Cyberpunk aesthetic, moody, dystopian.",
+        audio: {
+          sfx: "heavy rain falling, distant siren"
+        }
+      };
+    }
+
+    const prompt = `
+You are an expert AI video director crafting prompts for Veo 3.1.
+Convert the following user concept into a highly structured 5-part prompt draft.
+
+User concept: "${concept}"
+${optionalContext ? `Additional context: "${optionalContext}"` : ''}
+
+Output a JSON object exactly matching this structure:
+{
+  "cinematography": "Camera angle, movement, focal length, lighting style",
+  "subject": "Detailed description of the main subject/characters",
+  "action": "Specific movement and dynamics",
+  "context": "Background, environment, and setting elements",
+  "styleAmbiance": "Overall visual style, mood, color palette, rendering engine details",
+  "audio": {
+    "dialogue": "Spoken dialogue if requested",
+    "sfx": "Sound effects if requested",
+    "ambience": "Background audio ambience if requested",
+    "music": "Musical style/cues if requested"
+  }
+}
+Note: Leave audio fields out if not applicable. The core 5 parts are required.
+`;
+
+    return this.generateJson<any>(prompt, apiKey);
   }
 
 };

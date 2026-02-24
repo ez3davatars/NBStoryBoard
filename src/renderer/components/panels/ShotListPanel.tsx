@@ -1,5 +1,5 @@
 
-import { Film, Grid, Copy, Trash2 } from 'lucide-react';
+import { Film, Grid, Copy, Trash2, Clapperboard } from 'lucide-react';
 import { SidebarPanel } from '../ui/SidebarPanel';
 import HelpTooltip from '../ui/HelpTooltip';
 
@@ -20,6 +20,7 @@ interface ShotListPanelProps {
     onToggle: (id: string) => void;
     onDrop: (targetId: string) => void;
     isProcessing?: boolean;
+    onOpenStoryboard?: () => void;
 }
 
 export const ShotListPanel = ({
@@ -35,7 +36,8 @@ export const ShotListPanel = ({
     removeShot,
     collapsed,
     onToggle,
-    onDrop
+    onDrop,
+    onOpenStoryboard
 }: ShotListPanelProps) => {
     return (
         <HelpTooltip zone="stage" id="storyboardTimeline">
@@ -73,6 +75,16 @@ export const ShotListPanel = ({
                     >
                         End
                     </button>
+                    {onOpenStoryboard && (
+                        <button
+                            onClick={onOpenStoryboard}
+                            disabled={!activeShotId}
+                            className="flex-shrink-0 bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-2 rounded font-bold disabled:opacity-50 flex items-center justify-center transition-colors border border-emerald-500/50"
+                            title="Open Veo Prompt Studio"
+                        >
+                            <Clapperboard className="w-3.5 h-3.5" />
+                        </button>
+                    )}
                 </div>
 
                 {activeShotId && (
