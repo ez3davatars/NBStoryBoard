@@ -61,6 +61,31 @@ const WardrobeStudio = () => {
   const [selectedCostume, setSelectedCostume] = useState<WardrobeItem | null>(null);
   const [selectedCharacter, setSelectedCharacter] = useState<CastMember | null>(null);
 
+  // --- TRY-ON OUTPUT & TURNAROUND (2-SHEET MODE) ---
+  type TryOnOutputMode = 'front' | 'turnaround';
+  type TryOnView = 'front' | 'back' | 'left' | 'right';
+  type TryOnDisplay = TryOnView | 'sheetFB' | 'sheetLR';
+
+  const [tryOnOutputMode, setTryOnOutputMode] = useState<TryOnOutputMode>('front');
+  const [tryOnViews, setTryOnViews] = useState<Record<TryOnView, string> | null>(null);
+  const [tryOnSheetFB, setTryOnSheetFB] = useState<string | null>(null);
+  const [tryOnSheetLR, setTryOnSheetLR] = useState<string | null>(null);
+  const [activeTryOnView, setActiveTryOnView] = useState<TryOnDisplay>('front');
+
+  // Character Sheet reference (identity anchor for turnarounds)
+  const [tryOnCharacterSheet, setTryOnCharacterSheet] = useState<string | null>(null);
+
+  // --- COSTUME DESIGNER: REFERENCE INPUT (SESSION ONLY) ---
+  type DesignerRefKind = 'sketch' | 'costume';
+  const [designerRefKind, setDesignerRefKind] = useState<DesignerRefKind>('sketch');
+  const [designerRefImage, setDesignerRefImage] = useState<string | null>(null);
+  const [designerRefName, setDesignerRefName] = useState<string>('');
+  const [designerDropActive, setDesignerDropActive] = useState(false);
+
+  const [bgToolTab, setBgToolTab] = useState<'isolate' | 'restore'>('isolate');
+
+
+
   // Derived / Transient
   const [erodedUrl, setErodedUrl] = useState<string | null>(null);
   // processedTryOnUrl is now global
@@ -72,6 +97,114 @@ const WardrobeStudio = () => {
     setNotification(msg);
     setTimeout(() => setNotification(null), 3000);
   };
+
+  // --- FILE/IMAGE HELPERS ---
+  const fileToDataUrl = (file: Blob) =>
+    new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('Failed to read file'));
+      reader.onload = () => resolve(reader.result as string);
+      reader.readAsDataURL(file);
+    });
+
+
+
+
+
+  // --- TRY-ON / WARDROBE HELPERS ---
+  const isDesignReferenceSelected = (item: WardrobeItem) =>
+    item.category === 'DesignRef' || /^DESIGNREF/i.test(item.id);
+
+  // --- COSTUME DESIGNER: SESSION-ONLY DESIGN REFERENCE (NOT SAVED TO WARDROBE LIBRARY) ---
+  const setDesignerReferenceFromFile = async (file: File) => {
+    const dataUrl = await fileToDataUrl(file);
+    const safeBase = file.name.replace(/\.[^/.]+$/, '').trim() || 'Reference';
+    setDesignerRefImage(dataUrl);
+    setDesignerRefName(safeBase);
+
+    // Reset generated output so the viewport shows the reference until generation completes.
+    setDesignerImage(null);
+    setDesignerMask(null);
+
+    showToast(designerRefKind === 'sketch' ? 'Design sketch/pattern loaded.' : 'Costume reference loaded.');
+  };
+
+  const handleUploadDesignerReference = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const file = e.target.files[0];
+    try {
+      await setDesignerReferenceFromFile(file);
+    } catch {
+      showToast('Failed to load reference image.');
+    } finally {
+      e.target.value = "";
+    }
+  };
+
+  const handleDropDesignerReference = async (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDesignerDropActive(false);
+
+    const file = e.dataTransfer.files?.[0];
+    if (!file || !file.type.startsWith('image/')) return;
+
+    try {
+      await setDesignerReferenceFromFile(file);
+    } catch {
+      showToast("Failed to load dropped reference image.");
+    }
+  };
+
+  const clearDesignerWorkspace = () => {
+    setDesignerRefImage(null);
+    setDesignerRefName('');
+    setDesignerImage(null);
+    setDesignerMask(null);
+  };
+
+
+  const handleUploadTryOnCharacterSheet = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const file = e.target.files[0];
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      setTryOnCharacterSheet(dataUrl);
+      showToast("Character sheet loaded.");
+    } finally {
+      e.target.value = "";
+    }
+  };
+
+  const buildSubjectReferenceImages = (subject: CastMember) => {
+    const refs: { url: string; label: string }[] = [];
+    if (tryOnCharacterSheet) refs.push({ url: tryOnCharacterSheet, label: "Character Sheet (Identity Anchor)" });
+    refs.push({ url: subject.url, label: "Subject Reference" });
+    return refs;
+  };
+
+  const setTryOnDisplay = (view: TryOnDisplay) => {
+    setActiveTryOnView(view);
+
+    // Switching views invalidates any active isolation/restore state
+    setRemoveTryOnBg(false);
+    setTryOnMask(null);
+    setProcessedTryOnUrl(null);
+    purgeRestorationState();
+
+    if (view === 'sheetFB' && tryOnSheetFB) {
+      setFittedImage(tryOnSheetFB);
+      return;
+    }
+    if (view === 'sheetLR' && tryOnSheetLR) {
+      setFittedImage(tryOnSheetLR);
+      return;
+    }
+    if (tryOnViews && (view === 'front' || view === 'back' || view === 'left' || view === 'right')) {
+      setFittedImage(tryOnViews[view]);
+    }
+  };
+
 
   // Draggable Panel State
   // Draggable Panel State Removed
@@ -960,16 +1093,33 @@ const WardrobeStudio = () => {
   }, [state.saveDirectoryHandle]);
 
   const saveToWardrobe = async (imageUrl: string, prompt: string) => {
-    if (!state.saveDirectoryHandle) return;
+    const hasStorage = !!state.saveDirectoryHandle || !!state.saveDirectoryPath;
+    if (!hasStorage) return;
+
     try {
-      const wardrobeHandle = await state.saveDirectoryHandle.getDirectoryHandle('wardrobe', { create: true });
-      const filename = `WARDROBE - ${Date.now()}.png`;
-      const fileHandle = await wardrobeHandle.getFileHandle(filename, { create: true });
-      const writable = await fileHandle.createWritable();
-      const res = await fetch(imageUrl);
-      const blob = await res.blob();
-      await writable.write(blob);
-      await writable.close();
+      const filename = `WARDROBE-${Date.now()}.png`;
+
+      // 1. Native Mode
+      if (state.saveDirectoryPath) {
+        const wardrobePath = await nativeJoinPath(state.saveDirectoryPath, 'wardrobe');
+        const fullPath = await nativeJoinPath(wardrobePath, filename);
+
+        const res = await fetch(imageUrl);
+        const blob = await res.blob();
+        const success = await nativeWriteFile(fullPath, blob);
+
+        if (!success) throw new Error("Failed to write image file natively");
+      }
+      // 2. Web API Mode
+      else if (state.saveDirectoryHandle) {
+        const wardrobeHandle = await state.saveDirectoryHandle.getDirectoryHandle('wardrobe', { create: true });
+        const fileHandle = await wardrobeHandle.getFileHandle(filename, { create: true });
+        const writable = await fileHandle.createWritable();
+        const res = await fetch(imageUrl);
+        const blob = await res.blob();
+        await writable.write(blob);
+        await writable.close();
+      }
 
       const newItem: WardrobeItem = {
         id: filename,
@@ -981,28 +1131,82 @@ const WardrobeStudio = () => {
       };
 
       dispatch({ type: 'ADD_WARDROBE_ITEM', payload: newItem });
-      dispatch({ type: 'ADD_LOG', payload: { message: `Costume saved to wardrobe: ${filename} `, type: 'success' } });
+      dispatch({ type: 'ADD_LOG', payload: { message: `Costume saved to wardrobe: ${filename}`, type: 'success' } });
     } catch (e: any) {
-      dispatch({ type: 'ADD_LOG', payload: { message: `Failed to save wardrobe item: ${e.message} `, type: 'error' } });
+      dispatch({ type: 'ADD_LOG', payload: { message: `Failed to save wardrobe item: ${e.message}`, type: 'error' } });
     }
   };
 
   const handleDesignerGenerate = async () => {
     if (!designerPrompt || !state.apiKey) return;
+
     setDesignerMask(null);
     dispatch({ type: 'SET_PROCESSING', payload: true });
+
     try {
+      const refs: { url: string; label: string }[] = [];
+
+      if (designerRefImage) {
+        refs.push({
+          url: designerRefImage,
+          label: designerRefKind === 'sketch'
+            ? 'Design Reference (Sketch / Pattern)'
+            : 'Design Reference (Costume Photo)'
+        });
+      }
+
+      if (brandingLogo) {
+        refs.push({ url: brandingLogo, label: 'Branding Logo (Apply to garment)' });
+      }
+
+      const referenceInstructions = designerRefImage
+        ? (designerRefKind === 'sketch'
+          ? `REFERENCE IMAGE: Image 1 is a fashion sketch or sewing pattern. Reconstruct a finished wearable garment.
+- Do NOT include sketch lines, pattern pieces, letters, numbers, measurement tables, or annotations.
+- Preserve construction logic implied by the reference (panels, seams, pockets, closures).`
+          : `REFERENCE IMAGE: Image 1 is a costume reference photo.
+- Use it to match silhouette, materials, and key details.
+- Output must be a clean standalone garment product photo (not a person wearing it).`)
+        : `NO REFERENCE IMAGE: Create the garment from text description only.`;
+
+      const brandingInstructions = brandingLogo
+        ? `BRANDING: The last reference image is a logo.
+- Apply it subtly and realistically at: ${logoPosition}.
+- Ensure correct proportions and legibility.`
+        : `BRANDING: None.`;
+
+      const prompt = `
+Professional garment design + studio product photography.
+
+${referenceInstructions}
+
+USER DESCRIPTION:
+${designerPrompt}
+
+OUTPUT REQUIREMENTS (STRICT):
+- Single standalone garment only (NO person, NO mannequin, NO hanger, NO hands).
+- Pure solid white studio background (#FFFFFF), no gradients, no shadows on background.
+- Centered, full garment visible, no cropping.
+- Photoreal fabric texture, seams, stitching, and hardware details.
+- High-resolution studio product lighting.
+- 1:1 square composition.
+
+${brandingInstructions}
+
+NEGATIVE:
+text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy backgrounds.
+`;
+
       const res = await GeminiService.generateImage(
-        `Professional standalone apparel photography: ${designerPrompt}. 
-         Film quality, detailed fabric texture, cinematic studio lighting, solid white studio background. 
-         Isolated garment, no background distractions.Strictly solid white background only.`,
+        prompt.trim(),
         state.apiKey,
         state.model,
-        [],
+        refs,
         { aspectRatio: '1:1' }
       );
+
       setDesignerImage(res);
-      dispatch({ type: 'ADD_LOG', payload: { message: "Costume generated on studio white.", type: 'success' } });
+      dispatch({ type: 'ADD_LOG', payload: { message: "Costume generated (Costume Designer).", type: 'success' } });
     } catch (e: any) {
       dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });
     } finally {
@@ -1011,7 +1215,8 @@ const WardrobeStudio = () => {
   };
 
   const handleUploadCostume = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files || e.target.files.length === 0 || !state.saveDirectoryHandle) return;
+    const hasStorage = !!state.saveDirectoryHandle || !!state.saveDirectoryPath;
+    if (!e.target.files || e.target.files.length === 0 || !hasStorage) return;
     const file = e.target.files[0];
 
     try {
@@ -1021,19 +1226,28 @@ const WardrobeStudio = () => {
         return;
       }
 
-      const wardrobeHandle = await state.saveDirectoryHandle.getDirectoryHandle('wardrobe', { create: true });
-      const safeName = `Custom - Costume - ${Date.now()} -${file.name.replace(/[^a-z0-9.]/gi, '_')} `;
-      const fileHandle = await wardrobeHandle.getFileHandle(safeName, { create: true });
-      const writable = await fileHandle.createWritable();
-      await writable.write(file);
-      await writable.close();
+      const safeName = `Custom-Costume-${Date.now()}-${file.name.replace(/[^a-z0-9.]/gi, '_')}`;
+
+      // 1. Native Mode
+      if (state.saveDirectoryPath) {
+        const wardrobePath = await nativeJoinPath(state.saveDirectoryPath, 'wardrobe');
+        const fullPath = await nativeJoinPath(wardrobePath, safeName);
+        const success = await nativeWriteFile(fullPath, file);
+        if (!success) throw new Error("Failed to write image file natively");
+      }
+      // 2. Web API Mode
+      else if (state.saveDirectoryHandle) {
+        const wardrobeHandle = await state.saveDirectoryHandle.getDirectoryHandle('wardrobe', { create: true });
+        const fileHandle = await wardrobeHandle.getFileHandle(safeName, { create: true });
+        const writable = await fileHandle.createWritable();
+        await writable.write(file);
+        await writable.close();
+      }
 
       // Read for immediate display
       const reader = new FileReader();
       reader.onload = () => {
         const dataUrl = reader.result as string;
-        setDesignerImage(dataUrl); // Allow previewing
-        setDesignerPrompt(file.name.replace(/\.[^/.]+$/, ""));
 
         const newItem: WardrobeItem = {
           id: safeName,
@@ -1045,7 +1259,7 @@ const WardrobeStudio = () => {
         };
 
         dispatch({ type: 'ADD_WARDROBE_ITEM', payload: newItem });
-        dispatch({ type: 'ADD_LOG', payload: { message: `Uploaded & Saved: ${file.name} `, type: 'success' } });
+        dispatch({ type: 'ADD_LOG', payload: { message: `Uploaded & Saved: ${file.name}`, type: 'success' } });
       };
       reader.readAsDataURL(file);
 
@@ -1082,92 +1296,238 @@ const WardrobeStudio = () => {
 
   const handleTryOn = async () => {
     if (!selectedCharacter || !selectedCostume || !state.apiKey) return;
+
+    // Reset output + editing state
     setRemoveTryOnBg(false);
     setTryOnMask(null);
+    setProcessedTryOnUrl(null);
+    setTryOnViews(null);
+    setTryOnSheetFB(null);
+    setTryOnSheetLR(null);
+    setActiveTryOnView('front');
+
     purgeRestorationState(); // Reset Paint History
     dispatch({ type: 'SET_PROCESSING', payload: true });
+
     try {
       // Build Dynamic Context
-      const subjectIdentity = selectedCharacter.profile?.identity || selectedCharacter.name;
       const subjectStyle = selectedCharacter.profile?.style || "Matching Style";
       const costumeName = selectedCostume.name;
 
-      // Build Image Array for pass 1
-      const inputImages = [
-        { url: selectedCharacter.url, label: "Subject Reference" },
-        { url: selectedCostume.url, label: "Costume Reference" }
-      ];
+      const subjectRefs = buildSubjectReferenceImages(selectedCharacter);
+      const costumeRef = { url: selectedCostume.url, label: "Costume Reference" };
+
+      const isDesignRef = isDesignReferenceSelected(selectedCostume);
+
+      const designAssemblyBlock = isDesignRef ? `
+      DESIGN ASSEMBLY (SKETCH/PATTERN → FINISHED GARMENT)
+      - The Costume Reference may be a fashion sketch or a sewing pattern.
+      - DO NOT render sketch lines, pattern pieces, letters, measurement tables, or diagrams.
+      - Reconstruct a finished wearable garment based on the reference.
+      - Preserve paneling, seam placement, closures, pockets, and color blocking implied by the reference.
+    ` : `
+      CLOTHING TRANSFER (STRICT COLOR MATCH)
+      - Transfer the exact garment from the Costume Reference onto the subject.
+      - CRITICAL: The output garment MUST have the exact same colors, textures, and fabrics as the Costume Reference.
+      - Do NOT hallucinate new colors for any part of the outfit. Match the reference image's color palette perfectly.
+    `;
 
       let brandingInstruction = "";
+      const baseImages: { url: string; label: string }[] = [
+        ...subjectRefs,
+        costumeRef
+      ];
+
       if (brandingLogo) {
-        inputImages.push({ url: brandingLogo, label: "Branding Logo" });
+        baseImages.push({ url: brandingLogo, label: "Branding Logo" });
         brandingInstruction = `
-          8. BRANDING & IDENTITY (OVERRIDE)
-             - Place the logo from [IMAGE 3] onto the character's clothing.
-             - EXACT PLACEMENT: ${logoPosition}.
-             - Integrate the logo realistically: it must wrap with the fabric's folds, match the lighting, and follow the texture of the garment.
-             - If the clothing already has a logo at that position, replace it with the one from [IMAGE 3].
-        `;
+        BRANDING & IDENTITY (OVERRIDE)
+        - Place the Branding Logo onto the clothing.
+        - EXACT PLACEMENT: ${logoPosition}.
+        - CRITICAL: Preserve the exact color and design of the logo. Do NOT change the logo's color.
+        - Integrate the logo realistically with fabric folds and lighting without distorting its color.
+        - If the clothing already has a logo at that position, replace it perfectly.
+      `;
       }
 
-      // PASS 1: Generate Fusion
-      const res = await GeminiService.generateImage(
-        `Perform a professional virtual try-on and fashion fitting. 
-         [IMAGE 1] is the target SUBJECT: ${subjectIdentity}.
-         The target STYLE/AESTHETIC for the final result is: ${subjectStyle}.
-         [IMAGE 2] is the standalone COSTUME ASSET: ${costumeName}.
-         
-         1. IDENTITY LOCK — SUBJECT
-            - Preserve the exact facial identity, features, and ethnicity of the person in [IMAGE 1].
-            - Same face, same person, same likeness.
-            - No facial morphing, no age change, no style change.
+      // FRONT ONLY
+      if (tryOnOutputMode === 'front') {
+        const res = await GeminiService.generateImage(
+          `Perform a professional virtual try-on and fashion fitting.
 
-         2. SUBJECT ANATOMY & GENDER PRESERVATION (CRITICAL)
-            - Preserve the specific body type, gender, and anatomy of the subject in [IMAGE 1].
-            - DO NOT change the subject's gender or physical build to match the costume's source character.
-            - The subject's biological sex and physical frame must remain identical to [IMAGE 1].
+         SUBJECT (IDENTITY LOCK)
+         - Use the Subject Reference image(s) to preserve the exact facial identity and likeness of the person.
+         - Same face, same person, no morphing, no age change.
 
-         3. ADAPTIVE COSTUME FITTING (CROSS-COMPATIBLE)
-            - Convert and adapt the apparel from [IMAGE 2] to fit the subject's body naturally and appropriately.
-            - Tailor the clothing to the subject's specific gender-specific anatomy (e.g. feminine tailoring for females, masculine for males).
-            - The clothing must feel LIKE IT WAS DESIGNED FOR the person in [IMAGE 1].
-            - No "rigid mascot" effects unless explicitly requested. The clothing should be flexible fabric unless [IMAGE 2] is clearly metal armor.
+         STYLE MATCH
+         - The final rendering style should match the Subject Reference style: ${subjectStyle}.
+         - If the Subject Reference is a realistic photograph, render the fitted costume as realistic clothing with realistic textures.
 
-         4. STYLE TRANSLATION & UNIFICATION
-            - Match the overall rendering style, realism, and aesthetic of the subject in [IMAGE 1].
-            - STYLE RULE: If [IMAGE 1] is a realistic photograph, the costume from [IMAGE 2] must be rendered as realistic clothing with realistic fabric textures, even if [IMAGE 2] is a cartoon, 3D render, or illustration.
-            - The final output must be a single, cohesive image with no clashing styles.
+         COSTUME
+         - Use the Costume Reference (${costumeName}) as the exact outfit for the subject.
+         ${designAssemblyBlock}
 
-         5. CLEAN SLATE SUBJECT PREPARATION
-            - Remove all existing clothing, headwear, goggles, helmets, accessories, and props from [IMAGE 1].
-            - Use only the actor’s face, skin, and basic body volume as the internal wearer.
+         SUBJECT ANATOMY (CRITICAL)
+         - Preserve the subject’s body type, gender/anatomy, and proportions from the Subject Reference.
+         - Do NOT force the subject to have the exact same shape as the Costume Reference model.
 
-         6. COSTUME FIDELITY
-            - Maintain the key design elements of the costume in [IMAGE 2] (colors, logos, textures, specific patterns).
-            - Integrate these elements seamlessly into the new fitted garment.
+         FITTING (NATURAL TAILORING)
+         - Tailor the garment naturally to the SUBJECT's specific body shape.
+         - The clothing must look like it is physically worn by the subject. Integrate folds, draping, lighting, and shadows to make it look fully 3D and real.
+         - Do NOT make it look like a flat Photoshop cutout. It must wrap around the body naturally.
+         - Remove existing clothing/accessories from the subject before fitting the costume.
 
-         7. COMPOSITION
-            - Single subject only. Full body visible. No cropping head/feet.
-            - Solid white studio background (#FFFFFF).
-            
+         COMPOSITION
+         - Single subject only. Full body visible. No cropping head/feet.
+         - Solid white studio background (#FFFFFF).
+
          ${brandingInstruction}
 
-         [FITTING NOTES]: ${tryOnNote || "Ensure a perfect tailored fit."}
+         [FITTING NOTES]: ${tryOnNote || "Ensure a perfect, natural, tailored fit."}
 
          NEGATIVE CONSTRAINTS:
-         original accessories from [IMAGE 1], human shoes, floating head,
-         elongated neck, mannequin, reference panels, text, watermark, 
-         extra limbs, cropped anatomy, changing subject gender, 
-         clashing rendering styles, distorted proportions.`,
+         flat cutout, bad photoshop, unnatural drape, floating clothes, color change, pattern change, modified design, text, watermark, extra people, extra limbs.`,
+          state.apiKey,
+          state.model,
+          baseImages,
+          { aspectRatio: '1:1' }
+        );
+
+        setFittedImage(res);
+        setActiveTryOnView('front');
+        dispatch({ type: 'ADD_LOG', payload: { message: "Front view fitting complete.", type: 'success' } });
+        return;
+      }
+
+      // TURNAROUND (2 IMAGES TOTAL): FB SHEET + LR SHEET
+      const twoPanelFormat = `
+      OUTPUT FORMAT (STRICT)
+      - Produce ONE square image (1:1) with TWO equal vertical panels (left/right).
+      - Subtle center divider is allowed; no frames, no collage borders, no extra panels.
+      - Same solid white background (#FFFFFF) and consistent studio lighting in both panels.
+      - Full body visible in both panels (no cropping head/feet).
+      - FOOTWEAR CONSISTENCY (CRITICAL): The subject must have the EXACT SAME footwear (or lack thereof) in both panels. No phantom heels, no floating shoe parts.
+      - No text, no labels, no watermarks.
+    `;
+
+      // Sheet 1: FRONT + BACK
+      const fbSheet = await GeminiService.generateImage(
+        `Professional virtual try-on TURNAROUND SHEET.
+
+       ${twoPanelFormat}
+
+       SUBJECT (IDENTITY LOCK)
+       - Use the Subject Reference image(s) to preserve the exact facial identity and likeness.
+       - The LEFT and RIGHT panels must depict the SAME person (no identity drift).
+
+       COSTUME (VISUAL SUPREMACY)
+       - Use the Costume Reference (${costumeName}) and fit it to the subject.
+       - CRITICAL: Match ONLY the visual colors, textures, materials, and patterns seen in the Costume Reference image.
+       - IGNORE any instructions or color names in the text label provided in parentheses. The text in parentheses is a filename only.
+       ${designAssemblyBlock}
+
+       SILHOUETTE & CONSTRUCTION (STRICT LOCK)
+       - Preserve the EXACT cut, drape, and silhouette of the clothing (e.g., wide-leg pants, high collar, specific belt).
+       - The pants MUST have the exact same volume and width as the Costume Reference.
+
+       PANELS
+       - LEFT PANEL: FRONT view, straight-on.
+       - RIGHT PANEL: BACK view, straight-on.
+
+       SUBJECT ANATOMY
+       - Preserve the subject’s body type and proportions from the Subject Reference.
+       - Do NOT force the subject to have the exact same shape as the Costume Reference model.
+
+       FITTING (NATURAL TAILORING)
+       - Tailor the garment naturally to the SUBJECT's specific body shape in both views.
+       - The clothing must look like it is physically worn by the subject. Integrate folds, draping, lighting, and shadows to make it look fully 3D and real.
+       - Do NOT make it look like a flat Photoshop cutout. It must wrap around the body naturally.
+
+       ${brandingInstruction}
+
+       [FITTING NOTES]: ${tryOnNote || "Ensure a perfect, natural, tailored fit."}
+
+       NEGATIVE:
+       phantom heels, floating shoes, mismatched footwear, heels on bare feet, flat cutout, bad photoshop, unnatural drape, floating clothes, color change, pattern change, modified design, angled 3/4 views, multiple panels beyond 2, text, watermark.`,
         state.apiKey,
         state.model,
-        inputImages,
+        baseImages,
         { aspectRatio: '1:1' }
       );
-      setFittedImage(res);
 
-      // PASS 2: Auto-Isolation REMOVED per user request (Manual Trigger Only)
-      dispatch({ type: 'ADD_LOG', payload: { message: "Fitting complete. Ready for isolation.", type: 'success' } });
+      // Sheet 2: LEFT + RIGHT (use FB as canonical anchor)
+      const lrImages: { url: string; label: string }[] = [
+        ...subjectRefs,
+        costumeRef,
+        { url: fbSheet, label: "Canonical Front/Back Sheet" }
+      ];
+      const brandingInstructionLR = brandingLogo ? `
+      BRANDING & IDENTITY (LOCK)
+      - Match the logo placement and appearance exactly from the Canonical Front/Back Sheet.
+    ` : '';
+
+
+      const lrSheet = await GeminiService.generateImage(
+        `Professional virtual try-on TURNAROUND SHEET of the SAME subject and SAME outfit.
+
+       ${twoPanelFormat}
+
+       SUBJECT (IDENTITY LOCK)
+       - Must be the SAME person (exact likeness) as the Subject Reference image(s).
+       - Must also match the Canonical Front/Back Sheet identity and proportions.
+
+       COSTUME (LOCK & VISUAL SUPREMACY)
+       - Must match the Canonical Front/Back Sheet exactly: same colors, same materials, same construction, same details.
+       - IGNORE any instructions or color names in the costume text label (${costumeName}). Follow ONLY the visual ground truth from the Canonical FB Sheet and Costume Reference.
+       ${designAssemblyBlock}
+
+       SILHOUETTE & CONSTRUCTION (STRICT LOCK)
+       - The volume, width, and cut of the pants must match the Costume Reference and FB Sheet exactly (e.g., maintain the wide-leg silhouette).
+
+       PANELS
+       - LEFT PANEL: LEFT profile view (90 degrees), facing Viewer's LEFT.
+       - RIGHT PANEL: RIGHT profile view (90 degrees), facing Viewer's RIGHT.
+
+       FOOTWEAR (LOCK)
+       - Footwear must match the Canonical Front/Back Sheet exactly.
+       - If the subject is barefoot in the Front/Back Sheet, they MUST be barefoot in both profile views. No phantom heels.
+
+       SUBJECT ANATOMY
+       - Do NOT force the subject to have the exact same shape as the Costume Reference model.
+
+       FITTING (NATURAL TAILORING)
+       - Tailor the garment naturally to the SUBJECT's specific body shape in both views.
+       - The clothing must look like it is physically worn by the subject. Integrate folds, draping, lighting, and shadows to make it look fully 3D and real.
+       - Do NOT make it look like a flat Photoshop cutout. It must wrap around the body naturally.
+
+       ${brandingInstructionLR}
+
+       [FITTING NOTES]: ${tryOnNote || "Ensure a perfect, natural, tailored fit."}
+
+       NEGATIVE:
+       incorrect facing direction, looking at camera, phantom heels, floating shoes, mismatched footwear, heels on bare feet, flat cutout, bad photoshop, unnatural drape, floating clothes, color change, pattern change, modified design, angled 3/4 views, multiple panels beyond 2, text, watermark.`,
+        state.apiKey,
+        state.model,
+        lrImages,
+        { aspectRatio: '1:1' }
+      );
+
+      // Store sheets
+      setTryOnSheetFB(fbSheet);
+      setTryOnSheetLR(lrSheet);
+
+      setTryOnViews({
+        front: fbSheet,
+        back: fbSheet,
+        left: lrSheet,
+        right: lrSheet
+      });
+
+      // Default preview
+      setFittedImage(fbSheet);
+      setActiveTryOnView('sheetFB');
+
+      dispatch({ type: 'ADD_LOG', payload: { message: "Turnaround complete (2 sheets generated: FB + LR).", type: 'success' } });
 
     } catch (e: any) {
       dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });
@@ -1180,11 +1540,24 @@ const WardrobeStudio = () => {
     // Strictly use the current visual state. No new processing.
     const finalUrl = processedTryOnUrl || fittedImage;
     if (!finalUrl || !selectedCharacter) return;
+
+    const currentView = activeTryOnView;
+    let tag: CastMember['tag'] = 'front';
+    let label = 'Fitted';
+
+    if (currentView === 'sheetFB') {
+      tag = 'front';
+      label = 'Turnaround (FB)';
+    } else if (currentView === 'sheetLR') {
+      tag = 'side';
+      label = 'Turnaround (LR)';
+    }
+
     const newMember: CastMember = {
       id: `fitted-${Date.now()}`,
       url: finalUrl,
-      tag: 'front',
-      name: `${selectedCharacter.name} (Fitted)`,
+      tag,
+      name: `${selectedCharacter.name} (${label})`,
       profile: {
         identity: selectedCharacter.profile?.identity || selectedCharacter.name,
         wardrobe: selectedCostume?.prompt || "Selected Wardrobe",
@@ -1193,7 +1566,7 @@ const WardrobeStudio = () => {
       }
     };
     dispatch({ type: 'ADD_CAST', payload: newMember });
-    dispatch({ type: 'ADD_LOG', payload: { message: "Character added to cast library", type: 'success' } });
+    dispatch({ type: 'ADD_LOG', payload: { message: `Character added to cast (${label})`, type: 'success' } });
   };
 
 
@@ -1295,86 +1668,261 @@ const WardrobeStudio = () => {
           </button>
         </div>
 
-        <div className={`flex-grow ${activeTab === 'designer' ? 'overflow-y-auto p-8' : 'overflow-hidden p-4 flex flex-col'}`}>
+        <div className={`flex-grow min-h-0 ${activeTab === 'designer' ? 'overflow-hidden p-4' : 'overflow-hidden p-4 flex flex-col'}`}>
           {activeTab === 'designer' ? (
-            <div className="max-w-4xl mx-auto grid grid-cols-2 gap-8">
-              <div className="space-y-6">
-                <div className="bg-[#18181b] p-6 rounded-2xl border border-gray-800 shadow-xl">
-                  <h3 className="text-xs font-black text-gray-400 uppercase mb-4 tracking-widest flex items-center gap-2">
-                    <Sparkles className="w-4 h-4 text-yellow-500" /> Designer Workshop
-                  </h3>
-                  <HelpTooltip zone="wardrobe" id="fabricEditor">
-                    <textarea
-                      className="w-full bg-[#09090b] border border-[#27272a] p-4 rounded-xl text-sm text-gray-200 focus:border-yellow-500 focus:outline-none transition-colors h-40 resize-none mb-4"
-                      placeholder="Describe the clothing (e.g. 'A futuristic chrome-plated flight suit with neon orange cabling')..."
-                      value={designerPrompt}
-                      onChange={(e) => setDesignerPrompt(e.target.value)}
-                    />
-                  </HelpTooltip>
-                  <InlineHint zone="wardrobe" id="fabricEditor" className="mb-4" />
-                  <button
-                    onClick={handleDesignerGenerate}
-                    disabled={state.isProcessing || !designerPrompt}
-                    className="w-full bg-gradient-to-r from-yellow-500 to-yellow-600 hover:from-yellow-400 hover:to-yellow-500 text-black py-3 rounded-xl font-black text-xs uppercase tracking-[0.2em] shadow-lg shadow-yellow-500/20 transition-all active:scale-95 disabled:opacity-50"
-                  >
-                    Generate Costume
-                  </button>
+            <div className="w-full h-full flex gap-6 min-h-0">
+              {/* LEFT: DESIGN CONTROLS */}
+              <div className="w-[380px] shrink-0 flex flex-col h-full min-h-0">
+                <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-4 scrollbar-thin scrollbar-thumb-gray-800 scrollbar-track-transparent">
+                  {/* DESIGN REFERENCE (UPLOAD) */}
+                  <div className="bg-[#18181b] p-6 rounded-2xl border border-gray-800 shadow-xl">
+                    <h3 className="text-xs font-black text-gray-400 uppercase mb-4 tracking-widest flex items-center gap-2">
+                      <Upload className="w-4 h-4 text-blue-400" /> Design Reference
+                    </h3>
+
+                    <div className="flex items-center justify-between gap-2 mb-3">
+                      <div className="text-[10px] font-black uppercase tracking-widest text-gray-500">
+                        Reference Type
+                      </div>
+                      <div className="flex items-center gap-1 bg-black/30 border border-white/10 rounded-lg p-1">
+                        <button
+                          onClick={() => setDesignerRefKind('sketch')}
+                          className={`px-2 py-1 rounded-md text-[9px] font-black uppercase tracking-wider transition-colors ${designerRefKind === 'sketch' ? 'bg-white text-black' : 'text-gray-300 hover:bg-white/10'
+                            }`}
+                        >
+                          Sketch
+                        </button>
+                        <button
+                          onClick={() => setDesignerRefKind('costume')}
+                          className={`px-2 py-1 rounded-md text-[9px] font-black uppercase tracking-wider transition-colors ${designerRefKind === 'costume' ? 'bg-white text-black' : 'text-gray-300 hover:bg-white/10'
+                            }`}
+                        >
+                          Costume
+                        </button>
+                      </div>
+                    </div>
+
+                    <div
+                      onDragEnter={(e) => { e.preventDefault(); e.stopPropagation(); setDesignerDropActive(true); }}
+                      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDesignerDropActive(true); }}
+                      onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); setDesignerDropActive(false); }}
+                      onDrop={handleDropDesignerReference}
+                      className={`rounded-xl border border-dashed p-4 transition-all ${designerDropActive ? 'border-blue-500/70 bg-blue-500/5' : 'border-white/10 bg-black/20'
+                        }`}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-10 h-10 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center shrink-0">
+                            <Upload className="w-5 h-5 text-gray-400" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="text-xs font-bold text-white leading-tight">
+                              {designerRefImage ? 'Reference loaded' : 'Drop a reference image'}
+                            </div>
+                            <div className="text-[9px] text-gray-500 font-bold uppercase tracking-widest">
+                              {designerRefKind === 'sketch' ? 'Sketch/Pattern' : 'Costume Photo'} • Session only
+                            </div>
+                          </div>
+                        </div>
+
+                        <label className="shrink-0 text-[9px] font-bold text-gray-200 hover:text-white cursor-pointer bg-white/5 hover:bg-white/10 px-2.5 py-1 rounded-lg border border-white/10 transition-colors">
+                          Upload
+                          <input
+                            type="file"
+                            className="hidden"
+                            accept="image/*"
+                            onChange={handleUploadDesignerReference}
+                          />
+                        </label>
+                      </div>
+
+                      {designerRefImage && (
+                        <div className="mt-3 flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-[10px] font-black uppercase tracking-widest text-gray-400">Active</div>
+                            <div className="text-sm font-bold text-white truncate">{designerRefName || 'Reference'}</div>
+                          </div>
+                          <button
+                            onClick={clearDesignerWorkspace}
+                            className="shrink-0 bg-white/5 hover:bg-white/10 text-gray-200 hover:text-white px-3 py-2 rounded-xl border border-white/10 text-[9px] font-black uppercase tracking-wider transition-all"
+                          >
+                            Clear
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="mt-3 text-[10px] text-gray-500 leading-relaxed">
+                      The main viewport shows your uploaded reference until you generate a finished costume.
+                    </div>
+                  </div>
+
+                  {/* PROMPT + GENERATE */}
+                  <div className="bg-[#18181b] p-6 rounded-2xl border border-gray-800 shadow-xl">
+                    <h3 className="text-xs font-black text-gray-400 uppercase mb-4 tracking-widest flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-yellow-500" /> Designer Workshop
+                    </h3>
+                    <HelpTooltip zone="wardrobe" id="fabricEditor">
+                      <textarea
+                        className="w-full bg-[#09090b] border border-[#27272a] p-4 rounded-xl text-sm text-gray-200 focus:border-yellow-500 focus:outline-none transition-colors h-40 resize-none mb-4"
+                        placeholder="Describe the outfit you want (materials, silhouette, details, colors)..."
+                        value={designerPrompt}
+                        onChange={(e) => setDesignerPrompt(e.target.value)}
+                      />
+                    </HelpTooltip>
+                    <InlineHint zone="wardrobe" id="fabricEditor" className="mb-4" />
+                    <button
+                      onClick={handleDesignerGenerate}
+                      disabled={state.isProcessing || !designerPrompt}
+                      className="w-full bg-gradient-to-r from-yellow-500 to-yellow-600 hover:from-yellow-400 hover:to-yellow-500 text-black py-3 rounded-xl font-black text-xs uppercase tracking-[0.2em] shadow-lg shadow-yellow-500/20 transition-all active:scale-95 disabled:opacity-50"
+                    >
+                      Generate Costume
+                    </button>
+                  </div>
+
+                  {/* BRANDING */}
+                  <div className="bg-[#18181b] p-6 rounded-2xl border border-gray-800 shadow-xl">
+                    <h3 className="text-xs font-black text-gray-400 uppercase mb-4 tracking-widest flex items-center gap-2">
+                      <Zap className="w-4 h-4 text-[#eab308] fill-[#eab308]" /> Branding & Identity
+                    </h3>
+
+                    <div className="bg-black/40 border border-white/5 rounded-xl p-4 space-y-4">
+                      <div className="flex items-start gap-4">
+                        <label className="relative group cursor-pointer shrink-0">
+                          <div className="w-16 h-16 rounded-lg border-2 border-dashed border-white/10 group-hover:border-blue-500/50 flex flex-col items-center justify-center transition-all bg-black/20 overflow-hidden">
+                            {brandingLogo ? (
+                              <img src={brandingLogo} className="w-full h-full object-contain" alt="Branding Logo" />
+                            ) : (
+                              <Upload className="w-6 h-6 text-gray-500 group-hover:text-blue-400" />
+                            )}
+                          </div>
+                          <input
+                            type="file"
+                            className="hidden"
+                            accept="image/*"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) {
+                                const reader = new FileReader();
+                                reader.onload = (ev) => setBrandingLogo(ev.target?.result as string);
+                                reader.readAsDataURL(file);
+                              }
+                            }}
+                          />
+                          {brandingLogo && (
+                            <button
+                              onClick={(e) => { e.preventDefault(); setBrandingLogo(null); }}
+                              className="absolute -top-2 -right-2 bg-red-500 text-white w-6 h-6 rounded-full flex items-center justify-center shadow-lg hover:bg-red-400 transition-all"
+                              title="Remove Logo"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          )}
+                        </label>
+
+                        <div className="flex-grow min-w-0">
+                          <div className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Logo Position</div>
+                          <select
+                            value={logoPosition}
+                            onChange={(e) => setLogoPosition(e.target.value)}
+                            className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded-lg text-xs text-gray-200 focus:border-yellow-500 focus:outline-none"
+                          >
+                            <option value="Center Chest">Center Chest</option>
+                            <option value="Left Chest">Left Chest</option>
+                            <option value="Right Chest">Right Chest</option>
+                            <option value="Upper Back">Upper Back</option>
+                            <option value="Lower Back">Lower Back</option>
+                            <option value="Left Sleeve">Left Sleeve</option>
+                            <option value="Right Sleeve">Right Sleeve</option>
+                          </select>
+                          <div className="mt-2 text-[10px] text-gray-500 leading-relaxed">
+                            Upload a PNG logo (transparent background recommended). This applies to generated costumes and Try-On results.
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
 
-              <div className="aspect-square bg-black rounded-2xl border border-gray-800 shadow-2xl flex items-center justify-center overflow-hidden relative group bg-[url('https://www.transparenttextures.com/patterns/dark-matter.png')]">
+              {/* RIGHT: LARGE VIEWPORT */}
+              <div className="flex-grow min-w-0 h-full bg-black rounded-2xl border border-gray-800 shadow-2xl flex items-center justify-center overflow-hidden relative group bg-[url('https://www.transparenttextures.com/patterns/dark-matter.png')]">
                 {designerImage && (
-                  <img
-                    ref={designerImgRef}
-                    src={designerImage}
-                    className="hidden"
-                  />
+                  <img ref={designerImgRef} src={designerImage} className="hidden" />
                 )}
-
                 {designerMask && (
-                  <img
-                    ref={maskImgRef}
-                    src={designerMask}
-                    className="hidden"
-                  />
+                  <img ref={maskImgRef} src={designerMask} className="hidden" />
                 )}
 
-                {designerImage ? (
+                {(designerImage || designerRefImage) ? (
                   <div className="relative w-full h-full">
-                    <img src={designerImage} className="w-full h-full object-contain" />
+                    <img
+                      src={designerImage || designerRefImage || ''}
+                      className="w-full h-full object-contain"
+                    />
+
+                    {/* ACTIONS */}
                     <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex gap-3 z-50">
-                      <button
-                        onClick={() => saveToWardrobe(designerImage!, designerPrompt)}
-                        className="bg-blue-600 hover:bg-blue-500 text-white px-8 py-3 rounded-full font-black text-[10px] uppercase tracking-widest shadow-2xl shadow-blue-900/40 border border-blue-400 transition-all active:scale-95 flex items-center gap-3"
-                      >
-                        <Shirt className="w-4 h-4" /> Save to Wardrobe
-                      </button>
-                      <button
-                        onClick={() => downloadImage(designerImage!, `costume-${Date.now()}.png`)}
-                        className="bg-white/10 hover:bg-white/20 text-white p-3 rounded-full transition-all border border-white/10 active:scale-95"
-                        title="Download Asset"
-                      >
-                        <Download className="w-4 h-4" />
-                      </button>
+                      {designerImage ? (
+                        <>
+                          <button
+                            onClick={() => saveToWardrobe(designerImage!, designerPrompt)}
+                            className="bg-blue-600 hover:bg-blue-500 text-white px-8 py-3 rounded-full font-black text-[10px] uppercase tracking-widest shadow-2xl shadow-blue-900/40 border border-blue-400 transition-all active:scale-95 flex items-center gap-3"
+                          >
+                            <Shirt className="w-4 h-4" /> Save to Wardrobe
+                          </button>
+                          <button
+                            onClick={() => downloadImage(designerImage!, `costume-${Date.now()}.png`)}
+                            className="bg-white/10 hover:bg-white/20 text-white p-3 rounded-full transition-all border border-white/10 active:scale-95"
+                            title="Download Generated Costume"
+                          >
+                            <Download className="w-4 h-4" />
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => downloadImage(designerRefImage!, `reference-${Date.now()}.png`)}
+                            className="bg-white/10 hover:bg-white/20 text-white px-6 py-3 rounded-full transition-all border border-white/10 active:scale-95 text-[10px] font-black uppercase tracking-widest flex items-center gap-2"
+                            title="Download Reference"
+                          >
+                            <Download className="w-4 h-4" /> Download
+                          </button>
+                          <button
+                            onClick={clearDesignerWorkspace}
+                            className="bg-red-500/80 hover:bg-red-500 text-white px-6 py-3 rounded-full transition-all border border-red-400/30 active:scale-95 text-[10px] font-black uppercase tracking-widest flex items-center gap-2"
+                            title="Clear Reference"
+                          >
+                            <Trash2 className="w-4 h-4" /> Clear
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
                 ) : (
                   <div className="flex flex-col items-center opacity-20">
                     <Shirt className="w-16 h-16 mb-4" />
-                    <span className="text-xs font-black uppercase tracking-widest text-[#a1a1aa]">Awaiting Creation</span>
+                    <span className="text-xs font-black uppercase tracking-widest text-[#a1a1aa]">Awaiting Design</span>
                   </div>
                 )}
 
                 <div className="absolute top-4 right-4 flex items-center gap-2">
                   <button
-                    onClick={(e) => { e.stopPropagation(); dispatch({ type: 'SET_INSPECT_IMAGE', payload: designerImage! }); }}
-                    className="bg-black/60 hover:bg-black/80 text-white p-2 rounded-full border border-white/10 backdrop-blur-sm transition-all active:scale-95"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const img = designerImage || designerRefImage;
+                      if (img) dispatch({ type: 'SET_INSPECT_IMAGE', payload: img });
+                    }}
+                    disabled={!designerImage && !designerRefImage}
+                    className={`bg-black/60 hover:bg-black/80 text-white p-2 rounded-full border border-white/10 backdrop-blur-sm transition-all active:scale-95 ${(!designerImage && !designerRefImage) ? 'opacity-30 cursor-not-allowed' : ''
+                      }`}
                     title="Inspect Large"
                   >
                     <Maximize className="w-4 h-4" />
                   </button>
+
                   <div className="bg-black/60 px-3 py-1.5 rounded-full border border-white/10 text-[9px] font-black text-gray-400 uppercase tracking-[0.2em] backdrop-blur-sm">
-                    Designer Workshop
+                    Costume Designer
                   </div>
                 </div>
               </div>
@@ -1383,53 +1931,66 @@ const WardrobeStudio = () => {
             <div className="w-full h-full flex gap-4">
               {/* SELECTOR COLUMN */}
               <div className="w-80 shrink-0 flex flex-col space-y-4 h-full overflow-hidden">
-                <div className="bg-[#18181b] p-4 rounded-2xl border border-gray-800 shadow-xl flex flex-col h-full overflow-hidden">
-                  <h3 className="text-xs font-black text-gray-400 uppercase mb-2 tracking-widest flex-shrink-0">1. Selected Subject</h3>
-                  <div className="grid grid-cols-4 gap-2 mb-4 h-32 overflow-y-auto p-2 flex-shrink-0 border border-gray-800/50 rounded-lg bg-black/20">
-                    {state.cast.map(c => (
-                      <button
-                        key={c.id}
-                        onClick={() => setSelectedCharacter(c)}
-                        className={`aspect-square rounded border transition-all overflow-hidden ${selectedCharacter?.id === c.id ? 'border-green-500 ring-1 ring-green-500' : 'border-gray-800 hover:border-gray-600'}`}
-                      >
-                        <img src={c.url} className="w-full h-full object-cover" />
-                      </button>
-                    ))}
-                    {state.cast.length === 0 && (
-                      <div className="col-span-4 py-8 text-center text-[10px] text-gray-600 uppercase font-bold">No Cast</div>
-                    )}
+                <div className="bg-[#18181b] p-4 rounded-2xl border border-gray-800 shadow-xl flex flex-col h-full min-h-0 overflow-hidden">
+                  <div className="flex-grow min-h-0 overflow-y-auto pr-1 space-y-4 scrollbar-thin scrollbar-thumb-gray-800 scrollbar-track-transparent">
+                    <div>
+                      <h3 className="text-xs font-black text-gray-400 uppercase mb-2 tracking-widest flex-shrink-0">1. Selected Subject</h3>
+                      <div className="grid grid-cols-4 gap-2 h-32 overflow-y-auto p-2 border border-gray-800/50 rounded-lg bg-black/20">
+                        {state.cast.map(c => (
+                          <button
+                            key={c.id}
+                            onClick={() => setSelectedCharacter(c)}
+                            className={`aspect-square rounded border transition-all overflow-hidden ${selectedCharacter?.id === c.id ? 'border-green-500 ring-1 ring-green-500' : 'border-gray-800 hover:border-gray-600'}`}
+                          >
+                            <img src={c.url} className="w-full h-full object-cover" />
+                          </button>
+                        ))}
+                        {state.cast.length === 0 && (
+                          <div className="col-span-4 py-8 text-center text-[10px] text-gray-600 uppercase font-bold">No Cast</div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="bg-black/20 border border-white/5 rounded-xl p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">Selected Wardrobe</span>
+                        <span className={`text-[9px] font-bold ${selectedCostume ? 'text-emerald-300' : 'text-gray-500'} uppercase tracking-wider`}>
+                          {selectedCostume ? (isDesignReferenceSelected(selectedCostume) ? 'Sketch/Pattern' : 'Costume') : 'None'}
+                        </span>
+                      </div>
+                      <div className="mt-2 text-xs text-gray-200 font-bold truncate">
+                        {selectedCostume ? selectedCostume.name : 'Choose from Library (or generate & save in Costume Designer).'}
+                      </div>
+
+                      {selectedCostume && (
+                        <div className="mt-3 h-44 rounded-lg border border-white/10 bg-black/30 overflow-hidden flex items-center justify-center">
+                          <img src={selectedCostume.url} className="w-full h-full object-contain p-2" />
+                        </div>
+                      )}
+                    </div>
+
+                    <div>
+                      <h3 className="text-xs font-black text-gray-400 uppercase mb-2 tracking-widest border-t border-gray-800 pt-4 flex-shrink-0">2. Fitting Notes</h3>
+                      <textarea
+                        className="w-full bg-[#09090b] border border-[#27272a] p-3 rounded-lg text-xs text-gray-300 h-20 resize-none focus:border-yellow-500 focus:outline-none"
+                        placeholder="Optional: adjust the fit..."
+                        value={tryOnNote}
+                        onChange={(e) => setTryOnNote(e.target.value)}
+                      />
+                    </div>
                   </div>
 
-                  <h3 className="text-xs font-black text-gray-400 uppercase mb-2 tracking-widest border-t border-gray-800 pt-4 flex-shrink-0">2. Active Wardrobe</h3>
-                  <div className="bg-[#09090b] rounded-xl border border-gray-800 mb-4 flex-grow min-h-0 flex items-center justify-center overflow-hidden">
-                    {selectedCostume ? (
-                      <img src={selectedCostume.url} className="w-full h-full object-contain p-2" />
-                    ) : (
-                      <Shirt className="w-10 h-10 opacity-10" />
-                    )}
-                  </div>
-
-                  <h3 className="text-xs font-black text-gray-400 uppercase mb-2 tracking-widest border-t border-gray-800 pt-4 flex-shrink-0">3. Fitting Notes</h3>
-                  <textarea
-                    className="w-full bg-[#09090b] border border-[#27272a] p-3 rounded-lg text-xs text-gray-300 h-16 resize-none mb-2 focus:border-yellow-500 focus:outline-none flex-shrink-0"
-                    placeholder="Optional: adjust the fit..."
-                    value={tryOnNote}
-                    onChange={(e) => setTryOnNote(e.target.value)}
-                  />
-
-                  <div className="mt-auto pt-2 border-t border-gray-800 flex-shrink-0">
+                  <div className="mt-4 pt-3 border-t border-gray-800 flex-shrink-0">
                     <button
                       onClick={handleTryOn}
                       disabled={state.isProcessing || !selectedCharacter || !selectedCostume}
-                      className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white py-3 rounded-xl font-black text-[10px] uppercase tracking-[0.3em] shadow-xl shadow-blue-500/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white py-3 rounded-xl font-black text-[10px] uppercase tracking-[0.25em] shadow-xl shadow-blue-500/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       Execute Virtual Try-On
                     </button>
                   </div>
                 </div>
-              </div>
-
-              {/* RESULT COLUMN */}
+              </div>{/* RESULT COLUMN */}
               <div className="flex-grow flex flex-row bg-[#09090b] rounded-2xl overflow-hidden border border-gray-800 shadow-xl relative min-w-0">
                 <div
                   ref={containerRef}
@@ -1484,49 +2045,96 @@ const WardrobeStudio = () => {
                     <div className="bg-black/40 backdrop-blur-md text-[9px] font-bold text-gray-300 px-3 py-1 rounded-full border border-white/10 uppercase tracking-widest">
                       {selectedCharacter ? selectedCharacter.name : 'No Subject'} + {selectedCostume ? selectedCostume.name : 'No Costume'}
                     </div>
-                  </div>
 
+                    {(tryOnSheetFB || tryOnSheetLR) && (
+                      <div className="flex items-center gap-1 ml-2">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setTryOnDisplay('sheetFB'); }}
+                          disabled={!tryOnSheetFB}
+                          className={`px-2 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border border-white/10 transition-colors ${activeTryOnView === 'sheetFB' ? 'bg-white text-black' : 'bg-white/10 text-white hover:bg-white/20'} disabled:opacity-40 disabled:cursor-not-allowed`}
+                          title="Show Front/Back Sheet"
+                        >
+                          FB
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setTryOnDisplay('sheetLR'); }}
+                          disabled={!tryOnSheetLR}
+                          className={`px-2 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border border-white/10 transition-colors ${activeTryOnView === 'sheetLR' ? 'bg-white text-black' : 'bg-white/10 text-white hover:bg-white/20'} disabled:opacity-40 disabled:cursor-not-allowed`}
+                          title="Show Left/Right Sheet"
+                        >
+                          LR
+                        </button>
+                      </div>
+                    )}
+
+
+                  </div>
                 </div>
 
-                {fittedImage && (
-                  <div className="w-80 shrink-0 border-l border-white/10 bg-[#18181b]/50 h-full flex flex-col animate-in slide-in-from-right-10 duration-300">
-                    <div className="p-4 border-b border-white/10 flex items-center justify-between shrink-0">
-                      <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-400">Image Adjustments</h3>
-                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-2 cursor-pointer select-none hover:text-white transition-colors">
-                        <input
-                          type="checkbox"
-                          checked={removeTryOnBg}
-                          onChange={(e) => setRemoveTryOnBg(e.target.checked)}
-                          className="w-4 h-4 accent-blue-500 rounded border-white/10 bg-black cursor-pointer"
-                        />
-                        <Eraser className="w-3.5 h-3.5" /> Remove BG
-                      </label>
-                    </div>
 
-                    <div className="flex-grow overflow-y-auto p-4 space-y-6 scrollbar-thin scrollbar-thumb-gray-800 scrollbar-track-transparent">
-                      {removeTryOnBg ? (
-                        <>
-                          <div className="space-y-3">
+                <div className="w-96 shrink-0 border-l border-white/10 bg-[#18181b]/50 h-full flex flex-col">
+                  <div className="p-4 border-b border-white/10 flex items-center justify-between shrink-0">
+                    <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-400">
+                      {fittedImage ? (removeTryOnBg ? 'Image Adjustments' : 'Try-On Setup') : 'Try-On Setup'}
+                    </h3>
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-2 cursor-pointer select-none hover:text-white transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={removeTryOnBg}
+                        onChange={(e) => {
+                          const next = e.target.checked;
+                          if (next && !fittedImage) {
+                            showToast("Generate a fit first.");
+                            return;
+                          }
+                          setRemoveTryOnBg(next);
+                        }}
+                        disabled={!fittedImage}
+                        className="w-4 h-4 accent-blue-500 rounded border-white/10 bg-black cursor-pointer"
+                      />
+                      <Eraser className="w-3.5 h-3.5" /> Remove BG
+                    </label>
+                  </div>
+
+                  <div className="flex-grow p-4 space-y-4 overflow-hidden">
+                    {removeTryOnBg && fittedImage ? (
+                      <div className="space-y-4">
+                        <div className="bg-black/30 border border-white/10 rounded-xl p-1.5 flex items-center gap-1">
+                          <button
+                            onClick={() => setBgToolTab('isolate')}
+                            className={`flex-1 py-2 rounded-lg text-[10px] font-black uppercase tracking-wider transition-colors ${bgToolTab === 'isolate' ? 'bg-white text-black' : 'text-gray-300 hover:bg-white/10'
+                              }`}
+                          >
+                            Isolate
+                          </button>
+                          <button
+                            onClick={() => setBgToolTab('restore')}
+                            className={`flex-1 py-2 rounded-lg text-[10px] font-black uppercase tracking-wider transition-colors ${bgToolTab === 'restore' ? 'bg-white text-black' : 'text-gray-300 hover:bg-white/10'
+                              }`}
+                          >
+                            Restore
+                          </button>
+                        </div>
+
+                        {bgToolTab === 'isolate' ? (
+                          <div className="bg-black/30 border border-white/5 rounded-xl p-4 space-y-3">
                             <div className="flex items-center justify-between">
-                              <span className="text-[9px] font-black text-gray-500 uppercase tracking-widest">Edge Refinement</span>
-
-                              {tryOnMask ? (
-                                <div className="flex items-center gap-1.5 text-blue-400">
-                                  <CheckCircle2 className="w-3 h-3" />
-                                  <span className="text-[9px] font-bold uppercase">Isolated</span>
-                                </div>
-                              ) : (
-                                <button
-                                  onClick={runTryOnIsolation}
-                                  className="text-[9px] font-bold text-gray-400 hover:text-white flex items-center gap-1 bg-white/5 px-2 py-0.5 rounded transition-colors"
-                                >
-                                  <Sparkles className="w-3 h-3" /> Run
-                                </button>
-                              )}
+                              <span className="text-[9px] font-black text-gray-500 uppercase tracking-widest">
+                                Isolation
+                              </span>
+                              <button
+                                onClick={runTryOnIsolation}
+                                className="text-[9px] font-bold text-gray-200 hover:text-white bg-white/5 hover:bg-white/10 px-2.5 py-1 rounded-lg border border-white/10 transition-colors flex items-center gap-1"
+                              >
+                                <Sparkles className="w-3 h-3" />
+                                {tryOnMask ? 'Re-run' : 'Run'}
+                              </button>
                             </div>
 
-                            <div className="flex items-center gap-3 bg-black/20 p-2 rounded-lg border border-white/5">
-                              <span className="text-[10px] text-gray-400 font-bold w-8 text-right">{fringeSize}px</span>
+                            <div className="flex items-center justify-between gap-3 bg-black/20 p-2 rounded-lg border border-white/5">
+                              <span className="text-[10px] text-gray-400 font-bold w-12 text-right">
+                                {fringeSize}px
+                              </span>
                               <input
                                 type="range"
                                 min="0"
@@ -1537,54 +2145,57 @@ const WardrobeStudio = () => {
                                 className="flex-grow h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
                               />
                             </div>
+
+                            <div className="text-[9px] text-gray-500 leading-relaxed">
+                              {tryOnMask ? 'Isolation ready. Switch to Restore to paint back details.' : 'Run isolation to enable Restore tools.'}
+                            </div>
                           </div>
+                        ) : (
+                          <div className="bg-black/30 border border-white/5 rounded-xl p-4 space-y-3">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[9px] font-black text-gray-500 uppercase tracking-widest">
+                                Restore Brush
+                              </span>
+                              <button
+                                onClick={() => setIsBrushActive(!isBrushActive)}
+                                disabled={!tryOnMask}
+                                className={`text-[9px] font-black uppercase tracking-wider px-2.5 py-1 rounded-lg border transition-colors ${!tryOnMask
+                                  ? 'opacity-40 cursor-not-allowed bg-white/5 border-white/10 text-gray-400'
+                                  : isBrushActive
+                                    ? 'bg-blue-600 text-white border-blue-400/30'
+                                    : 'bg-white/5 hover:bg-white/10 text-gray-200 border-white/10'
+                                  }`}
+                              >
+                                {isBrushActive ? 'On' : 'Off'}
+                              </button>
+                            </div>
 
-                          <div className="pt-4 border-t border-white/5 space-y-3">
-                            <div className="flex flex-col w-full gap-2">
-                              <span className="text-[9px] font-black text-gray-500 uppercase tracking-widest leading-none">Restore</span>
-                              <HelpTooltip zone="wardrobe" id="restorationTools">
-                                <div className="w-full flex items-center justify-between gap-1 bg-black/40 rounded-lg p-1 border border-white/10">
-                                  <div className="relative group/history">
-                                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-black border border-gray-700 px-2 py-1 rounded text-[9px] text-gray-300 opacity-0 group-hover/history:opacity-100 pointer-events-none transition-opacity whitespace-nowrap z-50">
-                                      History State: {historyIndex}
-                                    </div>
-                                    <span className="text-xs font-bold text-blue-400 font-mono px-2 select-none bg-blue-900/30 rounded border border-blue-500/30 min-w-[36px] text-center whitespace-nowrap block">
-                                      {historyIndex === -1 ? '0' : historyIndex + 1} / {history.length}
-                                    </span>
-                                  </div>
+                            <div className="grid grid-cols-3 gap-2 items-center">
+                              <button
+                                onClick={handleUndo}
+                                disabled={historyIndex < 0}
+                                className="py-2 rounded-lg bg-white/5 hover:bg-white/10 text-gray-200 border border-white/10 disabled:opacity-40 disabled:hover:bg-white/5 flex items-center justify-center"
+                                title="Undo"
+                              >
+                                <Undo2 className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={handleRedo}
+                                disabled={historyIndex >= history.length - 1}
+                                className="py-2 rounded-lg bg-white/5 hover:bg-white/10 text-gray-200 border border-white/10 disabled:opacity-40 disabled:hover:bg-white/5 flex items-center justify-center"
+                                title="Redo"
+                              >
+                                <Redo2 className="w-4 h-4" />
+                              </button>
 
-                                  <button
-                                    onClick={() => setIsBrushActive(!isBrushActive)}
-                                    className={`p-1.5 rounded transition-all ${isBrushActive
-                                      ? 'bg-blue-600 text-white shadow-[0_0_10px_rgba(37,99,235,0.5)]'
-                                      : 'text-gray-400 hover:text-white hover:bg-white/10'
-                                      }`}
-                                    title="Restore Mask Brush"
-                                  >
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 20a6 6 0 0 0-12 0" /><path d="M12 20v-6" /><path d="M12 14a4 4 0 0 1 4-4V5a4 4 0 0 0-8 0v5a4 4 0 0 1 4 4z" /></svg>
-                                  </button>
-                                  <div className="w-px h-3 bg-white/10 mx-0.5" />
-                                  <button
-                                    onClick={handleUndo}
-                                    disabled={historyIndex < 0}
-                                    className="p-3 rounded hover:bg-white/10 text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent transition-colors group"
-                                  >
-                                    <Undo2 className="w-4 h-4 pointer-events-none" />
-                                  </button>
-                                  <button
-                                    onClick={handleRedo}
-                                    disabled={historyIndex >= history.length - 1}
-                                    className="p-3 rounded hover:bg-white/10 text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent transition-colors group"
-                                  >
-                                    <Redo2 className="w-4 h-4 pointer-events-none" />
-                                  </button>
-                                </div>
-                              </HelpTooltip>
+                              <div className="text-[9px] font-bold text-gray-500 uppercase tracking-widest text-center">
+                                {historyIndex === -1 ? 0 : historyIndex + 1}/{history.length}
+                              </div>
                             </div>
 
                             {isBrushActive && (
-                              <div className="flex items-center gap-3 pl-2 animate-in fade-in slide-in-from-top-1 bg-black/20 p-2 rounded-lg border border-white/5">
-                                <span className="text-[9px] font-bold text-gray-500 w-8 text-right">{brushSize}px</span>
+                              <div className="flex items-center gap-3 bg-black/20 p-2 rounded-lg border border-white/5">
+                                <span className="text-[10px] text-gray-400 font-bold w-12 text-right">{brushSize}px</span>
                                 <input
                                   type="range"
                                   min="1"
@@ -1596,187 +2207,211 @@ const WardrobeStudio = () => {
                                 />
                               </div>
                             )}
+
+                            <div className="text-[9px] text-gray-500 leading-relaxed">
+                              Paint on the image to restore original pixels (requires isolation).
+                            </div>
                           </div>
-                        </>
-                      ) : (
-                        <div className="flex flex-col items-center justify-center py-10 opacity-30 text-center">
-                          <Eraser className="w-8 h-8 mb-2" />
-                          <span className="text-[10px] font-bold uppercase tracking-widest block max-w-[150px] leading-relaxed">Enable "Remove BG" to access tools</span>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* BRANDING & IDENTITY SECTION */}
-                    <div className="p-4 border-t border-white/10 space-y-4">
-                      <div className="flex items-center gap-2">
-                        <Zap className="w-4 h-4 text-[#eab308] fill-[#eab308]" />
-                        <h3 className="text-[10px] font-black uppercase tracking-widest text-[#eab308]">
-                          Branding & Identity
-                        </h3>
+                        )}
                       </div>
+                    ) : (
+                      <div className="space-y-4">
+                        <div className="bg-black/30 border border-white/5 rounded-xl p-4 space-y-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="text-[10px] font-black uppercase tracking-widest text-gray-400 truncate">
+                                Character Sheet (Identity Anchor)
+                              </div>
+                              <div className="text-[9px] text-gray-500 font-bold leading-relaxed">
+                                Optional • Recommended for Turnaround.
+                              </div>
+                            </div>
 
-                      <div className="bg-black/40 border border-white/5 rounded-xl p-4 space-y-4">
-                        <div className="flex items-start gap-4">
-                          <label className="relative group cursor-pointer shrink-0">
-                            <div className="w-16 h-16 rounded-lg border-2 border-dashed border-white/10 group-hover:border-blue-500/50 flex flex-col items-center justify-center transition-all bg-black/20 overflow-hidden">
-                              {brandingLogo ? (
-                                <img src={brandingLogo} className="w-full h-full object-contain" alt="Branding Logo" />
+                            <label className="shrink-0 text-[9px] font-bold text-gray-200 hover:text-white cursor-pointer bg-white/5 hover:bg-white/10 px-2.5 py-1 rounded-lg border border-white/10 transition-colors flex items-center gap-1.5">
+                              <Upload className="w-3.5 h-3.5" /> Upload
+                              <input type="file" className="hidden" accept="image/*" onChange={handleUploadTryOnCharacterSheet} />
+                            </label>
+                          </div>
+
+                          <div className="bg-black/40 border border-white/10 rounded-lg p-2 flex items-center gap-3">
+                            <div className="w-14 h-14 rounded-md border border-white/10 bg-black/30 overflow-hidden flex items-center justify-center shrink-0">
+                              {tryOnCharacterSheet ? (
+                                <img src={tryOnCharacterSheet} className="w-full h-full object-cover" />
                               ) : (
-                                <Upload className="w-6 h-6 text-gray-500 group-hover:text-blue-400" />
+                                <UserPlus className="w-6 h-6 opacity-20" />
                               )}
                             </div>
-                            <input
-                              type="file"
-                              className="hidden"
-                              accept="image/*"
-                              onChange={(e) => {
-                                const file = e.target.files?.[0];
-                                if (file) {
-                                  const reader = new FileReader();
-                                  reader.onload = (ev) => setBrandingLogo(ev.target?.result as string);
-                                  reader.readAsDataURL(file);
-                                }
-                              }}
-                            />
-                            {brandingLogo && (
-                              <button
-                                onClick={(e) => {
-                                  e.preventDefault();
-                                  setBrandingLogo(null);
-                                }}
-                                className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5 shadow-lg hover:bg-red-600 transition-colors"
-                              >
-                                <X className="w-3 h-3" />
-                              </button>
-                            )}
-                          </label>
 
-                          <div className="flex-grow space-y-1">
-                            <span className="text-[9px] font-bold text-gray-500 uppercase tracking-wider">Logo Position</span>
-                            <input
-                              type="text"
-                              value={logoPosition}
-                              onChange={(e) => setLogoPosition(e.target.value)}
-                              placeholder="e.g. Center Chest"
-                              className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white placeholder:text-gray-600 focus:outline-none focus:border-blue-500/50 transition-all font-bold"
-                            />
+                            <div className="min-w-0">
+                              <div className="text-xs text-gray-200 font-semibold leading-tight">
+                                {tryOnCharacterSheet ? 'Loaded.' : 'None loaded.'}
+                              </div>
+                              {tryOnCharacterSheet && (
+                                <button
+                                  onClick={() => setTryOnCharacterSheet(null)}
+                                  className="mt-2 text-[9px] font-bold text-red-400 hover:text-red-300 uppercase tracking-widest"
+                                >
+                                  Remove
+                                </button>
+                              )}
+                            </div>
                           </div>
                         </div>
 
-                        <p className="text-[9px] text-gray-500 leading-relaxed italic">
-                          Upload a PNG logo (transparent background recommended). Specify exact placement for the weaver.
-                        </p>
+                        <div className="bg-black/30 border border-white/5 rounded-xl p-4 space-y-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="text-[10px] font-black uppercase tracking-widest text-gray-400">Output Views</div>
+                            <div className="text-[9px] font-bold text-gray-500 uppercase tracking-widest">
+                              {tryOnOutputMode === 'front' ? '1 image' : '2 images'}
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2">
+                            <button
+                              onClick={() => setTryOnOutputMode('front')}
+                              className={`py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all border ${tryOnOutputMode === 'front'
+                                ? 'bg-blue-600 border-blue-500 text-white'
+                                : 'bg-black/20 border-white/10 text-gray-300 hover:bg-white/5'
+                                }`}
+                            >
+                              Front
+                            </button>
+                            <button
+                              onClick={() => setTryOnOutputMode('turnaround')}
+                              className={`py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all border ${tryOnOutputMode === 'turnaround'
+                                ? 'bg-blue-600 border-blue-500 text-white'
+                                : 'bg-black/20 border-white/10 text-gray-300 hover:bg-white/5'
+                                }`}
+                            >
+                              Turnaround
+                            </button>
+                          </div>
+
+                          <p className="text-[9px] text-gray-500 leading-relaxed">
+                            Turnaround generates two sheets: <span className="text-gray-300 font-bold">Front+Back</span> and <span className="text-gray-300 font-bold">Left+Right</span>.
+                          </p>
+                        </div>
+
+                        <div className="bg-black/20 border border-white/5 rounded-xl p-3 flex items-center justify-between gap-3">
+                          <div className="text-[9px] text-gray-500 font-bold leading-relaxed">
+                            Upload Sketch/Costume + Branding in <span className="text-gray-300">Costume Designer</span>.
+                          </div>
+                          <button
+                            onClick={() => setActiveTab('designer')}
+                            className="shrink-0 bg-white/5 hover:bg-white/10 text-gray-200 px-3 py-2 rounded-lg border border-white/10 text-[9px] font-black uppercase tracking-wider"
+                          >
+                            Open
+                          </button>
+                        </div>
                       </div>
-                    </div>
+                    )}
+                  </div>
 
-                    <div className="p-4 border-t border-white/10 bg-[#09090b]/50 shrink-0 space-y-3">
-                      <button onClick={handleAddToCast} className="w-full bg-emerald-500/10 hover:bg-emerald-500 text-emerald-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-emerald-500/20 hover:shadow-[0_0_15px_rgba(16,185,129,0.4)] text-[10px] font-black uppercase tracking-wider" title="Add to Session Cast">
-                        <UserPlus className="w-4 h-4" /> Add to Cast
+                  <div className="p-4 border-t border-white/10 bg-[#09090b]/50 shrink-0 space-y-3">
+                    <button onClick={handleAddToCast} className="w-full bg-emerald-500/10 hover:bg-emerald-500 text-emerald-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-emerald-500/20 hover:shadow-[0_0_15px_rgba(16,185,129,0.4)] text-[10px] font-black uppercase tracking-wider" title="Add to Session Cast">
+                      <UserPlus className="w-4 h-4" /> Add to Cast
+                    </button>
+
+                    <button onClick={handleOpenSaveModal} className="w-full bg-purple-500/10 hover:bg-purple-500 text-purple-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-purple-500/20 hover:shadow-[0_0_15px_rgba(168,85,247,0.4)] text-[10px] font-black uppercase tracking-wider" title="Save to Actor Library">
+                      <FolderPlus className="w-4 h-4" /> Save to Library
+                    </button>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <button onClick={() => downloadImage(processedTryOnUrl || fittedImage!, `fitted-${selectedCharacter?.name || 'character'}.png`)} className="w-full bg-blue-600/10 hover:bg-blue-600 text-blue-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-blue-500/20 hover:shadow-[0_0_15px_rgba(37,99,235,0.4)] text-[10px] font-black uppercase tracking-wider" title="Download">
+                        <Download className="w-4 h-4" /> Save
                       </button>
-
-                      <button onClick={handleOpenSaveModal} className="w-full bg-purple-500/10 hover:bg-purple-500 text-purple-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-purple-500/20 hover:shadow-[0_0_15px_rgba(168,85,247,0.4)] text-[10px] font-black uppercase tracking-wider" title="Save to Actor Library">
-                        <FolderPlus className="w-4 h-4" /> Save to Library
+                      <button onClick={() => {
+                        updateState({
+                          fittedImage: null,
+                          tryOnMask: null,
+                          restorationLayer: null,
+                          removeBg: false,
+                          history: [],
+                          historyIndex: -1,
+                          processedTryOnUrl: null
+                        });
+                      }} className="w-full bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-red-500/20 hover:shadow-[0_0_15px_rgba(239,68,68,0.4)] text-[10px] font-black uppercase tracking-wider" title="Clear/Discard">
+                        <X className="w-4 h-4" /> Clear
                       </button>
-
-                      <div className="grid grid-cols-2 gap-3">
-                        <button onClick={() => downloadImage(processedTryOnUrl || fittedImage!, `fitted-${selectedCharacter?.name || 'character'}.png`)} className="w-full bg-blue-600/10 hover:bg-blue-600 text-blue-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-blue-500/20 hover:shadow-[0_0_15px_rgba(37,99,235,0.4)] text-[10px] font-black uppercase tracking-wider" title="Download">
-                          <Download className="w-4 h-4" /> Save
-                        </button>
-                        <button onClick={() => {
-                          updateState({
-                            fittedImage: null,
-                            tryOnMask: null,
-                            restorationLayer: null,
-                            removeBg: false,
-                            history: [],
-                            historyIndex: -1,
-                            processedTryOnUrl: null
-                          });
-                        }} className="w-full bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-red-500/20 hover:shadow-[0_0_15px_rgba(239,68,68,0.4)] text-[10px] font-black uppercase tracking-wider" title="Clear/Discard">
-                          <X className="w-4 h-4" /> Clear
-                        </button>
-                      </div>
                     </div>
                   </div>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* DELETE CONFIRMATION MODAL */}
-      <AnimatePresence>
-        {
-          confirmDelete && (
-            <div className="fixed inset-0 z-[3000] bg-black/80 backdrop-blur-sm flex items-center justify-center p-8 animate-in fade-in duration-200">
-              <div className="bg-[#18181b] border border-gray-700 p-6 rounded-2xl shadow-2xl max-w-sm w-full relative overflow-hidden">
-                <h3 className="text-lg font-black text-white uppercase tracking-wider mb-2">Delete Costume?</h3>
-                <p className="text-sm text-gray-400 mb-6">
-                  Are you sure you want to delete <span className="text-white font-bold">{confirmDelete.name}</span>? This cannot be undone.
-                </p>
-                <div className="flex justify-end gap-3">
-                  <button
-                    onClick={() => setConfirmDelete(null)}
-                    className="px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider text-gray-400 hover:text-white hover:bg-gray-800 transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={executeDelete}
-                    className="px-4 py-2 rounded-lg text-xs font-black uppercase tracking-wider bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-900/20"
-                  >
-                    Confirm
-                  </button>
                 </div>
               </div>
             </div>
-          )
-        }
-      </AnimatePresence>
+          )}
 
-      {/* SAVE TO LIBRARY MODAL (Refactored) */}
-      <ActorSaveModal
-        isOpen={showSaveModal}
-        initialName={newActorName}
-        onClose={() => setShowSaveModal(false)}
-        onSave={(name, category) => {
-          setNewActorName(name);
-          setSaveCategory(category);
-          confirmSaveToLibrary(name, category);
-        }}
-        backgrounds={{
-          realism: styleRealism,
-          animation: styleAnimation,
-          illustration: styleIllustration,
-          scifi: styleScifi
-        }}
-      />
-      <ConfirmDialog
-        isOpen={!!confirmDelete}
-        onClose={() => setConfirmDelete(null)}
-        onConfirm={executeDelete}
-        title="Delete Costume?"
-        message={confirmDelete ? `Are you sure you want to delete ${confirmDelete.name}? This action cannot be undone.` : ""}
-        confirmText="Delete"
-        cancelText="Cancel"
-        variant="danger"
-      />
+          {/* DELETE CONFIRMATION MODAL */}
+          <AnimatePresence>
+            {confirmDelete && (
+              <div className="fixed inset-0 z-[3000] bg-black/80 backdrop-blur-sm flex items-center justify-center p-8 animate-in fade-in duration-200">
+                <div className="bg-[#18181b] border border-gray-700 p-6 rounded-2xl shadow-2xl max-w-sm w-full relative overflow-hidden">
+                  <h3 className="text-lg font-black text-white uppercase tracking-wider mb-2">Delete Costume?</h3>
+                  <p className="text-sm text-gray-400 mb-6">
+                    Are you sure you want to delete <span className="text-white font-bold">{confirmDelete.name}</span>? This cannot be undone.
+                  </p>
+                  <div className="flex justify-end gap-3">
+                    <button
+                      onClick={() => setConfirmDelete(null)}
+                      className="px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider text-gray-400 hover:text-white hover:bg-gray-800 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={executeDelete}
+                      className="px-4 py-2 rounded-lg text-xs font-black uppercase tracking-wider bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-900/20"
+                    >
+                      Confirm
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </AnimatePresence>
 
-      {/* TOAST OVERLAY */}
-      <AnimatePresence>
-        {notification && (
-          <motion.div
-            initial={{ opacity: 0, y: 50 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 20 }}
-            className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-[#09090b] border border-yellow-500/50 text-white px-6 py-3 rounded-full shadow-2xl backdrop-blur-xl z-[5000] flex items-center gap-3"
-          >
-            <CheckCircle2 className="w-5 h-5 text-yellow-500" />
-            <span className="text-xs font-bold uppercase tracking-widest">{notification}</span>
-          </motion.div>
-        )}
-      </AnimatePresence>
+          {/* SAVE TO LIBRARY MODAL (Refactored) */}
+          <ActorSaveModal
+            isOpen={showSaveModal}
+            initialName={newActorName}
+            onClose={() => setShowSaveModal(false)}
+            onSave={(name, category) => {
+              setNewActorName(name);
+              setSaveCategory(category);
+              confirmSaveToLibrary(name, category);
+            }}
+            backgrounds={{
+              realism: styleRealism,
+              animation: styleAnimation,
+              illustration: styleIllustration,
+              scifi: styleScifi
+            }}
+          />
+          <ConfirmDialog
+            isOpen={!!confirmDelete}
+            onClose={() => setConfirmDelete(null)}
+            onConfirm={executeDelete}
+            title="Delete Costume?"
+            message={confirmDelete ? `Are you sure you want to delete ${confirmDelete.name}? This action cannot be undone.` : ""}
+            confirmText="Delete"
+            cancelText="Cancel"
+            variant="danger"
+          />
+
+          {/* TOAST OVERLAY */}
+          <AnimatePresence>
+            {notification && (
+              <motion.div
+                initial={{ opacity: 0, y: 50 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 20 }}
+                className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-[#09090b] border border-yellow-500/50 text-white px-6 py-3 rounded-full shadow-2xl backdrop-blur-xl z-[5000] flex items-center gap-3"
+              >
+                <CheckCircle2 className="w-5 h-5 text-yellow-500" />
+                <span className="text-xs font-bold uppercase tracking-widest">{notification}</span>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      </div>
     </div>
   );
 };
