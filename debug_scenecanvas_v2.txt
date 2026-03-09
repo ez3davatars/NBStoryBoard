@@ -1,2 +1,0 @@
-Unclosed div starting at line 1407
-Unclosed div starting at line 1997

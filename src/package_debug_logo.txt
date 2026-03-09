@@ -1,7 +1,0 @@
-  ΓÇó electron-builder  version=26.0.12 os=10.0.26200
-  ΓÇó loaded configuration  file=D:\NanobananaProStudio\V8\src\electron-builder.fixed.yml
-  Γ¿» Cannot find package.json in the D:\NanobananaProStudio\V8\src  failedTask=build stackTrace=Error: Cannot find package.json in the D:\NanobananaProStudio\V8\src
-    at Packager.readProjectMetadataIfTwoPackageStructureOrPrepacked (D:\NanobananaProStudio\V8\node_modules\app-builder-lib\src\packager.ts:459:11)
-    at Packager.validateConfig (D:\NanobananaProStudio\V8\node_modules\app-builder-lib\src\packager.ts:375:24)
-    at Packager.build (D:\NanobananaProStudio\V8\node_modules\app-builder-lib\src\packager.ts:392:5)
-    at executeFinally (D:\NanobananaProStudio\V8\node_modules\builder-util\src\promise.ts:12:14)
