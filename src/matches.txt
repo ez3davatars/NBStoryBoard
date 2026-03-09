@@ -1,3 +1,30 @@
-
-renderer\App.tsx:10:  FlipHorizontal, FlipVertical, RotateCcw, Link2, Package
-
+284: * Ensures that all actors with groundingEnabled are automatically re-snapped
+318: // We intentionally EXCLUDE 'token.depth' to prevent infinite loops.
+320: .map(t => `${t.id}:${t.x}:${t.y}:${t.groundingEnabled}:${t.anchorY}:${(t as any).groundingNonce ?? 0}`)
+328: if ((token as any).groundingEnabled === false) return;
+347: if (Math.abs(clamped - (token.depth || 0)) > 0.01) {
+385: if (token.depth === undefined) continue;
+388: if ((token as any).hasConfirmedPlacement === false) continue;
+432: const tokenDepth = Math.min(1, Math.max(0, (token.depth as number) + bias));
+1476: updates.hasConfirmedPlacement = true;
+1516: const handleDrop = async (e: React.DragEvent) => {
+1522: dispatch({ type: 'ADD_LOG', payload: { message: `handleDrop failed: No viewport rect found.`, type: 'error' } });
+1531: console.log(`[handleDrop] Rejected: Drop coordinates (${x}, ${y}) outside camera gate bounds (${rect.width}x${rect.height})`);
+1532: dispatch({ type: 'ADD_LOG', payload: { message: `handleDrop rejected: Dropped outside camera gate.`, type: 'info' } });
+1543: console.log(`[handleDrop] Inside gate. castId: ${castId}, raw length: ${raw?.length || 0}`);
+1544: dispatch({ type: 'ADD_LOG', payload: { message: `handleDrop triggered inside gate. castId: ${castId}, raw length: ${raw?.length || 0}`, type: 'info' } });
+1550: console.log(`[handleDrop] Looked up castId ${castId}. Found item? ${!!item}`);
+1555: console.log(`[handleDrop] Falling back to JSON parsing payload of length ${raw.length}`);
+1558: console.error(`[handleDrop] JSON parse error:`, err);
+1559: dispatch({ type: 'ADD_LOG', payload: { message: `handleDrop parse error: ${err.message}`, type: 'error' } });
+1589: groundingEnabled: true,
+1600: hasConfirmedPlacement: false,
+1611: dispatch({ type: 'ADD_LOG', payload: { message: `handleDrop parse error: ${err.message}`, type: 'error' } });
+1753: 'groundingEnabled' in (updates as any)
+1755: fullUpdates.hasConfirmedPlacement = true;
+2468: groundingEnabled: false
+2513: e.dataTransfer.setData('application/x-cast-id', c.id);
+2819: onDrop={handleDrop}
+2832: onDrop={handleDrop}
+2903: if (token.depth === undefined) return null;
+2904: const dRaw = token.depth * 255;

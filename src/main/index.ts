@@ -1,7 +1,9 @@
 import electron from 'electron';
-const { app, shell, BrowserWindow } = electron;
+const { app, shell, BrowserWindow, ipcMain, dialog } = electron;
 import { join } from 'path';
 import { electronApp, optimizer, is } from '@electron-toolkit/utils';
+
+let isQuitting = false;
 
 function createWindow(): void {
   // Create the browser window.
@@ -21,6 +23,24 @@ function createWindow(): void {
 
   mainWindow.on('ready-to-show', () => {
     mainWindow.show();
+  });
+
+  mainWindow.on('close', (e) => {
+    if (isQuitting) return; // Allow natural close
+
+    // Tell renderer that app is trying to close, so it shows the custom UI prompt.
+    e.preventDefault();
+    mainWindow.webContents.send('request-app-close');
+  });
+
+  // Listen for the renderer to say it has finished cleanup/saving
+  ipcMain.on('confirm-discard-session', () => {
+    isQuitting = true;
+    app.quit();
+  });
+  ipcMain.on('confirm-close', () => {
+    isQuitting = true;
+    app.quit();
   });
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -82,7 +102,6 @@ app.on('window-all-closed', () => {
 });
 
 // Native File System Handlers
-import { ipcMain, dialog } from 'electron';
 import { spawn } from 'child_process';
 import * as fs from 'fs/promises';
 import * as path from 'path';
@@ -97,6 +116,22 @@ ipcMain.handle('dialog:openDirectory', async () => {
   } else {
     return filePaths[0];
   }
+});
+
+ipcMain.handle('dialog:showSaveDialog', async (_event, options) => {
+  const result = await dialog.showSaveDialog(options);
+  if (result.canceled) {
+    return null;
+  }
+  return result.filePath;
+});
+
+ipcMain.handle('dialog:showOpenDialog', async (_event, options) => {
+  const result = await dialog.showOpenDialog(options);
+  if (result.canceled) {
+    return null;
+  }
+  return result.filePaths;
 });
 
 ipcMain.handle('file:read', async (_event, filePath) => {
@@ -138,6 +173,18 @@ ipcMain.handle('file:exists', async (_event, filePath) => {
     await fs.access(filePath);
     return true;
   } catch {
+    return false;
+  }
+});
+
+ipcMain.handle('file:delete', async (_event, filePath) => {
+  try {
+    await fs.unlink(filePath);
+    return true;
+  } catch (error: any) {
+    if (error.code !== 'ENOENT') {
+      console.error("Delete Error:", error);
+    }
     return false;
   }
 });

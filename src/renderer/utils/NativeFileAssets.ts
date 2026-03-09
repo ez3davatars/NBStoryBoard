@@ -89,4 +89,34 @@ export const nativeWriteFile = async (fullPath: string, file: File | Blob): Prom
     }
 };
 
+/**
+ * Safely fetches a Blob from either a web URL, data URL, or a local file path.
+ * Local paths will automatically be routed through the Native file system reader.
+ */
+export const safeFetchBlob = async (urlOrPath: string): Promise<Blob> => {
+    if (urlOrPath.startsWith('http') || urlOrPath.startsWith('data:') || urlOrPath.startsWith('blob:')) {
+        const response = await fetch(urlOrPath);
+        return await response.blob();
+    }
 
+    let cleanPath = urlOrPath;
+    if (cleanPath.startsWith('file://')) {
+        cleanPath = decodeURI(cleanPath.replace(/^file:\/\/\/?/, ''));
+        // Re-add forward slash for unix if the path doesn't have a drive letter.
+        // E.g. file:///Users/... -> Users/... -> /Users/... but Windows C:/ works as is if C:/...
+        if (!cleanPath.match(/^[a-zA-Z]:/)) {
+            cleanPath = '/' + cleanPath;
+        }
+    }
+
+    // Attempt local file fetch via native bridge
+    if (isNativeParams()) {
+        const dataUrl = await nativeReadFile(cleanPath);
+        if (dataUrl && dataUrl.startsWith('data:')) {
+            const response = await fetch(dataUrl);
+            return await response.blob();
+        }
+    }
+
+    throw new Error(`Cannot safely fetch blob from path: ${urlOrPath}`);
+};

@@ -57,7 +57,7 @@ export const GeminiService = {
     apiKey: string,
     model: string,
     referenceImages: { url: string; label: string }[] = [],
-    options: { aspectRatio?: string } = {}
+    options: { aspectRatio?: string, imageSize?: '1K' | '2K' | '4K', thinkingLevel?: boolean, googleGrounding?: boolean } = {}
   ): Promise<string> {
 
     if (!apiKey) {
@@ -95,18 +95,40 @@ export const GeminiService = {
       // Inject prompt last for better "instruction following" on the visual context
       contentsParts.push({ text: prompt });
 
+      const requestBody: any = {
+        contents: [{ parts: contentsParts }],
+        generationConfig: {
+          responseModalities: ["IMAGE"],
+          imageConfig: {
+            aspectRatio: options.aspectRatio || "16:9",
+            ...(options.imageSize && { imageSize: options.imageSize })
+          }
+        },
+        ...((options.googleGrounding !== false && referenceImages.length === 0) ? {
+          tools: [
+            {
+              googleSearch: {
+                searchTypes: {
+                  webSearch: {},
+                  imageSearch: {}
+                }
+              }
+            }
+          ]
+        } : {})
+      };
+
+      if (options.thinkingLevel && model === 'gemini-3.1-flash-image-preview') {
+        // According to docs, thinkingLevel can be 'high' or 'minimal'
+        requestBody.generationConfig.thinkingConfig = {
+          thinkingLevel: 'High'
+        };
+      }
+
       const response = await fetch(`${baseUrl}?key=${apiKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: contentsParts }],
-          generationConfig: {
-            responseModalities: ["IMAGE"],
-            imageConfig: {
-              aspectRatio: options.aspectRatio || "16:9"
-            }
-          }
-        })
+        body: JSON.stringify(requestBody)
       });
 
       if (!response.ok) {
@@ -355,7 +377,7 @@ Hard constraints:
 
   async generateText(prompt: string, apiKey: string): Promise<string> {
     if (!apiKey) throw new Error("No API Key provided.");
-    const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent`;
+    const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent`;
 
     const response = await fetch(`${baseUrl}?key=${apiKey}`, {
       method: 'POST',
@@ -405,7 +427,7 @@ Hard constraints:
     }
   },
 
-  async generateVeoFivePartDraft(concept: string, apiKey: string, optionalContext?: string): Promise<VeoFivePartDraft & { audio?: VeoAudioBlock }> {
+  async generateVeoFivePartDraft(concept: string, apiKey: string, optionalContext?: string): Promise<VeoFivePartDraft & { audio?: VeoAudioBlock, negativePrompt?: string }> {
     if (!apiKey) {
       console.warn("No API Key. Returning mocked Veo prompt.");
       await new Promise(r => setTimeout(r, 1000));
@@ -415,6 +437,7 @@ Hard constraints:
         action: "The robot slowly turns its head towards the camera.",
         context: "Rain is pouring down, reflecting neon signs.",
         styleAmbiance: "Cyberpunk aesthetic, moody, dystopian.",
+        negativePrompt: "morphing, extra limbs, extra objects, unwanted props, text, watermarks, deformed faces",
         audio: {
           sfx: "heavy rain falling, distant siren"
         }
@@ -432,9 +455,10 @@ Output a JSON object exactly matching this structure:
 {
   "cinematography": "Camera angle, movement, focal length, lighting style",
   "subject": "Detailed description of the main subject/characters",
-  "action": "Specific movement and dynamics",
+  "action": "Specific movement and dynamics. IMPORTANT: If the camera pans away and returns, explicitly state that the prop remains identical to enforce object permanence.",
   "context": "Background, environment, and setting elements",
   "styleAmbiance": "Overall visual style, mood, color palette, rendering engine details",
+  "negativePrompt": "MANDATORY: A heavy, comma-separated list of extreme negative constraints to strictly prevent: morphing, changing props into different objects, mutating subjects, unwanted extra props, extra limbs, bad anatomy, deformed hands, missing hands, or style drift. CRITICAL: Include 'prop substitution, loss of object permanence, hallucinating new props'. Be very aggressive.",
   "audio": {
     "dialogue": "Spoken dialogue if requested",
     "sfx": "Sound effects if requested",

@@ -47,6 +47,15 @@ When you save an actor, the system uses a **Native File Structure**:
 
 ---
 
+### AI Generation Settings
+In the **Settings** menu (Gear icon in the top right), you can fine-tune how the AI generates images across the studio:
+*   **Active Engine:** Select your preferred generation model. We recommend **Gemini 3.1 Flash (Image)** for the best balance of speed and prompt reasoning.
+*   **Image Resolution (Gemini 3.1):** Choose between 1K (Fastest), 2K (High Quality), and 4K (Ultra HD - Slow).
+*   **Thinking Mode (Gemini 3.1):** Enable this to improve prompt adherence and complex image generation at the cost of generational speed.
+*   **Google Image Search Grounding:** Enable this to allow the AI to ground its outputs using Google Search, increasing accuracy for real-world references and props.
+
+---
+
 ## 3. The Studio Workflow
 
 ### Phase 1: CAST (Character Generation)
@@ -148,16 +157,22 @@ Once a character is fitted:
 
 ### Phase 5: STAGE (Scene Composition)
 **The "Blocking Stage"**
-Compose your shot.
+Compose your shot by dragging your generated actors and props onto the canvas.
 
-*   **Tokens:** Drag Actors and Props onto the 16:9 Canvas.
-*   **Controls:**
-    *   **Position/Scale:** Arrange elements to frame the narrative.
-    *   **Z-Depth:** Reorder layers in the sidebar to decide who is in front.
+#### Token Properties vs. Actor Intelligence
+When an actor is on stage, you control them via two distinct panels:
+*   **Token Properties (The Visuals):** Controls *where* the actor sits on the canvas (X/Y position, Scale/Zoom, Rotation) and *how they overlap* with other objects (Z-index layering and depth-based occlusion masking). Think of this as your layout engine.
+*   **Actor Intelligence (The Semantic DNA):** Controls *what* the actor is doing. This panel manages the textual "Prompt DNA" sent to the AI.
+    *   **Auto Analyze:** Inspects the selected character and writes a highly specific prompt describing their pose, action, and lighting.
+    *   **Grounding:** Anchors the actor vertically to the detected 3D floor plane so they don't look like they are floating.
+    *   **Anchor Depth:** Sets the textual category (Fore/Mid/Back) injected into the prompt, ensuring the AI understands the scale of the scene.
+
+#### Stage Controls & Tools
+*   **Z-Depth Sorting:** Reorder layers in the sidebar to decide who is in front visually.
 *   **Annotations:**
     *   **Note Tool:** Add text guidance for the AI (e.g., "Looking at explosion").
     *   **Arrow Tool:** Draw sightlines or movement paths.
-*   **Scene Generator:** Describe the setting (e.g., "Mars Base Interior") and generate a background plate.
+*   **Scene Generator (Anchor Ref):** Describe the setting (e.g., "Mars Base Interior") and generate a background plate to serve as the environment.
 
 ### Phase 5b: The "Reference Stack" Workflow (Advanced)
 **For precise directing without using canvas tokens.**

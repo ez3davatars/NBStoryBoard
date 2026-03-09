@@ -7,6 +7,7 @@ export interface VeoFivePartDraft {
     action?: string;
     context?: string;
     styleAmbiance?: string;
+    negativePrompt?: string;
 }
 
 export interface VeoAudioBlock {

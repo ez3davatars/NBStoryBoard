@@ -37,7 +37,16 @@ interface ElectronAPI {
   writeFile: (path: string, buffer: ArrayBuffer) => Promise<boolean>;
   exists: (path: string) => Promise<boolean>;
   listFiles: (path: string) => Promise<string[]>;
+  createDir: (path: string) => Promise<boolean>;
   joinPath: (...args: string[]) => Promise<string>;
+  hashFile: (path: string) => Promise<string | null>;
+  onRequestDiscardSession?: (callback: () => void) => void;
+  confirmDiscardSession?: () => void;
+  onRequestAppClose?: (callback: () => void) => void;
+  confirmClose?: () => void;
+  showSaveDialog?: (options: any) => Promise<string | null>;
+  showOpenDialog?: (options: any) => Promise<string[] | null>;
+  deleteFile?: (path: string) => Promise<boolean>;
 }
 
 interface Window {

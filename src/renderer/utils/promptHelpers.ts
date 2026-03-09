@@ -1,7 +1,7 @@
 import type { DirectorSettings, ReferenceSlot, StageToken } from '../context/AppContext';
 import { computeDepthScore } from './spatialHelpers';
 
-export const SCENE_LOCK_NEGATIVE_TOKENS = "scene alteration, background change, lighting shift, camera angle change, style deviation, new composition, structural change, reimagined scene, time of day shift, seasonal change, architectural alteration, furniture movement, lens flares, color grading shift";
+export const SCENE_LOCK_NEGATIVE_TOKENS = "scene alteration, background change, lighting shift, camera angle change, style deviation, new composition, structural change, reimagined scene, time of day shift, seasonal change, architectural alteration, furniture movement, lens flares, color grading shift, original studio background, white backgrounds showing through gaps";
 
 export const buildMasterStyleKeywords = (director: DirectorSettings): string[] => {
   const tech: string[] = [];
@@ -14,7 +14,7 @@ export const buildMasterStyleKeywords = (director: DirectorSettings): string[] =
       'subsurface scattering',
       'soft volumetric lighting',
       'expressive features',
-      '8k octane render',
+      '4k octane render',
       'smooth textures'
     );
   }
@@ -43,6 +43,8 @@ export const getActiveReferenceSlots = (slots: ReferenceSlot[]) => {
     .filter(s => !!s.url && s.active)
     .sort((a, b) => a.index - b.index);
 };
+
+import { LIGHTING_PRESETS, CAMERA_PRESETS } from '../../prompts/portraitPrompts';
 
 export const compileV3DirectorPrompt = (director: DirectorSettings, slots: ReferenceSlot[], tokens: StageToken[] = []): string => {
   const activeRefs = getActiveReferenceSlots(slots);
@@ -98,17 +100,34 @@ export const compileV3DirectorPrompt = (director: DirectorSettings, slots: Refer
     }
   }
 
+  // RESOLVE PRESETS for Lighting and Camera
+  const resolvedLighting = LIGHTING_PRESETS.find((p: any) => p.key === director.lighting)?.prompt || director.lighting?.trim() || '';
+  const resolvedCamera = CAMERA_PRESETS.find((p: any) => p.key === director.camera)?.prompt || director.camera?.trim() || '';
+
   // 2.5) Actor Intelligence (Pose, Lighting interaction per actor)
   tokens.forEach(token => {
     let intelligence = token.intelligence || '';
     if (token.spatialDescriptor) {
-      // Authority #4: Lighting rules derived from semantic layers
+      // Authority #4: Lighting rules derived from semantic layers (with preset overrides)
       let spatialLighting = '';
-      if (token.spatialDescriptor.depthLayer === 'foreground') spatialLighting = 'higher contrast, sharper shadows';
-      if (token.spatialDescriptor.depthLayer === 'midground') spatialLighting = 'neutral lighting';
-      if (token.spatialDescriptor.depthLayer === 'background') spatialLighting = 'softer lighting, lower contrast';
+      if (resolvedLighting) {
+        spatialLighting = `Fully lit entirely by: ${resolvedLighting}`;
+      } else {
+        // Fallback to spatial ambient lighting matching the environment
+        if (token.spatialDescriptor.depthLayer === 'foreground') spatialLighting = 'Match ambient lighting color and direction from Environment. Higher contrast, sharper shadows.';
+        else if (token.spatialDescriptor.depthLayer === 'midground') spatialLighting = 'Match ambient lighting color and direction from Environment. Neutral contrast.';
+        else if (token.spatialDescriptor.depthLayer === 'background') spatialLighting = 'Match ambient lighting color and direction from Environment. Softer lighting, lower contrast.';
+      }
 
       intelligence += ` (STAGING: ${token.spatialDescriptor.depthLayer}. LIGHTING: ${spatialLighting})`;
+    }
+
+    // 2.6) Occlusion Directives
+    if (token.occlusionMode === 'front') {
+      intelligence += ` (OCCLUSION: FORCE FRONT - Render this actor in front of all environment/background objects).`;
+    } else if (token.occlusionBias && token.occlusionBias !== 0) {
+      const direction = token.occlusionBias > 0 ? 'PUSHED BACK (deeper into scene)' : 'PULLED FORWARD (closer to camera)';
+      intelligence += ` (OCCLUSION BIAS: ${direction} relative to anchor depth).`;
     }
 
     if (intelligence) {
@@ -134,7 +153,7 @@ export const compileV3DirectorPrompt = (director: DirectorSettings, slots: Refer
   }
 
   // 5) Cinematography
-  const cinema = [director.lighting, director.camera, director.filmStock].map(s => s.trim()).filter(Boolean);
+  const cinema = [resolvedLighting, resolvedCamera, director.filmStock?.trim()].filter(Boolean);
   if (cinema.length > 0) segments.push(`Cinematography: ${cinema.join(', ')}.`);
 
   // 6) Reference Context
@@ -166,7 +185,7 @@ export const compileV3DirectorPrompt = (director: DirectorSettings, slots: Refer
     : '';
   const sceneLockNegs = director.sceneLock ? SCENE_LOCK_NEGATIVE_TOKENS : '';
   const neg = mergeNegatives(director.negativePrompt || '', safetyNegs, markerNegs, sceneLockNegs);
-  if (neg.trim()) out += ` --no ${neg.trim()}`;
+  if (neg.trim()) out += `\n\nNEGATIVE CONSTRAINTS (CRITICAL - DO NOT GENERATE): ${neg.trim()}`;
 
   return out.trim();
 };
@@ -193,8 +212,8 @@ export const buildContinuityLockBlock = (opts: ContinuityLockOptions = {}): stri
   if (opts.lockLighting) lines.push('- Keep lighting direction, exposure, and color temperature consistent.');
   if (opts.lockLens) lines.push('- Keep camera/lens language consistent unless explicitly instructed.');
   if (opts.lockStyle) lines.push('- Keep visual style and color palette consistent. No style drift.');
-  if (opts.noExtraObjects) lines.push('- Do NOT add extra objects, text, watermarks, logos, or random people.');
-  if (opts.noMorph) lines.push('- Do NOT duplicate limbs/heads, do NOT change anatomy, do NOT change clothing unexpectedly.');
+  if (opts.noExtraObjects) lines.push('- Do NOT add extra objects, text, watermarks, logos, or random people. MAINTAIN PERFECT OBJECT PERMANENCE: If a prop leaves the camera view and re-enters, it must remain completely identical. NO PROP SUBSTITUTION.');
+  if (opts.noMorph) lines.push('- Do NOT duplicate limbs/heads, do NOT change anatomy, do NOT change clothing unexpectedly. NO HALLUCINATIONS of existing objects.');
   return lines.join('\n');
 };
 

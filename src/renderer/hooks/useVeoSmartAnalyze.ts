@@ -103,7 +103,7 @@ export function useVeoSmartAnalyze() {
             if (!apiKey) throw new Error("API Key required for Smart Analyze");
             let spec: any;
             try {
-                spec = await GeminiService.analyzeMultiFrameJson(prompt, apiKey, model || 'gemini-2.0-flash', frames);
+                spec = await GeminiService.analyzeMultiFrameJson(prompt, apiKey, model || 'gemini-2.5-flash', frames);
             } catch (jsonErr) {
                 throw new Error("Failed to extract Scene Bibles. Please retry.");
             }

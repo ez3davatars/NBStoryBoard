@@ -116,7 +116,8 @@ const optimizer = {
     });
   }
 };
-const { app, shell, BrowserWindow } = electron;
+const { app, shell, BrowserWindow, ipcMain, dialog } = electron;
+let isQuitting = false;
 function createWindow() {
   const mainWindow = new BrowserWindow({
     width: 1440,
@@ -133,6 +134,19 @@ function createWindow() {
   });
   mainWindow.on("ready-to-show", () => {
     mainWindow.show();
+  });
+  mainWindow.on("close", (e) => {
+    if (isQuitting) return;
+    e.preventDefault();
+    mainWindow.webContents.send("request-app-close");
+  });
+  ipcMain.on("confirm-discard-session", () => {
+    isQuitting = true;
+    app.quit();
+  });
+  ipcMain.on("confirm-close", () => {
+    isQuitting = true;
+    app.quit();
   });
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url);
@@ -169,8 +183,8 @@ app.on("window-all-closed", () => {
     app.quit();
   }
 });
-electron.ipcMain.handle("dialog:openDirectory", async () => {
-  const { canceled, filePaths } = await electron.dialog.showOpenDialog({
+ipcMain.handle("dialog:openDirectory", async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
     properties: ["openDirectory"]
   });
   if (canceled) {
@@ -179,7 +193,21 @@ electron.ipcMain.handle("dialog:openDirectory", async () => {
     return filePaths[0];
   }
 });
-electron.ipcMain.handle("file:read", async (_event, filePath) => {
+ipcMain.handle("dialog:showSaveDialog", async (_event, options) => {
+  const result = await dialog.showSaveDialog(options);
+  if (result.canceled) {
+    return null;
+  }
+  return result.filePath;
+});
+ipcMain.handle("dialog:showOpenDialog", async (_event, options) => {
+  const result = await dialog.showOpenDialog(options);
+  if (result.canceled) {
+    return null;
+  }
+  return result.filePaths;
+});
+ipcMain.handle("file:read", async (_event, filePath) => {
   try {
     const content = await fs__namespace.readFile(filePath);
     return content.toString("base64");
@@ -188,7 +216,7 @@ electron.ipcMain.handle("file:read", async (_event, filePath) => {
     return null;
   }
 });
-electron.ipcMain.handle("file:write", async (_event, filePath, buffer) => {
+ipcMain.handle("file:write", async (_event, filePath, buffer) => {
   try {
     const dirname = path__namespace.dirname(filePath);
     await fs__namespace.mkdir(dirname, { recursive: true });
@@ -199,7 +227,7 @@ electron.ipcMain.handle("file:write", async (_event, filePath, buffer) => {
     return false;
   }
 });
-electron.ipcMain.handle("dir:create", async (_event, dirPath) => {
+ipcMain.handle("dir:create", async (_event, dirPath) => {
   try {
     await fs__namespace.mkdir(dirPath, { recursive: true });
     return true;
@@ -208,7 +236,7 @@ electron.ipcMain.handle("dir:create", async (_event, dirPath) => {
     return false;
   }
 });
-electron.ipcMain.handle("file:exists", async (_event, filePath) => {
+ipcMain.handle("file:exists", async (_event, filePath) => {
   try {
     await fs__namespace.access(filePath);
     return true;
@@ -216,7 +244,18 @@ electron.ipcMain.handle("file:exists", async (_event, filePath) => {
     return false;
   }
 });
-electron.ipcMain.handle("file:list", async (_event, folderPath) => {
+ipcMain.handle("file:delete", async (_event, filePath) => {
+  try {
+    await fs__namespace.unlink(filePath);
+    return true;
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      console.error("Delete Error:", error);
+    }
+    return false;
+  }
+});
+ipcMain.handle("file:list", async (_event, folderPath) => {
   try {
     const entries = await fs__namespace.readdir(folderPath, { withFileTypes: true });
     return entries.filter((e) => e.isFile() && /\.(png|jpg|jpeg)$/i.test(e.name)).map((e) => e.name);
@@ -224,10 +263,10 @@ electron.ipcMain.handle("file:list", async (_event, folderPath) => {
     return [];
   }
 });
-electron.ipcMain.handle("path:join", async (_event, ...args) => {
+ipcMain.handle("path:join", async (_event, ...args) => {
   return path__namespace.join(...args);
 });
-electron.ipcMain.handle("file:hash", async (_event, filePath) => {
+ipcMain.handle("file:hash", async (_event, filePath) => {
   try {
     const buffer = await fs__namespace.readFile(filePath);
     return crypto__namespace.createHash("sha256").update(buffer).digest("hex");
@@ -236,7 +275,7 @@ electron.ipcMain.handle("file:hash", async (_event, filePath) => {
     return null;
   }
 });
-electron.ipcMain.handle("depth:generate", async (_event, input) => {
+ipcMain.handle("depth:generate", async (_event, input) => {
   let inputPath = input;
   let isTemp = false;
   let inputBuffer;
