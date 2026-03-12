@@ -5,8 +5,6 @@ directories:
   buildResources: build
 files:
   - out/**/*
-  - index.html
-  - src/renderer/**/*
   - package.json
   - resources/**/*
 win:

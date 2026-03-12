@@ -1215,7 +1215,7 @@ ${designerPrompt}
 
 OUTPUT REQUIREMENTS (STRICT):
 - Single standalone garment only (NO person, NO mannequin, NO hanger, NO hands).
-- Pure solid white studio background (#FFFFFF), no gradients, no shadows on background.
+- Solid black studio background (#000000), no gradients, no shadows on background.
 - Centered, full garment visible, no cropping.
 - Photoreal fabric texture, seams, stitching, and hardware details.
 - High-resolution studio product lighting.
@@ -1459,7 +1459,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
  COMPOSITION
  - Single subject only. Full body visible. No cropping head/feet.
- - Solid white studio background (#FFFFFF).
+ - Solid black studio background (#000000).
 
  ${brandingInstruction}
 

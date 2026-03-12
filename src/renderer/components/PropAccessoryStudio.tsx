@@ -421,8 +421,8 @@ const PropAccessoryStudio = () => {
         try {
             const res = await GeminiService.generateImage(
                 `Professional standalone object photography: ${designerPrompt}. 
- High resolution, detailed texture, cinematic studio lighting, solid white studio background. 
- Isolated prop, no background distractions. Strictly solid white background only.`,
+ High resolution, detailed texture, cinematic studio lighting, solid black studio background (#000000). 
+ Isolated prop, no background distractions. Strictly solid black background only.`,
                 state.apiKey,
                 state.model,
                 [],

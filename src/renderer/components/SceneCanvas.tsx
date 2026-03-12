@@ -1445,19 +1445,42 @@ const SceneCanvas = () => {
         // Ignore drops outside the camera gate
         if (x < 0 || y < 0 || x > rect.width || y > rect.height) return;
 
-        // 1) Actor Library Drop
+        // 1) Actor Library or Annotation Drop
         const raw = e.dataTransfer.getData('application/json');
         if (raw) {
             try {
-                const item = JSON.parse(raw) as CastMember;
+                const item = JSON.parse(raw);
+
+                // Handle Annotation Template Drops
+                if (item.templateType === 'annotation') {
+                    const id = `ann-${Date.now()}`;
+                    let payload: any = { id, x, y, rotation: 0, scaleX: 1, scaleY: 1 };
+                    
+                    if (item.annotationType === 'note') {
+                        payload = { ...payload, type: 'note', width: 150, height: 100, zIndex: 10, text: '' };
+                    } else if (item.annotationType === 'zone') {
+                        payload = { ...payload, type: 'zone', width: 200, height: 150, zIndex: 5 };
+                    } else if (item.annotationType === 'arrow') {
+                        payload = { ...payload, type: 'arrow', width: 60, height: 60, zIndex: 11 };
+                    }
+
+                    dispatch({ type: 'ADD_ANNOTATION', payload });
+                    dispatch({ type: 'SELECT_ITEM', payload: { id, type: 'annotation' } });
+                    return;
+                }
+
+                // Handle Actor Drop
+                const castItem = item as CastMember;
+                if (!castItem.id) return; // Basic validation that it represents a cast member
+                
                 const id = `token-${Date.now()}-${Math.random().toString(16).slice(2)}`;
                 dispatch({
                     type: 'ADD_TOKEN',
                     payload: {
                         id,
-                        castId: item.id,
-                        url: item.url,
-                        tag: item.name || 'Actor',
+                        castId: castItem.id,
+                        url: castItem.url,
+                        tag: castItem.name || 'Actor',
                         x: x - 100,
                         y: y - 150,
                         width: 200,
@@ -1479,16 +1502,10 @@ const SceneCanvas = () => {
                     }
                 });
 
-
-                // Actor stays at dropped x, y
-
-                dispatch({ type: 'ADD_LOG', payload: { message: `Actor ${item.tag} auto-staged — drag to reposition`, type: 'success' } });
+                dispatch({ type: 'ADD_LOG', payload: { message: `Actor ${castItem.tag} auto-staged — drag to reposition`, type: 'success' } });
                 return;
             } catch { /* ignore */ }
         }
-
-        // 2) Wardrobe / Props (if applicable, but handled by the respective studios usually)
-        // For now, we only handle CastMember drops on the canvas.
     };
 
 
@@ -2821,6 +2838,10 @@ const SceneCanvas = () => {
 
                             {/* ADD TOOLS */}
                             <button
+                                draggable
+                                onDragStart={(e) => {
+                                    e.dataTransfer.setData('application/json', JSON.stringify({ templateType: 'annotation', annotationType: 'note' }));
+                                }}
                                 onClick={() => {
                                     const id = `ann-${Date.now()}`;
                                     dispatch({
@@ -2839,6 +2860,10 @@ const SceneCanvas = () => {
                             </button>
 
                             <button
+                                draggable
+                                onDragStart={(e) => {
+                                    e.dataTransfer.setData('application/json', JSON.stringify({ templateType: 'annotation', annotationType: 'zone' }));
+                                }}
                                 onClick={() => {
                                     const id = `ann-${Date.now()}`;
                                     dispatch({
@@ -2857,6 +2882,10 @@ const SceneCanvas = () => {
                             </button>
 
                             <button
+                                draggable
+                                onDragStart={(e) => {
+                                    e.dataTransfer.setData('application/json', JSON.stringify({ templateType: 'annotation', annotationType: 'arrow' }));
+                                }}
                                 onClick={() => {
                                     const id = `ann-${Date.now()}`;
                                     dispatch({
