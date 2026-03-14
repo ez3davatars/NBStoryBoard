@@ -28,7 +28,8 @@ const WardrobeStudio = () => {
     const {
         fittedImage, tryOnMask, restorationLayer, removeBg: removeTryOnBg,
         fringeSize, brushSize, history, historyIndex, isBrushActive: globalIsBrushActive,
-        tryOnNote, processedTryOnUrl, brandingLogo, logoPosition
+        tryOnNote, processedTryOnUrl, brandingLogo, logoPosition,
+        tryOnOutputMode, tryOnViews, tryOnSheetFB, tryOnSheetLR, activeTryOnView
     } = state.wardrobeState;
 
     // Local Helper to update global state
@@ -50,6 +51,11 @@ const WardrobeStudio = () => {
     const setProcessedTryOnUrl = (val: string | null) => updateState({ processedTryOnUrl: val });
     const setBrandingLogo = (val: string | null) => updateState({ brandingLogo: val });
     const setLogoPosition = (val: string) => updateState({ logoPosition: val });
+    const setTryOnOutputMode = (val: 'front' | 'turnaround') => updateState({ tryOnOutputMode: val });
+    const setTryOnViews = (val: Record<'front' | 'back' | 'left' | 'right', string> | null) => updateState({ tryOnViews: val });
+    const setTryOnSheetFB = (val: string | null) => updateState({ tryOnSheetFB: val });
+    const setTryOnSheetLR = (val: string | null) => updateState({ tryOnSheetLR: val });
+    const setActiveTryOnView = (val: 'front' | 'back' | 'left' | 'right' | 'sheetFB' | 'sheetLR') => updateState({ activeTryOnView: val });
 
     // Use global isBrushActive
     const isBrushActive = globalIsBrushActive;
@@ -62,15 +68,10 @@ const WardrobeStudio = () => {
     const [selectedCharacter, setSelectedCharacter] = useState<CastMember | null>(null);
 
     // --- TRY-ON OUTPUT & TURNAROUND (2-SHEET MODE) ---
-    type TryOnOutputMode = 'front' | 'turnaround';
     type TryOnView = 'front' | 'back' | 'left' | 'right';
     type TryOnDisplay = TryOnView | 'sheetFB' | 'sheetLR';
 
-    const [tryOnOutputMode, setTryOnOutputMode] = useState<TryOnOutputMode>('front');
-    const [tryOnViews, setTryOnViews] = useState<Record<TryOnView, string> | null>(null);
-    const [tryOnSheetFB, setTryOnSheetFB] = useState<string | null>(null);
-    const [tryOnSheetLR, setTryOnSheetLR] = useState<string | null>(null);
-    const [activeTryOnView, setActiveTryOnView] = useState<TryOnDisplay>('front');
+    // State migrated to global context (AppContext)
 
     // Character Sheet reference (identity anchor for turnarounds)
     const [tryOnCharacterSheet, setTryOnCharacterSheet] = useState<string | null>(null);
@@ -215,7 +216,7 @@ const WardrobeStudio = () => {
 
     // --- SAVE TO ACTOR LIBRARY STATE ---
     const [showSaveModal, setShowSaveModal] = useState(false);
-    const [saveCategory, setSaveCategory] = useState("Realism");
+    const [saveCategory, setSaveCategory] = useState("realism");
     const [newActorName, setNewActorName] = useState("");
 
     const handleOpenSaveModal = () => {
@@ -264,11 +265,11 @@ const WardrobeStudio = () => {
 
                 // Map Category to a valid Style for Library Filtering
                 const catToStyle: Record<string, string> = {
-                    "Realism": "exact_studio",
-                    "Stylized Cartoon": "family_3d",
-                    "Illustration": "retro_anime",
-                    "Sci-Fi": "cyberpunk_neon",
-                    "Extras": "exact_studio"
+                    "realism": "exact_studio",
+                    "anim": "family_3d",
+                    "illustration": "retro_anime",
+                    "scifi": "cyberpunk_neon",
+                    "uncategorized": "exact_studio"
                 };
                 const activeStyle = catToStyle[targetCategory] || "exact_studio";
 
@@ -1341,6 +1342,8 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
     const handleTryOn = async () => {
         if (!selectedCharacter || !selectedCostume || !state.apiKey) return;
 
+        console.log('TRY-ON MODE:', tryOnOutputMode);
+
         // Reset output + editing state
         setRemoveTryOnBg(false);
         setTryOnMask(null);
@@ -1350,57 +1353,102 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
         setTryOnSheetLR(null);
         setActiveTryOnView('front');
 
-        purgeRestorationState(); // Reset Paint History
+        purgeRestorationState();
         dispatch({ type: 'SET_PROCESSING', payload: true });
 
-        // --- TIMEOUT & ETA LOGIC ---
-        const getEtaMs = () => state.imageResolution === '4K' ? 90000 : (state.imageResolution === '2K' ? 70000 : 45000); // 2 sheets takes longer
+        const getEtaMs = () =>
+            tryOnOutputMode === 'turnaround'
+                ? (state.imageResolution === '4K' ? 90000 : state.imageResolution === '2K' ? 70000 : 45000)
+                : (state.imageResolution === '4K' ? 45000 : state.imageResolution === '2K' ? 35000 : 25000);
+
         const etaMs = getEtaMs();
 
-        // --- PROGRESS SIMULATION TIMER ---
         let currentPercent = 5;
         dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text: "Initiating Try-On Protocol" } });
 
         const updateMs = 1000;
         const increment = (updateMs / etaMs) * 100;
 
-        // Using window.setInterval to avoid NodeJS Timeout typing issues in React/Vite
         const progressInterval = window.setInterval(() => {
             currentPercent += increment;
-            if (currentPercent > 95) currentPercent = 95; // Cap at 95% until complete
+            if (currentPercent > 95) currentPercent = 95;
 
             let text = "Initiating Try-On Protocol";
-            if (currentPercent > 20) text = "Matching Torso/Limbs...";
-            if (currentPercent > 40) text = "Processing Front/Back Sheet...";
-            if (currentPercent > 65) text = "Processing Left/Right Sheet...";
-            if (currentPercent > 85) text = "Finalizing Output...";
+            if (currentPercent > 20) text = tryOnOutputMode === 'turnaround' ? "Processing Front/Back Sheet..." : "Matching Costume Structure...";
+            if (currentPercent > 45) text = tryOnOutputMode === 'turnaround' ? "Processing Left/Right Sheet..." : "Preserving Face Window...";
+            if (currentPercent > 75) text = "Finalizing Output...";
             if (currentPercent >= 95) text = "Finalizing Output... (Still working, please wait)";
 
             dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text } });
         }, updateMs);
 
         try {
-            // Build Dynamic Context
             const subjectStyle = selectedCharacter.profile?.style || "Matching Style";
             const costumeName = selectedCostume.name;
+            const costumeText = `${costumeName} ${tryOnNote || ''}`.toLowerCase();
 
             const subjectRefs = buildSubjectReferenceImages(selectedCharacter);
             const costumeRef = { url: selectedCostume.url, label: "Costume Reference" };
 
             const isDesignRef = isDesignReferenceSelected(selectedCostume);
 
-            const designAssemblyBlock = isDesignRef ? `
- DESIGN ASSEMBLY (SKETCH/PATTERN → FINISHED GARMENT)
- - The Costume Reference may be a fashion sketch or a sewing pattern.
- - DO NOT render sketch lines, pattern pieces, letters, measurement tables, or diagrams.
- - Reconstruct a finished wearable garment based on the reference.
- - Preserve paneling, seam placement, closures, pockets, and color blocking implied by the reference.
- ` : `
- CLOTHING TRANSFER (STRICT COLOR MATCH)
+            const isEnclosureCostume =
+                /costume|mascot|onesie|full[- ]?body|character suit|banana|fruit|food|animal|creature|dinosaur|novelty|plush|foam suit|body suit|bodysuit|robe|shell|armor/i.test(costumeText);
+
+            const faceWindowLockBlock = isEnclosureCostume ? `
+ FACE WINDOW LOCK (CRITICAL)
+ - If the Costume Reference shows a dedicated face hole, face window, or face opening, the subject's face must appear only through that designed face window.
+ - Preserve the exact position, size, shape, and border of the designed face window as shown in the Costume Reference.
+ - Do NOT widen, shrink, move, reshape, split, or redesign the face window.
+ - Do NOT place the face in any other cavity, mouth opening, cutout, gap, or decorative opening unless the reference clearly shows that it is the intended face window.
+ - Decorative openings, cavities, or structural gaps must remain decorative unless the reference explicitly shows they are used for the face.
+ - Adjust the subject internally to the costume rather than changing the costume opening.
+ - Do NOT expose extra neck, chest, shoulders, wrists, ankles, hands, or feet unless explicitly visible in the Costume Reference.
+` : '';
+
+            const fittingBlock = isEnclosureCostume ? `
+ COSTUME TRANSFER (HARD LOCK)
+ - Transfer the costume onto the subject while preserving the original design exactly.
+ - The costume may stretch or fit naturally to the person's body, but the designed structure must remain intact.
+ - Preserve the exact silhouette, enclosure, coverage, padding, bulk, appendages, and visible openings shown in the Costume Reference.
+ - Do NOT redesign any structural part of the costume in order to fit the subject.
+ - If the face must be aligned to the designed face window, adjust the internal fit, neck length, or interior positioning rather than changing the costume opening itself.
+ - Do NOT invent extra arm shapes, extra sleeve shapes, duplicate limb-like costume protrusions, extra glove logic, or extra foot logic.
+ - Do NOT convert the costume into ordinary clothing or a body-contoured reinterpretation.
+ ${faceWindowLockBlock}
+` : `
+ GARMENT TRANSFER (STRICT)
  - Transfer the exact garment from the Costume Reference onto the subject.
- - CRITICAL: The output garment MUST have the exact same colors, textures, and fabrics as the Costume Reference.
- - Do NOT hallucinate new colors for any part of the outfit. Match the reference image's color palette perfectly.
- `;
+ - Preserve silhouette, proportions, colors, materials, and visible construction details.
+ - Fit the garment naturally only insofar as needed to look physically worn.
+ - Do NOT redesign the garment.
+`;
+
+            const designAssemblyBlock = isDesignRef ? `
+ DESIGN REFERENCE LOCK
+ - Reconstruct only what is explicitly visible in the reference.
+ - Preserve visible paneling, seam placement, closures, pockets, color blocking, silhouette, visible coverage, and visible openings exactly.
+ - Do NOT infer hidden anatomy exposure, hidden openings, hidden closures, hidden glove logic, hidden footwear logic, or concealed structural details unless clearly shown.
+ - If a structural detail is unknown, keep it closed, neutral, and non-revealing.
+` : `
+ COSTUME REFERENCE LOCK
+ - Copy the Costume Reference exactly.
+ - Preserve the exact colors, textures, fabrics, silhouette, visible openings, appendages, and visible construction.
+ - Do NOT hallucinate new colors, new materials, alternate costume logic, or extra limbs.
+`;
+
+            const sideViewLockBlock = `
+ SIDE-VIEW LOCK
+ - The Canonical Front/Back Sheet is the absolute source of truth.
+ - Side views must be rotations of the already-established costume, not reinterpretations.
+ - Do NOT invent new openings, new exposed anatomy, new glove separation, new ankle shaping, new footwear logic, or new costume structure.
+ - Do NOT reinterpret the original Costume Reference if it conflicts with the Canonical Front/Back Sheet.
+ - If a side detail is not visible in the Canonical Front/Back Sheet, keep it structurally consistent and non-revealing.
+`;
+
+            const effectiveTryOnNote = isEnclosureCostume
+                ? `${tryOnNote ? `${tryOnNote}. ` : ''}Preserve the costume exactly. If the design has a dedicated face window, keep that opening exactly as shown and place the subject's face only there. Do not use any other cavity or decorative opening as the face opening.`
+                : (tryOnNote || "Transfer the garment exactly and preserve the visible design.");
 
             let brandingInstruction = "";
             const baseImages: { url: string; label: string }[] = [
@@ -1422,40 +1470,45 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
             // FRONT ONLY
             if (tryOnOutputMode === 'front') {
+                console.log('Running FRONT branch');
+
                 const res = await GeminiService.generateImage(
                     `Perform a professional virtual try-on and fashion fitting.
 
  SUBJECT (IDENTITY LOCK)
- - Use the Subject Reference image(s) to preserve the exact facial identity and likeness of the person.
+ - Use the Subject Reference image(s) only to preserve the exact facial identity and likeness of the person.
  - Same face, same person, no morphing, no age change.
 
  STYLE MATCH
  - The final rendering style should match the Subject Reference style: ${subjectStyle}.
- - If the Subject Reference is a realistic photograph, render the fitted costume as realistic clothing with realistic textures.
+ - If the Subject Reference is a realistic photograph, render the fitted costume as realistic material with realistic texture and lighting.
 
- COSTUME
- - Use the Costume Reference (${costumeName}) as the exact outfit for the subject.
+ COSTUME (HARD TRANSFER AUTHORITY)
+ - The Costume Reference (${costumeName}) is the authority for the outfit.
+ - Copy the costume exactly as shown.
+ - Preserve the exact visible silhouette, enclosure, coverage, face-window placement, colors, textures, materials, and construction.
+ - Do NOT reinterpret it into a more wearable, more fitted, more anatomical, or more revealing version.
+ - IGNORE filename text if it conflicts with the image.
  ${designAssemblyBlock}
+ ${faceWindowLockBlock}
 
- SUBJECT ANATOMY (CRITICAL)
- - Preserve the subject’s body type, gender/anatomy, and proportions from the Subject Reference.
- - Do NOT force the subject to have the exact same shape as the Costume Reference model.
+ COLOR & MATERIAL LOCK
+ - Preserve the exact costume colors from the Costume Reference.
+ - Do NOT shift, mute, brighten, darken, replace, or reinterpret the costume colors.
+ - Preserve the exact visible material finish and fabric appearance.
 
- FITTING (NATURAL TAILORING)
- - Tailor the garment naturally to the SUBJECT's specific body shape.
- - The clothing must look like it is physically worn by the subject. Integrate folds, draping, lighting, and shadows to make it look fully 3D and real.
- - Do NOT make it look like a flat Photoshop cutout. It must wrap around the body naturally.
+ SUBJECT IDENTITY
+ - Preserve the subject's face and identity.
+ - The body exists only to support the costume transfer.
+ - Do NOT prioritize body contour over costume structure.
+
+ ${fittingBlock}
  - Remove existing clothing/accessories from the subject before fitting the costume.
 
- HISTORICAL AUTHENTICITY (IF APPLICABLE)
- - If the Costume Reference is historical (e.g., Roman armor, medieval attire), the garments and footwear MUST use authentic period-accurate construction.
- - NO modern manufacturing artifacts: NO rubber soles, NO modern orthotic footbeds, NO zippers, NO synthetic textiles, NO machine-stitching patterns that belong on modern shoes.
-
  FOOTWEAR (CONTEXTUAL MATCH)
- - The footwear MUST match the historical or thematic style of the Costume Reference (${costumeName}).
- - If historical (e.g., Roman armor), generate strictly authentic footwear (e.g., stacked leather strapped caligae or period-correct sandals). Do NOT generate modern Birkenstock-style sandals, modern dress shoes, oxfords, or sneakers.
- - If the Costume Reference explicitly shows shoes, copy them exactly.
- - Bare feet are only acceptable if the Costume Reference explicitly demands it.
+ - If the Costume Reference explicitly shows shoes, feet, or foot coverings, copy them exactly.
+ - Do NOT invent footwear logic not visible in the Costume Reference.
+ - Do NOT expose feet unless explicitly visible in the Costume Reference.
 
  COMPOSITION
  - Single subject only. Full body visible. No cropping head/feet.
@@ -1463,14 +1516,25 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
  ${brandingInstruction}
 
- [FITTING NOTES]: ${tryOnNote || "Ensure a perfect, natural, tailored fit."}
+ [FITTING NOTES]: ${effectiveTryOnNote}
 
  NEGATIVE CONSTRAINTS:
- modern shoes, modern sandals, rubber soles, orthotic footbeds, flat cutout, bad photoshop, unnatural drape, floating clothes, color change, pattern change, modified design, text, watermark, extra people, extra limbs, inappropriate modern footwear, modern shoes on historical outfits.`,
+ face placed in wrong opening, face placed in decorative cavity, face placed in non-face opening,
+ redesigned face hole, widened face window, shrunken face window, moved face window, broken face-window border,
+ invented openings, extra cutouts, exposed neck when not shown, exposed wrists when not shown, exposed ankles when not shown, exposed hands when not shown, exposed feet when not shown,
+ reshaped gloves, reshaped feet, anatomy contouring, body-hugging reinterpretation, bodysuit reinterpretation, costume redesign,
+ extra limbs, duplicate arms, duplicate sleeves, duplicate glove forms, duplicate foot forms, extra costume appendages,
+ altered costume colors, shifted palette, desaturated costume, brighter costume, darker costume, material reinterpretation,
+ flat cutout, bad photoshop, unnatural drape, floating clothes, modified design, text, watermark.`,
                     state.apiKey,
                     state.model,
                     baseImages,
-                    { aspectRatio: '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding }
+                    {
+                        aspectRatio: '1:1',
+                        imageSize: state.imageResolution,
+                        thinkingLevel: state.enableImageThinking,
+                        googleGrounding: state.enableGoogleGrounding
+                    }
                 );
 
                 setFittedImage(res);
@@ -1479,108 +1543,128 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                 return;
             }
 
-            // TURNAROUND (2 IMAGES TOTAL): FB SHEET + LR SHEET
+            console.log('Running TURNAROUND branch');
+
             const twoPanelFormat = `
  OUTPUT FORMAT (STRICT)
  - Produce ONE square image (1:1) with TWO equal vertical panels (left/right).
  - Subtle center divider is allowed; no frames, no collage borders, no extra panels.
- - Same solid white background (#FFFFFF) and consistent studio lighting in both panels.
+ - Same solid black background (#000000) and consistent studio lighting in both panels.
  - Full body visible in both panels (no cropping head/feet).
- - FOOTWEAR CONSISTENCY (CRITICAL): The subject must have the EXACT SAME footwear (or lack thereof) in both panels. No phantom heels, no floating shoe parts.
+ - FOOTWEAR CONSISTENCY (CRITICAL): The subject must have the EXACT SAME footwear (or lack thereof) in both panels.
  - No text, no labels, no watermarks.
  `;
 
-            // Sheet 1: FRONT + BACK
             const fbSheet = await GeminiService.generateImage(
                 `Professional virtual try-on TURNAROUND SHEET.
 
  ${twoPanelFormat}
 
  SUBJECT (IDENTITY LOCK)
- - Use the Subject Reference image(s) to preserve the exact facial identity and likeness.
- - The LEFT and RIGHT panels must depict the SAME person (no identity drift).
+ - Use the Subject Reference image(s) only to preserve the exact facial identity and likeness.
+ - The LEFT and RIGHT panels must depict the SAME person.
+ - Do NOT let body anatomy override costume structure.
 
- COSTUME (VISUAL SUPREMACY)
- - Use the Costume Reference (${costumeName}) and fit it to the subject.
- - CRITICAL: Match ONLY the visual colors, textures, materials, and patterns seen in the Costume Reference image.
- - IGNORE any instructions or color names in the text label provided in parentheses. The text in parentheses is a filename only.
+ COSTUME (HARD TRANSFER AUTHORITY)
+ - The Costume Reference (${costumeName}) is the authority for the outfit.
+ - Copy the costume exactly as shown.
+ - Preserve the exact visible silhouette, enclosure, coverage, designed face-window placement, colors, textures, materials, and construction.
+ - Do NOT reinterpret it into a more wearable, more fitted, more anatomical, or more revealing version.
+ - IGNORE filename text if it conflicts with the image.
  ${designAssemblyBlock}
+ ${faceWindowLockBlock}
+ - If the costume has a dedicated face window, that is the only valid face placement location.
 
- SILHOUETTE & CONSTRUCTION (STRICT LOCK)
- - Preserve the EXACT cut, drape, and silhouette of the clothing (e.g., wide-leg pants, high collar, specific belt).
- - The pants MUST have the exact same volume and width as the Costume Reference.
+ COLOR & MATERIAL LOCK
+ - Preserve the exact costume colors from the Costume Reference.
+ - Do NOT shift, mute, brighten, darken, replace, or reinterpret the costume colors.
+ - Preserve the exact visible material finish and fabric appearance.
+
+ SILHOUETTE & STRUCTURE (STRICT LOCK)
+ - Preserve the exact outer silhouette and visible structure of the Costume Reference.
+ - Preserve all enclosure logic, shell shape, padding, bulk, visible openings, and visible appendages exactly.
+ - Do NOT simplify the costume into regular clothing.
+ - Do NOT expose body parts unless the Costume Reference explicitly shows them.
 
  PANELS
  - LEFT PANEL: FRONT view, straight-on.
  - RIGHT PANEL: BACK view, straight-on.
 
- SUBJECT ANATOMY
- - Preserve the subject’s body type and proportions from the Subject Reference.
- - Do NOT force the subject to have the exact same shape as the Costume Reference model.
+ STRUCTURE RULE
+ - The front and back panels must depict the same exact costume structure.
+ - Any enclosure or coverage shown in front must remain structurally consistent in back unless the reference explicitly shows otherwise.
+ - Do NOT create a back opening or exposed head/neck zone unless explicitly visible in the Costume Reference.
 
- HISTORICAL AUTHENTICITY (IF APPLICABLE)
- - If the Costume Reference is historical (e.g., Roman armor, medieval attire), the garments and footwear MUST use authentic period-accurate construction.
- - NO modern manufacturing artifacts: NO rubber soles, NO modern orthotic footbeds, NO zippers, NO synthetic textiles.
-
- FOOTWEAR (CONTEXTUAL MATCH)
- - The footwear MUST match the historical or thematic style of the Costume Reference (${costumeName}).
- - If historical (e.g., Roman armor), generate strictly authentic footwear (e.g., stacked leather strapped caligae or period-correct sandals). Do NOT generate modern Birkenstock-style sandals, modern dress shoes, oxfords, or sneakers.
- - If the Costume Reference explicitly shows shoes, copy them exactly in both views.
- - Bare feet are only acceptable if the Costume Reference explicitly demands it.
-
- FITTING (NATURAL TAILORING)
- - Tailor the garment naturally to the SUBJECT's specific body shape in both views.
- - The clothing must look like it is physically worn by the subject. Integrate folds, draping, lighting, and shadows to make it look fully 3D and real.
- - Do NOT make it look like a flat Photoshop cutout. It must wrap around the body naturally.
+ ${fittingBlock}
 
  ${brandingInstruction}
 
- [FITTING NOTES]: ${tryOnNote || "Ensure a perfect, natural, tailored fit."}
+ [FITTING NOTES]: ${effectiveTryOnNote}
 
  NEGATIVE:
- modern sandals, rubber soles, orthotic footbeds, phantom heels, floating shoes, mismatched footwear, heels on bare feet, flat cutout, bad photoshop, unnatural drape, floating clothes, color change, pattern change, modified design, angled 3/4 views, multiple panels beyond 2, text, watermark, inappropriate modern footwear, modern shoes on historical outfits.`,
+ face placed in wrong opening, face placed in decorative cavity, face placed in non-face opening,
+ redesigned face hole, widened face window, shrunken face window, moved face window, broken face-window border,
+ extra limbs, duplicate arms, duplicate sleeves, duplicate gloves, extra costume appendages, invented openings, extra cutouts, exposed neck when not shown, exposed wrists when not shown, exposed ankles when not shown, exposed hands when not shown, exposed feet when not shown, anatomy contouring, body-hugging reinterpretation, bodysuit reinterpretation, costume redesign, mascot redesign,
+ altered costume colors, shifted palette, desaturated costume, brighter costume, darker costume, material reinterpretation,
+ flat cutout, bad photoshop, unnatural drape, floating clothes, modified design, text, watermark.`,
                 state.apiKey,
                 state.model,
                 baseImages,
-                { aspectRatio: '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding }
+                {
+                    aspectRatio: '1:1',
+                    imageSize: state.imageResolution,
+                    thinkingLevel: state.enableImageThinking,
+                    googleGrounding: state.enableGoogleGrounding
+                }
             );
 
-            // Sheet 2: LEFT + RIGHT (use FB as canonical anchor)
             const lrImages: { url: string; label: string }[] = [
                 ...subjectRefs,
                 costumeRef,
                 { url: fbSheet, label: "Canonical Front/Back Sheet" }
             ];
+
             const brandingInstructionLR = brandingLogo ? `
  BRANDING & IDENTITY (LOCK)
  - Match the logo placement and appearance exactly from the Canonical Front/Back Sheet.
  ` : '';
 
-
             const lrSheet = await GeminiService.generateImage(
                 `Professional virtual try-on TURNAROUND SHEET of the SAME subject and SAME outfit.
- 
+
  ${twoPanelFormat}
 
- SUBJECT ANATOMY & IDENTITY (CRITICAL LOCK)
- - The subject's body MUST remain anatomically correct and structurally identical to the Canonical Front/Back sheet.
- - DO NOT warp, stretch, or deform the subject's posture, skull, or spine.
- - Keep the subject standing straight up with a neutral, natural posture.
- - The LEFT and RIGHT panels must depict the EXACT SAME person.
+ SUBJECT IDENTITY (CRITICAL LOCK)
+ - The LEFT and RIGHT panels must depict the exact same person.
+ - Preserve face identity and neutral upright posture.
+ - Do NOT let body anatomy override the costume structure established by the Canonical Front/Back Sheet.
 
- COSTUME (VISUAL SUPREMACY)
- - Must match the Canonical Front/Back Sheet exactly: same colors, same materials, same construction.
- - DO NOT add any new accessories, armor, leg guards, greaves, or clothing items that are not present in the Canonical Front/Back Sheet.
- - The exact number of straps, layers, and items must be identical.
- - IGNORE any text descriptions of the costume that conflict with the Canonical FB Sheet.
- ${designAssemblyBlock}
+ COSTUME (CANONICAL LOCK)
+ - The Canonical Front/Back Sheet is the absolute source of truth.
+ - Match the Canonical Front/Back Sheet exactly: same silhouette, same materials, same construction, same visible coverage, same openings, same appendages.
+ - Do NOT add or remove any structure.
+ - Do NOT reinterpret the costume into a more fitted or more revealing version.
+ - Do NOT invent side-specific anatomy exposure or limb-like costume parts.
+ ${sideViewLockBlock}
+ ${faceWindowLockBlock}
+ - If the costume has a dedicated face window, that is the only valid face placement location.
 
- SILHOUETTE & CONSTRUCTION (STRICT LOCK)
- - The volume, width, and cut of all garments must match the FB Sheet exactly.
+ COLOR & MATERIAL LOCK
+ - Preserve the exact costume colors established by the Canonical Front/Back Sheet.
+ - Do NOT shift, mute, brighten, darken, replace, or reinterpret the costume colors.
+ - Preserve the exact visible material finish and fabric appearance.
+
+ SILHOUETTE & STRUCTURE (STRICT LOCK)
+ - Side views must preserve the exact volume, bulk, closure, and external silhouette established by the Canonical Front/Back Sheet.
+ - Do NOT invent side-specific shaping that exposes more anatomy than the Canonical Front/Back Sheet implies.
 
  PANELS
  - LEFT PANEL: LEFT profile view (90 degrees), facing Viewer's LEFT.
  - RIGHT PANEL: RIGHT profile view (90 degrees), facing Viewer's RIGHT.
+
+ PROFILE RULE
+ - Left and right panels must be profile rotations of the already-established costume.
+ - Do NOT introduce new arm, hand, leg, ankle, head, glove, or sleeve construction details not already established by the Canonical Front/Back Sheet.
 
  FOOTWEAR (CRITICAL LOCK & CONTEXTUAL MATCH)
  - The exact boot, sandal, or shoe design from the Canonical Front/Back Sheet MUST be preserved identically.
@@ -1591,25 +1675,65 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
  ${brandingInstructionLR}
 
- [FITTING NOTES]: ${tryOnNote || "Ensure a perfect, natural, tailored fit without warping the body."}
+ [FITTING NOTES]: ${effectiveTryOnNote}
 
  NEGATIVE CONSTRAINTS (FORBIDDEN):
- modern sandals, rubber soles, orthotic footbeds, new armor, added greaves, changing shoe style, different sandals, outfit mismatch, incorrect facing direction, looking at camera, deformed body, hunched back, warped posture, phantom heels, floating shoes, mismatched footwear, heels on bare feet, flat cutout, bad photoshop, unnatural drape, floating clothes, color change, pattern change, modified design, angled 3/4 views, multiple panels beyond 2, text, watermark, inappropriate modern footwear, modern shoes on historical outfits.`,
+ face placed in wrong opening, face placed in decorative cavity, face placed in non-face opening,
+ redesigned face hole, widened face window, shrunken face window, moved face window, broken face-window border,
+ extra limbs, duplicate arms, duplicate sleeves, duplicate gloves, extra costume appendages, invented openings, exposed neck when not shown, exposed wrists when not shown, exposed ankles when not shown,
+ exposed hands when not shown, exposed feet when not shown, anatomy contouring, body-hugging reinterpretation, bodysuit reinterpretation,
+ costume redesign, side-view reinterpretation, outfit mismatch,
+ altered costume colors, shifted palette, desaturated costume, brighter costume, darker costume, material reinterpretation,
+ text, watermark.`,
                 state.apiKey,
                 state.model,
                 lrImages,
-                { aspectRatio: '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding }
+                {
+                    aspectRatio: '1:1',
+                    imageSize: state.imageResolution,
+                    thinkingLevel: state.enableImageThinking,
+                    googleGrounding: state.enableGoogleGrounding
+                }
             );
+
+            // Extract exact view frames from turnaround sheets using offscreen canvas logic
+            const extractPanel = (sourceUrl: string, isRightPanel: boolean): Promise<string> => {
+                return new Promise((resolve) => {
+                    const img = new Image();
+                    img.crossOrigin = "anonymous";
+                    img.onload = () => {
+                        const canvas = document.createElement("canvas");
+                        canvas.width = img.width / 2;
+                        canvas.height = img.height;
+                        const ctx = canvas.getContext("2d");
+                        if (!ctx) {
+                            resolve(sourceUrl);
+                            return;
+                        }
+
+                        const srcX = isRightPanel ? img.width / 2 : 0;
+                        ctx.drawImage(img, srcX, 0, img.width / 2, img.height, 0, 0, canvas.width, canvas.height);
+                        resolve(canvas.toDataURL("image/webp", 1.0));
+                    };
+                    img.onerror = () => resolve(sourceUrl);
+                    img.src = sourceUrl;
+                });
+            };
+
+            const frontExtracted = await extractPanel(fbSheet, false);
+            const backExtracted = await extractPanel(fbSheet, true);
+            const leftExtracted = await extractPanel(lrSheet, false);
+            const rightExtracted = await extractPanel(lrSheet, true);
 
             // Store sheets
             setTryOnSheetFB(fbSheet);
             setTryOnSheetLR(lrSheet);
 
             setTryOnViews({
-                front: fbSheet,
-                back: fbSheet,
-                left: lrSheet,
-                right: lrSheet
+                front: frontExtracted,
+                back: backExtracted,
+                left: leftExtracted,
+                right: rightExtracted
             });
 
             // Default preview
@@ -1617,20 +1741,19 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
             setActiveTryOnView('sheetFB');
 
             dispatch({ type: 'ADD_LOG', payload: { message: "Turnaround complete (2 sheets generated: FB + LR).", type: 'success' } });
-
         } catch (e: any) {
             dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });
         } finally {
             clearInterval(progressInterval);
-            dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
             dispatch({ type: 'SET_PROCESSING', payload: false });
+            dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: 0, text: '' } });
         }
     };
 
     const handleAddToCast = async () => {
         // Strictly use the current visual state. No new processing.
         const finalUrl = processedTryOnUrl || fittedImage;
-        if (!finalUrl || !selectedCharacter) return;
+        if (!finalUrl) return;
 
         const currentView = activeTryOnView;
         let tag: CastMember['tag'] = 'front';
@@ -1648,12 +1771,12 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
             id: `fitted-${Date.now()}`,
             url: finalUrl,
             tag,
-            name: `${selectedCharacter.name} (${label})`,
+            name: selectedCharacter ? `${selectedCharacter.name} (${label})` : `Fitted Character (${label})`,
             profile: {
-                identity: selectedCharacter.profile?.identity || selectedCharacter.name,
+                identity: selectedCharacter?.profile?.identity || selectedCharacter?.name || "Unknown Identity",
                 wardrobe: selectedCostume?.prompt || "Selected Wardrobe",
-                accessories: selectedCharacter.profile?.accessories || "",
-                style: selectedCharacter.profile?.style || ""
+                accessories: selectedCharacter?.profile?.accessories || "",
+                style: selectedCharacter?.profile?.style || ""
             }
         };
         dispatch({ type: 'ADD_CAST', payload: newMember });
@@ -2085,8 +2208,10 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                         </button>
                                     </div>
                                 </div>
-                            </div>{/* RESULT COLUMN */}
-                            <div className="flex-grow flex flex-row bg-[#09090b] rounded-2xl overflow-hidden border border-gray-800 relative min-w-0">
+                            </div>
+
+                            {/* RESULT COLUMN */}
+                            <div className="flex-grow flex flex-row bg-black rounded-2xl overflow-hidden border border-gray-800 relative min-w-0">
                                 <div
                                     ref={containerRef}
                                     onMouseDown={startInteraction}
@@ -2401,7 +2526,6 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                             </div>
                                         )}
                                     </div>
-
                                     <div className="p-4 border-t border-white/10 bg-[#09090b]/50 shrink-0 space-y-3">
                                         <button onClick={handleAddToCast} className="w-full bg-emerald-500/10 hover:bg-emerald-500 text-emerald-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-emerald-500/20 hover:-[0_0_15px_rgba(16,185,129,0.4)] text-[10px] font-black uppercase tracking-wider" title="Add to Session Cast">
                                             <UserPlus className="w-4 h-4" /> Add to Cast

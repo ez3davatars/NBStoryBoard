@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useAppContext } from '../../context/AppContext';
 import { Copy, Check, Terminal, FileCode2, ChevronDown } from 'lucide-react';
-import { formatVeoFivePartPrompt, formatVeoTimestampSequence } from '../../promptEngine/veoFivePart';
+import { formatVeoTimestampSequence, buildCombinedPrompt } from '../../promptEngine/veoFivePart';
 
 interface VeoBottomDockProps {
  mode: 'builder' | 'keyframes' | 'timeline';
@@ -26,17 +26,10 @@ export default function VeoBottomDock({ mode }: VeoBottomDockProps) {
  }
 
  if (!draft) return "No active draft available. Select a shot and start building your prompt.";
- let base = formatVeoFivePartPrompt({
- cinematography: draft?.cinematography || '',
- subject: draft?.subject || '',
- action: draft?.action || '',
- context: draft?.context || '',
- styleAmbiance: draft?.styleAmbiance || ''
- }) || "Draft is empty...";
+ const combined = buildCombinedPrompt(draft, (draft as any).audio, undefined, draft.negativePrompt);
+    let base = combined.prompt || "Draft is empty...";
 
- if (draft.negativePrompt) {
- base += ` --no ${draft.negativePrompt.trim()}`;
- }
+ 
  return base;
  }, [activeShot, draft, mode]);
 

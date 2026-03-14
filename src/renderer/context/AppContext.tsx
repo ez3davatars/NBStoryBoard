@@ -167,6 +167,20 @@ export interface StageAnnotation {
     thickness?: number;
     zIndex: number;
     visible?: boolean;
+
+    // Semantic Intent Fields
+    role?: 'note' | 'anchor' | 'lookAt' | 'protect';
+    label?: string;
+    hard?: boolean;
+    anchorKind?: 'seat' | 'stand' | 'lean';
+    relation?: 'place' | 'lookAt' | 'moveToward';
+    sourceId?: string;
+    targetId?: string;
+    x1?: number;
+    y1?: number;
+    x2?: number;
+    y2?: number;
+    targetTokenId?: string;
 }
 
 export type RefSlotStatus = 'empty' | 'loading' | 'analyzed' | 'error' | 'ready' | 'analyzing';
@@ -181,8 +195,6 @@ export interface ReferenceSlot {
     status: RefSlotStatus;
     castId?: string;
 }
-
-export type DirectorMergeStrategy = 'Character Identity' | 'Style Transfer' | 'Composition Reference' | 'Photo Merge';
 export type DirectorSpatialLayout = '' | 'horizontal' | 'vertical' | 'center';
 export type DirectorMarkerType =
     | ''
@@ -192,12 +204,21 @@ export type DirectorMarkerType =
     | 'Crude Sketches'
     | 'Numeric Markers';
 
-export type DirectorAspectRatio = '16:9' | '21:9' | '3:2' | '4:3' | '9:16' | '1:1' | '4:5';
 export type DirectorResolution = 'Native 4K' | '2K QHD' | '1K' | { width: number; height: number };
 export type DirectorQualityMode = 'Standard' | 'Raw Uncompressed' | '3D Render' | 'Stylized';
 export type DirectorSafety = 'Standard' | 'Strict';
 
+export type DirectorAspectRatio = '16:9' | '4:3' | '1:1' | '9:16' | '3:4' | '21:9' | '3:2' | '4:5';
+export type DirectorLighting = 'Studio Flash' | 'Natural Window' | 'Cinematic Dark' | 'Neon Cyberpunk' | 'Overcast' | 'Golden Hour';
+export type DirectorRenderScale = '1K (Draft)' | '2K (HD)' | '4K (Pro)';
+export type DirectorMergeStrategy = 'Character Identity' | 'Style Transfer' | 'Composition Reference' | 'Photo Merge';
+
+export type CameraMode = 'locked' | 'reframed' | 'repositioned';
+export type Framing = 'wide' | 'full_body' | 'three_quarter' | 'medium' | 'close_up';
+export type EnvironmentPreservation = 'exact' | 'high' | 'moderate' | 'loose';
+
 export interface DirectorSettings {
+    prompt: string;
     aspectRatio: DirectorAspectRatio;
     resolution: DirectorResolution;
     qualityMode: DirectorQualityMode;
@@ -218,6 +239,11 @@ export interface DirectorSettings {
     markerType: DirectorMarkerType;
     negativePrompt: string;
     sceneLock: boolean;
+    
+    // Explicit UI Layout Overrides
+    cameraMode: CameraMode;
+    framing: Framing;
+    environmentPreservation: EnvironmentPreservation;
 }
 
 export interface StoryboardGeneration {
@@ -257,10 +283,28 @@ export interface RegionEditState {
     protectMaskDataUrl: string | null;
 }
 
-export const clone = <T,>(v: T): T => {
-    // structuredClone is ideal; JSON clone is fine for our plain objects
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return (globalThis as any).structuredClone ? (globalThis as any).structuredClone(v) : JSON.parse(JSON.stringify(v));
+export const smartClone = <T,>(v: T): T => {
+    if (v === null || typeof v !== 'object') return v;
+    if (Array.isArray(v)) {
+        return v.map(smartClone) as any;
+    }
+    // OOM Guard: Prevent deep cloning native binary objects which freezes the V8 thread
+    if (ArrayBuffer.isView(v) || v instanceof ArrayBuffer) {
+        return v;
+    }
+    const cloned = {} as any;
+    for (const key in v) {
+        if (Object.prototype.hasOwnProperty.call(v, key)) {
+            const val = (v as any)[key];
+            // Critical OOM Guard: Pass massive base64 URIs by reference instead of deep copying into V8 heap
+            if (typeof val === 'string' && val.length > 500 && (key.toLowerCase().includes('url') || val.startsWith('data:'))) {
+                cloned[key] = val;
+            } else {
+                cloned[key] = smartClone(val);
+            }
+        }
+    }
+    return cloned;
 };
 
 export interface Shot {
@@ -353,9 +397,15 @@ export interface AppState {
     // WARDROBE PERSISTENCE
     wardrobeState: WardrobeState;
 
+    // PROP STUDIO PERSISTENCE
+    propStudioState: PropAccessoryState;
+
     globalProgress?: { percent: number; text: string };
     sessionName: string | null;
     sessionFilePath: string | null;
+
+    // GLOBAL VEO DRAFT (Fallback when no shot is selected)
+    veoPromptDraft?: VeoFivePartDraft & { audio?: VeoAudioBlock, concept?: string, negativePrompt?: string };
 }
 
 export interface WardrobeState {
@@ -374,6 +424,31 @@ export interface WardrobeState {
     selectedCostume: WardrobeItem | null;
     brandingLogo: string | null;
     logoPosition: string;
+    // New persistent fields for Virtual Try-On
+    tryOnOutputMode: 'front' | 'turnaround';
+    tryOnViews: Record<'front' | 'back' | 'left' | 'right', string> | null;
+    tryOnSheetFB: string | null;
+    tryOnSheetLR: string | null;
+    activeTryOnView: 'front' | 'back' | 'left' | 'right' | 'sheetFB' | 'sheetLR';
+}
+
+export interface PropAccessoryState {
+    activeTab: 'designer' | 'library';
+    designerPrompt: string;
+    designerImage: string | null;
+    selectedProp: PropItem | null;
+    selectedCharacter: CastMember | null;
+    appliedImage: string | null;
+    applyNote: string;
+    applyMask: string | null;
+    removeApplyBg: boolean;
+    applyAiMaskActive: boolean;
+    applyTolerance: number;
+    applySpillSuppression: number;
+    applyMaskSoftening: number;
+    applyInvertBg: boolean;
+    matteErosion: number;
+    processedApplyUrl: string | null;
 }
 
 const DEFAULT_WARDROBE_STATE: WardrobeState = {
@@ -391,7 +466,31 @@ const DEFAULT_WARDROBE_STATE: WardrobeState = {
     selectedCharacter: null,
     selectedCostume: null,
     brandingLogo: null,
-    logoPosition: "Center Chest"
+    logoPosition: "Center Chest",
+    tryOnOutputMode: 'front',
+    tryOnViews: null,
+    tryOnSheetFB: null,
+    tryOnSheetLR: null,
+    activeTryOnView: 'front'
+};
+
+const DEFAULT_PROP_STUDIO_STATE: PropAccessoryState = {
+    activeTab: 'designer',
+    designerPrompt: '',
+    designerImage: null,
+    selectedProp: null,
+    selectedCharacter: null,
+    appliedImage: null,
+    applyNote: '',
+    applyMask: null,
+    removeApplyBg: false,
+    applyAiMaskActive: true,
+    applyTolerance: 15,
+    applySpillSuppression: 100,
+    applyMaskSoftening: 1.5,
+    applyInvertBg: false,
+    matteErosion: 1,
+    processedApplyUrl: null
 };
 
 export type Action =
@@ -459,6 +558,7 @@ export type Action =
     | { type: 'ADD_SHOT_FROM_STAGE'; payload: { name?: string } }
     | { type: 'DUPLICATE_SHOT'; payload: { id: string } }
     | { type: 'REMOVE_SHOT'; payload: { id: string } }
+    | { type: 'CLEAR_SHOTS' }
     | { type: 'SET_ACTIVE_SHOT'; payload: { id: string | null } }
     | { type: 'SAVE_ACTIVE_SHOT'; payload?: { touchUpdatedAt?: boolean } }
     | { type: 'UPDATE_SHOT_META'; payload: { id: string; updates: Partial<Pick<Shot, 'name' | 'notes' | 'veoPromptDraft' | 'veoTimeline'>> } }
@@ -470,6 +570,7 @@ export type Action =
     | { type: 'SET_CUSTOM_COVERS'; payload: Record<string, string> }
     | { type: 'SET_STAGE_PANEL_STATE'; payload: { id: string; isOpen: boolean } }
     | { type: 'SET_WARDROBE_STATE'; payload: Partial<WardrobeState> }
+    | { type: 'SET_PROP_STUDIO_STATE'; payload: Partial<PropAccessoryState> }
     | { type: 'SET_DEPTH_PROCESSING'; payload: boolean }
     | { type: 'SET_IMAGE_RESOLUTION'; payload: '1K' | '2K' | '4K' }
     | { type: 'SET_ENABLE_IMAGE_THINKING'; payload: boolean }
@@ -478,6 +579,7 @@ export type Action =
     | { type: 'SET_ANNOTATIONS'; payload: StageAnnotation[] }
     | { type: 'SYNC_SPATIAL_DESCRIPTORS' }
     | { type: 'DUPLICATE_TOKEN'; payload: { id: string } }
+    | { type: 'SET_GLOBAL_VEO_DRAFT'; payload: VeoFivePartDraft & { audio?: VeoAudioBlock, concept?: string, negativePrompt?: string } | undefined }
     ;
 
 // --- HELPERS ---
@@ -533,16 +635,21 @@ export const deduplicateTokens = (tokens: StageToken[]): StageToken[] => {
     const unique: StageToken[] = [];
 
     tokens.forEach(t => {
+        if (!t) return;
+        
         // 1. Strict ID uniqueness
-        if (seenIds.has(t.id)) return;
+        if (t.id && seenIds.has(t.id)) return;
 
         // 2. Content-based de-duplication (heuristic for bug-induced duplicates)
         // If exact same cast member at exact same position/scale/z-index
-        const posKey = `${t.castId}-${t.x.toFixed(2)}-${t.y.toFixed(2)}-${t.zIndex}`;
+        const xStr = typeof t.x === 'number' ? t.x.toFixed(2) : '0.00';
+        const yStr = typeof t.y === 'number' ? t.y.toFixed(2) : '0.00';
+        const posKey = `${t.castId || 'unknown'}-${xStr}-${yStr}-${t.zIndex || 0}`;
+        
         if (seenPos.has(posKey)) return;
 
         unique.push(t);
-        seenIds.add(t.id);
+        if (t.id) seenIds.add(t.id);
         seenPos.add(posKey);
     });
     return unique;
@@ -553,18 +660,18 @@ const MAX_HISTORY = 30;
 const snapshotOf = (s: AppState): HistorySnapshot => ({
     backgroundUrl: s.backgroundUrl,
     depthMapUrl: s.depthMapUrl,
-    tokens: clone(s.tokens),
-    annotations: clone(s.annotations),
-    referenceSlots: clone(s.referenceSlots),
-    director: clone(s.director),
-    regionEdit: clone(s.regionEdit),
-    shots: clone(s.shots),
+    tokens: smartClone(s.tokens),
+    annotations: smartClone(s.annotations),
+    referenceSlots: smartClone(s.referenceSlots),
+    director: smartClone(s.director),
+    regionEdit: smartClone(s.regionEdit),
+    shots: smartClone(s.shots),
     activeShotId: s.activeShotId,
     resultImage: s.resultImage,
     depthMapHash: s.depthMapHash,
     sourceBackgroundHash: s.sourceBackgroundHash,
     floorPlane: s.floorPlane,
-    occupiedVolumes: clone(s.occupiedVolumes),
+    occupiedVolumes: smartClone(s.occupiedVolumes),
 });
 
 const applySnapshot = (s: AppState, snap: HistorySnapshot): AppState => ({
@@ -592,6 +699,7 @@ const shouldRecordHistory = (type: Action['type']) => {
 
 
 const defaultDirector: DirectorSettings = {
+    prompt: '',
     aspectRatio: '16:9',
     resolution: 'Native 4K',
     qualityMode: 'Standard',
@@ -606,13 +714,16 @@ const defaultDirector: DirectorSettings = {
     textStyle: '',
     envAuto: false,
     mergeStrategy: 'Character Identity',
+    cameraMode: 'locked',
+    framing: 'full_body',
+    environmentPreservation: 'high',
+    sceneLock: false,
     replaceAnchorSubjects: false,
     globalReplaceTarget: '',
     spatialLayout: '',
     markerType: 'Colored Bounding Boxes',
     negativePrompt:
         'worst quality, low quality, normal quality, lowres, monochrome, grayscale, watermark, signature, username, error, blurry, jpeg artifacts, cropped, duplicate, out of frame, ugly, morbid, mutilated, out of focus, dehydration, long neck, bad anatomy, bad proportions, extra limbs, cloned face, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, deformed, disfigured, mutation, mutated hands, mutated fingers, long body, tiling, poorly drawn hands, poorly drawn face, disfigured face, skin spots, acnes, skin blemishes, bad reflections, overexposed, underexposed, harsh lighting, unrealistic lighting',
-    sceneLock: false,
 };
 
 const defaultRefSlots: ReferenceSlot[] = Array.from({ length: 10 }, (_, i) => ({
@@ -691,7 +802,7 @@ export const initialState: AppState = {
     occupiedVolumes: loadJson<OccupiedVolume[]>('nano_occupied_volumes', []),
     isDepthProcessing: false,
 
-    regionEdit: clone(DEFAULT_REGION_EDIT),
+    regionEdit: smartClone(DEFAULT_REGION_EDIT),
 
 
     historyPast: [],
@@ -710,6 +821,9 @@ export const initialState: AppState = {
 
     // WARDROBE PERSISTENCE
     wardrobeState: loadJson<WardrobeState>('nano_wardrobe_state', DEFAULT_WARDROBE_STATE),
+
+    // PROP STUDIO PERSISTENCE
+    propStudioState: loadJson<PropAccessoryState>('nano_prop_studio_state', DEFAULT_PROP_STUDIO_STATE),
 
     sessionName: null,
     sessionFilePath: null,
@@ -800,7 +914,7 @@ export const reducer = (state: AppState, action: Action): AppState => {
             const now = Date.now();
             const nextId = `token-${now}-${Math.random().toString(16).slice(2)}`;
             const copy: StageToken = {
-                ...clone(src),
+                ...smartClone(src),
                 id: nextId,
                 x: src.x + 20,
                 y: src.y + 20,
@@ -837,6 +951,11 @@ export const reducer = (state: AppState, action: Action): AppState => {
         case 'CLEAR_REF_SLOTS':
             return { ...state, referenceSlots: defaultRefSlots };
 
+        case 'SET_PROP_STUDIO_STATE': {
+            const nextState = { ...state.propStudioState, ...action.payload };
+            localStorage.setItem('nano_prop_studio_state', JSON.stringify(nextState));
+            return { ...state, propStudioState: nextState };
+        }
         case 'SET_DIRECTOR': {
             const next = { ...state.director, ...action.payload };
             return { ...state, director: next };
@@ -866,8 +985,8 @@ export const reducer = (state: AppState, action: Action): AppState => {
                 lastCastedImage: null,
                 lastCastedPrompt: '',
                 lastCastedMask: null,
-                regionEdit: clone(DEFAULT_REGION_EDIT),
-                director: clone(defaultDirector),
+                regionEdit: smartClone(DEFAULT_REGION_EDIT),
+                director: smartClone(defaultDirector),
                 historyPast: [],
                 historyFuture: [],
             };
@@ -885,8 +1004,8 @@ export const reducer = (state: AppState, action: Action): AppState => {
                         annotations: [],
                         floorPlane: null,
                         occupiedVolumes: [],
-                        regionEdit: clone(DEFAULT_REGION_EDIT),
-                        director: clone(defaultDirector),
+                        regionEdit: smartClone(DEFAULT_REGION_EDIT),
+                        director: smartClone(defaultDirector),
                         updatedAt: Date.now(),
                     };
                 });
@@ -980,6 +1099,8 @@ export const reducer = (state: AppState, action: Action): AppState => {
             return { ...state, globalProgress: action.payload || undefined };
         case 'SET_DEPTH_PROCESSING':
             return { ...state, isDepthProcessing: action.payload };
+        case 'SET_GLOBAL_VEO_DRAFT':
+            return { ...state, veoPromptDraft: action.payload };
         case 'ADD_LOG':
             return { ...state, logs: [...state.logs, { ...action.payload, id: Math.random().toString(), timestamp: new Date() }].slice(-50) };
         case 'DISCARD_SESSION': {
@@ -1000,12 +1121,13 @@ export const reducer = (state: AppState, action: Action): AppState => {
                 storyboardGenerations: [],
                 wardrobeItems: [],
                 propItems: [],
+                veoPromptDraft: undefined,
                 historyPast: [],
                 historyFuture: [],
                 resultImage: null,
                 inspectImage: null,
                 inspectMask: null,
-                regionEdit: clone(DEFAULT_REGION_EDIT)
+                regionEdit: smartClone(DEFAULT_REGION_EDIT)
             };
         }
         case 'SET_SESSION_INFO':
@@ -1149,15 +1271,15 @@ export const reducer = (state: AppState, action: Action): AppState => {
                 depthMapHash: state.depthMapHash,
                 sourceBackgroundHash: state.sourceBackgroundHash,
                 floorPlane: state.floorPlane,
-                occupiedVolumes: clone(state.occupiedVolumes),
-                tokens: clone(state.tokens),
-                annotations: clone(state.annotations),
-                referenceSlots: clone(state.referenceSlots),
-                director: clone(state.director),
+                occupiedVolumes: smartClone(state.occupiedVolumes) || [],
+                tokens: smartClone(state.tokens) || [],
+                annotations: smartClone(state.annotations) || [],
+                referenceSlots: smartClone(state.referenceSlots) || [],
+                director: smartClone(state.director),
                 startFrameUrl: null,
                 endFrameUrl: null,
                 notes: '',
-                regionEdit: clone(state.regionEdit),
+                regionEdit: smartClone(state.regionEdit),
             };
 
             return { ...state, shots: [...state.shots, newShot], activeShotId: newShot.id };
@@ -1169,7 +1291,7 @@ export const reducer = (state: AppState, action: Action): AppState => {
             const now = Date.now();
             const nextId = `shot-${now}-${Math.random().toString(16).slice(2)}`;
             const copy: Shot = {
-                ...clone(src),
+                ...smartClone(src),
                 id: nextId,
                 name: `${src.name} Copy`,
                 createdAt: now,
@@ -1181,13 +1303,13 @@ export const reducer = (state: AppState, action: Action): AppState => {
                 activeShotId: copy.id,
                 backgroundUrl: copy.backgroundUrl,
                 depthMapUrl: copy.depthMapUrl || null,
-                tokens: clone(copy.tokens),
-                annotations: clone(copy.annotations),
-                referenceSlots: clone(copy.referenceSlots),
-                director: clone(copy.director),
+                tokens: smartClone(copy.tokens) || [],
+                annotations: smartClone(copy.annotations) || [],
+                referenceSlots: smartClone(copy.referenceSlots) || [],
+                director: smartClone(copy.director),
                 floorPlane: copy.floorPlane || null,
-                occupiedVolumes: clone(copy.occupiedVolumes),
-                regionEdit: clone(copy.regionEdit ?? DEFAULT_REGION_EDIT),
+                occupiedVolumes: smartClone(copy.occupiedVolumes) || [],
+                regionEdit: smartClone(copy.regionEdit ?? DEFAULT_REGION_EDIT),
                 selection: null,
                 selectionType: null,
             };
@@ -1200,7 +1322,15 @@ export const reducer = (state: AppState, action: Action): AppState => {
             if (!removingActive) return { ...state, shots: remaining };
 
             const nextActive = remaining[remaining.length - 1] || null;
-            if (!nextActive) return { ...state, shots: [], activeShotId: null };
+            if (!nextActive) {
+                return { 
+                    ...state, 
+                    shots: [], 
+                    activeShotId: null,
+                    storyboardSource: null,
+                    storyboardEndSource: null
+                };
+            }
 
             return {
                 ...state,
@@ -1211,14 +1341,26 @@ export const reducer = (state: AppState, action: Action): AppState => {
                 depthMapHash: nextActive.depthMapHash || null,
                 sourceBackgroundHash: nextActive.sourceBackgroundHash || null,
                 floorPlane: nextActive.floorPlane || null,
-                occupiedVolumes: clone(nextActive.occupiedVolumes),
-                tokens: clone(nextActive.tokens),
-                annotations: clone(nextActive.annotations),
-                referenceSlots: clone(nextActive.referenceSlots),
-                director: clone(nextActive.director),
-                regionEdit: clone(nextActive.regionEdit ?? DEFAULT_REGION_EDIT),
+                occupiedVolumes: smartClone(nextActive.occupiedVolumes) || [],
+                tokens: smartClone(nextActive.tokens) || [],
+                annotations: smartClone(nextActive.annotations) || [],
+                referenceSlots: smartClone(nextActive.referenceSlots) || [],
+                director: smartClone(nextActive.director),
+                regionEdit: smartClone(nextActive.regionEdit ?? DEFAULT_REGION_EDIT),
                 selection: null,
                 selectionType: null,
+                storyboardSource: nextActive.startFrameUrl ? { url: nextActive.startFrameUrl, dna: 'Shot Start' } : null,
+                storyboardEndSource: nextActive.endFrameUrl ? { url: nextActive.endFrameUrl, dna: 'Shot End' } : null,
+            };
+        }
+
+        case 'CLEAR_SHOTS': {
+            return {
+                ...state,
+                shots: [],
+                activeShotId: null,
+                storyboardSource: null,
+                storyboardEndSource: null
             };
         }
 
@@ -1234,13 +1376,13 @@ export const reducer = (state: AppState, action: Action): AppState => {
                 activeShotId: shot.id,
                 backgroundUrl: shot.backgroundUrl,
                 depthMapUrl: shot.depthMapUrl || null,
-                tokens: deduplicateTokens(clone(shot.tokens)),
-                annotations: clone(shot.annotations),
-                referenceSlots: clone(shot.referenceSlots),
-                director: clone(shot.director),
+                tokens: deduplicateTokens(smartClone(shot.tokens) || []),
+                annotations: smartClone(shot.annotations) || [],
+                referenceSlots: smartClone(shot.referenceSlots) || [],
+                director: smartClone(shot.director),
                 floorPlane: shot.floorPlane || null,
-                occupiedVolumes: clone(shot.occupiedVolumes),
-                regionEdit: clone(shot.regionEdit ?? DEFAULT_REGION_EDIT),
+                occupiedVolumes: smartClone(shot.occupiedVolumes) || [],
+                regionEdit: smartClone(shot.regionEdit ?? DEFAULT_REGION_EDIT),
                 selection: null,
                 selectionType: null,
             };
@@ -1257,13 +1399,13 @@ export const reducer = (state: AppState, action: Action): AppState => {
                     ...s,
                     backgroundUrl: state.backgroundUrl,
                     depthMapUrl: state.depthMapUrl,
-                    tokens: deduplicateTokens(clone(state.tokens)),
-                    annotations: clone(state.annotations),
-                    referenceSlots: clone(state.referenceSlots),
-                    director: clone(state.director),
+                    tokens: deduplicateTokens(smartClone(state.tokens) || []),
+                    annotations: smartClone(state.annotations) || [],
+                    referenceSlots: smartClone(state.referenceSlots) || [],
+                    director: smartClone(state.director),
                     floorPlane: state.floorPlane,
-                    occupiedVolumes: clone(state.occupiedVolumes),
-                    regionEdit: clone(state.regionEdit),
+                    occupiedVolumes: smartClone(state.occupiedVolumes) || [],
+                    regionEdit: smartClone(state.regionEdit),
                     updatedAt: touch ? now : s.updatedAt,
                 };
             });

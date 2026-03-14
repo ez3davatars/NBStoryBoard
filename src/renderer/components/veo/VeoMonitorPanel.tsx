@@ -40,6 +40,16 @@ export default function VeoMonitorPanel() {
  }
  };
 
+ const handleSyncToSceneAnchor = () => {
+ if (activePlate === 'start' && currentStartUrl) {
+ dispatch({ type: 'SET_BG', payload: currentStartUrl });
+ dispatch({ type: 'ADD_LOG', payload: { message: "Sent Start Plate to Scene Generator Anchor", type: 'success' } });
+ } else if (activePlate === 'end' && currentEndUrl) {
+ dispatch({ type: 'SET_BG', payload: currentEndUrl });
+ dispatch({ type: 'ADD_LOG', payload: { message: "Sent End Plate to Scene Generator Anchor", type: 'success' } });
+ }
+ };
+
  const handleAddEndPlate = (e: React.ChangeEvent<HTMLInputElement>) => {
  const file = e.target.files?.[0];
  if (file) {
@@ -118,16 +128,26 @@ export default function VeoMonitorPanel() {
 
  {/* Hover Sync Overlay */}
  {displayUrl && (
- <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-20 backdrop-blur-[2px]">
+ <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-4 z-20 backdrop-blur-[2px]">
  <button
  onClick={handleSyncToPlate}
- className={`px-6 py-3 rounded-full text-xs font-bold uppercase tracking-widest transition-transform transform hover:scale-105 border flex items-center gap-2
+ className={`px-6 py-3 min-w-[220px] justify-center rounded-full text-xs font-bold uppercase tracking-widest transition-transform transform hover:scale-105 border flex items-center gap-2
  ${activePlate === 'start'
  ? 'bg-green-500/20 text-green-400 border-green-500/50 hover:bg-green-500/30'
  : 'bg-blue-500/20 text-blue-400 border-blue-500/50 hover:bg-blue-500/30'}`}
  >
- <FileSearch className="w-4 h-4" />
+ <FileSearch className="w-4 h-4 shrink-0" />
  Load as Target
+ </button>
+ <button
+ onClick={handleSyncToSceneAnchor}
+ className={`px-6 py-3 min-w-[220px] justify-center rounded-full text-xs font-bold uppercase tracking-widest transition-transform transform hover:scale-105 border flex items-center gap-2
+ ${activePlate === 'start'
+ ? 'bg-purple-500/20 text-purple-400 border-purple-500/50 hover:bg-purple-500/30'
+ : 'bg-indigo-500/20 text-indigo-400 border-indigo-500/50 hover:bg-indigo-500/30'}`}
+ >
+ <ImageIcon className="w-4 h-4 shrink-0" />
+ Set as Scene Anchor
  </button>
  </div>
  )}

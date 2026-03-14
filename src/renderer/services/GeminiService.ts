@@ -3,35 +3,36 @@ import type { VeoFivePartDraft, VeoAudioBlock } from '../promptEngine/veoFivePar
 export const GeminiService = {
 
   // Helper: Convert Blob/Data URL to Base64
-  async _resolveImageData(url: string): Promise<{ mimeType: string; data: string }> {
+  async _resolveImageData(url: string, maxSize: number = 3072): Promise<{ mimeType: string; data: string }> {
     if (!url) throw new Error("No URL provided to _resolveImageData");
+
+    let resolvedMimeType = '';
+    let resolvedData = '';
 
     // 1. Handle Base64 Data URL
     if (url.startsWith('data:')) {
       try {
-        const mimeType = url.substring(url.indexOf(':') + 1, url.indexOf(';'));
-        const data = url.split('base64,')[1];
-        if (!data) throw new Error("Invalid base64 data");
-        return { mimeType, data };
+        resolvedMimeType = url.substring(url.indexOf(':') + 1, url.indexOf(';'));
+        resolvedData = url.split('base64,')[1];
+        if (!resolvedData) throw new Error("Invalid base64 data");
       } catch (e) {
         throw new Error("Failed to parse base64 data URL");
       }
     }
-
     // 2. Handle Blob URL (or any fetchable URL)
-    if (url.startsWith('blob:') || url.startsWith('http')) {
+    else if (url.startsWith('blob:') || url.startsWith('http')) {
       try {
         const response = await fetch(url);
         if (!response.ok) throw new Error(`Fetch failed: ${response.statusText}`);
         const blob = await response.blob();
-        return new Promise((resolve, reject) => {
+        await new Promise<void>((resolve, reject) => {
           const reader = new FileReader();
           reader.onloadend = () => {
             const result = reader.result as string;
             try {
-              const mimeType = result.substring(result.indexOf(':') + 1, result.indexOf(';'));
-              const data = result.split('base64,')[1];
-              resolve({ mimeType, data });
+              resolvedMimeType = result.substring(result.indexOf(':') + 1, result.indexOf(';'));
+              resolvedData = result.split('base64,')[1];
+              resolve();
             } catch (e) {
               reject(new Error("Failed to parse blob to base64"));
             }
@@ -43,13 +44,125 @@ export const GeminiService = {
         throw new Error(`Failed to resolve image data from ${url.startsWith('blob:') ? 'blob' : 'URL'}: ${e.message}`);
       }
     }
-
     // 3. Handle Raw Base64 (Assume PNG)
-    if (url.length > 100) { // Simple heuristic for raw base64
-      return { mimeType: 'image/png', data: url };
+    else if (url.length > 100) { // Simple heuristic for raw base64
+      resolvedMimeType = 'image/png';
+      resolvedData = url;
+    } else {
+      throw new Error(`Invalid image URL format: ${url.substring(0, 50)}...`);
     }
 
-    throw new Error(`Invalid image URL format: ${url.substring(0, 50)}...`);
+    // 4. Downscale Guardian - Protects Gemini REST API from Deadline Exceeded timeouts on massive uncompressed Turnaround sheets
+    try {
+      // Reconstruct temporary data URI
+      const tempUrl = `data:${resolvedMimeType};base64,${resolvedData}`;
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      await new Promise((resolve, reject) => {
+          img.onload = resolve;
+          img.onerror = reject;
+          img.src = tempUrl;
+      });
+
+      const MAX_SIZE = maxSize || 3072; // Gemini multi-image payload limit logic
+      let targetW = img.width;
+      let targetH = img.height;
+      
+      if (targetW > MAX_SIZE || targetH > MAX_SIZE) {
+          const ratio = Math.min(MAX_SIZE / targetW, MAX_SIZE / targetH);
+          targetW = Math.round(targetW * ratio);
+          targetH = Math.round(targetH * ratio);
+          
+          const canvas = document.createElement('canvas');
+          canvas.width = targetW;
+          canvas.height = targetH;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+              ctx.drawImage(img, 0, 0, targetW, targetH);
+              // Re-encode as JPEG for highly aggressive JSON payload reduction over IPC
+              const optimizedUrl = canvas.toDataURL('image/jpeg', 0.85);
+              resolvedMimeType = 'image/jpeg';
+              resolvedData = optimizedUrl.split('base64,')[1];
+          }
+      }
+    } catch (err) {
+      console.warn('[GeminiService] Image downscale Guardian failed, falling back to original extracted base64.', err);
+    }
+
+    return { mimeType: resolvedMimeType, data: resolvedData };
+  },
+
+  // Helper: sanitize + reframe prompts for Gemini 3.x native image generation
+  _sanitizeImagePromptForGemini(prompt: string): { prompt: string; avoidBullets: string[] } {
+    let p = (prompt || '').trim();
+    const avoid: string[] = [];
+
+    // Remove MJ/SD style aspect tokens; aspect ratio is controlled via imageConfig.aspectRatio
+    p = p.replace(/\s--ar\s+[^\s]+/gi, '').trim();
+
+    // Convert `--no ...` into avoid tokens
+    const noMatch = p.match(/\s--no\s([^\n]+)$/i);
+    if (noMatch?.[1]) {
+      avoid.push(...noMatch[1].split(',').map(s => s.trim()).filter(Boolean));
+      p = p.replace(/\s--no\s[^\n]+$/i, '').trim();
+    }
+
+    // Convert the Director prompt's NEGATIVE CONSTRAINTS block into bullets
+    const negBlockMatch = p.match(/\n\nNEGATIVE\s+CONSTRAINTS[\s\S]*?:\s*([\s\S]+)$/i);
+    if (negBlockMatch?.[1]) {
+      const negCsv = negBlockMatch[1].trim();
+      // Remove the negative block from the main prompt
+      p = p.replace(/\n\nNEGATIVE\s+CONSTRAINTS[\s\S]*?$/i, '').trim();
+      avoid.push(...negCsv.split(',').map(s => s.trim()).filter(Boolean));
+    }
+
+    // Deduplicate avoid bullets
+    const seen = new Set<string>();
+    const avoidBullets = avoid.filter(a => {
+      const k = a.toLowerCase();
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+
+    // Gemini 3 image prompting tends to respond better to a simple leading instruction
+    // Keep original content intact; just add a short "create an image" header.
+    const header = "Create a single image following ALL requirements below.";
+    const finalPrompt =
+      p.toLowerCase().startsWith('create ') || p.toLowerCase().startsWith('generate ')
+        ? p
+        : `${header}\n\n${p}`;
+
+    return { prompt: finalPrompt.trim(), avoidBullets };
+  },
+
+
+  // Helper: build a safe thinkingConfig for the given model.
+  // NOTE: Gemini 3.1 Flash Image supports only `minimal` (default) and `high`.
+  // Passing legacy values like "low" will cause a 400.
+  _buildThinkingConfigForModel(model: string, level?: string): any | undefined {
+    if (!level) return undefined;
+    const lv = String(level).trim().toLowerCase();
+
+    // Nano Banana 2 (Gemini 3.1 Flash Image Preview)
+    if (model === "gemini-3.1-flash-image-preview") {
+      // Default thinkingLevel is `minimal`; only set config when explicitly requesting High.
+      if (lv === "high") return { thinkingLevel: "High" };
+      return undefined;
+    }
+
+    // Nano Banana Pro (Gemini 3 Pro Image Preview) – keep conservative defaults until we confirm full enum support.
+    if (model === "gemini-3-pro-image-preview") {
+      if (lv === "high") return { thinkingLevel: "High" };
+      return undefined;
+    }
+
+    // Fallback for other Gemini 3 models (if used elsewhere)
+    if (/^gemini-3/i.test(model)) {
+      if (["minimal", "low", "medium", "high"].includes(lv)) return { thinkingLevel: lv };
+    }
+
+    return undefined;
   },
 
   async generateImage(
@@ -57,7 +170,7 @@ export const GeminiService = {
     apiKey: string,
     model: string,
     referenceImages: { url: string; label: string }[] = [],
-    options: { aspectRatio?: string, imageSize?: '1K' | '2K' | '4K', thinkingLevel?: boolean, googleGrounding?: boolean } = {}
+    options: { aspectRatio?: string, imageSize?: '1K' | '2K' | '4K', thinkingLevel?: boolean | 'minimal' | 'low' | 'medium' | 'high', googleGrounding?: boolean, strictMode?: boolean } = {}
   ): Promise<string> {
 
     if (!apiKey) {
@@ -93,18 +206,56 @@ export const GeminiService = {
       }
 
       // Inject prompt last for better "instruction following" on the visual context
-      contentsParts.push({ text: prompt });
+      // --- Prompt normalization for Gemini 3.x image models ---
+      // The Nano Banana 2 model is more sensitive to prompt structure; we normalize common legacy tokens
+      // and move "avoid" constraints into a short bullet list near the top for stronger compliance.
+      const strictMode = options.strictMode ?? /SPATIAL PROTOCOL|NEGATIVE CONSTRAINTS|CRITICAL\s*-\s*DO NOT|NON-NEGOTIABLE/i.test(prompt);
+
+      const sanitized = GeminiService._sanitizeImagePromptForGemini(prompt);
+      let finalPrompt = sanitized.prompt;
+
+      if (strictMode && sanitized.avoidBullets.length > 0) {
+        const avoidBlock =
+          `NON-NEGOTIABLE (DO NOT INCLUDE):\n` +
+          sanitized.avoidBullets.map(a => `- ${a}`).join('\n') +
+          `\n\nIf any requirement conflicts, follow NON-NEGOTIABLE first.`;
+
+        // Insert avoid block near the top (after the first paragraph) to improve compliance.
+        const firstBreak = finalPrompt.indexOf('\n\n');
+        if (firstBreak !== -1) {
+          finalPrompt = finalPrompt.slice(0, firstBreak + 2) + avoidBlock + '\n\n' + finalPrompt.slice(firstBreak + 2);
+        } else {
+          finalPrompt = finalPrompt + '\n\n' + avoidBlock;
+        }
+      }
+
+      contentsParts.push({ text: finalPrompt });
+
+      const useGrounding =
+        (options.googleGrounding !== false) && !strictMode && referenceImages.length === 0;
+
+      const rawThinking =
+        typeof options.thinkingLevel === 'string'
+          ? options.thinkingLevel
+          : options.thinkingLevel === true
+            ? 'high'
+            : undefined;
+
+      // For strict prompts we default to higher thinking to improve instruction-following.
+      // (Gemini 3.1 Flash Image default is `minimal`; `high` usually helps with long, rule-heavy prompts.)
+      const desiredThinkingLevel = rawThinking ?? (strictMode ? 'high' : undefined);
 
       const requestBody: any = {
         contents: [{ parts: contentsParts }],
         generationConfig: {
           responseModalities: ["IMAGE"],
+          candidateCount: 1,
           imageConfig: {
             aspectRatio: options.aspectRatio || "16:9",
             ...(options.imageSize && { imageSize: options.imageSize })
           }
         },
-        ...((options.googleGrounding !== false && referenceImages.length === 0) ? {
+        ...(useGrounding ? {
           tools: [
             {
               googleSearch: {
@@ -118,14 +269,12 @@ export const GeminiService = {
         } : {})
       };
 
-      if (options.thinkingLevel && model === 'gemini-3.1-flash-image-preview') {
-        // According to docs, thinkingLevel can be 'high' or 'minimal'
-        requestBody.generationConfig.thinkingConfig = {
-          thinkingLevel: 'High'
-        };
+      const thinkingConfig = GeminiService._buildThinkingConfigForModel(model, desiredThinkingLevel);
+      if (thinkingConfig) {
+        requestBody.generationConfig.thinkingConfig = thinkingConfig;
       }
 
-      const response = await fetch(`${baseUrl}?key=${apiKey}`, {
+      let response = await fetch(`${baseUrl}?key=${apiKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody)
@@ -136,7 +285,34 @@ export const GeminiService = {
         console.error("Gemini API Error Response:", errText);
         let cleanMsg = errText;
         try { cleanMsg = JSON.parse(errText).error?.message || cleanMsg; } catch { }
-        throw new Error(`Gemini Error (${response.status}): ${cleanMsg}`);
+
+        // If a model rejects our thinkingLevel, retry once without thinkingConfig (falls back to model default).
+        const thinkingRejected =
+          response.status === 400 &&
+          /thinking level/i.test(cleanMsg) &&
+          /not supported/i.test(cleanMsg) &&
+          requestBody?.generationConfig?.thinkingConfig;
+
+        if (thinkingRejected) {
+          console.warn("Gemini: thinkingLevel rejected by model; retrying without thinkingConfig.");
+          delete requestBody.generationConfig.thinkingConfig;
+
+          response = await fetch(`${baseUrl}?key=${apiKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(requestBody)
+          });
+
+          if (!response.ok) {
+            errText = await response.text();
+            console.error("Gemini API Error Response (retry):", errText);
+            cleanMsg = errText;
+            try { cleanMsg = JSON.parse(errText).error?.message || cleanMsg; } catch { }
+            throw new Error(`Gemini Error (${response.status}): ${cleanMsg}`);
+          }
+        } else {
+          throw new Error(`Gemini Error (${response.status}): ${cleanMsg}`);
+        }
       }
 
       const result = await response.json();
@@ -181,7 +357,7 @@ export const GeminiService = {
     const useModel = 'gemini-2.5-flash';
     const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${useModel}:generateContent`;
 
-    const inline = await GeminiService._resolveImageData(imageUrl);
+    const inline = await GeminiService._resolveImageData(imageUrl, 1024);
     const response = await fetch(`${baseUrl}?key=${apiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -227,7 +403,7 @@ export const GeminiService = {
     let idx = 1;
     for (const frame of frames) {
       parts.push({ text: `[FRAME ${idx}: ${frame.label}]` });
-      const inline = await GeminiService._resolveImageData(frame.url);
+      const inline = await GeminiService._resolveImageData(frame.url, 1024);
       parts.push({ inlineData: { mimeType: inline.mimeType, data: inline.data } });
       idx++;
     }

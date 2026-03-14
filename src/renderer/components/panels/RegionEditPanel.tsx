@@ -164,7 +164,7 @@ export const RegionEditPanel = ({
  </button>
 
  <button
- onClick={() => dispatch({ type: 'CLEAR_REGION_LAYER_MASK', payload: { id: l.id } } as any)}
+ onClick={() => dispatch({ type: 'CLEAR_REGION_LAYER_MASK', payload: l.id } as any)}
  className="p-1.5 bg-black/30 hover:bg-red-500/20 rounded text-gray-400 hover:text-red-400 transition-colors"
  title="Clear this mask"
  >

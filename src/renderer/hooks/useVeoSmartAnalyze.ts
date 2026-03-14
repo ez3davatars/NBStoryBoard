@@ -13,6 +13,7 @@ export interface SmartAnalyzeOptions {
     noExtraObjects: boolean;
     noMorph: boolean;
     dispatch: any;
+    injectPromptDraft?: any; // VeoFivePartDraft
 }
 
 export function useVeoSmartAnalyze() {
@@ -30,7 +31,8 @@ export function useVeoSmartAnalyze() {
         continuityLockEnabled,
         noExtraObjects,
         noMorph,
-        dispatch
+        dispatch,
+        injectPromptDraft
     }: SmartAnalyzeOptions) => {
         if (!startUrl && !endUrl) return;
         setIsAnalyzing(true);
@@ -148,6 +150,7 @@ export function useVeoSmartAnalyze() {
                 lockLighting: true,
                 lockLens: true,
                 lockStyle: true,
+                injectPromptDraft
             });
 
             const displayOutput = `${finalPrompt}\n\nNEGATIVE_PROMPT: ${negatives}`;

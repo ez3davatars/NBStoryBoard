@@ -1528,7 +1528,7 @@ const NanoCastingDirector = () => {
 
     // --- SAVE TO ACTOR LIBRARY STATE ---
     const [showSaveModal, setShowSaveModal] = useState(false);
-    const [saveCategory, setSaveCategory] = useState("Realism");
+    const [saveCategory, setSaveCategory] = useState("realism");
     const [newActorName, setNewActorName] = useState("");
     const [saveMode, setSaveMode] = useState<'actor' | 'ref_sheet'>('actor');
 

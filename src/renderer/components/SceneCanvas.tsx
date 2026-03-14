@@ -32,10 +32,14 @@ import type {
     SpatialAuthorityStatus,
     CastMember,
     DirectorSettings,
+    CameraMode,
+    Framing,
+    EnvironmentPreservation
 } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
 import { DepthService } from '../services/DepthService';
-import { compileV3DirectorPrompt } from '../utils/promptHelpers';
+import { compileV3DirectorPrompt, buildPlacementPrompt, getActiveReferenceSlots } from '../utils/promptHelpers';
+import { buildPlacementIntentsFromAnnotations, buildAnchorSurfaceFromZone, buildAllowanceMaskFromAnchor, buildForegroundProtectMaskFromDepth } from '../utils/spatialHelpers';
 
 // UI Components
 import ConfirmDialog from './ui/ConfirmDialog';
@@ -297,7 +301,12 @@ const SceneCanvas = () => {
     const lastGroundingKeyRef = useRef<string>('');
 
     useEffect(() => {
-        if (groundDepth === null || !state.depthMapUrl) return;
+        // BAILOUT: If there is no depth map or no background, we cannot compute grounding.
+        if (groundDepth === null || !state.depthMapUrl || !state.backgroundUrl) {
+            // If we previously had a key and now don't, reset so we don't loop on re-entry
+            if (lastGroundingKeyRef.current !== '') lastGroundingKeyRef.current = '';
+            return;
+        }
 
         // 1. Generate a key of properties that SHOULD trigger a re-grounding.
         // We intentionally EXCLUDE 'token.depth' to prevent infinite loops.
@@ -554,7 +563,7 @@ const SceneCanvas = () => {
     }, [state.selection, state.selectionType, dispatch]);
 
     // --- SIDEBAR STATE ---
-    const [panelOrder, setPanelOrder] = useState<string[]>(['specs', 'layers', 'ref_stacks', 'region_edit', 'scene_director']);
+    const [panelOrder, setPanelOrder] = useState<string[]>(['specs', 'layers', 'shots', 'ref_stacks', 'region_edit', 'scene_director']);
 
     // Use global panel state from AppContext to persist during navigation
     const collapsedPanels = (state as any).stagePanelState || {
@@ -563,7 +572,8 @@ const SceneCanvas = () => {
         'stage-layers': true,
         'specs': true,
         'anchor': true,
-        'scene_director': true
+        'scene_director': true,
+        'shots': false
     };
     const [draggedPanelId, setDraggedPanelId] = useState<string | null>(null);
 
@@ -746,7 +756,7 @@ const SceneCanvas = () => {
         }
         setProtectStatus('generating');
         try {
-            const captured = await captureStage();
+            const captured = await captureSceneImage();
             if (!captured) throw new Error('Stage capture returned empty.');
 
             // Pick a Gemini image model for mask generation
@@ -915,7 +925,7 @@ const SceneCanvas = () => {
 
     const clearActiveMask = () => {
         if (!activeLayer) return;
-        dispatch({ type: 'CLEAR_REGION_LAYER_MASK', payload: { id: activeLayer.id } } as any);
+        dispatch({ type: 'CLEAR_REGION_LAYER_MASK', payload: activeLayer.id } as any);
         const c = maskCanvasRef.current;
         const ctx = c?.getContext('2d');
         if (c && ctx) {
@@ -940,40 +950,99 @@ const SceneCanvas = () => {
         try {
             const editModel = state.model === 'imagen-4.0-generate-001' ? 'gemini-2.5-flash-image' : state.model;
 
-            const captured = await captureStage();
+            const captured = await captureSceneImage();
             if (!captured) throw new Error('Stage capture returned empty.');
 
             let base: string = captured;
 
+            // 1. Process standard regions
             const layers = (regionEdit.layers as any[]).filter((l: any) => l.enabled);
 
-            // mark queued
-            for (const layer of layers) {
-                if (cancelRegionEditRef.current) {
-                    dispatch({ type: 'ADD_LOG', payload: { message: 'Region Edit cancelled.', type: 'info' } } as any);
-                    break;
+            // 2. Process intentional placements (Auto-Generated Region Edits)
+            const intents = buildPlacementIntentsFromAnnotations(state.annotations as any, state.tokens as any);
+            const intentLayers = [];
+
+            for (const intent of intents) {
+                const token = state.tokens.find(t => t.id === intent.actorId);
+                const anchor = state.annotations.find(a => a.id === intent.anchorId);
+                if (!token || !anchor) continue;
+
+                const lookAt = intent.lookAtId ? state.annotations.find(a => a.id === intent.lookAtId) : undefined;
+
+                // Build literal mask
+                const anchorSurface = buildAnchorSurfaceFromZone(anchor as any);
+                const allowance = buildAllowanceMaskFromAnchor(anchorSurface);
+                const generatedMask = captureBinaryMask([{ type: 'rect', ...allowance }]);
+
+                let finalMask = generatedMask;
+
+                // Attempt depth protection mask
+                if (state.depthMapUrl) {
+                    try {
+                        const protMask = await buildForegroundProtectMaskFromDepth(
+                            state.depthMapUrl,
+                            allowance,
+                            anchorSurface.surfaceDepth,
+                            viewportBox,
+                            (_url, _nx, _ny) => 255 // Provide fallback or real sync-depth here if available in context
+                        );
+                        if (protMask && finalMask) {
+                            finalMask = await subtractProtectionMask(finalMask, protMask);
+                        }
+                    } catch {
+                        console.warn("Graceful depth degrade failed");
+                    }
                 }
-                dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: layer.id, updates: { status: 'running', lastError: null } } } as any);
-                dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: layer.id, updates: { status: 'queued', lastError: null } } } as any);
+
+                if (finalMask) {
+                    intentLayers.push({
+                        id: `intent-${intent.actorId}`,
+                        name: `Placement: ${token.tag}`,
+                        maskDataUrl: finalMask,
+                        prompt: buildPlacementPrompt(intent, token, anchor as any, lookAt as any),
+                        enabled: true,
+                        status: 'idle'
+                    });
+                }
             }
 
-            for (const layer of layers) {
+            const allLayers = [...layers, ...intentLayers];
+
+            // mark queued
+            for (const layer of allLayers) {
                 if (cancelRegionEditRef.current) {
                     dispatch({ type: 'ADD_LOG', payload: { message: 'Region Edit cancelled.', type: 'info' } } as any);
                     break;
                 }
-                dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: layer.id, updates: { status: 'running', lastError: null } } } as any);
+                // Skip UI updates for virtual intent layers
+                if (!layer.id.startsWith('intent-')) {
+                    dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: layer.id, updates: { status: 'running', lastError: null } } } as any);
+                    dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: layer.id, updates: { status: 'queued', lastError: null } } } as any);
+                }
+            }
+
+            for (const layer of allLayers) {
+                if (cancelRegionEditRef.current) {
+                    dispatch({ type: 'ADD_LOG', payload: { message: 'Region Edit cancelled.', type: 'info' } } as any);
+                    break;
+                }
+
+                if (!layer.id.startsWith('intent-')) {
+                    dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: layer.id, updates: { status: 'running', lastError: null } } } as any);
+                }
+
                 const mask: string | null = layer.maskDataUrl ?? null;
                 const promptText: string = String(layer.prompt || '').trim();
+
                 if (!mask || !promptText) {
-                    dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: layer.id, updates: { status: 'idle' } } } as any);
+                    if (!layer.id.startsWith('intent-')) dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: layer.id, updates: { status: 'idle' } } } as any);
                     continue;
                 }
 
                 dispatch({ type: 'ADD_LOG', payload: { message: `Applying ${layer.name}...`, type: 'info' } } as any);
 
                 let maskToSend: string = mask;
-                if (protectEnabled && protectMaskUrl) {
+                if (protectEnabled && protectMaskUrl && !layer.id.startsWith('intent-')) { // intentional protects its own via depth
                     maskToSend = await subtractProtectionMask(mask, protectMaskUrl);
                 }
 
@@ -1084,12 +1153,28 @@ const SceneCanvas = () => {
 
         // 2) Dragged Forge asset
         const raw = e.dataTransfer.getData('application/json');
+        console.log('[handleRefSlotDrop] raw payload:', raw);
         if (raw) {
             try {
-                const cast = JSON.parse(raw) as CastMember;
-                await setSlotFromUrl(index, cast.url, cast.name || (cast as any).tag, cast.id);
-            } catch {
-                // ignore
+                const parsed = JSON.parse(raw);
+                let cast: CastMember | undefined;
+
+                if (parsed.type === 'cast_member') {
+                    // Fetch full data using ID to avoid transferring massive base64 URIs via IPC
+                    cast = state.cast.find(c => c.id === parsed.id);
+                    console.log('[handleRefSlotDrop] parsed cast_member ID:', parsed.id, 'found cast:', !!cast);
+                } else if (parsed.url) {
+                    cast = parsed as CastMember;
+                }
+
+                if (cast && cast.url) {
+                    console.log('[handleRefSlotDrop] Calling setSlotFromUrl for ID:', cast.id);
+                    await setSlotFromUrl(index, cast.url, cast.name || (cast as any).tag, cast.id);
+                } else {
+                    console.error('[handleRefSlotDrop] Cast or cast.url missing!', cast);
+                }
+            } catch (err) {
+                console.error('[handleRefSlotDrop] Parse error:', err);
             }
         }
     };
@@ -1167,7 +1252,7 @@ const SceneCanvas = () => {
         });
     };
 
-    const captureStage = async (): Promise<string | null> => {
+    const captureSceneImage = async (): Promise<string | null> => {
         if (!viewportRef.current) return null;
         try {
             // Manual Canvas Composition (Authority #5) - Decoupled from HTML-TO-IMAGE
@@ -1236,52 +1321,47 @@ const SceneCanvas = () => {
                 }
             }
 
-            // 4. Draw Annotations
-            const sortedAnnos = [...state.annotations].sort((a, b) => a.zIndex - b.zIndex);
-            for (const a of sortedAnnos) {
-                ctx.save();
-                const cx = a.x + a.width / 2;
-                const cy = a.y + a.height / 2;
-                ctx.translate(cx, cy);
-                ctx.rotate((a.rotation * Math.PI) / 180);
-                ctx.translate(-cx, -cy);
-
-                if (a.type === 'zone') {
-                    ctx.strokeStyle = a.color || 'rgba(59, 130, 246, 0.8)';
-                    ctx.lineWidth = 4;
-                    ctx.setLineDash([10, 5]);
-                    ctx.strokeRect(a.x, a.y, a.width, a.height);
-                    ctx.fillStyle = (a.color || 'rgba(59, 130, 246, 0.1)');
-                    ctx.globalAlpha = 0.1;
-                    ctx.fillRect(a.x, a.y, a.width, a.height);
-                } else if (a.type === 'note' && a.text) {
-                    ctx.fillStyle = 'rgba(234, 179, 8, 0.2)';
-                    ctx.fillRect(a.x, a.y, a.width, a.height);
-                    ctx.fillStyle = '#fef08a';
-                    ctx.font = '14px monospace';
-                    ctx.fillText(a.text, a.x + 5, a.y + 20);
-                }
-                ctx.restore();
-            }
-
-            // --- INVERT MASK (Foreground → Transparent, Background → Visible) ---
-            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const data = imageData.data;
-
-            for (let i = 0; i < data.length; i += 4) {
-                data[i] = 255 - data[i]; // R
-                data[i + 1] = 255 - data[i + 1]; // G
-                data[i + 2] = 255 - data[i + 2]; // B
-                // leave alpha unchanged
-            }
-
-            ctx.putImageData(imageData, 0, 0);
-            // --- END INVERSION ---
-
+            // 4. Do NOT Draw Annotations or UI chrome in the base capture frame
+            // Annotations, handles, bounding boxes, and selection elements are now strictly Excluded from the generation source.
 
             return canvas.toDataURL('image/png');
         } catch (err) {
-            console.error('[captureStage] FAILED:', err);
+            console.error('[captureSceneImage] FAILED:', err);
+            return null;
+        }
+    };
+
+    /**
+     * Generates a strict binary mask for Region Edits, passing in a render callback or rectangle
+     */
+    const captureBinaryMask = (
+        renders: Array<{ x: number; y: number; w: number; h: number; type: 'rect' }>
+    ): string | null => {
+        if (!viewportRef.current) return null;
+        try {
+            const TARGET_W = viewportBox.w;
+            const TARGET_H = viewportBox.h;
+            const canvas = document.createElement('canvas');
+            canvas.width = TARGET_W;
+            canvas.height = TARGET_H;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return null;
+
+            // Strict Black Background
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(0, 0, TARGET_W, TARGET_H);
+
+            // Strict White Foreground Mask Elements
+            ctx.fillStyle = '#FFFFFF';
+            for (const r of renders) {
+                if (r.type === 'rect') {
+                    ctx.fillRect(r.x, r.y, r.w, r.h);
+                }
+            }
+
+            return canvas.toDataURL('image/png');
+        } catch (err) {
+            console.error('[captureBinaryMask] FAILED:', err);
             return null;
         }
     };
@@ -1455,7 +1535,7 @@ const SceneCanvas = () => {
                 if (item.templateType === 'annotation') {
                     const id = `ann-${Date.now()}`;
                     let payload: any = { id, x, y, rotation: 0, scaleX: 1, scaleY: 1 };
-                    
+
                     if (item.annotationType === 'note') {
                         payload = { ...payload, type: 'note', width: 150, height: 100, zIndex: 10, text: '' };
                     } else if (item.annotationType === 'zone') {
@@ -1470,9 +1550,15 @@ const SceneCanvas = () => {
                 }
 
                 // Handle Actor Drop
-                const castItem = item as CastMember;
-                if (!castItem.id) return; // Basic validation that it represents a cast member
-                
+                let castItem: CastMember | undefined;
+                if (item.type === 'cast_member') {
+                    castItem = state.cast.find(c => c.id === item.id);
+                } else if (item.url) {
+                    castItem = item as CastMember;
+                }
+
+                if (!castItem?.id || !castItem?.url) return; // Basic validation that it represents a cast member
+
                 const id = `token-${Date.now()}-${Math.random().toString(16).slice(2)}`;
                 dispatch({
                     type: 'ADD_TOKEN',
@@ -1511,8 +1597,12 @@ const SceneCanvas = () => {
 
     // --- SHOT HELPERS ---
     const addShotFromStage = () => {
-        dispatch({ type: 'ADD_SHOT_FROM_STAGE', payload: { name: newShotName.trim() || undefined } } as any);
+        const id = `shot-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        dispatch({ type: 'ADD_SHOT_FROM_STAGE', payload: { id, name: newShotName.trim() || undefined } } as any);
         setNewShotName('');
+
+        // Auto-capture the visual state into the newly created shot's Start Plate
+        captureAndSetShotFrame('start', id);
     };
 
     const setActiveShot = (id: string) => {
@@ -1534,16 +1624,17 @@ const SceneCanvas = () => {
         dispatch({ type: 'UPDATE_SHOT_META', payload: { id: activeShotId, updates: { name } } } as any);
     };
 
-    const captureAndSetShotFrame = async (which: 'start' | 'end') => {
-        if (!activeShotId) {
+    const captureAndSetShotFrame = async (which: 'start' | 'end', targetId?: string) => {
+        const idToUse = targetId || activeShotId;
+        if (!idToUse) {
             dispatch({ type: 'ADD_LOG', payload: { message: 'No active shot selected.', type: 'error' } } as any);
             return;
         }
         dispatch({ type: 'SET_PROCESSING', payload: true } as any);
         try {
-            const dataUrl = await captureStage();
+            const dataUrl = await captureSceneImage();
             if (!dataUrl) throw new Error('Stage capture returned empty.');
-            dispatch({ type: 'SET_SHOT_FRAME', payload: { id: activeShotId, which, url: dataUrl } } as any);
+            dispatch({ type: 'SET_SHOT_FRAME', payload: { id: idToUse, which, url: dataUrl } } as any);
             dispatch({ type: 'ADD_LOG', payload: { message: `Saved ${which.toUpperCase()} frame from stage.`, type: 'success' } } as any);
         } catch (e: any) {
             dispatch({ type: 'ADD_LOG', payload: { message: `Failed to capture ${which} frame: ${e?.message || e}`, type: 'error' } } as any);
@@ -1555,28 +1646,308 @@ const SceneCanvas = () => {
 
 
 
+
+    const normalizeStyleOnlyRequest = (input: string): string => {
+        const raw = String(input || '').trim();
+        if (!raw) return 'No additional stylistic request provided.';
+
+        // Strip the most common spatial / pose override language so the user text
+        // cannot easily fight the anchor-scene lock.
+        const blockedPatterns = [
+            /\bclose\s*up\b/gi,
+            /\bextreme\s+close\s*up\b/gi,
+            /\bwide\s+shot\b/gi,
+            /\bmedium\s+shot\b/gi,
+            /\bfull\s+body\b/gi,
+            /\bfrom\s+the\s+photographer'?s\s+camera\b/gi,
+            /\bfrom\s+above\b/gi,
+            /\bfrom\s+below\b/gi,
+            /\blow\s+angle\b/gi,
+            /\bhigh\s+angle\b/gi,
+            /\bbird'?s\s+eye\b/gi,
+            /\bdutch\s+angle\b/gi,
+            /\bprofile\b/gi,
+            /\bside\s+view\b/gi,
+            /\bturn\s+head\b/gi,
+            /\blooking\s+at\s+camera\b/gi,
+            /\blook\s+at\s+camera\b/gi,
+            /\bsmile\b/gi,
+            /\bfrown\b/gi,
+            /\bgrin\b/gi,
+            /\bopen\s+mouth\b/gi,
+            /\bpose\b/gi,
+            /\bposture\b/gi,
+            /\braise\s+hand\b/gi,
+            /\bwave\b/gi,
+            /\bwalk(?:ing)?\b/gi,
+            /\brun(?:ning)?\b/gi,
+            /\bsit(?:ting)?\b/gi,
+            /\bstand(?:ing)?\b/gi,
+            /\bnew\s+background\b/gi,
+            /\badd\s+(?:a|an|the)\b/gi,
+            /\bremove\s+(?:a|an|the)\b/gi,
+            /\bextra\s+person\b/gi,
+            /\bcamera\b/gi,
+            /\bframing\b/gi,
+            /\bperspective\b/gi,
+            /\bangle\b/gi,
+            /\bshot\b/gi,
+            /\bzoom\b/gi,
+            /\bpan\b/gi,
+            /\btilt\b/gi,
+        ];
+
+        let sanitized = raw;
+        for (const pattern of blockedPatterns) {
+            sanitized = sanitized.replace(pattern, ' ');
+        }
+
+        sanitized = sanitized.replace(/\s+/g, ' ').trim();
+        return sanitized || 'Keep the existing scene exactly the same. Only enhance lighting, color grade, texture richness, and cinematic finish.';
+    };
+
+    const buildStrictAnchorReplacementPrompt = (args: {
+        bgPrompt: string;
+        mergeStrategy?: string;
+        sceneLock?: boolean;
+        replaceAnchorSubjects?: boolean;
+        globalReplaceTarget?: string;
+        cameraMode?: CameraMode;
+        framing?: Framing;
+        environmentPreservation?: EnvironmentPreservation;
+        hasDepthMap?: boolean;
+        activeRefs: ReferenceSlot[];
+    }) => {
+        const {
+            bgPrompt,
+            mergeStrategy,
+            sceneLock,
+            replaceAnchorSubjects,
+            globalReplaceTarget,
+            cameraMode = 'locked',
+            framing = 'full_body',
+            environmentPreservation = 'high',
+            hasDepthMap,
+            activeRefs
+        } = args;
+
+        const styleOnlyRequest = normalizeStyleOnlyRequest(bgPrompt);
+
+        // Resolve Environment Preservation compatibility
+        let effectiveEnv = environmentPreservation;
+        if (cameraMode === 'repositioned' && environmentPreservation === 'exact') {
+            effectiveEnv = 'high';
+        }
+
+        const activeTargets = activeRefs
+            .filter(r => !!r.url)
+            .map(r => {
+                const slotName = r.name || `Ref ${r.index}`;
+                const targetName = r.target?.trim();
+                return targetName
+                    ? `- SLOT ${r.index}: replace "${targetName}" using identity from ${slotName}.`
+                    : `- SLOT ${r.index}: use identity from ${slotName} for subject replacement.`;
+            })
+            .join('\n');
+
+        const replaceTargetSummary = globalReplaceTarget?.trim()
+            ? `"${globalReplaceTarget.trim()}"`
+            : 'the anchor-scene subject(s)';
+
+        // Build Camera Directives
+        let cameraDirectives = '';
+        switch (cameraMode) {
+            case 'locked':
+                cameraDirectives = '- EXACT CAMERA MATCH: Do not move the camera. Use the exact same focal length and perspective as the anchor image.';
+                break;
+            case 'reframed':
+                cameraDirectives = '- REFRAMED CROP: You may zoom in or out, or crop the scene differently, but preserve the original camera angle and spatial relationships.';
+                break;
+            case 'repositioned':
+                cameraDirectives = '- REPOSITIONED CAMERA: Move the camera to a completely new viewpoint (e.g., from the side, from behind, varying elevation). This is a CAMERA RELOCATION, not a subject restaging. The subject must remain in their original pose and orientation relative to the environment, but the framing, crop, and visible arrangement of the surrounding environment MUST adapt to the new camera angle.';
+                break;
+        }
+
+        // Build Framing Directives
+        let framingDirectives = '';
+        switch (framing) {
+            case 'wide':
+                framingDirectives = '- WIDE SHOT: Show the subject within a broad view of the environment.';
+                break;
+            case 'full_body':
+                framingDirectives = '- FULL BODY: Ensure the subject is visible from head to toe within the frame.';
+                break;
+            case 'three_quarter':
+                framingDirectives = '- THREE-QUARTER SHOT: Frame the subject from roughly the knees or thighs up.';
+                break;
+            case 'medium':
+                framingDirectives = '- MEDIUM SHOT: Frame the subject from roughly the waist up.';
+                break;
+            case 'close_up':
+                framingDirectives = '- CLOSE-UP: Frame the subject tightly, focusing on the head and shoulders.';
+                break;
+        }
+
+        // Build Environment Directives
+        let envDirectives = '';
+        switch (effectiveEnv) {
+            case 'exact':
+                envDirectives = '- EXACT PRESERVATION: Do not alter the background, props, or lighting drastically. Preserve every detail of the anchor environment.';
+                break;
+            case 'high':
+                envDirectives = '- HIGH PRESERVATION: Keep the primary environment structure, key props, and recognizable setting intact, but minor details and lighting may naturally adjust.';
+                break;
+            case 'moderate':
+                envDirectives = '- MODERATE PRESERVATION: Keep the general theme and vibe of the environment, but allow structural changes to fit the new framing or camera angle.';
+                break;
+            case 'loose':
+                envDirectives = '- LOOSE PRESERVATION: You are free to heavily alter the environment, keeping only the most basic context of the original scene.';
+                break;
+        }
+
+        return `You are a precision image compositor performing scene generation under strict spatial controls.
+
+=== SCENE GENERATION MODE ===
+${replaceAnchorSubjects ? 'ANCHOR SUBJECT IDENTITY REPLACEMENT' : 'SCENE ENHANCEMENT / PRESERVATION'}
+
+=== SPATIAL DIRECTIVES ===
+Driven by Camera Mode '${cameraMode}':
+${cameraDirectives}
+
+=== FRAMING DIRECTIVES ===
+Driven by Framing Setting '${framing}':
+${framingDirectives}
+
+=== ENVIRONMENT PRESERVATION ===
+Driven by Environment Setting '${effectiveEnv}':
+${envDirectives}
+
+=== SUBJECT / SCENE LOCKS ===
+Treat ANCHOR_SCENE_MASTER_REFERENCE as the source of truth for the existing scene content.
+${cameraMode === 'repositioned'
+                ? 'For REPOSITIONED CAMERA mode: Do NOT freeze the exact original composition or crop. Allow the camera position and spatial framing to change drastically as long as subject and scene identity are preserved.'
+                : 'For locked or reframed modes: Preserve the exact structural composition of the anchor scene.'}
+${replaceAnchorSubjects ? `Replace ${replaceTargetSummary} in the anchor scene with the identity from the active CHARACTER_REFERENCE stack.
+- Face, hair, and likeness must match the CHARACTER_REFERENCE.
+- Body proportions and skin tone must match the CHARACTER_REFERENCE.
+` : 'Do not perform identity replacement unless other controls explicitly require it.'}
+
+**CRITICAL SUBJECT CONTINUITY:**
+- Preserve subject facing direction unless explicitly changed.
+- Preserve body pose and stance.
+- Preserve head direction and expression.
+- Preserve wardrobe and subject continuity while changing only camera viewpoint/framing.
+
+${replaceAnchorSubjects ? `=== ACTIVE REFERENCE STACK ASSIGNMENTS ===
+${activeTargets || '- No named target overrides provided. Use the active references to replace the anchor-scene subject(s).'}\n` : ''}
+${sceneLock ? `Scene lock is ON.
+- Maintain the subject's exact physical footprint and interaction with the environment (sitting, holding props).
+- Do not adapt the environment to the prompt.
+` : 'Scene lock is OFF. Minor environmental adjustments are allowed, but the subject continuity rules above still apply.'}
+
+=== STYLE REQUEST ===
+Apply only lighting, color grading, tonal, texture, and cinematic finish instructions from the sanitized user request below.
+Do not let these words override the explicit Camera, Framing, or Environment directives listed above.
+
+SANITIZED_STYLE_REQUEST:
+"""${styleOnlyRequest}"""
+
+=== OUTPUT REQUIREMENT ===
+${cameraMode === 'repositioned'
+                ? 'Produce a photoreal result from a distinctly new camera angle that preserves the original subject performance and overall scene identity.'
+                : 'Produce a photoreal, composition-locked result that preserves the anchor scene exactly while transferring only the identity from the CHARACTER_REFERENCE stack.'
+            }${hasDepthMap ? `
+Use ANCHOR_SCENE_DEPTH_MAP as supporting evidence for occlusion, volume, and foreground/background ordering. Preserve those relationships.` : ''}
+
+MERGE STRATEGY: ${mergeStrategy || 'preserve-anchor-scene'}
+`;
+    };
+
+
     // --- BACKGROUND GENERATION ---
+
     const generateBg = async () => {
-        if (!bgPrompt.trim() || !state.apiKey) return;
+        if (!state.apiKey) return;
+
+        const hasSourceScene = !!state.backgroundUrl;
+        const hasPromptText = !!bgPrompt.trim();
+        const hasNonDefaultSpatialIntent =
+            (state.director.cameraMode || 'locked') !== 'locked' ||
+            (state.director.framing || 'full_body') !== 'full_body' ||
+            (state.director.environmentPreservation || 'high') !== 'high';
+
+        const canGenerateScene = hasSourceScene && (hasPromptText || hasNonDefaultSpatialIntent);
+
+        if (!canGenerateScene) return;
+
         dispatch({ type: 'SET_PROCESSING', payload: true });
-        dispatch({ type: 'ADD_LOG', payload: { message: `Generating Background: ${bgPrompt}`, type: 'info' } });
+        dispatch({ type: 'ADD_LOG', payload: { message: `Generating Scene${hasPromptText ? ': ' + bgPrompt : ' with manual spatial controls.'}`, type: 'info' } });
+
         try {
-            const url = await GeminiService.generateImage(bgPrompt, state.apiKey, state.model);
+            const references: Array<{ url: string; label: string }> = [];
+            const activeRefs = getActiveReferenceSlots(state.referenceSlots).filter(r => !!r.url);
+
+            // 1) Anchor scene first so composition stays dominant.
+            if (state.backgroundUrl) {
+                references.push({
+                    url: state.backgroundUrl,
+                    label: 'ANCHOR_SCENE_MASTER_REFERENCE'
+                });
+            }
+
+            // 2) Reference stack second and explicitly identity-only.
+            for (const r of activeRefs) {
+                references.push({
+                    url: r.url!,
+                    label: `CHARACTER_REFERENCE_${r.index}: ${(r.name || r.analysis || '').trim()}`
+                });
+            }
+
+            // 3) Depth map last as structural support only.
+            if (state.depthMapUrl) {
+                references.push({
+                    url: state.depthMapUrl,
+                    label: 'ANCHOR_SCENE_DEPTH_MAP'
+                });
+            }
+
+            // Use the new structured scene builder
+            const finalPrompt = buildStrictAnchorReplacementPrompt({
+                bgPrompt,
+                mergeStrategy: state.director.mergeStrategy,
+                sceneLock: state.director.sceneLock,
+                replaceAnchorSubjects: state.director.replaceAnchorSubjects,
+                globalReplaceTarget: state.director.globalReplaceTarget,
+                cameraMode: state.director.cameraMode,
+                framing: state.director.framing,
+                environmentPreservation: state.director.environmentPreservation,
+                hasDepthMap: !!state.depthMapUrl,
+                activeRefs
+            });
+
+            const url = await GeminiService.generateImage(
+                finalPrompt,
+                state.apiKey,
+                state.model,
+                references
+            );
+
             dispatch({ type: 'SET_BG', payload: url });
-            dispatch({ type: 'ADD_LOG', payload: { message: 'Background generated successfully.', type: 'success' } });
+            dispatch({ type: 'ADD_LOG', payload: { message: 'Scene generated successfully.', type: 'success' } });
         } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Background failed: ${e.message}`, type: 'error' } });
+            dispatch({ type: 'ADD_LOG', payload: { message: `Scene generation failed: ${e.message}`, type: 'error' } });
         } finally {
             dispatch({ type: 'SET_PROCESSING', payload: false });
         }
     };
 
-    const downloadCanvas = async () => {
+
+    const downloadStageImage = async () => {
         if (!viewportRef.current) return;
         dispatch({ type: 'SET_PROCESSING', payload: true });
         dispatch({ type: 'ADD_LOG', payload: { message: 'Composting Stage for Storyboard Capture...', type: 'info' } });
         try {
-            const dataUrl = await captureStage();
+            const dataUrl = await captureSceneImage();
             if (dataUrl) {
                 const link = document.createElement('a');
                 link.href = dataUrl;
@@ -1591,6 +1962,19 @@ const SceneCanvas = () => {
         } finally {
             dispatch({ type: 'SET_PROCESSING', payload: false });
         }
+    };
+
+    const downloadDepthMap = () => {
+        if (!state.depthMapUrl) {
+            dispatch({ type: 'ADD_LOG', payload: { message: 'No depth map available to capture.', type: 'error' } });
+            return;
+        }
+        dispatch({ type: 'ADD_LOG', payload: { message: 'Capturing Scene Depth Map...', type: 'info' } });
+        const depthLink = document.createElement('a');
+        depthLink.href = state.depthMapUrl;
+        depthLink.download = `NB_Scene_Depth_${Date.now()}.png`;
+        depthLink.click();
+        dispatch({ type: 'ADD_LOG', payload: { message: 'Depth map captured successfully.', type: 'success' } });
     };
 
     // --- INTERNAL UI HELPERS ---
@@ -2035,10 +2419,16 @@ const SceneCanvas = () => {
                                         className="aspect-square bg-black border border-gray-700 rounded-lg overflow-hidden cursor-move hover:border-purple-500 transition-all relative group "
                                         draggable
                                         onDragStart={(e) => {
-                                            e.dataTransfer.setData('application/json', JSON.stringify(c));
+                                            // Sending only ID prevents Chromium IPC drag/drop truncation on multi-MB base64 images
+                                            const payload = JSON.stringify({ type: 'cast_member', id: c.id, tag: c.tag });
+                                            console.log('[onDragStart:AvailableCast] Setting application/json:', payload);
+                                            e.dataTransfer.setData('application/json', payload);
+                                            // Clear the default data properties that Chromium auto-fills for images to prevent IPC overflows
+                                            e.dataTransfer.setData('text/plain', '');
+                                            e.dataTransfer.setData('text/html', '');
                                         }}
                                     >
-                                        <img src={c.url} className="w-full h-full object-contain" />
+                                        <img src={c.url} className="w-full h-full object-contain pointer-events-none" draggable={false} onDragStart={(e) => e.preventDefault()} />
                                         <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
                                             <span className="text-[8px] font-bold text-white uppercase px-1 text-center leading-tight truncate w-full">{c.tag}</span>
                                         </div>
@@ -2788,7 +3178,7 @@ const SceneCanvas = () => {
                     <div className="flex items-center justify-between gap-4 p-2 bg-[#09090b] border border-[#27272a] rounded-xl shrink-0">
 
                         {/* Left Group: History & Edit */}
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-1">
                             <div className="flex items-center gap-1 bg-black/50 p-1 rounded-lg border border-white/5">
                                 <button
                                     onClick={() => dispatch({ type: 'UNDO' })}
@@ -2809,7 +3199,7 @@ const SceneCanvas = () => {
                         </div>
 
                         {/* Center Group: Edit & Add Tools */}
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center justify-center gap-2 shrink-0">
                             {/* EDIT TOOLS (Moved here) */}
                             <button
                                 onClick={duplicateSelection}
@@ -2905,13 +3295,24 @@ const SceneCanvas = () => {
                         </div>
 
                         {/* Right Group: Capture */}
-                        <div>
+                        <div className="flex items-center gap-2 flex-1 justify-end">
                             <button
-                                onClick={downloadCanvas}
-                                className="bg-black/80 hover:bg-black border border-white/10 text-blue-500 hover:text-green-500 px-6 py-2 rounded-lg flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest transition-all active:scale-95"
+                                onClick={downloadStageImage}
+                                className="bg-black/80 hover:bg-black border border-white/10 text-blue-500 hover:text-green-500 px-4 py-1.5 rounded-md flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-widest transition-all active:scale-95"
+                                title="Download composed stage image"
                             >
-                                <MonitorPlay className="w-4 h-4" />
-                                Capture Stage
+                                <MonitorPlay className="w-3 h-3" />
+                                Save Image
+                            </button>
+                            <button
+                                onClick={downloadDepthMap}
+                                disabled={!state.depthMapUrl}
+                                className={`bg-black/80 hover:bg-black border border-white/10 text-purple-500 px-4 py-1.5 rounded-md flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-widest transition-all ${state.depthMapUrl ? 'hover:text-purple-400 active:scale-95' : 'opacity-50 cursor-not-allowed'
+                                    }`}
+                                title="Download generated Depth Map"
+                            >
+                                <MonitorPlay className="w-3 h-3" />
+                                Save Depth
                             </button>
                         </div>
 
@@ -2923,7 +3324,7 @@ const SceneCanvas = () => {
                     {/* DYNAMIC SIDEBAR PANELS */}
                     <div className="flex-1 overflow-y-auto pl-2 custom-scrollbar flex flex-col gap-3 pb-4">
                         {
-                            panelOrder.map(panelId => {
+                            panelOrder.filter(id => id !== 'shots' || state.isStoryboardEnabled).map(panelId => {
                                 if (panelId === 'shots') {
                                     return (
                                         <ShotListPanel

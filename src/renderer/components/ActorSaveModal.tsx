@@ -21,37 +21,37 @@ export interface ActorSaveModalProps {
 
 const STUDIOS = [
  {
- id: 'Realism',
+ id: 'realism',
  label: 'REALISM',
- sub: 'Exact Likeness & Premium CG',
+ sub: 'Photorealistic Portraiture & Raw Detail',
  bgKey: 'realism',
  color: 'border-purple-500' // Accent color
  },
  {
- id: 'Stylized Cartoon',
+ id: 'anim',
  label: 'STYLIZED CARTOON',
- sub: 'Family 3D & Claymation',
+ sub: 'Modern 3D Animation & Soft Lighting',
  bgKey: 'animation',
  color: 'border-blue-500'
  },
  {
- id: 'Illustration',
+ id: 'illustration',
  label: 'ILLUSTRATION',
  sub: 'Anime, Noir & Graphic',
  bgKey: 'illustration',
  color: 'border-pink-500'
  },
  {
- id: 'Sci-Fi',
+ id: 'scifi',
  label: 'SCI-FI',
  sub: 'Cyberpunk & High Tech',
  bgKey: 'scifi',
  color: 'border-cyan-500'
  },
  {
- id: 'Extras',
- label: 'EXTRAS',
- sub: 'Background Characters & NPCs',
+ id: 'uncategorized',
+ label: 'UNSORTED',
+ sub: 'No Specific Style',
  bgKey: 'realism', // Fallback or separate
  color: 'border-gray-500'
  }

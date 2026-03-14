@@ -13,28 +13,49 @@ import ConfirmDialog from './ui/ConfirmDialog';
 
 const PropAccessoryStudio = () => {
     const { state, dispatch } = useAppContext();
-    const [activeTab, setActiveTab] = useState<'designer' | 'library'>('designer');
-    const [designerPrompt, setDesignerPrompt] = useState("");
-    const [designerImage, setDesignerImage] = useState<string | null>(null);
-    const [selectedProp, setSelectedProp] = useState<PropItem | null>(null);
-    const [selectedCharacter, setSelectedCharacter] = useState<CastMember | null>(null);
-    const [appliedImage, setAppliedImage] = useState<string | null>(null);
-    const [applyNote, setApplyNote] = useState("");
-    const [applyMask, setApplyMask] = useState<string | null>(null);
+    const {
+        activeTab,
+        designerPrompt,
+        designerImage,
+        selectedProp,
+        selectedCharacter,
+        appliedImage,
+        applyNote,
+        applyMask,
+        removeApplyBg,
+        applyAiMaskActive,
+        applyTolerance,
+        applySpillSuppression,
+        applyMaskSoftening,
+        applyInvertBg,
+        matteErosion,
+        processedApplyUrl
+    } = state.propStudioState;
 
-    // Apply Removal State
-    const [removeApplyBg, setRemoveApplyBg] = useState(false);
-    const [applyAiMaskActive, setApplyAiMaskActive] = useState(true);
-    const [applyTolerance, setApplyTolerance] = useState(15);
-    const [applySpillSuppression, setApplySpillSuppression] = useState(100);
-    const [applyMaskSoftening, setApplyMaskSoftening] = useState(1.5);
-    const [applyInvertBg] = useState(false);
-    const [matteErosion, setMatteErosion] = useState(1);
+    const setPropState = (payload: Partial<typeof state.propStudioState>) => {
+        dispatch({ type: 'SET_PROP_STUDIO_STATE', payload });
+    };
+
+    const setActiveTab = (val: typeof activeTab) => setPropState({ activeTab: val });
+    const setDesignerPrompt = (val: string) => setPropState({ designerPrompt: val });
+    const setDesignerImage = (val: string | null) => setPropState({ designerImage: val });
+    const setSelectedProp = (val: PropItem | null) => setPropState({ selectedProp: val });
+    const setSelectedCharacter = (val: CastMember | null) => setPropState({ selectedCharacter: val });
+    const setAppliedImage = (val: string | null) => setPropState({ appliedImage: val });
+    const setApplyNote = (val: string) => setPropState({ applyNote: val });
+    const setApplyMask = (val: string | null) => setPropState({ applyMask: val });
+    const setRemoveApplyBg = (val: boolean) => setPropState({ removeApplyBg: val });
+    const setApplyAiMaskActive = (val: boolean) => setPropState({ applyAiMaskActive: val });
+    const setApplyTolerance = (val: number) => setPropState({ applyTolerance: val });
+    const setApplySpillSuppression = (val: number) => setPropState({ applySpillSuppression: val });
+    const setApplyMaskSoftening = (val: number) => setPropState({ applyMaskSoftening: val });
+    const setMatteErosion = (val: number) => setPropState({ matteErosion: val });
+    const setProcessedApplyUrl = (val: string | null) => setPropState({ processedApplyUrl: val });
+
     const applyImgRef = useRef<HTMLImageElement>(null);
     const applyMaskImgRef = useRef<HTMLImageElement>(null);
     const applyCanvasRef = useRef<HTMLCanvasElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
-    const [processedApplyUrl, setProcessedApplyUrl] = useState<string | null>(null);
 
     const runApplyIsolation = (): string | null => {
         if (removeApplyBg && appliedImage && applyImgRef.current && applyCanvasRef.current) {

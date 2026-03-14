@@ -73,20 +73,23 @@ const VeoGenerator = ({ smartAnalyze }: { smartAnalyze: any }) => {
  };
 
  const runSmartAnalyze = async () => {
- const startUrl = (activeShot?.startFrameUrl as string | undefined) ?? state.storyboardSource?.url;
- const endUrl = (activeShot?.endFrameUrl as string | undefined) ?? state.storyboardEndSource?.url;
- await doSmartAnalyze({
- apiKey: state.apiKey,
- model: state.model,
- startUrl,
- endUrl,
- tokens: state.tokens,
- strictCharacterAds,
- continuityLockEnabled,
- noExtraObjects,
- noMorph,
- dispatch
- });
+    const startUrl = (activeShot?.startFrameUrl as string | undefined) ?? state.storyboardSource?.url;
+    const endUrl = (activeShot?.endFrameUrl as string | undefined) ?? state.storyboardEndSource?.url;
+    const draftSource = activeShot ? activeShot.veoPromptDraft : state.veoPromptDraft;
+
+    await doSmartAnalyze({
+        apiKey: state.apiKey,
+        model: state.model,
+        startUrl,
+        endUrl,
+        tokens: state.tokens,
+        strictCharacterAds,
+        continuityLockEnabled,
+        noExtraObjects,
+        noMorph,
+        dispatch,
+        injectPromptDraft: draftSource
+    });
  };
 
  const InspectorSection = ({ title, children, defaultOpen = true, titleAddon }: any) => (

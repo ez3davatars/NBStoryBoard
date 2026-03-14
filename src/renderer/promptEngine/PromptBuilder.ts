@@ -16,6 +16,7 @@ export type VeoPromptOptions = {
   lockLighting?: boolean;
   lockLens?: boolean;
   lockStyle?: boolean;
+  injectPromptDraft?: any; // VeoFivePartDraft
 };
 
 const safeJoin = (val: any): string => {
@@ -38,14 +39,14 @@ export function buildVeo31Prompt(spec: Veo31Spec, opts: VeoPromptOptions = {}): 
 
   const continuityBlock = continuityOn
     ? buildContinuityLockBlock({
-        identityLocks,
-        lockEnvironment: opts.lockEnvironment ?? true,
-        lockLighting: opts.lockLighting ?? true,
-        lockLens: opts.lockLens ?? true,
-        lockStyle: opts.lockStyle ?? true,
-        noExtraObjects: opts.noExtraObjects ?? true,
-        noMorph: opts.noMorph ?? true,
-      })
+      identityLocks,
+      lockEnvironment: opts.lockEnvironment ?? true,
+      lockLighting: opts.lockLighting ?? true,
+      lockLens: opts.lockLens ?? true,
+      lockStyle: opts.lockStyle ?? true,
+      noExtraObjects: opts.noExtraObjects ?? true,
+      noMorph: opts.noMorph ?? true,
+    })
     : '';
 
   const charBlock = [
@@ -85,6 +86,27 @@ export function buildVeo31Prompt(spec: Veo31Spec, opts: VeoPromptOptions = {}): 
     ? `FRAME 2 DESCRIPTION:\n${safeJoin((spec as any).frame2Description)}`
     : '';
 
+  // INJECT USER'S HANDWRITTEN OVERRIDES (if available)
+  const userOverrideParts = [];
+  if (opts.injectPromptDraft) {
+    userOverrideParts.push('==================================================');
+    userOverrideParts.push('DIRECTOR\'S MANUAL OVERRIDES (HIGHEST PRIORITY):');
+
+    const draft = opts.injectPromptDraft;
+    if (draft.concept) userOverrideParts.push(`CONCEPT TARGET: ${draft.concept}`);
+
+    // Deconstruct cinematography
+    const cParts = [draft.cinematographyShotType, draft.cinematographyMotion, draft.cinematographyLens, draft.cinematography].filter(Boolean);
+    if (cParts.length > 0) userOverrideParts.push(`CINEMATOGRAPHY: ${cParts.join(', ')}`);
+
+    if (draft.subject) userOverrideParts.push(`SUBJECT: ${draft.subject}`);
+    if (draft.action) userOverrideParts.push(`ACTION: ${draft.action}`);
+    if (draft.context) userOverrideParts.push(`CONTEXT: ${draft.context}`);
+    if (draft.styleAmbiance) userOverrideParts.push(`STYLE/AMBIANCE: ${draft.styleAmbiance}`);
+    userOverrideParts.push('==================================================');
+  }
+  const userOverrideBlock = userOverrideParts.join('\n');
+
   const fullPromptParts = [
     'VEO 3.1 DIRECTOR SPEC (STRICT):',
     continuityBlock,
@@ -94,7 +116,9 @@ export function buildVeo31Prompt(spec: Veo31Spec, opts: VeoPromptOptions = {}): 
     motionBlock,
     frame1Block,
     frame2Block,
-    'OUTPUT: Generate a coherent video that matches the bibles above. Obey continuity locks.',
+    userOverrideBlock,
+    'OUTPUT: Generate a coherent video that matches the bibles above.',
+    'CRITICAL INSTRUCTION: If DIRECTOR\'S MANUAL OVERRIDES are present, you MUST prioritize them over the forensic bibles above.'
   ].filter(Boolean);
 
   const fullPrompt = fullPromptParts.join('\n\n');
