@@ -2,6 +2,7 @@ import { SidebarPanel } from '../ui/SidebarPanel';
 import { Sparkles, RefreshCcw } from 'lucide-react';
 import { GeminiService } from '../../services/GeminiService';
 import type { GroundingAudit } from '../../context/AppContext';
+import { DebouncedTextarea } from '../ui/DebouncedTextarea';
 
 interface ActorIntelligencePanelProps {
     state: any;
@@ -173,9 +174,9 @@ export const ActorIntelligencePanel = ({
                                 </button>
                             </div>
                             <div className="flex flex-col gap-2">
-                                <textarea
+                                <DebouncedTextarea
                                     value={token.intelligence || ''}
-                                    onChange={(e) => dispatch({ type: 'UPDATE_TOKEN', payload: { id: token.id, intelligence: e.target.value } })}
+                                    onChange={(val) => dispatch({ type: 'UPDATE_TOKEN', payload: { id: token.id, intelligence: val } })}
                                     className="w-full bg-[#09090b] border border-[#27272a] rounded p-2 text-[10px] text-gray-400 focus:border-blue-500 outline-none resize-none"
                                     rows={2}
                                     placeholder="Pose, Action, Lighting DNA..."
@@ -206,7 +207,7 @@ export const ActorIntelligencePanel = ({
                                         }}
                                         className={`flex-1 flex items-center justify-center gap-1.5 py-1 px-2 rounded text-[9px] font-bold uppercase transition-all ${token.groundingEnabled ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-gray-800/50 text-gray-500 border border-gray-700/50 hover:bg-gray-800'}`}
                                     >
-                                        <div className={`w-1.5 h-1.5 rounded-full ${token.groundingEnabled ? 'bg-emerald-400 shadow-[0_0_4px_rgba(52,211,153,0.5)]' : 'bg-gray-600'}`} />
+                                        <div className={`w-1.5 h-1.5 rounded-full ${token.groundingEnabled ? 'bg-emerald-400 -[0_0_4px_rgba(52,211,153,0.5)]' : 'bg-gray-600'}`} />
                                         Grounding
                                     </button>
 
@@ -247,7 +248,7 @@ export const ActorIntelligencePanel = ({
                                             <button
                                                 key={layer}
                                                 onClick={() => updateToken(token.id, { anchorLayer: layer })}
-                                                className={`py-1 rounded text-[9px] font-bold uppercase border transition-all ${token.anchorLayer === layer ? 'bg-blue-600 border-blue-400 text-white shadow-[0_0_8px_rgba(37,99,235,0.3)]' : 'bg-black/40 border-white/5 text-gray-600 hover:text-gray-400 hover:border-white/10'}`}
+                                                className={`py-1 rounded text-[9px] font-bold uppercase border transition-all ${token.anchorLayer === layer ? 'bg-blue-600 border-blue-400 text-white -[0_0_8px_rgba(37,99,235,0.3)]' : 'bg-black/40 border-white/5 text-gray-600 hover:text-gray-400 hover:border-white/10'}`}
                                             >
                                                 {layer === 'foreground' ? 'Fore' : layer === 'midground' ? 'Mid' : 'Back'}
                                             </button>

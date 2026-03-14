@@ -10,6 +10,7 @@
     *   Storage & Synchronization
 3.  **The Studio Workflow**
     *   **Phase 1: CAST** (Character Generation)
+    *   **Phase 1b: PORTRAIT** (DNA Engine)
     *   **Phase 2: NANO CAST** (Biometric & Style Engine)
     *   **Phase 3: WARDROBE STUDIO** (Designer & Virtual Try-On)
     *   **Phase 4: PROPS** (Asset Management)
@@ -47,6 +48,16 @@ When you save an actor, the system uses a **Native File Structure**:
 
 ---
 
+### AI Generation Settings
+In the **Settings** menu (Gear icon in the top right), you can fine-tune how the AI generates images across the studio:
+*   **Active Engine:** Select your preferred generation model. We recommend **Gemini 3.1 Flash (Image)** for the best balance of speed and prompt reasoning.
+*   **Image Resolution (Gemini 3.1):** Choose between 1K (Fastest), 2K (High Quality), and 4K (Ultra HD - Slow).
+*   **Thinking Mode (Gemini 3.1):** Enable this to improve prompt adherence and complex image generation at the cost of generational speed.
+*   **Google Image Search Grounding:** Enable this to allow the AI to ground its outputs using Google Search, increasing accuracy for real-world references and props.
+*   **Enable Storyboard (Veo 3.1) [Experimental]:** Unlocks the experimental Veo 3.1 storyboarding interface under the Storyboard tab. Note: This feature is currently experimental and should not be expected to produce production-ready results.
+
+---
+
 ## 3. The Studio Workflow
 
 ### Phase 1: CAST (Character Generation)
@@ -66,6 +77,28 @@ Your journey begins here. Use the Casting Forge to generate new high-fidelity ac
     *   Select a **Category** (e.g., *Realism*).
     *   This saves the actor to `.../Actors/Realism/` with the sidecar JSON.
 *   **Send to Director:** Locks the identity for Phase 2.
+
+---
+
+### Phase 1b: PORTRAIT (DNA Engine)
+**The "Portrait Studio"**
+Use the Portrait Studio to establish a baseline character using precise biometric and morphological traits before full casting. The studio operates in two distinct modes: **Synthetic** (building a face from scratch) and **Reference** (using an existing photo).
+
+**Mode 1: SYNTHETIC (Create from Scratch)**
+*   **Identity Matrix:** Use the dropdowns to construct the fundamental demographics (e.g., Male, Hispanic/Latino, Type III Tone).
+*   **Life Stage & Age:** Select a broad life stage (e.g., Adult) and fine-tune with the Chronological Age slider.
+*   **Morphology:** Adjust the height and weight sliders to calculate the character's Metabolic Index (BMI) and physical build (e.g., Athletic, Average, Heavy).
+
+**Mode 2: REFERENCE (Upload a Photo)**
+*   **Identity Reference Photo:** Drag & drop or upload a source photograph. The system will lock on to this facial identity as the absolute truth.
+*   **Likeness Fidelity Lock (0-100%):** Controls how strictly the AI adheres to the uploaded photo. 100% enforces an exact, unyielding clone (preserving eyewear, facial hair, and styling). Lowering the percentage allows the AI more creative liberty to alter the face.
+*   **Age Transform:** While the core identity is locked to the photo, you can use the Life Stage and Chronological Age controls to apply a seamless age progression or regression to the uploaded face.
+*   *(Note: In Reference Mode, basic morphology like height/weight is locked to prioritize the source image).*
+
+**DNA Output Stream (Both Modes)**
+*   **Generate DNA Portrait:** Compiles your chosen settings (or Reference photo) into a highly detailed "Studio Protocol" prompt to generate a perfect, consistent headshot. *Requires an uploaded image if Reference mode is active.*
+*   **Send to Casting:** Transfers the generated portrait to the Casting Forge (Phase 1) to act as a permanent locked actor.
+*   **Send to Ref Sheet:** Sets up the newly created face for multi-angle character design sheets.
 
 ---
 
@@ -102,10 +135,17 @@ Found in the **Director** sidebar tab.
 **The "Costume Department"**
 
 #### Part A: Costume Designer (Tab 1)
-Create unique clothing assets.
+Create unique clothing assets from scratch or using references.
 
-1.  **Prompt:** Describe the outfit (e.g., "Cyberpunk neon trench coat").
-2.  **Generate:** Creates the item on a white studio background.
+**Design Reference (Optional):**
+You can upload an image to guide the AI's generation. This is a temporary "session only" reference.
+*   **SKETCH:** Select this if you are uploading a fashion sketch, drawing, or sewing pattern. The AI will interpret the drawing and construct a photorealistic, finished wearable garment based on those lines.
+*   **COSTUME:** Select this if you are uploading a photo of an existing garment. The AI will use it to match the silhouette, materials, and overall look, creating a clean studio product shot of it.
+
+**Step-by-Step:**
+1.  **Reference (Optional):** Upload a Sketch or Costume photo.
+2.  **Prompt:** Describe the outfit (e.g., "Cyberpunk neon trench coat") to guide the AI further.
+3.  **Generate:** Creates the standalone clothing item on a black studio background.
 3.  **Verify & Save:**
     *   **Save to Wardrobe:** Adds it to the local `wardrobe` folder for Try-On.
     *   **Download:** Exports the image file.
@@ -113,11 +153,20 @@ Create unique clothing assets.
 #### Part B: Virtual Try-On Room (Tab 2)
 Fit costumes onto actors.
 
-**Step-by-Step:**
+**Try-On Setup & Controls (Right Panel):**
+*   **Remove BG:** Toggle this on to automatically remove the background from the generated try-on image once it completes.
+*   **Character Sheet (Identity Anchor):** Upload a previously generated character sheet (from the Casting Forge). This acts as a strict identity anchor, which is highly recommended when generating turnaround sheets to ensure the character's face and body remain consistent across all angles.
+*   **Output Views:** 
+    *   **FRONT:** Generates a standard, single-image front view of the character wearing the outfit.
+    *   **TURNAROUND:** Generates a comprehensive two-sheet turnaround containing Front, Back, Left, and Right views of the character in the outfit.
+*   **Upload Sketch/Costume:** A quick shortcut to open the Costume Designer tab to generate or upload new reference materials.
+
+**Step-by-Step Workflow:**
 1.  **Select Subject:** Click an actor from the "Selected Subject" row.
 2.  **Select Wardrobe:** Click a costume from the "Active Wardrobe" list.
-3.  **Fitting Notes:** Add specific instructions (e.g., "Battle damaged", "Tucked in").
-4.  **Execute Virtual Try-On:**
+3.  **Configure Setup:** Set your desired **Output View** (Front or Turnaround) and upload a **Character Sheet** if you want to lock their identity for multi-angle generation.
+4.  **Fitting Notes:** Add specific instructions (e.g., "Battle damaged", "Tucked in").
+5.  **Execute Virtual Try-On:**
     *   The system merges the costume onto the actor.
     *   **Logic:** It enforces strict **Single Subject** rules (No mannequins, no floating heads).
     *   **Mascot Suits:** It understands the actor is *inside* the suit.
@@ -148,16 +197,30 @@ Once a character is fitted:
 
 ### Phase 5: STAGE (Scene Composition)
 **The "Blocking Stage"**
-Compose your shot.
+Compose your shot by dragging your generated actors and props onto the canvas.
 
-*   **Tokens:** Drag Actors and Props onto the 16:9 Canvas.
-*   **Controls:**
-    *   **Position/Scale:** Arrange elements to frame the narrative.
-    *   **Z-Depth:** Reorder layers in the sidebar to decide who is in front.
-*   **Annotations:**
-    *   **Note Tool:** Add text guidance for the AI (e.g., "Looking at explosion").
-    *   **Arrow Tool:** Draw sightlines or movement paths.
-*   **Scene Generator:** Describe the setting (e.g., "Mars Base Interior") and generate a background plate.
+#### Token Properties vs. Actor Intelligence
+When an actor is on stage, you control them via two distinct panels:
+*   **Token Properties (The Visuals):** Controls *where* the actor sits on the canvas (X/Y position, Scale/Zoom, Rotation) and *how they overlap* with other objects (Z-index layering and depth-based occlusion masking). Think of this as your layout engine.
+    *   **Focus View:** Instantly centers your view on the selected character.
+    *   **Duplicate / Copy:** Quickly clone a character on the stage.
+    *   **Spatial & Occlusion:** Fine-tune how the character physically blends into the environment's 3D space:
+        *   **Occlusion Mode (Auto vs. Force Front):** "Auto (Depth)" computationally masks the actor based on their estimated 3D position in the scene compared to the background elements (e.g., placing them *behind* a desk). "Force Front" overrides this, ensuring the actor always renders entirely in front of the background.
+        *   **Depth Bias (-1.0 to 1.0):** When in Auto mode, use this slider to aggressively shift the depth threshold. "Pull Closer" reveals more of the actor by treating them as closer to the camera lens, while "Push Back" increases the masking effect by pushing them deeper into the scene's geometry.
+*   **Actor Intelligence (The Semantic DNA):** Controls *what* the actor is doing. This panel manages the textual "Prompt DNA" sent to the AI.
+    *   **Auto Analyze:** Inspects the selected character and writes a highly specific prompt describing their pose, action, and lighting.
+    *   **Grounding:** Anchors the actor vertically to the detected 3D floor plane so they don't look like they are floating. (Automatically enabled when dragging sliced actors onto the canvas).
+    *   **Anchor Depth:** Sets the textual category (Fore/Mid/Back) injected into the prompt, ensuring the AI understands the scale of the scene.
+
+#### Stage Controls & Tools
+*   **Z-Depth Sorting:** Reorder layers in the sidebar to decide who is in front visually.
+*   **Annotations (Note, Zone, Path):**
+    *   **Drag and Drop:** You can drag these tools directly from the right toolbar onto the canvas to place them precisely where you need them.
+    *   **Click to Spawn:** Alternatively, clicking the buttons will spawn them in a default position on the canvas.
+    *   **Note Tool:** Add text guidance for the AI (e.g., "Looking at explosion", "Direct light source here").
+    *   **Zone Tool:** Highlight specific areas on the stage to define boundaries or regions of interest.
+    *   **Path Tool:** Draw sightlines, movement arrows, or character trajectories.
+*   **Scene Generator (Anchor Ref):** Describe the setting (e.g., "Mars Base Interior") and generate a background plate to serve as the environment.
 
 ### Phase 5b: The "Reference Stack" Workflow (Advanced)
 **For precise directing without using canvas tokens.**

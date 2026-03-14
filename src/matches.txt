@@ -1,3 +1,0 @@
-
-renderer\App.tsx:10:  FlipHorizontal, FlipVertical, RotateCcw, Link2, Package
-

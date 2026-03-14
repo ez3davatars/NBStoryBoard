@@ -15,6 +15,7 @@ import { removeBackground } from "@imgly/background-removal";
 import { GeminiService } from '../services/GeminiService';
 import HelpTooltip from './ui/HelpTooltip';
 import InlineHint from './ui/InlineHint';
+import ConfirmDialog from './ui/ConfirmDialog';
 
 // Types are exported from AppContext
 import type { CastMember } from '../context/AppContext';
@@ -24,7 +25,7 @@ import {
   getStudioCoverFilename,
   verifyPermission
 } from '../utils/FileSystemAssets';
-import { isNativeParams, nativeLoadCover, nativeSaveCover, nativeWriteFile, nativeJoinPath } from '../utils/NativeFileAssets';
+import { isNativeParams, nativeLoadCover, nativeSaveCover, nativeWriteFile, nativeJoinPath, safeFetchBlob } from '../utils/NativeFileAssets';
 
 import coverRealism from '../assets/cover-realism.png';
 import coverAnim from '../assets/cover-anim.png';
@@ -342,12 +343,14 @@ const CastingForge = () => {
     const name = isRefSheet ? `Ref Sheet ${new Date().toLocaleTimeString()}` : `Actor ${state.actorLibrary.length + 1}`;
     const identity = isRefSheet ? "Reference Sheet" : (state.lastCastedPrompt || "Unknown Identity");
 
+    const targetCategoryLabel = targetFolderId === 'uncategorized' ? '' : (targetFolder?.label || '');
+
     const newActor: CastMember = {
       id: newActorId,
       url: finalUrl,
       tag: 'front', // Default
       name: name,
-      filename: filename, // Important for disk sync
+      filename: targetCategoryLabel ? `${targetCategoryLabel}/${filename}` : filename, // Important for disk sync
       profile: {
         identity: identity,
         wardrobe: "",
@@ -365,17 +368,16 @@ const CastingForge = () => {
       // 4. Save to Disk (if configured)
       // NATIVE
       if (isNativeParams() && state.saveDirectoryPath) {
-        // Ref Sheets go to 'Actors' folder too if added to library, 
-        // OR we could put them in 'ReferenceSheets'. 
-        // For consistency with "Add to Library", we treat them as Actors in the folder structure 
-        // so they appear in the grid.
         const actorsDir = await nativeJoinPath(state.saveDirectoryPath, 'Actors');
-        const fullPath = await nativeJoinPath(actorsDir, filename);
+        // Ensure subfolder exists by joining it; nativeWriteFile handles recursive mkdir
+        const targetDir = targetCategoryLabel ? await nativeJoinPath(actorsDir, targetCategoryLabel) : actorsDir;
+        const fullPath = await nativeJoinPath(targetDir, filename);
         await nativeWriteFile(fullPath, file);
       }
       // WEB
       else if (state.saveDirectoryHandle) {
-        await saveAssetToDisk(state.saveDirectoryHandle, `Actors/${filename}`, file);
+        const webPath = targetCategoryLabel ? `Actors/${targetCategoryLabel}/${filename}` : `Actors/${filename}`;
+        await saveAssetToDisk(state.saveDirectoryHandle, webPath, file);
       }
 
       // 5. Update State
@@ -433,6 +435,31 @@ const CastingForge = () => {
     }
 
     dispatch({ type: 'SET_PROCESSING', payload: true });
+
+    // --- TIMEOUT & ETA LOGIC ---
+    const getEtaMs = () => state.imageResolution === '4K' ? 35000 : (state.imageResolution === '2K' ? 25000 : 15000);
+    const etaMs = getEtaMs();
+
+    // --- PROGRESS SIMULATION TIMER ---
+    let currentPercent = 5;
+    dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text: "Synthesizing Asset" } });
+
+    const updateMs = 1000;
+    const increment = (updateMs / etaMs) * 100;
+
+    // Using window.setInterval to avoid NodeJS Timeout typing issues in React/Vite
+    const progressInterval = window.setInterval(() => {
+      currentPercent += increment;
+      if (currentPercent > 95) currentPercent = 95; // Cap at 95% until complete
+
+      let text = "Synthesizing Asset";
+      if (currentPercent > 40) text = "Processing Style Protocol...";
+      if (currentPercent > 70) text = "Refining Cutout Mask...";
+      if (currentPercent >= 95) text = "Refining Cutout Mask... (Still working, please wait)";
+
+      dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text } });
+    }, updateMs);
+
     dispatch({ type: 'SET_LAST_CASTED_MASK', payload: null });
     setProcessedPreviewUrl(null);
 
@@ -445,18 +472,19 @@ const CastingForge = () => {
         dispatch({ type: 'ADD_LOG', payload: { message: "Applying stylization to character...", type: 'info' } });
         res = await GeminiService.generateImage(
           `Stylize the subject in [IMAGE 1] to match this character description: ${effectivePrompt}.
-          ${styleDirectives}
-          CRITICAL RULES:
-          1. **ABSOLUTELY NO TEXT, LABELS, HUD, OR OVERLAYS.**
-          2. MAINTAIN the subject's identity and key features from [IMAGE 1].
-          3. FORCE a solid soft white background for clear subject isolation.
-          ${negativePrompt}`,
+ ${styleDirectives}
+ CRITICAL RULES:
+ 1. **ABSOLUTELY NO TEXT, LABELS, HUD, OR OVERLAYS.**
+ 2. MAINTAIN the subject's identity and key features from [IMAGE 1].
+ 3. FORCE a solid soft white background for clear subject isolation.
+ ${negativePrompt}`,
           state.apiKey,
           state.model,
-          [{ url: state.lastCastedImage, label: 'Subject Reference' }]
+          [{ url: state.lastCastedImage, label: 'Subject Reference' }],
+          { imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding }
         );
       } else {
-        res = await GeminiService.generateImage(`Detailed character portrait: ${effectivePrompt}. ${styleDirectives} Use a solid soft white background. **NO TEXT OR OVERLAYS.** ${negativePrompt}`, state.apiKey, 'imagen-4.0-generate-001');
+        res = await GeminiService.generateImage(`Detailed character portrait: ${effectivePrompt}. ${styleDirectives} Use a solid soft white background. **NO TEXT OR OVERLAYS.** ${negativePrompt}`, state.apiKey, 'imagen-4.0-generate-001', [], { imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding });
       }
 
       if (generationIdRef.current === currentGenId) {
@@ -470,9 +498,8 @@ const CastingForge = () => {
 
         dispatch({ type: 'ADD_LOG', payload: { message: "Running local AI isolation...", type: 'info' } });
 
-        // Fetch the generated image as a blob
-        const response = await fetch(res);
-        const blob = await response.blob();
+        // Fetch the generated image as a blob (safeFetchBlob supports local paths)
+        const blob = await safeFetchBlob(res);
 
         // Run @imgly/background-removal
         // Note: The first run will download model assets (approx 40MB)
@@ -500,6 +527,8 @@ const CastingForge = () => {
     } catch (e: any) {
       dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });
     } finally {
+      clearInterval(progressInterval);
+      dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
       dispatch({ type: 'SET_PROCESSING', payload: false });
     }
   };
@@ -509,7 +538,6 @@ const CastingForge = () => {
   const maskImgRef = useRef<HTMLImageElement>(null);
   const previewImgRef = useRef<HTMLImageElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const previewCanvasRef = useRef<HTMLCanvasElement>(null);
   // RESTORATION REFS
   const restorationCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const uiCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -534,20 +562,58 @@ const CastingForge = () => {
       const actorId = deleteTarget.payload;
       const actor = state.actorLibrary.find(a => a.id === actorId);
 
-      const performDelete = async () => {
-        // 1. If it's a file-based actor, delete from disk FIRST
-        if (actor && actor.filename && state.saveDirectoryHandle) {
+      const performDelete = async () => {      // 1. If it's a file-based actor, delete from disk FIRST
+        if (actor && actor.filename) {
           try {
-            // Verify Write Permission before attempting delete
-            const hasPermission = await verifyPermission(state.saveDirectoryHandle, true);
-            if (!hasPermission) {
-              showToast("Permission Denied: Cannot delete file from disk.");
-              return; // Abort delete
+            let deleted = false;
+            let diag = "";
+            if (state.saveDirectoryPath && window.electronAPI?.deleteFile && window.electronAPI?.joinPath) {
+              const filePath = await window.electronAPI.joinPath(state.saveDirectoryPath, 'Actors', actor.filename);
+              deleted = await window.electronAPI.deleteFile(filePath);
+              diag += `IPC[${deleted}] (${filePath}). `;
+
+              // SMART FALLBACK: If direct delete failed, maybe the file moved or category changed?
+              if (!deleted && window.electronAPI?.exists) {
+                diag += `FallbackSearch... `;
+                const possibleCats = ['', 'Realism', 'Stylized Cartoon', 'Illustration', 'Sci-Fi', 'Uncategorized', 'Extras'];
+                const basename = actor.filename?.split(/[\\/]/).pop();
+
+                if (basename) {
+                  for (const cat of possibleCats) {
+                    const testPath = await window.electronAPI.joinPath(state.saveDirectoryPath, 'Actors', cat, basename);
+                    if (await window.electronAPI.exists(testPath)) {
+                      deleted = await window.electronAPI.deleteFile(testPath);
+                      if (deleted) {
+                        diag += `FoundIn[${cat || 'Root'}]. `;
+                        break;
+                      }
+                    }
+                  }
+                }
+              }
+            } else {
+              diag += `IPC[Missing/NoPath]. `;
             }
 
-            const dir = await state.saveDirectoryHandle.getDirectoryHandle('Actors');
-            await dir.removeEntry(actor.filename);
-            dispatch({ type: 'ADD_LOG', payload: { message: "File deleted from disk", type: 'success' } });
+            if (!deleted && state.saveDirectoryHandle) {
+              const hasPermission = await verifyPermission(state.saveDirectoryHandle, true);
+              if (!hasPermission) {
+                showToast("Permission Denied: Cannot delete file from disk.");
+                return; // Abort delete
+              }
+              let curDir = await state.saveDirectoryHandle.getDirectoryHandle('Actors');
+              const pathParts = actor.filename.split(/[\\/]/);
+              for (let i = 0; i < pathParts.length - 1; i++) {
+                curDir = await curDir.getDirectoryHandle(pathParts[i]);
+              }
+              await curDir.removeEntry(pathParts[pathParts.length - 1]);
+              deleted = true;
+              diag += `Web[Succeed]. `;
+            }
+
+            if (!deleted) throw new Error("File deletion failed or permission denied on disk. Trace: " + diag);
+
+            dispatch({ type: 'ADD_LOG', payload: { message: `File deleted from disk ${diag}`, type: 'success' } });
 
             // Only remove from memory if disk delete succeeded
             dispatch({ type: 'REMOVE_ACTOR_LIBRARY', payload: actorId });
@@ -1096,13 +1162,12 @@ const CastingForge = () => {
           const w = img.width;
           const h = img.height;
           let targetRatio = 1;
-          let aspectRatio = '1:1';
           const ratio = w / h;
 
-          if (Math.abs(ratio - 16 / 9) < 0.2) { aspectRatio = '16:9'; targetRatio = 16 / 9; }
-          else if (Math.abs(ratio - 9 / 16) < 0.2) { aspectRatio = '9:16'; targetRatio = 9 / 16; }
-          else if (Math.abs(ratio - 4 / 3) < 0.2) { aspectRatio = '4:3'; targetRatio = 4 / 3; }
-          else if (Math.abs(ratio - 3 / 4) < 0.2) { aspectRatio = '3:4'; targetRatio = 3 / 4; }
+          if (Math.abs(ratio - 16 / 9) < 0.2) { targetRatio = 16 / 9; }
+          else if (Math.abs(ratio - 9 / 16) < 0.2) { targetRatio = 9 / 16; } // approximate portrait
+          else if (ratio > 1.2) { targetRatio = 16 / 9; }
+          else if (ratio < 0.8) { targetRatio = 9 / 16; }
 
           let cropW = w;
           let cropH = h;
@@ -1131,18 +1196,17 @@ const CastingForge = () => {
 
           if (state.apiKey) {
             try {
-              dispatch({ type: 'ADD_LOG', payload: { message: "Isolating character silhouette from upload...", type: 'info' } });
-              const maskModel = state.model.includes('gemini') ? state.model : 'gemini-2.5-flash-image';
-              const maskRes = await GeminiService.generateImage(
-                "DIGITAL CHARACTER SEGMENTATION MASK: Create a pure black and white silhouette of the character in the image. White = Subject, Black = Background. Film precision.",
-                state.apiKey,
-                maskModel,
-                [{ url: standardizedUrl, label: "Subject" }],
-                { aspectRatio }
-              );
+              dispatch({ type: 'ADD_LOG', payload: { message: "Isolating character silhouette locally...", type: 'info' } });
+              const blob = await safeFetchBlob(standardizedUrl);
+              const maskResBlob = await removeBackground(blob, {
+                progress: () => {
+                  // Keep it simple, or emit progress if needed. Imgly handles it.
+                }
+              });
+              const maskResDataUrl = URL.createObjectURL(maskResBlob);
 
               if (generationIdRef.current === currentGenId) {
-                dispatch({ type: 'SET_LAST_CASTED_MASK', payload: maskRes });
+                dispatch({ type: 'SET_LAST_CASTED_MASK', payload: maskResDataUrl });
                 dispatch({ type: 'ADD_LOG', payload: { message: "Character silhouette isolated successfully", type: 'success' } });
               }
             } catch (err: any) {
@@ -1163,16 +1227,44 @@ const CastingForge = () => {
     dispatch({ type: 'SET_PROCESSING', payload: true });
     dispatch({ type: 'ADD_LOG', payload: { message: "Generating Character Reference Sheet...", type: 'info' } });
 
+    // --- TIMEOUT & ETA LOGIC ---
+    const getEtaMs = () => state.imageResolution === '4K' ? 90000 : (state.imageResolution === '2K' ? 45000 : 20000);
+    const etaMs = getEtaMs();
+
+    // --- PROGRESS SIMULATION TIMER ---
+    let currentPercent = 5;
+    dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text: "Synthesizing Reference Sheet" } });
+
+    const updateMs = 1000;
+    const increment = (updateMs / etaMs) * 100;
+
+    const progressInterval = setInterval(() => {
+      currentPercent += increment;
+      if (currentPercent > 95) currentPercent = 95; // Cap at 95% until complete
+
+      let text = "Synthesizing Reference Sheet";
+      if (currentPercent > 30) text = "Refining Geometry...";
+      if (currentPercent > 60) text = "Applying Materials...";
+      if (currentPercent > 80) text = "Finalizing Render...";
+      if (currentPercent >= 95) text = "Finalizing Render... (Still working, please wait)";
+
+      dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text } });
+    }, updateMs);
+
     try {
       let finalPrompt = REFERENCE_SHEET_PROMPT;
 
       if (refLayout === 'form_focus') {
-        finalPrompt += " [LAYOUT A - CLASSIC]: Split canvas horizontally. Top 65% height: ROW OF EXACTLY 3 Full Body views with DISTINCT ANGLES (1. Front, 2. Side Profile, 3. Back). Bottom 35% height: Grid of EXACTLY 4 Headshots with VARIED ANGLES (Front, 3/4 Left, 3/4 Right, Profile). Ensure headshots are MACRO-DETAILED and hyper-sharp.";
+        finalPrompt += " [LAYOUT A - CLASSIC]: Split canvas horizontally. Top 65% height: ROW OF EXACTLY 3 Full Body views with DISTINCT ANGLES (1. Front, 2. Side Profile, 3. Back). Bottom 35% height: Grid of EXACTLY 4 Headshots with VARIED ANGLES (Front, EXTREME LEFT PROFILE, EXTREME RIGHT PROFILE, Looking Up). Ensure headshots are MACRO-DETAILED and hyper-sharp.";
       } else if (refLayout === 'face_focus') {
-        finalPrompt += " [LAYOUT B - FACE FIRST]: Split canvas horizontally. Top 55% height: Row of EXACTLY 4 Large Headshots showing VARIED ANGLES (Front, 3/4 Left, 3/4 Right, Profile). Bottom 45% height: Row of EXACTLY 3 Full Body views with DISTINCT ANGLES (1. Front, 2. Side Profile, 3. Back). Headshots must maintain perfect identity.";
+        finalPrompt += " [LAYOUT B - FACE FIRST]: Split canvas horizontally. Top 55% height: Row of EXACTLY 4 Large Headshots showing VARIED ANGLES (Front, EXTREME LEFT PROFILE, EXTREME RIGHT PROFILE, Looking Up). Bottom 45% height: Row of EXACTLY 3 Full Body views with DISTINCT ANGLES (1. Front, 2. Side Profile, 3. Back). Headshots must maintain perfect identity.";
       } else if (refLayout === 'split_focus') {
-        finalPrompt += " [LAYOUT C - STUDIO]: Split canvas vertically. Left 45% width: Vertical stack of EXACTLY 3 Full Body views with DISTINCT ANGLES (1. Front, 2. Side Profile, 3. Back). DO NOT ADD A FOURTH VIEW. Right 55% width: 2x2 Grid of Large Headshots with VARIED ANGLES (Front, 3/4 Left, 3/4 Right, Profile). Highest possible facial resolution.";
+        finalPrompt += " [LAYOUT C - STUDIO]: Split canvas vertically. Left 45% width: Vertical stack of EXACTLY 3 Full Body views with DISTINCT ANGLES (1. Front, 2. Side Profile, 3. Back). DO NOT ADD A FOURTH VIEW. Right 55% width: 2x2 Grid of Large Headshots with VARIED ANGLES (Front, EXTREME LEFT PROFILE, EXTREME RIGHT PROFILE, Looking Up). Highest possible facial resolution.";
       }
+
+      finalPrompt += " EXCLUSION RULE: NEVER put two identical profile views next to each other. The Left Profile and Right Profile MUST face opposite directions.\n";
+
+      finalPrompt += "\n\nCRITICAL ROTATION OVERRIDE: While the identity and costume must match the reference, YOU MUST NOT COPY THE CAMERA ANGLE OF THE REFERENCE IMAGE across all panels. You MUST dynamically rotate the character's head and body in 3D space to precisely match the requested viewpoints (Profile, 3/4, Back, etc) for each individual panel.\n\n";
 
       // BRANDING INJECTION
       let inputImages = [{ url: state.lastCastedImage, label: 'Character Reference' }];
@@ -1180,12 +1272,13 @@ const CastingForge = () => {
       if (brandingLogo) {
         inputImages.push({ url: brandingLogo, label: 'Branding Logo' });
         finalPrompt += `
-        
-        8. BRANDING & IDENTITY (OVERRIDE)
-           - Place the logo from [IMAGE 2] onto the character's clothing in EVERY view.
-           - EXACT PLACEMENT: ${logoPosition || "Chest/Torso"}.
-           - Integrate the logo realistically: it must wrap with the fabric's folds, match the lighting, and follow the texture of the garment.
-           - The logo must be visible and consistent across all angles (Front, Side, Back).`;
+ 
+ 8. BRANDING & IDENTITY (OVERRIDE)
+ - Place the logo from [IMAGE 2] onto the character's clothing in views where the torso is visible.
+ - EXACT PLACEMENT: ${logoPosition || "Chest/Torso"}.
+ - Integrate the logo realistically: it must wrap with the fabric's folds, match the lighting, and follow the texture of the garment.
+ - The logo must be visible and consistent across all full-body angles (Front, Side, Back).
+ - HEADSHOT EXCLUSION (CRITICAL): Do NOT spawn the logo floating in the background, on the neck, or on the face. If a panel is an extreme close-up or headshot where the ${logoPosition || "Chest/Torso"} is NOT naturally visible, OMIT THE LOGO ENTIRELY from that specific panel.`;
       }
 
       const res = await GeminiService.generateImage(
@@ -1193,7 +1286,7 @@ const CastingForge = () => {
         state.apiKey,
         state.model, // Use the user's selected model (consistent with main generator)
         inputImages,
-        { aspectRatio: '16:9' }
+        { aspectRatio: refLayout === 'split_focus' ? '16:9' : '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding }
       );
       setRefSheetUrl(res);
       setShowRefSheet(true);
@@ -1201,6 +1294,8 @@ const CastingForge = () => {
     } catch (e: any) {
       dispatch({ type: 'ADD_LOG', payload: { message: `Ref Sheet failed: ${e.message}`, type: 'error' } });
     } finally {
+      clearInterval(progressInterval);
+      dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
       dispatch({ type: 'SET_PROCESSING', payload: false });
     }
   };
@@ -1561,8 +1656,8 @@ const CastingForge = () => {
 
   const finalizeCrop = () => {
     if (!cropRect || !containerRef.current || cropRect.w < 10) return;
-    const isUsingCanvas = !!(processedPreviewUrl && previewImgRef.current);
-    const visualElement = isUsingCanvas ? previewImgRef.current : imgRef.current;
+    const isUsingProcessedPreview = !!(processedPreviewUrl && previewImgRef.current);
+    const visualElement = isUsingProcessedPreview ? previewImgRef.current : imgRef.current;
     if (!visualElement || !imgRef.current) return;
 
     const visualRect = visualElement.getBoundingClientRect();
@@ -1572,12 +1667,11 @@ const CastingForge = () => {
     const cropX_onVisual = cropRect.x - offsetLeft;
     const cropY_onVisual = cropRect.y - offsetTop;
 
-    let sourceFullWidth = imgRef.current.naturalWidth;
-    let sourceFullHeight = imgRef.current.naturalHeight;
-    if (isUsingCanvas && previewCanvasRef.current) {
-      sourceFullWidth = previewCanvasRef.current.width;
-      sourceFullHeight = previewCanvasRef.current.height;
-    }
+    const sourceElement = isUsingProcessedPreview ? previewImgRef.current : imgRef.current;
+    if (!sourceElement) return;
+
+    const sourceFullWidth = sourceElement.naturalWidth;
+    const sourceFullHeight = sourceElement.naturalHeight;
 
     const scaleX = sourceFullWidth / visualRect.width;
     const scaleY = sourceFullHeight / visualRect.height;
@@ -1599,11 +1693,7 @@ const CastingForge = () => {
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
     if (ctx) {
-      if (isUsingCanvas && previewCanvasRef.current) {
-        ctx.drawImage(previewCanvasRef.current, safeSx, safeSy, safeW, safeH, safeDx, safeDy, safeW, safeH);
-      } else {
-        ctx.drawImage(imgRef.current, safeSx, safeSy, safeW, safeH, safeDx, safeDy, safeW, safeH);
-      }
+      ctx.drawImage(sourceElement, safeSx, safeSy, safeW, safeH, safeDx, safeDy, safeW, safeH);
       const tokenUrl = canvas.toDataURL('image/png');
 
       // Update Viewport with Cropped Image
@@ -1634,10 +1724,10 @@ const CastingForge = () => {
   return (
     <div className="flex h-full gap-6 p-4">
       {/* 1. LEFT SIDEBAR: Source & Tools */}
-      <div className="w-[400px] flex flex-col gap-4 h-full shrink-0">
+      <div className="w-[400px] flex flex-col gap-4 h-full shrink-0 min-h-0 overflow-y-auto pr-1 pb-2">
 
         {/* Source Material */}
-        <div className="bg-[#18181b] p-6 rounded-xl border border-gray-800 shadow-xl shrink-0">
+        <div className="bg-[#18181b] p-6 rounded-xl border border-gray-800 shrink-0">
           <div className="flex justify-between items-center mb-4">
             <div>
               <h2 className="text-lg font-black text-white uppercase tracking-wide mb-1">Character Generator</h2>
@@ -1669,7 +1759,7 @@ const CastingForge = () => {
                   <button
                     onClick={() => setSelectedStyleId(selectedStyleId === folder.id ? null : folder.id)}
                     className={`flex items-center gap-2 p-2 rounded-lg border transition-all ${selectedStyleId === folder.id
-                      ? 'bg-yellow-500/10 border-yellow-500 text-yellow-500 shadow-[0_0_10px_rgba(234,179,8,0.2)]'
+                      ? 'bg-yellow-500/10 border-yellow-500 text-yellow-500 -[0_0_10px_rgba(234,179,8,0.2)]'
                       : 'bg-[#09090b] border-gray-800 text-gray-500 hover:border-gray-600 hover:text-gray-300'
                       }`}
                   >
@@ -1689,8 +1779,8 @@ const CastingForge = () => {
                 onClick={handleGenerate}
                 disabled={state.isProcessing}
                 className={`flex items-center justify-center gap-2 py-3 rounded-lg text-[10px] font-black transition-all border uppercase tracking-wider active:scale-95 ${state.lastCastedImage
-                  ? 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white border-blue-400/50 shadow-[0_0_15px_rgba(59,130,246,0.3)] hover:shadow-[0_0_25px_rgba(59,130,246,0.5)]'
-                  : 'bg-gradient-to-r from-[#27272a] to-[#18181b] hover:from-[#3f3f46] hover:to-[#27272a] text-white border-[#3f3f46] hover:border-gray-500 shadow-lg'
+                  ? 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white border-blue-400/50 -[0_0_15px_rgba(59,130,246,0.3)] hover:-[0_0_25px_rgba(59,130,246,0.5)]'
+                  : 'bg-gradient-to-r from-[#27272a] to-[#18181b] hover:from-[#3f3f46] hover:to-[#27272a] text-white border-[#3f3f46] hover:border-gray-500 '
                   }`}
               >
                 {state.isProcessing ? <RotateCw className="animate-spin w-4 h-4" /> : state.lastCastedImage ? <RefreshCw className="w-4 h-4" /> : <MonitorPlay className="w-4 h-4" />}
@@ -1709,12 +1799,12 @@ const CastingForge = () => {
 
 
         {/* Reference Sheet Generator */}
-        <div className="bg-[#18181b] p-6 rounded-xl border border-gray-800 shadow-xl shrink-0">
+        <div className="bg-[#18181b] p-6 rounded-xl border border-gray-800 shrink-0">
           <h2 className="text-xs font-bold text-gray-600 uppercase tracking-normal mb-4 flex items-center gap-2">
             <LayoutTemplate className="w-3.5 h-3.5 opacity-50" /> Actor Reference Sheet
             <div className="group relative">
               <Info className="w-3.5 h-3.5 text-gray-400 hover:text-white cursor-help transition-colors" />
-              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 p-3 bg-gray-900 border border-gray-700 rounded-lg shadow-xl text-[10px] text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
+              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 p-3 bg-gray-900 border border-gray-700 rounded-lg text-[10px] text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
                 <strong className="text-white block mb-1">Production Note:</strong>
                 High-Fidelity AI Synthesis: Identity & layout are strictly enforced, but minor variations may occur. Always review for production use.
               </div>
@@ -1731,7 +1821,7 @@ const CastingForge = () => {
                 key={l.id}
                 onClick={() => setRefLayout(l.id as any)}
                 className={`flex-1 py-2 rounded text-[10px] font-bold uppercase transition-all border ${refLayout === l.id
-                  ? 'bg-purple-900 border-purple-500 text-white shadow-[0_0_10px_rgba(168,85,247,0.4)]'
+                  ? 'bg-purple-900 border-purple-500 text-white -[0_0_10px_rgba(168,85,247,0.4)]'
                   : 'bg-black border-gray-700 text-gray-400 hover:border-gray-500'
                   }`}
               >
@@ -1777,7 +1867,7 @@ const CastingForge = () => {
                       e.preventDefault();
                       setBrandingLogo(null);
                     }}
-                    className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5 shadow-lg hover:bg-red-600 transition-colors"
+                    className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5 hover:bg-red-600 transition-colors"
                   >
                     <X className="w-2.5 h-2.5" />
                   </button>
@@ -1812,7 +1902,7 @@ const CastingForge = () => {
         {/* REF SHEET MODAL */}
         {showRefSheet && refSheetUrl && (
           <div className="fixed inset-0 z-[2000] bg-black/80 backdrop-blur-xl flex items-center justify-center p-8 animate-in fade-in duration-200">
-            <div className="relative w-full max-w-6xl h-[90vh] flex flex-col items-center bg-[#18181b] rounded-2xl border border-white/10 shadow-2xl overflow-hidden">
+            <div className="relative w-full max-w-6xl h-[90vh] flex flex-col items-center bg-[#18181b] rounded-2xl border border-white/10 overflow-hidden">
               <div className="flex justify-between items-center w-full p-6 border-b border-white/10 bg-[#09090b] flex-shrink-0">
                 <h3 className="text-xl font-black text-white uppercase tracking-widest flex items-center gap-3">
                   <LayoutTemplate className="w-6 h-6 text-purple-400" /> Reference Sheet
@@ -1877,7 +1967,7 @@ const CastingForge = () => {
                         a.click();
                       }
                     }}
-                    className="bg-purple-600 hover:bg-purple-500 text-white px-6 py-2 rounded-lg font-bold uppercase tracking-widest text-[10px] transition-all shadow-lg shadow-purple-900/50 flex items-center gap-2"
+                    className="bg-purple-600 hover:bg-purple-500 text-white px-6 py-2 rounded-lg font-bold uppercase tracking-widest text-[10px] transition-all flex items-center gap-2"
                   >
                     <Share2 className="w-4 h-4" /> Save Asset
                   </button>
@@ -1891,39 +1981,42 @@ const CastingForge = () => {
               </div>
 
               <div className="flex-1 w-full bg-black/50 overflow-hidden flex items-center justify-center relative p-4 min-h-0">
-                <img src={refSheetUrl} className="max-w-full max-h-full object-contain shadow-2xl" />
+                <img src={refSheetUrl} className="max-w-full max-h-full object-contain " />
               </div>
             </div>
           </div>
         )}
 
         {/* CAST ASSETS (RESTORED) */}
-        <div className="bg-[#18181b] p-6 rounded-xl border border-gray-800 flex-grow flex flex-col shadow-xl min-h-0">
+        <div className="bg-[#18181b] p-6 rounded-xl border border-gray-800 flex flex-col shrink-0">
           <h2 className="text-sm font-bold text-gray-400 uppercase mb-4 tracking-wider flex justify-between items-center shrink-0">
             <span>Cast Assets</span>
             <span className="text-xs bg-gray-800 px-2 py-1 rounded text-gray-500">{state.cast.length} tokens</span>
           </h2>
-          <div className="overflow-y-auto pr-1 flex-grow scrollbar-thin scrollbar-thumb-gray-800 scrollbar-track-transparent pb-2">
+          <div className="pb-2">
             <div className="grid grid-cols-3 gap-2">
               {state.cast.map(c => (
                 <div
                   key={c.id}
                   className="aspect-square bg-black border border-gray-700 rounded-lg overflow-hidden relative group cursor-pointer hover:border-yellow-500 transition-colors"
                   draggable
-                  onDragStart={(e) => e.dataTransfer.setData('application/json', JSON.stringify(c))}
+                  onDragStart={(e) => {
+                    e.dataTransfer.effectAllowed = 'copy';
+                    e.dataTransfer.setData('application/x-cast-id', c.id);
+                  }}
                 >
-                  <img src={c.url} className="w-full h-full object-contain" />
+                  <img src={c.url} className="w-full h-full object-contain pointer-events-none" draggable={false} />
                   <div className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col gap-1">
                     <button
                       onClick={(e) => { e.stopPropagation(); dispatch({ type: 'SET_INSPECT_IMAGE', payload: c.url }); }}
-                      className="bg-blue-500/80 hover:bg-blue-500 text-white p-1 rounded-full shadow-lg"
+                      className="bg-blue-500/80 hover:bg-blue-500 text-white p-1 rounded-full "
                       title="Inspect Large"
                     >
                       <Maximize className="w-3 h-3" />
                     </button>
                     <button
                       onClick={(e) => { e.stopPropagation(); setDeleteTarget({ type: 'cast', payload: c.id, name: c.tag || 'Token' }); }}
-                      className="bg-red-500/80 hover:bg-red-500 text-white p-1 rounded-full shadow-lg"
+                      className="bg-red-500/80 hover:bg-red-500 text-white p-1 rounded-full "
                       title="Delete Asset"
                     >
                       <Trash2 className="w-3 h-3" />
@@ -1944,7 +2037,7 @@ const CastingForge = () => {
 
       {/* 2. CENTER: Viewport */}
       <div className="flex-grow flex flex-col gap-6 overflow-hidden min-h-0">
-        <div className="flex-grow bg-[#09090b] rounded-2xl border border-gray-800 flex flex-col overflow-hidden relative shadow-2xl">
+        <div className="flex-grow bg-[#09090b] rounded-2xl border border-gray-800 flex flex-col overflow-hidden relative ">
           <div className="p-3 bg-[#18181b] border-b border-gray-800 flex justify-between items-center shrink-0">
             <div className="flex items-center gap-2">
               <span className="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse border border-green-400/50"></span>
@@ -1973,7 +2066,7 @@ const CastingForge = () => {
               <button
                 onClick={() => setIsCropping(!isCropping)}
                 className={`text-[9px] px-4 py-1.5 rounded-full font-black flex items-center gap-2 transition-all uppercase tracking-widest active:scale-95 border ${isCropping
-                  ? 'bg-blue-600 text-white border-blue-400 shadow-lg shadow-blue-500/20'
+                  ? 'bg-blue-600 text-white border-blue-400 '
                   : 'bg-black/40 text-gray-500 border-white/5 hover:border-white/20 hover:text-gray-200'
                   }`}
               >
@@ -1986,7 +2079,7 @@ const CastingForge = () => {
           <div className="flex flex-row flex-grow overflow-hidden relative">
             <div
               ref={containerRef}
-              className={`flex-grow relative bg-gradient-to-b from-[#18181b] to-black flex items-center justify-center overflow-hidden select-none group border-4 border-blue-500/30 rounded-2xl m-2 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.15),0_0_30px_rgba(59,130,246,0.1)] ${isBrushActive ? 'cursor-none' : ''}`}
+              className={`flex-grow relative bg-gradient-to-b from-[#18181b] to-black flex items-center justify-center overflow-hidden select-none group border-4 border-blue-500/30 rounded-2xl m-2 -[inset_0_0_0_1px_rgba(255,255,255,0.15),0_0_30px_rgba(59,130,246,0.1)] ${isBrushActive ? 'cursor-none' : ''}`}
               onMouseDown={(e) => startInteraction(e)}
               onMouseMove={moveInteraction}
               onMouseUp={endInteraction}
@@ -1997,7 +2090,7 @@ const CastingForge = () => {
 
               {isBrushActive && cursorPos && (
                 <div
-                  className="absolute pointer-events-none rounded-full border-2 border-white shadow-[0_0_0_1px_rgba(0,0,0,0.5),inset_0_0_0_1px_rgba(0,0,0,0.5)] z-50 transition-none mix-blend-normal"
+                  className="absolute pointer-events-none rounded-full border-2 border-white -[0_0_0_1px_rgba(0,0,0,0.5),inset_0_0_0_1px_rgba(0,0,0,0.5)] z-50 transition-none mix-blend-normal"
                   style={{
                     width: `${brushSize}px`,
                     height: `${brushSize}px`,
@@ -2009,10 +2102,10 @@ const CastingForge = () => {
               )}
               {isIsolating && (
                 <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-black/40 backdrop-blur-[2px] animate-in fade-in duration-200">
-                  <div className="w-12 h-12 border-4 border-blue-500/30 border-t-blue-500 rounded-full animate-spin mb-4 shadow-[0_0_15px_rgba(59,130,246,0.5)]"></div>
+                  <div className="w-12 h-12 border-4 border-blue-500/30 border-t-blue-500 rounded-full animate-spin mb-4 -[0_0_15px_rgba(59,130,246,0.5)]"></div>
                   <div className="w-48 h-1.5 bg-gray-800 rounded-full overflow-hidden border border-white/10">
                     <div
-                      className="h-full bg-blue-500 transition-all duration-200 ease-out shadow-[0_0_10px_rgba(59,130,246,0.8)]"
+                      className="h-full bg-blue-500 transition-all duration-200 ease-out -[0_0_10px_rgba(59,130,246,0.8)]"
                       style={{ width: `${isolationProgress}%` }}
                     />
                   </div>
@@ -2064,7 +2157,7 @@ const CastingForge = () => {
                         {/* Brand Highlight Line (matches scrollbar) */}
                         <div className="w-full h-0.5 mb-3 bg-[#eab308] opacity-80 rounded-full" />
 
-                        <h3 className="text-3xl font-black text-zinc-500 uppercase tracking-[0.2em] drop-shadow-lg text-center whitespace-nowrap">ADD OR GENERATE AN ACTOR</h3>
+                        <h3 className="text-3xl font-black text-zinc-500 uppercase tracking-[0.2em] text-center whitespace-nowrap">ADD OR GENERATE AN ACTOR</h3>
                       </div>
                       <div className="space-y-1">
                         <p className="text-xs font-bold text-zinc-300 uppercase tracking-widest animate-stage-breathe max-w-lg mx-auto leading-relaxed">
@@ -2102,7 +2195,6 @@ const CastingForge = () => {
                   )}
                 </div>
               )}
-              <canvas ref={previewCanvasRef} className="hidden" />
             </div>
 
             {state.lastCastedImage && (
@@ -2140,8 +2232,7 @@ const CastingForge = () => {
                                   dispatch({ type: 'ADD_LOG', payload: { message: "Starting isolation...", type: 'info' } });
                                   setIsIsolating(true);
                                   setIsolationProgress(5);
-                                  const response = await fetch(state.lastCastedImage);
-                                  const blob = await response.blob();
+                                  const blob = await safeFetchBlob(state.lastCastedImage);
                                   const res = await removeBackground(blob, {
                                     progress: (_key: string, current: number, total: number) => {
                                       if (total) setIsolationProgress(Math.round((current / total) * 100));
@@ -2195,7 +2286,7 @@ const CastingForge = () => {
                             <button
                               onClick={() => setIsBrushActive(!isBrushActive)}
                               className={`p-1.5 rounded transition-all ${isBrushActive
-                                ? 'bg-blue-600 text-white shadow-[0_0_10px_rgba(37,99,235,0.5)]'
+                                ? 'bg-blue-600 text-white -[0_0_10px_rgba(37,99,235,0.5)]'
                                 : 'text-gray-400 hover:text-white hover:bg-white/10'
                                 }`}
                               title="Restore Mask Brush"
@@ -2245,14 +2336,14 @@ const CastingForge = () => {
                 </div>
 
                 <div className="p-4 border-t border-white/10 bg-[#09090b]/50 shrink-0 space-y-3">
-                  <button onClick={handleAddToCast} className="w-full bg-emerald-500/10 hover:bg-emerald-500 text-emerald-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-emerald-500/20 hover:shadow-[0_0_15px_rgba(16,185,129,0.4)] text-[10px] font-black uppercase tracking-wider" title="Add to Session Cast">
+                  <button onClick={handleAddToCast} className="w-full bg-emerald-500/10 hover:bg-emerald-500 text-emerald-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-emerald-500/20 hover:-[0_0_15px_rgba(16,185,129,0.4)] text-[10px] font-black uppercase tracking-wider" title="Add to Session Cast">
                     <UserPlus className="w-4 h-4" /> Add to Cast
                   </button>
                   <div className="grid grid-cols-2 gap-3">
-                    <button onClick={handleDownload} className="w-full bg-blue-600/10 hover:bg-blue-600 text-blue-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-blue-500/20 hover:shadow-[0_0_15px_rgba(37,99,235,0.4)] text-[10px] font-black uppercase tracking-wider">
+                    <button onClick={handleDownload} className="w-full bg-blue-600/10 hover:bg-blue-600 text-blue-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-blue-500/20 hover:-[0_0_15px_rgba(37,99,235,0.4)] text-[10px] font-black uppercase tracking-wider">
                       <Download className="w-4 h-4" /> Save
                     </button>
-                    <button onClick={() => dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: null })} className="w-full bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-red-500/20 hover:shadow-[0_0_15px_rgba(239,68,68,0.4)] text-[10px] font-black uppercase tracking-wider">
+                    <button onClick={() => dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: null })} className="w-full bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-red-500/20 hover:-[0_0_15px_rgba(239,68,68,0.4)] text-[10px] font-black uppercase tracking-wider">
                       <X className="w-4 h-4" /> Clear
                     </button>
                   </div>
@@ -2267,7 +2358,7 @@ const CastingForge = () => {
       {
         showSaveModal && (
           <div className="fixed inset-0 z-[3000] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={() => setShowSaveModal(false)}>
-            <div className="bg-[#18181b] border border-gray-700 rounded-2xl p-6 shadow-2xl max-w-md w-full relative overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="bg-[#18181b] border border-gray-700 rounded-2xl p-6 max-w-md w-full relative overflow-hidden" onClick={e => e.stopPropagation()}>
               <h3 className="text-lg font-black text-white uppercase tracking-widest mb-2 flex items-center gap-2">
                 <FolderInput className="w-5 h-5 text-emerald-500" /> Save to Actor Library
               </h3>
@@ -2280,7 +2371,7 @@ const CastingForge = () => {
                     <button
                       key={folder.id}
                       onClick={() => handleSaveToActorLibrary(folder.id)}
-                      className="group relative h-24 w-full rounded-xl overflow-hidden border border-white/10 shadow-lg transition-all hover:scale-[1.02] hover:border-emerald-500 cursor-pointer mb-1 text-left"
+                      className="group relative h-24 w-full rounded-xl overflow-hidden border border-white/10 transition-all hover:scale-[1.02] hover:border-emerald-500 cursor-pointer mb-1 text-left"
                     >
                       {/* Background Image */}
                       {activeImage ? (
@@ -2294,7 +2385,7 @@ const CastingForge = () => {
                       {/* Cinematic Overlay */}
                       <div className="absolute inset-0 bg-gradient-to-r from-black/60 via-black/40 to-transparent flex flex-col justify-center px-6">
                         <div>
-                          <h3 className="text-xl font-black text-white italic tracking-tighter uppercase drop-shadow-md group-hover:text-emerald-400 transition-colors leading-none">
+                          <h3 className="text-xl font-black text-white italic tracking-tighter uppercase group-hover:text-emerald-400 transition-colors leading-none">
                             {folder.label}
                           </h3>
                           <div className="flex items-center gap-2 mt-1">
@@ -2323,8 +2414,8 @@ const CastingForge = () => {
       }
 
       {/* 3. RIGHT SIDEBAR: Actor Library */}
-      <div className="w-96 border-l border-gray-800 bg-[#18181b] flex flex-col shadow-xl shrink-0">
-        <div className="p-4 border-b border-gray-800 flex justify-between items-center h-16 shadow-lg bg-black/20">
+      <div className="w-96 border-l border-gray-800 bg-[#18181b] flex flex-col shrink-0">
+        <div className="p-4 border-b border-gray-800 flex justify-between items-center h-16 bg-black/20">
           <h2 className="text-sm font-black text-white tracking-widest uppercase flex items-center gap-3">
             <UserPlus className="w-4 h-4 text-blue-400" /> Actor Library
           </h2>
@@ -2342,7 +2433,7 @@ const CastingForge = () => {
 
         <div className="flex-grow overflow-y-scroll flex flex-col scrollbar-thin scrollbar-thumb-gray-800 scrollbar-track-transparent">
 
-          <div className="sticky top-0 z-20 bg-[#18181b]/95 backdrop-blur-md px-4 pt-4 pb-2 border-b border-white/5 shadow-2xl space-y-4">
+          <div className="sticky top-0 z-20 bg-[#18181b]/95 backdrop-blur-md px-4 pt-4 pb-2 border-b border-white/5 space-y-4">
             {activeFolder && (
               <div className="flex items-center gap-3 h-[34px]">
                 <button
@@ -2384,7 +2475,7 @@ const CastingForge = () => {
                     <span className="text-[10px] font-bold">SORT</span>
                   </button>
                   {showSortMenu && (
-                    <div className="absolute right-0 top-full mt-2 w-32 bg-[#18181b] border border-[#27272a] rounded-xl shadow-2xl z-50 overflow-hidden animate-in fade-in zoom-in duration-200">
+                    <div className="absolute right-0 top-full mt-2 w-32 bg-[#18181b] border border-[#27272a] rounded-xl z-50 overflow-hidden animate-in fade-in zoom-in duration-200">
                       <button onClick={() => { setSortOption('date'); setShowSortMenu(false); }} className="w-full text-left px-3 py-2 text-[10px] font-bold uppercase flex items-center gap-2 hover:bg-white/5 text-gray-400"><Calendar className="w-3 h-3" /> Date</button>
                       <button onClick={() => { setSortOption('name'); setShowSortMenu(false); }} className="w-full text-left px-3 py-2 text-[10px] font-bold uppercase flex items-center gap-2 hover:bg-white/5 text-gray-400"><Type className="w-3 h-3" /> Name</button>
                     </div>
@@ -2435,7 +2526,7 @@ const CastingForge = () => {
                 </div>
                 <button
                   onClick={() => loadDiskCovers(true)}
-                  className="px-4 py-2 bg-yellow-500 hover:bg-yellow-400 text-black font-black uppercase text-xs rounded-lg tracking-widest transition-all shadow-lg shadow-yellow-500/20"
+                  className="px-4 py-2 bg-yellow-500 hover:bg-yellow-400 text-black font-black uppercase text-xs rounded-lg tracking-widest transition-all "
                 >
                   Resume
                 </button>
@@ -2461,7 +2552,7 @@ const CastingForge = () => {
                   const activeImage = state.customCovers[folder.id] || folder.image;
 
                   return (
-                    <div key={folder.id} className="group relative h-48 w-full rounded-3xl overflow-hidden border border-white/10 shadow-2xl transition-all hover:scale-[1.02] hover:border-white/30 cursor-pointer" onClick={() => setActiveFolder(folder.id)}>
+                    <div key={folder.id} className="group relative h-48 w-full rounded-3xl overflow-hidden border border-white/10 transition-all hover:scale-[1.02] hover:border-white/30 cursor-pointer" onClick={() => setActiveFolder(folder.id)}>
                       {/* Background Image */}
                       {activeImage ? (
                         <img src={activeImage} className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
@@ -2474,7 +2565,7 @@ const CastingForge = () => {
                       {/* Cinematic Overlay */}
                       <div className="absolute inset-0 bg-gradient-to-r from-black/50 via-black/20 to-transparent flex flex-col justify-end px-6 pb-4 pt-6">
                         <div>
-                          <h3 className="text-lg font-black text-white italic tracking-tighter uppercase drop-shadow-md group-hover:text-yellow-500 transition-colors leading-none">
+                          <h3 className="text-lg font-black text-white italic tracking-tighter uppercase group-hover:text-yellow-500 transition-colors leading-none">
                             {folder.label}
                           </h3>
                           <div className="flex items-center gap-3 mt-2">
@@ -2492,7 +2583,7 @@ const CastingForge = () => {
                       <div className="absolute top-0 right-0 p-4 opacity-0 hover:opacity-100 transition-opacity duration-300 z-50">
                         <button
                           onClick={(e) => triggerCoverEdit(folder.id, e)}
-                          className="w-auto h-8 px-3 rounded-full bg-black/80 border border-white/20 flex items-center gap-2 transition-all hover:bg-zinc-900 hover:border-yellow-500 shadow-xl group/btn"
+                          className="w-auto h-8 px-3 rounded-full bg-black/80 border border-white/20 flex items-center gap-2 transition-all hover:bg-zinc-900 hover:border-yellow-500 group/btn"
                           title="Change Cover Image"
                         >
                           <Edit2 className="w-3.5 h-3.5 text-white group-hover/btn:text-yellow-500 transition-colors" />
@@ -2507,7 +2598,7 @@ const CastingForge = () => {
               // FOLDER VIEW: GRID
               <div className="grid grid-cols-2 gap-4 pb-20">
                 {filteredLibrary.map(actor => (
-                  <div key={actor.id} className="group relative aspect-square rounded-xl overflow-hidden bg-black/40 border border-[#27272a] hover:border-yellow-500/50 transition-all shadow-lg hover:shadow-yellow-500/10">
+                  <div key={actor.id} className="group relative aspect-square rounded-xl overflow-hidden bg-black/40 border border-[#27272a] hover:border-yellow-500/50 transition-all hover:">
                     <img src={actor.url} className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-500" />
                     {/* Overlay Actions */}
                     <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 transition-all duration-300 flex flex-col items-center justify-center gap-2 backdrop-blur-md">
@@ -2522,7 +2613,7 @@ const CastingForge = () => {
                               setProcessedPreviewUrl(null);
                               dispatch({ type: 'ADD_LOG', payload: { message: `Loaded ${actor.name} into Viewport`, type: 'info' } });
                             }}
-                            className="bg-[#27272a] hover:bg-orange-600 w-8 h-8 rounded-lg border border-white/10 hover:border-orange-400/50 shadow-xl transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
+                            className="bg-[#27272a] hover:bg-orange-600 w-8 h-8 rounded-lg border border-white/10 hover:border-orange-400/50 transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
                             title="Load to Forge / Turnaround"
                           >
                             <Hammer className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
@@ -2531,7 +2622,7 @@ const CastingForge = () => {
                         <InlineHint zone="cast" id="sendToDirectorButton" className="hidden" />
                         <button
                           onClick={() => dispatch({ type: 'SET_INSPECT_IMAGE', payload: actor.url })}
-                          className="bg-[#27272a] hover:bg-blue-600 w-8 h-8 rounded-lg border border-white/10 hover:border-blue-400/50 shadow-xl transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
+                          className="bg-[#27272a] hover:bg-blue-600 w-8 h-8 rounded-lg border border-white/10 hover:border-blue-400/50 transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
                           title="Inspect Large"
                         >
                           <Maximize className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
@@ -2541,7 +2632,7 @@ const CastingForge = () => {
                             type: 'ADD_CAST',
                             payload: { ...actor, id: `ref-${Date.now()}-${Math.random()}`, name: `${actor.name} (Ref)` }
                           })}
-                          className="bg-[#27272a] hover:bg-emerald-600 w-8 h-8 rounded-lg border border-white/10 hover:border-emerald-400/50 shadow-xl transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
+                          className="bg-[#27272a] hover:bg-emerald-600 w-8 h-8 rounded-lg border border-white/10 hover:border-emerald-400/50 transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
                           title="Add to Cast"
                         >
                           <UserPlus className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
@@ -2551,14 +2642,14 @@ const CastingForge = () => {
                       <div className="flex gap-2">
                         <button
                           onClick={() => setOrganizeTarget({ id: actor.id, name: actor.name })}
-                          className="bg-[#27272a] hover:bg-purple-600 w-8 h-8 rounded-lg border border-white/10 hover:border-purple-400/50 shadow-xl transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
+                          className="bg-[#27272a] hover:bg-purple-600 w-8 h-8 rounded-lg border border-white/10 hover:border-purple-400/50 transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
                           title="Move to Studio Folder"
                         >
                           <FolderInput className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
                         </button>
                         <button
                           onClick={() => setDeleteTarget({ type: 'library', payload: actor.id, name: actor.name })}
-                          className="bg-[#27272a] hover:bg-red-600 w-8 h-8 rounded-lg border border-white/10 hover:border-red-400/50 shadow-xl transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
+                          className="bg-[#27272a] hover:bg-red-600 w-8 h-8 rounded-lg border border-white/10 hover:border-red-400/50 transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
                           title="Remove from Library"
                         >
                           <Trash2 className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
@@ -2615,7 +2706,7 @@ const CastingForge = () => {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 50, scale: 0.8 }}
             transition={{ type: "spring", damping: 15, stiffness: 300 }}
-            className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[5000] bg-gradient-to-br from-zinc-800 to-zinc-900 border border-zinc-700 text-white px-5 py-3 rounded-full shadow-2xl flex items-center gap-3"
+            className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[5000] bg-gradient-to-br from-zinc-800 to-zinc-900 border border-zinc-700 text-white px-5 py-3 rounded-full flex items-center gap-3"
           >
             <CheckCircle2 className="w-5 h-5 text-green-500" />
             <span className="text-xs font-bold uppercase tracking-widest">{notification}</span>
@@ -2624,40 +2715,29 @@ const CastingForge = () => {
       </AnimatePresence>
 
       {/* DELETE CONFIRMATION MODAL */}
-      <AnimatePresence>
-        {
-          deleteTarget && (
-            <div className="fixed inset-0 z-[3000] bg-black/80 backdrop-blur-sm flex items-center justify-center p-8 animate-in fade-in duration-200">
-              <div className="bg-[#18181b] border border-gray-700 p-6 rounded-2xl shadow-2xl max-w-sm w-full relative overflow-hidden">
-                <h3 className="text-lg font-black text-white uppercase tracking-wider mb-2">Delete Asset?</h3>
-                <p className="text-sm text-gray-400 mb-6">
-                  Are you sure you want to delete <span className="text-white font-bold">{deleteTarget.name}</span>?
-                  {deleteTarget.type === 'library' && " This will verify remove it from your global actors."}
-                </p>
-                <div className="flex justify-end gap-3">
-                  <button
-                    onClick={() => setDeleteTarget(null)}
-                    className="px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider text-gray-400 hover:text-white hover:bg-gray-800 transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={executeDelete}
-                    className="px-4 py-2 rounded-lg text-xs font-black uppercase tracking-wider bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-900/20"
-                  >
-                    Confirm
-                  </button>
-                </div>
-              </div>
-            </div>
-          )
+      <ConfirmDialog
+        isOpen={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={executeDelete}
+        title="Delete Asset?"
+        message={
+          <>
+            Are you sure you want to delete <span className="text-white font-bold">{deleteTarget?.name}</span>?
+            {deleteTarget?.type === 'library' && " This will permanently remove it from your global actors."}
+          </>
         }
+        confirmText="Confirm"
+        cancelText="Cancel"
+        variant="danger"
+      />
+
+      <AnimatePresence>
 
         {/* ORGANIZATION MODAL */}
         {
           organizeTarget && (
             <div className="fixed inset-0 z-[2000] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
-              <div className="bg-[#18181b] p-6 rounded-2xl border border-gray-800 shadow-2xl max-w-md w-full relative overflow-hidden">
+              <div className="bg-[#18181b] p-6 rounded-2xl border border-gray-800 max-w-md w-full relative overflow-hidden">
                 <h3 className="text-lg font-black text-white uppercase tracking-widest mb-2 flex items-center gap-2">
                   <FolderInput className="w-5 h-5 text-purple-500" /> Move Actor
                 </h3>
@@ -2687,7 +2767,7 @@ const CastingForge = () => {
                           }
                           setOrganizeTarget(null);
                         }}
-                        className="group relative h-24 w-full rounded-xl overflow-hidden border border-white/10 shadow-lg transition-all hover:scale-[1.02] hover:border-purple-500 cursor-pointer mb-2"
+                        className="group relative h-24 w-full rounded-xl overflow-hidden border border-white/10 transition-all hover:scale-[1.02] hover:border-purple-500 cursor-pointer mb-2"
                       >
                         {/* Background Image */}
                         {activeImage ? (
@@ -2701,7 +2781,7 @@ const CastingForge = () => {
                         {/* Cinematic Overlay */}
                         <div className="absolute inset-0 bg-gradient-to-r from-black/50 via-black/20 to-transparent flex flex-col justify-center px-6">
                           <div>
-                            <h3 className="text-xl font-black text-white italic tracking-tighter uppercase drop-shadow-md group-hover:text-purple-400 transition-colors leading-none">
+                            <h3 className="text-xl font-black text-white italic tracking-tighter uppercase group-hover:text-purple-400 transition-colors leading-none">
                               {folder.label}
                             </h3>
                             <div className="flex items-center gap-2 mt-1">

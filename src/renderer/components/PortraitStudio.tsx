@@ -82,7 +82,7 @@ const LIFE_STAGES = {
 // Local component for solid panels to ensure rendering stability
 function SolidPanel({ children, className = "" }: { children: React.ReactNode; className?: string }) {
     return (
-        <div className={`bg-[#0f1117] bg-opacity-95 border border-white/10 shadow-xl rounded-2xl ${className}`}>
+        <div className={`bg-[#0f1117] bg-opacity-95 border border-white/10 rounded-2xl ${className}`}>
             {children}
         </div>
     );
@@ -427,6 +427,7 @@ export default function PortraitStudio() {
     };
 
     // --- ACTIONS ---
+    const [progress, setProgress] = useState<{ phase: string, percent: number, text?: string } | null>(null);
 
     const handleGenerate = async () => {
         if (!state.apiKey) {
@@ -436,13 +437,25 @@ export default function PortraitStudio() {
         setIsGenerating(true);
         dispatch({ type: "ADD_LOG", payload: { message: "Generating Portrait...", type: "info" } });
 
+        // Simulated Progress for the UX Loader
+        setProgress({ phase: 'initializing', percent: 0, text: 'Initializing neural link...' });
+        let currentPercent = 0;
+        const progressInterval = setInterval(() => {
+            currentPercent += (100 - currentPercent) * 0.05; // Asymptotic approach to 99%
+            let text = 'Formulating prompt...';
+            if (currentPercent > 30) text = 'Synthesizing image data...';
+            if (currentPercent > 70) text = 'Refining output...';
+            if (currentPercent > 90) text = 'Finalizing render...';
+            setProgress({ phase: 'generating', percent: currentPercent, text });
+        }, 800);
+
         try {
             // MULTIMODAL WIRING: Pass reference image if in Reference Mode
             const referenceImages = dna.identityMode === "reference" && dna.referenceImageUrl
                 ? [{ url: dna.referenceImageUrl, label: "Identity Reference" }]
                 : [];
 
-            const url = await GeminiService.generateImage(compiledPrompt, state.apiKey, state.model, referenceImages);
+            const url = await GeminiService.generateImage(compiledPrompt, state.apiKey, state.model, referenceImages, { imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding });
             setGeneratedImage(url); // Set local state for preview
             dispatch({ type: "SET_LAST_CASTED_IMAGE", payload: url });
             dispatch({ type: "SET_LAST_CASTED_PROMPT", payload: compiledPrompt });
@@ -450,6 +463,8 @@ export default function PortraitStudio() {
         } catch (e: any) {
             dispatch({ type: "ADD_LOG", payload: { message: `Generation failed: ${e.message}`, type: "error" } });
         } finally {
+            clearInterval(progressInterval);
+            setProgress(null);
             setIsGenerating(false);
         }
     };
@@ -474,15 +489,14 @@ export default function PortraitStudio() {
     return (
         <div className="flex h-full w-full bg-[#0f0f11] text-gray-200 p-8 gap-8 overflow-hidden selection:bg-yellow-500/30 font-sans">
             <style>{`
-                @keyframes compilePulse {
-                    0%, 100% { opacity: 0.2; background-color: #ffffff; box-shadow: none; }
-                    50% { opacity: 1; background-color: #4ade80; box-shadow: 0 0 6px rgba(34,197,94,0.4); }
-                }
-            `}</style>
+ @keyframes compilePulse {
+ 0%, 100% { opacity: 0.2; background-color: #ffffff; box-: none; }
+ 50% { opacity: 1; background-color: #4ade80; box-: 0 0 6px rgba(34,197,94,0.4); }
+ }
+ `}</style>
 
             {/* GLOBAL LOADING OVERLAY */}
-            {/* GLOBAL LOADING OVERLAY */}
-            {isGenerating && <NanobananaThinking />}
+            {isGenerating && <NanobananaThinking progress={progress} />}
 
             {/* LEFT PANEL: CONTROLS */}
             <div className="flex-1 flex flex-col gap-8 overflow-y-auto pr-4 pb-32 scrollbar-none">
@@ -523,7 +537,7 @@ export default function PortraitStudio() {
                                         skin: { ...prev.skin, surfaceUnderEyeControl: true }
                                     }))}
                                     className={`px-4 py-1.5 rounded-lg text-[10px] uppercase tracking-wider transition-all duration-200 ${dna.identityMode === "synthetic"
-                                        ? 'bg-gradient-to-r from-yellow-500 to-yellow-600 text-white font-semibold shadow-md'
+                                        ? 'bg-gradient-to-r from-yellow-500 to-yellow-600 text-white font-semibold '
                                         : 'text-white/60 hover:bg-white/5 font-medium'
                                         }`}
                                 >
@@ -539,7 +553,7 @@ export default function PortraitStudio() {
                                         allowRefMorphology: false
                                     }))}
                                     className={`px-4 py-1.5 rounded-lg text-[10px] uppercase tracking-wider transition-all duration-200 ${dna.identityMode === "reference"
-                                        ? 'bg-gradient-to-r from-yellow-500 to-yellow-600 text-white font-semibold shadow-md'
+                                        ? 'bg-gradient-to-r from-yellow-500 to-yellow-600 text-white font-semibold '
                                         : 'text-white/60 hover:bg-white/5 font-medium'
                                         }`}
                                 >
@@ -575,7 +589,7 @@ export default function PortraitStudio() {
                                                     value={newPresetName}
                                                     onChange={(e) => setNewPresetName(e.target.value)}
                                                     placeholder="Preset Name..."
-                                                    className="h-[34px] px-3 bg-[#0f1117] border border-white/20 rounded-lg text-xs text-white focus:outline-none focus:border-yellow-500/50 min-w-[140px] placeholder:text-gray-600 shadow-xl ring-1 ring-yellow-500/10"
+                                                    className="h-[34px] px-3 bg-[#0f1117] border border-white/20 rounded-lg text-xs text-white focus:outline-none focus:border-yellow-500/50 min-w-[140px] placeholder:text-gray-600 ring-1 ring-yellow-500/10"
                                                     onKeyDown={(e) => e.key === "Enter" && handleSavePreset()}
                                                     autoFocus
                                                 />
@@ -845,7 +859,7 @@ export default function PortraitStudio() {
                                 )}
                             </div>
                             {/* Prominent BMI Badge */}
-                            <div className="flex items-center gap-4 bg-yellow-500/5 px-5 py-3 rounded-lg border border-yellow-500/10 shadow-[0_4px_20px_rgba(0,0,0,0.2)] hover:border-yellow-500/30 transition-colors cursor-help group/bmi">
+                            <div className="flex items-center gap-4 bg-yellow-500/5 px-5 py-3 rounded-lg border border-yellow-500/10 -[0_4px_20px_rgba(0,0,0,0.2)] hover:border-yellow-500/30 transition-colors cursor-help group/bmi">
                                 <div className="flex flex-col gap-0.5 text-right border-r border-yellow-500/20 pr-4 mr-1">
                                     <span className="text-[9px] text-yellow-500/70 font-bold uppercase tracking-widest">Metabolic Index</span>
                                     <span className="text-[9px] text-white/40 uppercase tracking-widest group-hover/bmi:text-white/60 transition-colors">{dna.morphology.buildDescription}</span>
@@ -1203,7 +1217,7 @@ export default function PortraitStudio() {
 
                 {/* GENERATED IMAGE RESULT (INLINE) */}
                 {generatedImage && (
-                    <SolidPanel className="p-1 border-green-500/20 shadow-[0_0_30px_rgba(74,222,128,0.1)] relative group shrink-0 animate-in slide-in-from-bottom-2 fade-in duration-300">
+                    <SolidPanel className="p-1 border-green-500/20 -[0_0_30px_rgba(74,222,128,0.1)] relative group shrink-0 animate-in slide-in-from-bottom-2 fade-in duration-300">
                         <button
                             onClick={() => setGeneratedImage(null)}
                             className="absolute top-3 right-3 z-20 p-1.5 bg-black/50 hover:bg-red-500/80 text-white rounded-full transition-colors backdrop-blur-sm opacity-0 group-hover:opacity-100"
@@ -1211,7 +1225,7 @@ export default function PortraitStudio() {
                         >
                             <X className="w-3 h-3" />
                         </button>
-                        <div className="rounded-xl overflow-hidden h-96 w-full relative bg-black shadow-inner group-hover/image">
+                        <div className="rounded-xl overflow-hidden h-96 w-full relative bg-black group-hover/image">
                             <img src={generatedImage} alt="Generated Portrait" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 ease-out" />
                             <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"></div>
 
@@ -1242,7 +1256,7 @@ export default function PortraitStudio() {
                 )}
 
                 {/* CONSOLE CARD */}
-                <SolidPanel className="flex-1 flex flex-col h-full border-white/5 bg-[#050505] shadow-[inset_0_2px_20px_rgba(0,0,0,0.5)]">
+                <SolidPanel className="flex-1 flex flex-col h-full border-white/5 bg-[#050505] -[inset_0_2px_20px_rgba(0,0,0,0.5)]">
                     {/* Console Header */}
                     <div className="h-12 bg-black/60 border-b border-white/5 flex items-center justify-between px-5 shrink-0">
                         <div className="flex items-center gap-3">
@@ -1267,7 +1281,7 @@ export default function PortraitStudio() {
                         <div className="flex-1 flex flex-col gap-2 overflow-hidden">
                             <label className="text-[10px] font-black text-gray-600 uppercase tracking-[0.3em] pl-1">Compiled Output Stream</label>
                             <textarea
-                                className="w-full flex-1 bg-[#0a0a0c] border border-white/5 rounded-lg p-5 text-xs font-mono text-green-400/90 focus:outline-none resize-none leading-relaxed tracking-wide shadow-inner selection:bg-green-500/30 transition-opacity duration-150"
+                                className="w-full flex-1 bg-[#0a0a0c] border border-white/5 rounded-lg p-5 text-xs font-mono text-green-400/90 focus:outline-none resize-none leading-relaxed tracking-wide selection:bg-green-500/30 transition-opacity duration-150"
                                 readOnly
                                 value={compiledPrompt}
                             />
@@ -1281,13 +1295,13 @@ export default function PortraitStudio() {
                                     <button
                                         onClick={handleGenerate}
                                         disabled={isGenerating || (dna.identityMode === "reference" && !dna.referenceImageUrl)}
-                                        className={`w-full bg-gradient-to-r from-yellow-500 to-yellow-600 text-white font-semibold rounded-xl px-6 py-3 shadow-md hover:shadow-lg hover:brightness-110 transition-all duration-200 ease-out flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:brightness-100 disabled:hover:shadow-md group relative
-                                            ${(dna.identityMode === "reference" && !dna.referenceImageUrl) ? 'grayscale opacity-30 shadow-none' : ''}`}
+                                        className={`w-full bg-gradient-to-r from-yellow-500 to-yellow-600 text-white font-semibold rounded-xl px-6 py-3 hover: hover:brightness-110 transition-all duration-200 ease-out flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:brightness-100 disabled:hover: group relative
+ ${(dna.identityMode === "reference" && !dna.referenceImageUrl) ? 'grayscale opacity-30 ' : ''}`}
                                     >
                                         {isGenerating ? (
                                             <RefreshCw className="w-5 h-5 animate-spin relative z-10" />
                                         ) : (
-                                            <Wand2 className="w-5 h-5 shadow-[0_0_6px_rgba(255,215,0,0.35)] transition-transform duration-200 group-hover:-translate-y-px relative z-10" />
+                                            <Wand2 className="w-5 h-5 -[0_0_6px_rgba(255,215,0,0.35)] transition-transform duration-200 group-hover:-translate-y-px relative z-10" />
                                         )}
                                         <span className="relative z-10">{isGenerating ? "Synthesizing DNA..." : "Generate DNA Portrait"}</span>
                                     </button>
@@ -1391,13 +1405,13 @@ export default function PortraitStudio() {
                         <img
                             src={generatedImage}
                             alt="Inspecting Portrait"
-                            className="max-w-full max-h-[85vh] object-contain drop-shadow-2xl rounded-lg ring-1 ring-white/10 pointer-events-auto"
+                            className="max-w-full max-h-[85vh] object-contain rounded-lg ring-1 ring-white/10 pointer-events-auto"
                             onClick={(e) => e.stopPropagation()}
                         />
                     </div>
 
                     {/* Floating Action Bar */}
-                    <div className="fixed bottom-12 left-1/2 -translate-x-1/2 flex gap-4 z-[2001] bg-black/40 backdrop-blur-2xl border border-white/10 p-2 rounded-2xl shadow-2xl" onClick={(e) => e.stopPropagation()}>
+                    <div className="fixed bottom-12 left-1/2 -translate-x-1/2 flex gap-4 z-[2001] bg-black/40 backdrop-blur-2xl border border-white/10 p-2 rounded-2xl " onClick={(e) => e.stopPropagation()}>
                         <button
                             onClick={() => {
                                 const newCast: any = {
@@ -1461,7 +1475,11 @@ export default function PortraitStudio() {
                 onClose={() => setDeleteTarget(null)}
                 onConfirm={confirmDelete}
                 title="Delete Preset"
-                message={`Are you sure you want to permanently delete the preset "${deleteTarget}"? This action cannot be undone.`}
+                message={
+                    <>
+                        Are you sure you want to permanently delete the preset <span className="text-white font-bold">"{deleteTarget}"</span>? This action cannot be undone.
+                    </>
+                }
                 confirmText="Delete"
                 variant="danger"
             />

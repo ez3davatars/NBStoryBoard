@@ -9,5 +9,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     createDir: (path: string) => ipcRenderer.invoke('dir:create', path),
     joinPath: (...args: string[]) => ipcRenderer.invoke('path:join', ...args),
     hashFile: (path: string) => ipcRenderer.invoke('file:hash', path),
-    generateDepth: (inputPath: string) => ipcRenderer.invoke('depth:generate', inputPath)
+    generateDepth: (inputPath: string) => ipcRenderer.invoke('depth:generate', inputPath),
+    onRequestDiscardSession: (callback: () => void) => {
+        ipcRenderer.on('request-discard-session', () => callback());
+    },
+    confirmDiscardSession: () => ipcRenderer.send('confirm-discard-session'),
+    onRequestAppClose: (callback: () => void) => {
+        ipcRenderer.on('request-app-close', () => callback());
+    },
+    confirmClose: () => ipcRenderer.send('confirm-close'),
+    showSaveDialog: (options: any) => ipcRenderer.invoke('dialog:showSaveDialog', options),
+    showOpenDialog: (options: any) => ipcRenderer.invoke('dialog:showOpenDialog', options),
+    deleteFile: (path: string) => ipcRenderer.invoke('file:delete', path)
 });
