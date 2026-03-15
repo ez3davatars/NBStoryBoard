@@ -1205,12 +1205,24 @@ const NanoCastingDirector = () => {
                 setProgress({ phase: 'synthesis', percent: 30, detail: "Synthesizing garment geometry..." });
                 garment = await Promise.race([
                     GeminiService.generateImage(
-                        `Professional standalone apparel photography: ${wardrobePrompt}. 
- Film quality, solid white background, isolated garment.`,
+                        `Create a single image.
+
+GARMENT AUTHORITY
+- Render one standalone garment only based on this description: ${wardrobePrompt}.
+- Preserve the intended silhouette, materials, colors, and visible construction.
+- Do not add a model, mannequin head, props, text, or extra accessories.
+
+COMPOSITION
+- Isolated garment only.
+- Solid white studio background.
+- Full garment visible.
+
+NEGATIVE CONSTRAINTS:
+extra garments, mannequin person, text, watermark, props, cropped garment, altered colors, redesign.`,
                         state.apiKey,
                         state.model,
                         [],
-                        { aspectRatio: '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding }
+                        { aspectRatio: '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true }
                     ),
                     timeoutPromise(getTimeoutMs())
                 ]);
@@ -1221,18 +1233,30 @@ const NanoCastingDirector = () => {
                 setProgress({ phase: 'synthesis', percent: 70, detail: "Performing virtual fitting..." });
                 const fitted = await Promise.race([
                     GeminiService.generateImage(
-                        `Perform a virtual try-on. 
- [IMAGE 1] is the SUBJECT. [IMAGE 2] is the COSTUME.
- Apply the costume in [IMAGE 2] to the subject in [IMAGE 1].
- Maintain subject identity perfectly. Replace lighting to match studio quality.
- Strictly maintain the aspect ratio and framing of [IMAGE 1].`,
+                        `Create a single image.
+
+SUBJECT LOCK
+- [IMAGE 1] is the subject. Preserve the exact identity, pose, framing, and body proportions.
+
+COSTUME AUTHORITY
+- [IMAGE 2] is the outfit reference. Transfer it exactly onto the subject.
+- Preserve the outfit silhouette, colors, materials, and visible construction.
+- Do not redesign the outfit.
+
+COMPOSITION
+- Match the original framing and aspect ratio of [IMAGE 1].
+- Single subject only.
+- Studio-quality lighting.
+
+NEGATIVE CONSTRAINTS:
+identity drift, altered pose, changed framing, extra limbs, extra people, redesigned outfit, altered colors, text, watermark.`,
                         state.apiKey,
                         state.model,
                         [
                             { url: finalCharacterUrl, label: "Subject" },
                             { url: garment, label: "New Outfit" }
                         ],
-                        { aspectRatio: '2:3', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding } // Portrait
+                        { aspectRatio: '2:3', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true } // Portrait
                     ),
                     timeoutPromise(getTimeoutMs())
                 ]);
@@ -1360,7 +1384,9 @@ const NanoCastingDirector = () => {
             const applyIdentity = directorControls.identityStrength !== defaults.identityStrength;
 
             const prompt = `
- Generate a CHARACTER CONCEPT ART.
+ Create a single image.
+
+ CHARACTER CONCEPT ART
  
  IDENTITY REFERENCES: Use ${biometricRangeText} as the ONLY source for the character's face and body shape.
  ${directorControls.logoImage ? `LOGO ASSET: Use the last image provided as a Branding Asset only.` : ''}
@@ -1415,7 +1441,7 @@ const NanoCastingDirector = () => {
 
             // UPDATE APP CONTEXT
             dispatch({ type: 'SET_LAST_CASTED_PROMPT', payload: prompt });
-            addLog("TRANSMITTING TO NANO BANANA PRO CLUSTER...");
+            addLog("TRANSMITTING TO NANO BANANA 2 CLUSTER...");
 
             // 3. Call Gemini
             setProgress({ phase: 'synthesis', percent: 5, detail: "Generative Matrix Active..." });
@@ -1438,7 +1464,7 @@ const NanoCastingDirector = () => {
             let resultUrl: string;
             try {
                 resultUrl = await Promise.race([
-                    GeminiService.generateImage(prompt, state.apiKey, state.model, referenceImages, { imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding }),
+                    GeminiService.generateImage(prompt, state.apiKey, state.model, referenceImages, { imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true }),
                     timeoutPromise(getTimeoutMs())
                 ]);
             } finally {
@@ -2029,7 +2055,7 @@ const NanoCastingDirector = () => {
                             state.apiKey,
                             state.model,
                             imageRefs,
-                            { aspectRatio: '16:9', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding }
+                            { aspectRatio: '16:9', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true }
                         ),
                         timeoutPromise(timeoutMs) // Dynamic Timeout
                     ]);
@@ -3488,12 +3514,6 @@ const NanoCastingDirector = () => {
                             setNewActorName(name);
                             setSaveCategory(category);
                             confirmSaveToLibrary(name, category);
-                        }}
-                        backgrounds={{
-                            realism: styleExactStudioMasc,
-                            animation: stylePixarMasc,
-                            illustration: styleRetroAnimeMasc,
-                            scifi: styleCyberpunkMasc
                         }}
                     />
 

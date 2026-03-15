@@ -162,13 +162,10 @@ export const AnchorRefPanel = ({
                             disabled={
                                 state.isProcessing || 
                                 !(
-                                    !!state.backgroundUrl && 
-                                    (
-                                        !!bgPrompt.trim() || 
-                                        (state.director.cameraMode || 'locked') !== 'locked' ||
-                                        (state.director.framing || 'full_body') !== 'full_body' ||
-                                        (state.director.environmentPreservation || 'high') !== 'high'
-                                    )
+                                    !!bgPrompt.trim() || !!state.backgroundUrl ||
+                                    (state.director.cameraMode || 'locked') !== 'locked' ||
+                                    (state.director.framing || 'full_body') !== 'full_body' ||
+                                    (state.director.environmentPreservation || 'high') !== 'high'
                                 )
                             }
                             className="bg-blue-600 hover:bg-blue-500 text-white p-2 rounded flex items-center justify-center disabled:opacity-50 disabled:bg-gray-800"

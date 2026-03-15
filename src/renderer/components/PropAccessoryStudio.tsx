@@ -441,16 +441,29 @@ const PropAccessoryStudio = () => {
 
         try {
             const res = await GeminiService.generateImage(
-                `Professional standalone object photography: ${designerPrompt}. 
- High resolution, detailed texture, cinematic studio lighting, solid black studio background (#000000). 
- Isolated prop, no background distractions. Strictly solid black background only.`,
+                `Create a single image.
+
+PROP AUTHORITY
+- Create one standalone prop based exactly on this description: ${designerPrompt}.
+- Preserve the intended shape, silhouette, proportions, materials, and visible construction.
+- Do not add extra objects, extra parts, extra straps, text, labels, hands, people, or scenery.
+
+RENDER RULES
+- Professional standalone object photography.
+- High detail texture.
+- Realistic studio lighting.
+- Solid black studio background (#000000) only.
+- Single prop only, centered, fully visible.
+
+NEGATIVE CONSTRAINTS:
+extra objects, duplicate prop, altered proportions, floating parts, text, label, watermark, people, hands, scenery, pedestal, table, stand.`,
                 state.apiKey,
                 state.model,
                 [],
-                { aspectRatio: '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding }
+                { aspectRatio: '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true }
             );
             setDesignerImage(res);
-            dispatch({ type: 'ADD_LOG', payload: { message: "Prop generated on studio white.", type: 'success' } });
+            dispatch({ type: 'ADD_LOG', payload: { message: "Prop generated on black studio background.", type: 'success' } });
         } catch (e: any) {
             dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });
         } finally {
@@ -534,26 +547,38 @@ const PropAccessoryStudio = () => {
 
         try {
             const res = await GeminiService.generateImage(
-                `Perform a professional prop integration. 
- [IMAGE 1] is the target SUBJECT. 
- [IMAGE 2] is the standalone PROP to add.
- 
- OBJECTIVE: Integrate the prop from [IMAGE 2] into the scene with the subject in [IMAGE 1].
- 
- CRITICAL CONSTRAINTS:
- 1. SOLO PORTRAIT: The output must contain EXACTLY ONE HUMAN SUBJECT. Do not add any other people, background characters, or onlookers.
- 2. PROP FIDELITY: The prop in [IMAGE 2] must be copied EXACTLY. Do not change its color, shape, texture, or style. 1:1 REPLICATION of the prop object.
- 3. SPATIAL & SCALE REASONING: Analyze what the prop is. Scale its size accurately based on real-world physics, human proportions, and historical context. E.g., a Roman shield should cover the correct amount of the body; a teacup should fit precisely in the palm.
- 4. EXACT PLACEMENT: ${applyNote || "Clean professional placement. Integrate it naturally into the subject's grasp or on their person."} Pay STRICT attention to specific "left" or "right" hand instructions.
- 5. Adjust lighting and perspective to match the subject perfectly.
- 6. Use a solid black studio background (#000000) for perfect subject isolation.`,
+                `Create a single image.
+
+SUBJECT LOCK
+- [IMAGE 1] is the target SUBJECT.
+- Preserve the subject exactly: same face, same body, same pose, same camera angle.
+- Output must contain exactly one human subject.
+
+PROP AUTHORITY
+- [IMAGE 2] is the standalone PROP reference.
+- Copy the prop exactly. Preserve exact shape, silhouette, colors, materials, visible construction, and proportions.
+- Do not redesign, stylize, recolor, age, or decorate the prop.
+
+PLACEMENT LOCK
+- Place the prop only at this requested location: ${applyNote || "Clean professional placement in the correct grasp or on-body position."}
+- Pay strict attention to left/right instructions.
+- Preserve correct real-world scale relative to the subject.
+- Do not add extra props, straps, attachments, duplicates, or supporting objects unless visible in the prop reference.
+
+INTEGRATION
+- Match lighting and perspective to the subject.
+- The prop must look physically present, not composited.
+- Keep the solid black studio background (#000000).
+
+NEGATIVE CONSTRAINTS:
+extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop colors, altered prop materials, prop redesign, extra straps, extra attachments, extra people, text, watermark.`,
                 state.apiKey,
                 state.model,
                 [
                     { url: selectedCharacter.url, label: "Subject Reference" },
                     { url: selectedProp.url, label: "Prop Reference" }
                 ],
-                { aspectRatio: '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding }
+                { aspectRatio: '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true }
             );
             setAppliedImage(res);
             dispatch({ type: 'ADD_LOG', payload: { message: "Prop integrated. Creating character edge mask...", type: 'info' } });
@@ -565,7 +590,7 @@ const PropAccessoryStudio = () => {
                     state.apiKey,
                     state.model,
                     [{ url: res, label: "Reference" }],
-                    { aspectRatio: '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding }
+                    { aspectRatio: '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true }
                 );
                 setApplyMask(maskRes);
             } catch { }

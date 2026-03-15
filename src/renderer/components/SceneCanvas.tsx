@@ -44,6 +44,7 @@ import { buildPlacementIntentsFromAnnotations, buildAnchorSurfaceFromZone, build
 // UI Components
 import ConfirmDialog from './ui/ConfirmDialog';
 import { DebouncedHueSlider } from './ui/DebouncedHueSlider';
+import { NanobananaThinking } from './ui/NanobananaThinking';
 
 // Panels
 import { ShotListPanel } from './panels/ShotListPanel';
@@ -321,23 +322,18 @@ const SceneCanvas = () => {
             // Respect manual overrides / disabling
             if (!token.groundingEnabled) return;
 
-            const footY =
-                token.y + token.height * (token.anchorY ?? 1.0);
-
-            const footYClamped = Math.min(
-                Math.max(footY, 0),
-                viewportBox.h - 1
-            );
-
+            const footY = token.y + token.height * (token.anchorY ?? 1.0);
+            const footYClamped = Math.min(Math.max(footY, 0), viewportBox.h - 1);
+            
             const rawDepth = DepthService.getDepthAtPointSync(
-                state.depthMapUrl,
+                state.depthMapUrl!,
                 token.x / viewportBox.w,
                 footYClamped / viewportBox.h
             );
 
-
             const clamped = DepthService.clampDepthToGround(rawDepth, groundDepth);
 
+            // ONLY dispatch if depth ACTUALLY changed to avoid infinite loop
             if (Math.abs(clamped - (token.depth || 0)) > 0.01) {
                 dispatch({
                     type: 'UPDATE_TOKEN',
@@ -345,7 +341,7 @@ const SceneCanvas = () => {
                 });
             }
         });
-    }, [state.depthMapUrl, state.tokens, groundDepth, viewportBox.h, dispatch]);
+    }, [state.depthMapUrl, state.backgroundUrl, groundDepth, viewportBox.h, viewportBox.w, state.tokens, dispatch]);
 
     /**
     * OCCLUSION MASKS (PER-TOKEN)
@@ -1876,7 +1872,7 @@ MERGE STRATEGY: ${mergeStrategy || 'preserve-anchor-scene'}
             (state.director.framing || 'full_body') !== 'full_body' ||
             (state.director.environmentPreservation || 'high') !== 'high';
 
-        const canGenerateScene = hasSourceScene && (hasPromptText || hasNonDefaultSpatialIntent);
+        const canGenerateScene = hasPromptText || hasNonDefaultSpatialIntent || hasSourceScene;
 
         if (!canGenerateScene) return;
 
@@ -1925,11 +1921,25 @@ MERGE STRATEGY: ${mergeStrategy || 'preserve-anchor-scene'}
                 activeRefs
             });
 
+            console.log('SCENE STRICT MODE:', {
+                model: state.model,
+                strictMode: true,
+                googleGrounding: false,
+                aspectRatio: state.director.aspectRatio || '16:9'
+            });
+
             const url = await GeminiService.generateImage(
                 finalPrompt,
                 state.apiKey,
                 state.model,
-                references
+                references,
+                {
+                    aspectRatio: state.director.aspectRatio || '16:9',
+                    imageSize: state.imageResolution,
+                    thinkingLevel: state.enableImageThinking,
+                    googleGrounding: false,
+                    strictMode: true
+                }
             );
 
             dispatch({ type: 'SET_BG', payload: url });
@@ -2049,8 +2059,7 @@ MERGE STRATEGY: ${mergeStrategy || 'preserve-anchor-scene'}
 
     return (
         <>
-
-
+            {state.isProcessing && <NanobananaThinking />}
 
             <div className="flex h-full gap-4 p-4 overflow-hidden select-none">
                 {/* 1. LEFT SIDEBAR: ACTIVE ACTOR INTELLIGENCE & PROPERTIES */}
@@ -2741,12 +2750,13 @@ MERGE STRATEGY: ${mergeStrategy || 'preserve-anchor-scene'}
                         {/* Camera Gate / Viewport (this is the actual rendered frame) */}
                         <div
                             ref={viewportRef}
-                            className="absolute relative bg-black overflow-hidden rounded-xl ring-1 ring-white/10"
+                            className="absolute bg-black overflow-hidden rounded-xl ring-1 ring-white/10 shadow-[0_0_50px_rgba(0,0,0,0.5)]"
                             style={{
                                 left: `${viewportBox.x}px`,
                                 top: `${viewportBox.y}px`,
-                                width: `${viewportBox.w}px`,
-                                height: `${viewportBox.h}px`
+                                width: `${Math.max(10, viewportBox.w)}px`,
+                                height: `${Math.max(10, viewportBox.h)}px`,
+                                zIndex: 10
                             }}
                         >
                             {state.backgroundUrl ? (
@@ -2756,11 +2766,16 @@ MERGE STRATEGY: ${mergeStrategy || 'preserve-anchor-scene'}
                                     className="absolute inset-0 w-full h-full object-cover pointer-events-none"
                                 />
                             ) : (
-                                <div className="absolute inset-0 text-gray-800 flex flex-col items-center justify-center gap-4 opacity-20">
+                                <div className="absolute inset-0 text-gray-800 flex flex-col items-center justify-center gap-4 opacity-20 bg-black/50">
                                     <Square className="w-24 h-24 stroke-[1]" />
                                     <span className="text-xs font-bold uppercase tracking-[0.5em]">Empty Stage</span>
                                 </div>
                             )}
+
+                            {/* DEV DEBUG: Always show Viewport size */}
+                            <div className="absolute top-2 left-2 bg-black/80 text-red-500 font-mono text-[10px] px-2 py-1 rounded border border-red-500/50 z-[9999]">
+                                VB: {Math.round(viewportBox.w)}x{Math.round(viewportBox.h)} @ {Math.round(viewportBox.x)},{Math.round(viewportBox.y)} | Img: {state.backgroundUrl ? 'YES' : 'NO'} | Depth: {state.depthMapUrl ? 'YES' : 'NO'}
+                            </div>
 
                             <SceneSpecOverlay />
 

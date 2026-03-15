@@ -1470,11 +1470,11 @@ const ProductionConsole: React.FC = () => {
                                             <button
                                                 onClick={() => {
                                                     dispatch({ type: 'SET_BG', payload: state.resultImage! });
-                                                    dispatch({ type: 'SET_VIEW', payload: 'blocking' });
-                                                    dispatch({ type: 'ADD_LOG', payload: { message: "Sent to Blocking", type: 'success' } });
+                                                    dispatch({ type: 'SET_VIEW', payload: 'staging' });
+                                                    dispatch({ type: 'ADD_LOG', payload: { message: "Sent to Staging", type: 'success' } });
                                                 }}
                                                 className="w-16 h-16 bg-yellow-500/20 hover:bg-yellow-500 text-yellow-500 hover:text-black rounded-2xl transition-all transform hover:scale-110 flex items-center justify-center border border-yellow-500/30 -[0_0_15px_rgba(234,179,8,0.2)]"
-                                                title="Send to Blocking"
+                                                title="Send to Staging"
                                             >
                                                 <BoxSelect className="w-10 h-10 stroke-[3]" size={40} />
                                             </button>

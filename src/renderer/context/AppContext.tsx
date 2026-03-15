@@ -723,7 +723,7 @@ const defaultDirector: DirectorSettings = {
     spatialLayout: '',
     markerType: 'Colored Bounding Boxes',
     negativePrompt:
-        'worst quality, low quality, normal quality, lowres, monochrome, grayscale, watermark, signature, username, error, blurry, jpeg artifacts, cropped, duplicate, out of frame, ugly, morbid, mutilated, out of focus, dehydration, long neck, bad anatomy, bad proportions, extra limbs, cloned face, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, deformed, disfigured, mutation, mutated hands, mutated fingers, long body, tiling, poorly drawn hands, poorly drawn face, disfigured face, skin spots, acnes, skin blemishes, bad reflections, overexposed, underexposed, harsh lighting, unrealistic lighting',
+        'text, watermark, extra limbs, duplicate subjects, distorted anatomy, unrealistic lighting',
 };
 
 const defaultRefSlots: ReferenceSlot[] = Array.from({ length: 10 }, (_, i) => ({
@@ -745,7 +745,7 @@ const getInitialModel = (): AppState['model'] => {
         'gemini-3.1-flash-image-preview',
     ];
     if (saved && valid.includes(saved as any)) return saved as AppState['model'];
-    return 'gemini-2.5-flash-image';
+    return 'gemini-3.1-flash-image-preview';
 };
 
 const DEFAULT_REGION_EDIT: RegionEditState = {
@@ -795,9 +795,9 @@ export const initialState: AppState = {
     depthMapUrl: localStorage.getItem('nano_depth_url') || null,
     depthMapHash: localStorage.getItem('nano_depth_hash') || null,
     sourceBackgroundHash: localStorage.getItem('nano_source_hash') || null,
-    imageResolution: loadJson<'1K' | '2K' | '4K'>('nano_image_resolution', '1K'),
-    enableImageThinking: localStorage.getItem('nano_enable_image_thinking') === 'true',
-    enableGoogleGrounding: localStorage.getItem('nano_enable_google_grounding') === 'true',
+    imageResolution: loadJson<'1K' | '2K' | '4K'>('nano_image_resolution', '2K'),
+    enableImageThinking: localStorage.getItem('nano_enable_image_thinking') !== 'false',
+    enableGoogleGrounding: localStorage.getItem('nano_enable_google_grounding') === 'true' ? true : false,
     floorPlane: loadJson<FloorPlane | null>('nano_floor_plane', null),
     occupiedVolumes: loadJson<OccupiedVolume[]>('nano_occupied_volumes', []),
     isDepthProcessing: false,

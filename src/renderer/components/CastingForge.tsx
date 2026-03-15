@@ -470,21 +470,53 @@ const CastingForge = () => {
       let res;
       if (state.lastCastedImage && state.apiKey) {
         dispatch({ type: 'ADD_LOG', payload: { message: "Applying stylization to character...", type: 'info' } });
+        const stylizePrompt = `Create a single character portrait.
+
+SUBJECT LOCK
+- [IMAGE 1] is the subject reference.
+- Preserve the same identity, facial structure, age range, body type, and overall likeness from [IMAGE 1].
+- Preserve the same pose/framing unless the prompt explicitly requests otherwise.
+
+STYLE AUTHORITY
+- Apply this character description exactly: ${effectivePrompt}
+- Apply this style direction exactly: ${styleDirectives}
+- Keep the output as one clean isolated character on a solid soft white studio background.
+
+COMPOSITION
+- Single subject only.
+- Full visible character based on the requested framing.
+- No HUD, no labels, no overlays, no floating props.
+
+NEGATIVE CONSTRAINTS:
+text, labels, HUD, overlays, duplicate subjects, identity drift, extra limbs, fused fingers, wrong background, stylization drift${negativePrompt ? `, ${negativePrompt}` : ''}.`;
         res = await GeminiService.generateImage(
-          `Stylize the subject in [IMAGE 1] to match this character description: ${effectivePrompt}.
- ${styleDirectives}
- CRITICAL RULES:
- 1. **ABSOLUTELY NO TEXT, LABELS, HUD, OR OVERLAYS.**
- 2. MAINTAIN the subject's identity and key features from [IMAGE 1].
- 3. FORCE a solid soft white background for clear subject isolation.
- ${negativePrompt}`,
+          stylizePrompt,
           state.apiKey,
           state.model,
           [{ url: state.lastCastedImage, label: 'Subject Reference' }],
-          { imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding }
+          { imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true }
         );
       } else {
-        res = await GeminiService.generateImage(`Detailed character portrait: ${effectivePrompt}. ${styleDirectives} Use a solid soft white background. **NO TEXT OR OVERLAYS.** ${negativePrompt}`, state.apiKey, 'imagen-4.0-generate-001', [], { imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding });
+        const createPrompt = `Create a single character portrait.
+
+SUBJECT DEFINITION
+- Generate this character exactly: ${effectivePrompt}
+- Apply this style direction exactly: ${styleDirectives}
+
+COMPOSITION
+- One subject only.
+- Solid soft white studio background.
+- No text, no labels, no HUD, no overlays.
+
+NEGATIVE CONSTRAINTS:
+text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wrong background, stylization drift${negativePrompt ? `, ${negativePrompt}` : ''}.`;
+        res = await GeminiService.generateImage(
+          createPrompt,
+          state.apiKey,
+          state.model,
+          [],
+          { imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true }
+        );
       }
 
       if (generationIdRef.current === currentGenId) {
@@ -1286,7 +1318,7 @@ const CastingForge = () => {
         state.apiKey,
         state.model, // Use the user's selected model (consistent with main generator)
         inputImages,
-        { aspectRatio: refLayout === 'split_focus' ? '16:9' : '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding }
+        { aspectRatio: refLayout === 'split_focus' ? '16:9' : '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true }
       );
       setRefSheetUrl(res);
       setShowRefSheet(true);
