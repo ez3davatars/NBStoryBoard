@@ -2260,7 +2260,6 @@ const SceneCanvas = () => {
                     <ActorIntelligencePanel
                         state={state}
                         dispatch={dispatch}
-                        updateToken={updateToken}
                         authorityStatus={authorityStatus}
                         analyzingTokenId={analyzingTokenId}
                         setAnalyzingTokenId={setAnalyzingTokenId}

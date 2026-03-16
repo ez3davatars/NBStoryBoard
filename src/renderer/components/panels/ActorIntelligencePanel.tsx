@@ -7,7 +7,6 @@ import { DebouncedTextarea } from '../ui/DebouncedTextarea';
 interface ActorIntelligencePanelProps {
     state: any;
     dispatch: (action: any) => void;
-    updateToken: (id: string, updates: any) => void;
     authorityStatus: string;
     analyzingTokenId: string | null;
     setAnalyzingTokenId: (id: string | null) => void;
@@ -31,7 +30,6 @@ interface ActorIntelligencePanelProps {
 export const ActorIntelligencePanel = ({
     state,
     dispatch,
-    updateToken,
     authorityStatus,
     analyzingTokenId,
     setAnalyzingTokenId,
@@ -236,25 +234,7 @@ export const ActorIntelligencePanel = ({
                                     </div>
                                 </div>
 
-                                <div className="mt-2 pt-2 border-t border-white/5">
-                                    <div className="flex items-center justify-between mb-2">
-                                        <label className="text-[11px] font-bold text-gray-500 uppercase">Anchor Depth</label>
-                                        {token.spatialDescriptor && (
-                                            <div className="text-[10px] font-mono text-blue-400 uppercase font-black">{token.spatialDescriptor.depthLayer}</div>
-                                        )}
-                                    </div>
-                                    <div className="grid grid-cols-3 gap-1 mb-2">
-                                        {(['foreground', 'midground', 'background'] as const).map(layer => (
-                                            <button
-                                                key={layer}
-                                                onClick={() => updateToken(token.id, { anchorLayer: layer })}
-                                                className={`py-1.5 rounded text-[11px] font-bold uppercase border transition-all ${token.anchorLayer === layer ? 'bg-blue-600 border-blue-400 text-white -[0_0_8px_rgba(37,99,235,0.3)]' : 'bg-black/40 border-white/10 text-gray-400 hover:text-gray-300 hover:bg-[#27272a]'}`}
-                                            >
-                                                {layer === 'foreground' ? 'Fore' : layer === 'midground' ? 'Mid' : 'Back'}
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
+
                             </div>
                         </div>
                     ))

@@ -1,4 +1,4 @@
-
+import { useState } from 'react';
 import { Layers, Eye, EyeOff, GripVertical, UserPlus, StickyNote, BoxSelect, MoveUpRight, Trash2, ArrowUpToLine, ArrowUp, ArrowDown, ArrowDownToLine } from 'lucide-react';
 import { SidebarPanel } from '../ui/SidebarPanel';
 
@@ -24,6 +24,8 @@ export const StageLayersPanel = ({
  handlePanelDrop
 }: StageLayersPanelProps) => {
  const stageItemsCount = state.tokens.length + state.annotations.length;
+ const [editingId, setEditingId] = useState<string | null>(null);
+ const [editValue, setEditValue] = useState("");
 
  return (
  <SidebarPanel
@@ -44,6 +46,7 @@ export const StageLayersPanel = ({
  .map((layer: any) => {
  const isSelected = state.selection === layer.id;
  const isDragging = draggedLayerId === layer.id;
+ const isEditing = editingId === layer.id;
 
  return (
  <div
@@ -94,7 +97,7 @@ export const StageLayersPanel = ({
  if (layer.type === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: layer.id, visible: layer.visible === false } });
  else dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: layer.id, visible: layer.visible === false } });
  }}
- className="p-1 text-gray-500 hover:text-white rounded hover:bg-white/10 transition-colors mr-1"
+ className="p-1 text-gray-500 hover:text-white rounded hover:bg-white/10 transition-colors mr-1 cursor-pointer"
  title={layer.visible === false ? "Show Layer" : "Hide Layer"}
  >
  {layer.visible === false ? <EyeOff className="w-3 h-3 text-gray-600" /> : <Eye className="w-3 h-3" />}
@@ -109,9 +112,45 @@ export const StageLayersPanel = ({
  {layer.type === 'annotation' && layer.subtype === 'zone' && <BoxSelect className="w-3 h-3" />}
  {layer.type === 'annotation' && layer.subtype === 'arrow' && <MoveUpRight className="w-3 h-3" />}
  </div>
- <span className={`text-[9px] font-bold uppercase truncate flex-1 ${isSelected ? 'text-orange-400' : 'text-gray-400'}`}>
+ {isEditing ? (
+ <input
+ autoFocus
+ value={editValue}
+ onChange={(e) => setEditValue(e.target.value)}
+ onBlur={() => {
+ setEditingId(null);
+ if (editValue.trim() && editValue.trim() !== (layer.tag || layer.text || layer.type)) {
+ if (layer.type === 'token') {
+ dispatch({ type: 'UPDATE_TOKEN', payload: { id: layer.id, tag: editValue.trim() } });
+ } else {
+ dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: layer.id, text: editValue.trim() } });
+ }
+ }
+ }}
+ onKeyDown={(e) => {
+ if (e.key === 'Enter') {
+ e.currentTarget.blur();
+ } else if (e.key === 'Escape') {
+ setEditingId(null);
+ }
+ }}
+ onClick={(e) => e.stopPropagation()}
+ onDoubleClick={(e) => e.stopPropagation()}
+ className={`text-[9px] font-bold uppercase flex-1 bg-black/80 border border-orange-500/50 rounded px-1 min-w-0 outline-none h-5 shadow-[inset_0_1px_3px_rgba(0,0,0,0.5)] ${isSelected ? 'text-orange-300' : 'text-white'}`}
+ />
+ ) : (
+ <span 
+ onDoubleClick={(e) => {
+ e.stopPropagation();
+ setEditingId(layer.id);
+ setEditValue(layer.tag || layer.text || layer.type || '');
+ }}
+ className={`text-[9px] font-bold uppercase truncate flex-1 cursor-text select-text ${isSelected ? 'text-orange-400' : 'text-gray-400'}`}
+ title="Double-click to rename"
+ >
  {layer.tag || layer.text || layer.type}
  </span>
+ )}
  <span className="text-[9px] font-mono text-gray-600 mr-2">Z:{layer.zIndex}</span>
 
  {isSelected && (
