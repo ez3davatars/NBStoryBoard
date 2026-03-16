@@ -4,7 +4,6 @@ import type { ReactNode, ErrorInfo } from 'react';
 
 
 import SceneCanvas from './components/SceneCanvas';
-import ProductionConsole from './components/ProductionConsole';
 import WardrobeStudio from './components/WardrobeStudio';
 import PropAccessoryStudio from './components/PropAccessoryStudio';
 import PortraitStudio from './components/PortraitStudio';
@@ -675,7 +674,7 @@ const App = () => {
               <div className="self-start mt-2 sm:mt-2.5 lg:mt-3 flex items-start justify-center min-w-0 overflow-hidden [style='-webkit-app-region:no-drag;']">
                 <div className="w-full overflow-x-auto pb-3">
                   <nav className="mx-auto flex w-max rounded-lg border border-[#27272a] bg-[#09090b] p-1">
-                    {(['casting', 'nano_cast', 'portrait', 'wardrobe', 'props', 'staging', 'production', 'veo'] as ViewMode[])
+                    {(['casting', 'nano_cast', 'portrait', 'wardrobe', 'props', 'staging', 'veo'] as ViewMode[])
                       .filter(mode => mode !== 'veo' || state.isStoryboardEnabled)
                       .map(mode => (
                         <button
@@ -718,7 +717,6 @@ const App = () => {
               {state.view === 'wardrobe' && <WardrobeStudio />}
               {state.view === 'props' && <PropAccessoryStudio />}
               {state.view === 'staging' && <SceneCanvas />}
-              {state.view === 'production' && <ProductionConsole />}
               {state.view === 'veo' && <VeoPromptStudio />}
             </main>
 

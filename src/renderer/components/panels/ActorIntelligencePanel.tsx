@@ -76,7 +76,7 @@ export const ActorIntelligencePanel = ({
             {/* TECHNICAL DEBUG (DEV ONLY) */}
             {import.meta.env.DEV && (
                 <div className="mb-4 p-2 bg-[#1c1c1f] rounded-lg border border-[#27272a] space-y-2">
-                    <h5 className="text-[9px] font-black text-blue-400/80 uppercase tracking-tighter mb-1">
+                    <h5 className="text-[11px] font-black text-blue-400/80 uppercase tracking-tighter mb-1">
                         Debug Overlays
                     </h5>
                     <div className="grid grid-cols-2 gap-2">
@@ -85,10 +85,10 @@ export const ActorIntelligencePanel = ({
                             <button
                                 onClick={() => setShowDebugDepthMap(!showDebugDepthMap)}
                                 disabled={state.isDepthProcessing}
-                                className={`flex-1 px-2 py-2 text-[8px] font-bold rounded border transition-colors flex items-center justify-center gap-1 ${state.isDepthProcessing ? 'bg-blue-900/10 text-blue-300/50 border-blue-500/10 cursor-wait' : showDebugDepthMap ? 'bg-blue-500/20 text-blue-400 border-blue-500/50' : 'bg-black/20 text-gray-500 border-white/5'}`}
+                                className={`flex-1 px-3 py-1.5 text-[11px] font-bold rounded border transition-colors flex items-center justify-center gap-1 ${state.isDepthProcessing ? 'bg-blue-900/10 text-blue-300/50 border-blue-500/10 cursor-wait' : showDebugDepthMap ? 'bg-blue-500/20 text-blue-400 border-blue-500/50' : 'bg-black/20 text-gray-400 border-white/10 hover:bg-[#27272a]'}`}
                                 title="Visualizes the projected high-fidelity depth map. Lighter values represent closer objects."
                             >
-                                {state.isDepthProcessing && <RefreshCcw className="w-2.5 h-2.5 animate-spin" />}
+                                {state.isDepthProcessing && <RefreshCcw className="w-3 h-3 animate-spin" />}
                                 {state.isDepthProcessing ? 'Generating...' : 'Depth Map'}
                             </button>
                             <button
@@ -104,7 +104,7 @@ export const ActorIntelligencePanel = ({
                         {/* 2. Floor Plane */}
                         <button
                             onClick={() => setShowDebugFloor(!showDebugFloor)}
-                            className={`px-2 py-2 text-[8px] font-bold rounded border transition-colors ${showDebugFloor ? 'bg-blue-500/20 text-blue-400 border-blue-500/50' : 'bg-black/20 text-gray-500 border-white/5'}`}
+                            className={`px-3 py-1.5 text-[11px] font-bold rounded border transition-colors ${showDebugFloor ? 'bg-blue-500/20 text-blue-400 border-blue-500/50' : 'bg-black/20 text-gray-400 border-white/10 hover:bg-[#27272a]'}`}
                             title="Visualizes the detected ground plane (cyan line). This 'Grounding Baseline' triggers automatic foot placement for actors."
                         >
                             Floor Plane
@@ -113,7 +113,7 @@ export const ActorIntelligencePanel = ({
                         {/* 3. Volumes */}
                         <button
                             onClick={() => setShowDebugVolumes(!showDebugVolumes)}
-                            className={`px-2 py-2 text-[8px] font-bold rounded border transition-colors ${showDebugVolumes ? 'bg-blue-500/20 text-blue-400 border-blue-500/50' : 'bg-black/20 text-gray-500 border-white/5'}`}
+                            className={`px-3 py-1.5 text-[11px] font-bold rounded border transition-colors ${showDebugVolumes ? 'bg-blue-500/20 text-blue-400 border-blue-500/50' : 'bg-black/20 text-gray-400 border-white/10 hover:bg-[#27272a]'}`}
                             title="Visualizes occupied 3D volumes (amber boxes). These represent furniture or obstacles that actors can walk behind or in front of."
                         >
                             Volumes
@@ -122,7 +122,7 @@ export const ActorIntelligencePanel = ({
                         {/* 4. Bands */}
                         <button
                             onClick={() => setShowDebugBands(!showDebugBands)}
-                            className={`px-2 py-2 text-[8px] font-bold rounded border transition-colors ${showDebugBands ? 'bg-blue-500/20 text-blue-400 border-blue-500/50' : 'bg-black/20 text-gray-500 border-white/5'}`}
+                            className={`px-3 py-1.5 text-[11px] font-bold rounded border transition-colors ${showDebugBands ? 'bg-blue-500/20 text-blue-400 border-blue-500/50' : 'bg-black/20 text-gray-400 border-white/10 hover:bg-[#27272a]'}`}
                             title="Visualizes the depth 'slice' assigned to each actor in the scene."
                         >
                             Depth Bands
@@ -131,7 +131,7 @@ export const ActorIntelligencePanel = ({
                         {/* 5. HUD */}
                         <button
                             onClick={() => setShowDebugActorOverlay(!showDebugActorOverlay)}
-                            className={`px-2 py-2 text-[8px] font-bold rounded border transition-colors col-span-2 ${showDebugActorOverlay ? 'bg-blue-500/20 text-blue-400 border-blue-500/50' : 'bg-black/20 text-gray-500 border-white/5'}`}
+                            className={`px-3 py-1.5 text-[11px] font-bold rounded border transition-colors col-span-2 ${showDebugActorOverlay ? 'bg-blue-500/20 text-blue-400 border-blue-500/50' : 'bg-black/20 text-gray-400 border-white/10 hover:bg-[#27272a]'}`}
                             title="Overlays raw spatial metrics (Z-Index, Depth Score) on top of each actor."
                         >
                             Actor HUD
@@ -142,14 +142,14 @@ export const ActorIntelligencePanel = ({
 
             <div className="space-y-3">
                 {state.tokens.length === 0 ? (
-                    <div className="text-[10px] text-gray-600 italic py-4 border border-dashed border-gray-800 rounded-lg text-center">
+                    <div className="text-[11px] text-gray-600 italic py-4 border border-dashed border-gray-800 rounded-lg text-center">
                         No actors on stage.
                     </div>
                 ) : (
                     state.tokens.map((token: any) => (
                         <div key={token.id} className="bg-[#18181b] border border-[#27272a] rounded-lg p-3 group">
                             <div className="flex items-center justify-between mb-2">
-                                <span className="text-[10px] font-bold text-white uppercase">{token.tag}</span>
+                                <span className="text-[11px] font-bold text-white uppercase">{token.tag}</span>
                                 <button
                                     onClick={async () => {
                                         if (!state.apiKey) {
@@ -167,9 +167,9 @@ export const ActorIntelligencePanel = ({
                                         setAnalyzingTokenId(null);
                                     }}
                                     disabled={analyzingTokenId === token.id}
-                                    className="text-[9px] text-blue-400 hover:text-blue-300 font-bold uppercase flex items-center gap-1"
+                                    className="text-[11px] text-blue-400 hover:text-blue-300 font-bold uppercase flex items-center gap-1"
                                 >
-                                    {analyzingTokenId === token.id ? <RefreshCcw className="w-2.5 h-2.5 animate-spin" /> : <Sparkles className="w-2.5 h-2.5" />}
+                                    {analyzingTokenId === token.id ? <RefreshCcw className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
                                     Auto Analyze
                                 </button>
                             </div>
@@ -177,7 +177,7 @@ export const ActorIntelligencePanel = ({
                                 <DebouncedTextarea
                                     value={token.intelligence || ''}
                                     onChange={(val) => dispatch({ type: 'UPDATE_TOKEN', payload: { id: token.id, intelligence: val } })}
-                                    className="w-full bg-[#09090b] border border-[#27272a] rounded p-2 text-[10px] text-gray-400 focus:border-blue-500 outline-none resize-none"
+                                    className="w-full bg-[#09090b] border border-[#27272a] rounded p-2 text-xs text-gray-400 focus:border-blue-500 outline-none resize-none leading-relaxed"
                                     rows={2}
                                     placeholder="Pose, Action, Lighting DNA..."
                                 />
@@ -205,9 +205,9 @@ export const ActorIntelligencePanel = ({
                                                 }
                                             });
                                         }}
-                                        className={`flex-1 flex items-center justify-center gap-1.5 py-1 px-2 rounded text-[9px] font-bold uppercase transition-all ${token.groundingEnabled ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-gray-800/50 text-gray-500 border border-gray-700/50 hover:bg-gray-800'}`}
+                                        className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 px-3 rounded text-[11px] font-bold uppercase transition-all ${token.groundingEnabled ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-gray-800/50 text-gray-400 border border-gray-700/50 hover:bg-gray-800'}`}
                                     >
-                                        <div className={`w-1.5 h-1.5 rounded-full ${token.groundingEnabled ? 'bg-emerald-400 -[0_0_4px_rgba(52,211,153,0.5)]' : 'bg-gray-600'}`} />
+                                        <div className={`w-2 h-2 rounded-full ${token.groundingEnabled ? 'bg-emerald-400 -[0_0_4px_rgba(52,211,153,0.5)]' : 'bg-gray-600'}`} />
                                         Grounding
                                     </button>
 
@@ -230,17 +230,17 @@ export const ActorIntelligencePanel = ({
                                                     }
                                                 });
                                             }}
-                                            className="w-3 h-3 rounded bg-zinc-800 border-zinc-700 text-yellow-500"
+                                            className="w-3.5 h-3.5 rounded bg-zinc-800 border-zinc-700 text-yellow-500"
                                         />
-                                        <label htmlFor={`manual-${token.id}`} className="text-[8px] font-bold text-gray-500 uppercase cursor-pointer select-none">Manual</label>
+                                        <label htmlFor={`manual-${token.id}`} className="text-[10px] font-bold text-gray-500 uppercase cursor-pointer select-none">Manual</label>
                                     </div>
                                 </div>
 
                                 <div className="mt-2 pt-2 border-t border-white/5">
                                     <div className="flex items-center justify-between mb-2">
-                                        <label className="text-[9px] font-bold text-gray-500 uppercase">Anchor Depth</label>
+                                        <label className="text-[11px] font-bold text-gray-500 uppercase">Anchor Depth</label>
                                         {token.spatialDescriptor && (
-                                            <div className="text-[7px] font-mono text-blue-400 uppercase font-black">{token.spatialDescriptor.depthLayer}</div>
+                                            <div className="text-[10px] font-mono text-blue-400 uppercase font-black">{token.spatialDescriptor.depthLayer}</div>
                                         )}
                                     </div>
                                     <div className="grid grid-cols-3 gap-1 mb-2">
@@ -248,7 +248,7 @@ export const ActorIntelligencePanel = ({
                                             <button
                                                 key={layer}
                                                 onClick={() => updateToken(token.id, { anchorLayer: layer })}
-                                                className={`py-1 rounded text-[9px] font-bold uppercase border transition-all ${token.anchorLayer === layer ? 'bg-blue-600 border-blue-400 text-white -[0_0_8px_rgba(37,99,235,0.3)]' : 'bg-black/40 border-white/5 text-gray-600 hover:text-gray-400 hover:border-white/10'}`}
+                                                className={`py-1.5 rounded text-[11px] font-bold uppercase border transition-all ${token.anchorLayer === layer ? 'bg-blue-600 border-blue-400 text-white -[0_0_8px_rgba(37,99,235,0.3)]' : 'bg-black/40 border-white/10 text-gray-400 hover:text-gray-300 hover:bg-[#27272a]'}`}
                                             >
                                                 {layer === 'foreground' ? 'Fore' : layer === 'midground' ? 'Mid' : 'Back'}
                                             </button>

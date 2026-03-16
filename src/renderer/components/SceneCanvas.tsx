@@ -22,6 +22,7 @@ import {
     MoveUpRight,
     MonitorPlay
 } from 'lucide-react';
+import { NumericInput } from './ui/NumericInput';
 import { SidebarPanel } from './ui/SidebarPanel';
 
 import { useAppContext } from '../context/AppContext';
@@ -2064,8 +2065,6 @@ const SceneCanvas = () => {
 
     // --- DIRECTOR CANVAS LAYOUT COMPOSITE PIPELINE (NEW) ---
 
-    const [blueprintMode, setBlueprintMode] = useState<'basic' | 'cinematic'>('cinematic');
-
     const collectVisibleCompositeElements = useCallback(() => {
         return state.tokens
             .filter(t => t.visible !== false && !!t.url)
@@ -2314,27 +2313,27 @@ const SceneCanvas = () => {
                                                         });
                                                     }
                                                 }}
-                                                className="p-1.5 bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white rounded transition-colors"
+                                                className="w-9 h-9 !p-0 flex items-center justify-center bg-[#18181b] hover:bg-[#27272a] text-blue-400 rounded border border-white/20 transition-colors group"
                                                 title="Focus View"
                                             >
-                                                <Target className="w-3.5 h-3.5" />
+                                                <Target className="w-4 h-4 text-blue-400 group-hover:text-blue-300" />
                                             </button>
                                             <button
                                                 onClick={() => {
                                                     dispatch({ type: 'DUPLICATE_TOKEN', payload: { id: selectedToken.id } });
                                                     dispatch({ type: 'ADD_LOG', payload: { message: `Duplicated token: ${selectedToken.tag}`, type: 'success' } });
                                                 }}
-                                                className="p-1.5 bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white rounded transition-colors"
+                                                className="w-9 h-9 !p-0 flex items-center justify-center bg-[#18181b] hover:bg-[#27272a] rounded border border-white/20 transition-colors group"
                                                 title="Duplicate Token"
                                             >
-                                                <Copy className="w-3.5 h-3.5" />
+                                                <Copy className="w-4 h-4 text-gray-300 group-hover:text-white" />
                                             </button>
                                             <button
                                                 onClick={deleteSelection}
-                                                className="p-1.5 bg-gray-800 hover:bg-red-500/20 text-red-500 rounded transition-colors"
+                                                className="w-9 h-9 !p-0 flex items-center justify-center bg-[#18181b] hover:bg-red-500/20 text-red-500 hover:text-red-400 rounded border border-white/20 transition-colors group"
                                                 title="Delete Token"
                                             >
-                                                <TrashIcon className="w-3.5 h-3.5" />
+                                                <TrashIcon className="w-4 h-4 text-red-500 group-hover:text-red-400" />
                                             </button>
                                         </div>
                                     </div>
@@ -2355,129 +2354,143 @@ const SceneCanvas = () => {
                                                 anchorX: 0.5, anchorY: 0.8,
                                                 uniformScale: true
                                             })}
-                                            className="text-gray-600 hover:text-yellow-500 transition-colors"
+                                            className="w-7 h-7 !p-0 flex items-center justify-center bg-[#27272a] border border-white/30 rounded hover:bg-[#3f3f46] transition-colors group"
                                             title="Reset Transform"
                                         >
-                                            <RefreshCcw className="w-3 h-3" />
+                                            <RefreshCcw className="w-3.5 h-3.5 text-gray-200 group-hover:text-yellow-400" />
                                         </button>
                                     </div>
 
                                     {/* GRID LAYOUT FOR CONTROLS */}
-                                    <div className="grid grid-cols-[65px_1fr_24px_1fr_28px] items-center gap-x-2 gap-y-4 px-1">
+                                    <div className="grid grid-cols-[65px_1fr_24px_1fr_36px] items-center gap-x-2 gap-y-4 px-1">
+                                        
                                         {/* POSITION ROW */}
-                                        <span className="text-[10px] text-gray-500 uppercase font-medium">Position</span>
-                                        <div className="relative group">
-                                            <span className="absolute -top-2 left-1 text-[8px] text-gray-600">X</span>
-                                            <input
-                                                type="number"
-                                                value={Math.round(selectedToken.x)}
-                                                onChange={(e) => updateToken(selectedToken.id, { x: parseInt(e.target.value) || 0 })}
-                                                className="w-full bg-transparent border-b border-gray-800 focus:border-yellow-500 py-1 text-[11px] text-yellow-500 font-mono outline-none text-center"
-                                            />
-                                        </div>
-                                        <div className="text-center text-gray-700"></div>
-                                        <div className="relative group">
-                                            <span className="absolute -top-2 left-1 text-[8px] text-gray-600">Y</span>
-                                            <input
-                                                type="number"
-                                                value={Math.round(selectedToken.y)}
-                                                onChange={(e) => updateToken(selectedToken.id, { y: parseInt(e.target.value) || 0 })}
-                                                className="w-full bg-transparent border-b border-gray-800 focus:border-yellow-500 py-1 text-[11px] text-yellow-500 font-mono outline-none text-center"
-                                            />
-                                        </div>
-                                        <button onClick={() => updateToken(selectedToken.id, { x: 0, y: 0 })} className="text-gray-700 hover:text-white"><RefreshCcw className="w-2.5 h-2.5" /></button>
+                                        <span className="text-[10px] text-gray-300 uppercase font-bold">Position</span>
+                                        <NumericInput
+                                            label="X"
+                                            value={selectedToken.x}
+                                            onChange={(val) => updateToken(selectedToken.id, { x: val })}
+                                            step={10}
+                                        />
+                                        <div className="text-center text-gray-400 font-bold">:</div>
+                                        <NumericInput
+                                            label="Y"
+                                            value={selectedToken.y}
+                                            onChange={(val) => updateToken(selectedToken.id, { y: val })}
+                                            step={10}
+                                        />
+                                        <button 
+                                            onClick={() => updateToken(selectedToken.id, { x: 0, y: 0 })} 
+                                            className="w-9 h-9 !p-0 flex items-center justify-center bg-[#27272a] hover:bg-yellow-500/20 text-gray-100 hover:text-yellow-400 rounded border border-white/30 transition-colors group shadow-sm"
+                                            title="Reset Position"
+                                        >
+                                            <RefreshCcw className="w-4 h-4 text-gray-100 group-hover:text-yellow-400" />
+                                        </button>
 
                                         {/* QUICK NUDGE ROW */}
-                                        <span className="text-[10px] text-gray-500 uppercase font-medium">Nudge</span>
+                                        <span className="text-[10px] text-gray-200 uppercase font-bold">Nudge</span>
                                         <div className="col-span-4 flex items-center gap-1 mt-1">
-                                            <button onClick={() => updateToken(selectedToken.id, { x: selectedToken.x - 5 })} className="flex-1 py-1.5 bg-[#18181b] hover:bg-[#27272a] rounded border border-white/5 text-[10px] text-gray-400 hover:text-white font-bold transition-colors">LEFT</button>
-                                            <button onClick={() => updateToken(selectedToken.id, { x: selectedToken.x + 5 })} className="flex-1 py-1.5 bg-[#18181b] hover:bg-[#27272a] rounded border border-white/5 text-[10px] text-gray-400 hover:text-white font-bold transition-colors">RIGHT</button>
-                                            <button onClick={() => updateToken(selectedToken.id, { y: selectedToken.y - 5 })} className="flex-1 py-1.5 bg-[#18181b] hover:bg-[#27272a] rounded border border-white/5 text-[10px] text-gray-400 hover:text-white font-bold transition-colors">UP</button>
-                                            <button onClick={() => updateToken(selectedToken.id, { y: selectedToken.y + 5 })} className="flex-1 py-1.5 bg-[#18181b] hover:bg-[#27272a] rounded border border-white/5 text-[10px] text-gray-400 hover:text-white font-bold transition-colors">DOWN</button>
+                                            <button onClick={() => updateToken(selectedToken.id, { x: selectedToken.x - 5 })} className="flex-1 !p-0 !h-8 bg-[#27272a] hover:bg-[#3f3f46] rounded border border-white/30 !text-[10px] text-white font-bold transition-colors shadow-sm">LEFT</button>
+                                            <button onClick={() => updateToken(selectedToken.id, { x: selectedToken.x + 5 })} className="flex-1 !p-0 !h-8 bg-[#27272a] hover:bg-[#3f3f46] rounded border border-white/30 !text-[10px] text-white font-bold transition-colors shadow-sm">RIGHT</button>
+                                            <button onClick={() => updateToken(selectedToken.id, { y: selectedToken.y - 5 })} className="flex-1 !p-0 !h-8 bg-[#27272a] hover:bg-[#3f3f46] rounded border border-white/30 !text-[10px] text-white font-bold transition-colors shadow-sm">UP</button>
+                                            <button onClick={() => updateToken(selectedToken.id, { y: selectedToken.y + 5 })} className="flex-1 !p-0 !h-8 bg-[#27272a] hover:bg-[#3f3f46] rounded border border-white/30 !text-[10px] text-white font-bold transition-colors shadow-sm">DOWN</button>
                                         </div>
 
                                         {/* ZOOM ROW */}
-                                        <span className="text-[10px] text-gray-500 uppercase font-medium">Zoom</span>
-                                        <div className="relative group">
-                                            <span className="absolute -top-2 left-1 text-[8px] text-gray-600">X</span>
-                                            <input
-                                                type="number" step="0.01"
-                                                value={Math.abs(selectedToken.scaleX).toFixed(2)}
-                                                onChange={(e) => {
-                                                    const val = parseFloat(e.target.value) || 0;
-                                                    const updates: Partial<StageToken> = { scaleX: val * (selectedToken.scaleX < 0 ? -1 : 1) };
-                                                    if (selectedToken.uniformScale) updates.scaleY = val * (selectedToken.scaleY < 0 ? -1 : 1);
-                                                    updateToken(selectedToken.id, updates);
-                                                }}
-                                                className="w-full bg-transparent border-b border-gray-800 focus:border-yellow-500 py-1 text-[11px] text-yellow-500 font-mono outline-none text-center"
-                                            />
-                                        </div>
+                                        <span className="text-[10px] text-gray-300 uppercase font-bold">Zoom</span>
+                                        <NumericInput
+                                            label="X"
+                                            value={Math.abs(selectedToken.scaleX)}
+                                            onChange={(val) => {
+                                                const updates: Partial<StageToken> = { scaleX: val * (selectedToken.scaleX < 0 ? -1 : 1) };
+                                                if (selectedToken.uniformScale) updates.scaleY = val * (selectedToken.scaleY < 0 ? -1 : 1);
+                                                updateToken(selectedToken.id, updates);
+                                            }}
+                                            step={0.1}
+                                            precision={2}
+                                        />
                                         <div className="flex justify-center">
                                             <button
                                                 onClick={() => updateToken(selectedToken.id, { uniformScale: !selectedToken.uniformScale })}
-                                                className={`p-1 rounded transition-colors ${selectedToken.uniformScale ? 'text-yellow-500 bg-yellow-500/10' : 'text-gray-600'}`}
+                                                className={`group !p-0 w-8 h-8 flex items-center justify-center rounded border transition-colors shadow-sm ${selectedToken.uniformScale ? 'bg-yellow-500/20 border-yellow-500/60' : 'bg-[#27272a] border-white/30 hover:bg-[#3f3f46]'}`}
                                                 title="Toggle Uniform Scale"
                                             >
-                                                <Link2 className="w-3 h-3" />
+                                                <Link2 className={`w-4 h-4 ${selectedToken.uniformScale ? 'text-yellow-400' : 'text-gray-100 group-hover:text-white'}`} />
                                             </button>
                                         </div>
-                                        <div className="relative group">
-                                            <span className="absolute -top-2 left-1 text-[8px] text-gray-600">Y</span>
-                                            <input
-                                                type="number" step="0.01"
-                                                value={Math.abs(selectedToken.scaleY).toFixed(2)}
-                                                onChange={(e) => {
-                                                    const val = parseFloat(e.target.value) || 0;
-                                                    const updates: Partial<StageToken> = { scaleY: val * (selectedToken.scaleY < 0 ? -1 : 1) };
-                                                    if (selectedToken.uniformScale) updates.scaleX = val * (selectedToken.scaleX < 0 ? -1 : 1);
-                                                    updateToken(selectedToken.id, updates);
-                                                }}
-                                                className="w-full bg-transparent border-b border-gray-800 focus:border-yellow-500 py-1 text-[11px] text-yellow-500 font-mono outline-none text-center"
-                                            />
-                                        </div>
-                                        <button onClick={() => updateToken(selectedToken.id, { scaleX: 1, scaleY: 1 })} className="text-gray-700 hover:text-white"><RefreshCcw className="w-2.5 h-2.5" /></button>
+                                        <NumericInput
+                                            label="Y"
+                                            value={Math.abs(selectedToken.scaleY)}
+                                            onChange={(val) => {
+                                                const updates: Partial<StageToken> = { scaleY: val * (selectedToken.scaleY < 0 ? -1 : 1) };
+                                                if (selectedToken.uniformScale) updates.scaleX = val * (selectedToken.scaleX < 0 ? -1 : 1);
+                                                updateToken(selectedToken.id, updates);
+                                            }}
+                                            step={0.1}
+                                            precision={2}
+                                        />
+                                        <button 
+                                            onClick={() => updateToken(selectedToken.id, { scaleX: 1, scaleY: 1 })} 
+                                            className="w-9 h-9 !p-0 flex items-center justify-center bg-[#27272a] hover:bg-yellow-500/20 text-gray-100 hover:text-yellow-400 rounded border border-white/30 transition-colors shadow-sm"
+                                            title="Reset Scale"
+                                        >
+                                            <RefreshCcw className="w-4 h-4" />
+                                        </button>
 
                                         {/* ANCHOR ROW */}
-                                        <span className="text-[10px] text-gray-500 uppercase font-medium">Anchor</span>
-                                        <div className="relative group">
-                                            <span className="absolute -top-2 left-1 text-[8px] text-gray-600">X</span>
-                                            <input
-                                                type="number" step="0.1"
-                                                value={selectedToken.anchorX.toFixed(1)}
-                                                onChange={(e) => updateToken(selectedToken.id, { anchorX: parseFloat(e.target.value) || 0 })}
-                                                className="w-full bg-transparent border-b border-gray-800 focus:border-yellow-500 py-1 text-[11px] text-yellow-500 font-mono outline-none text-center"
-                                            />
-                                        </div>
-                                        <div className="text-center text-gray-700"></div>
-                                        <div className="relative group">
-                                            <span className="absolute -top-2 left-1 text-[8px] text-gray-600">Y</span>
-                                            <input
-                                                type="number" step="0.1"
-                                                value={selectedToken.anchorY.toFixed(1)}
-                                                onChange={(e) => updateToken(selectedToken.id, { anchorY: parseFloat(e.target.value) || 0 })}
-                                                className="w-full bg-transparent border-b border-gray-800 focus:border-yellow-500 py-1 text-[11px] text-yellow-500 font-mono outline-none text-center"
-                                            />
-                                        </div>
-                                        <button onClick={() => updateToken(selectedToken.id, { anchorX: 0.5, anchorY: 0.8 })} className="text-gray-700 hover:text-white"><RefreshCcw className="w-2.5 h-2.5" /></button>
+                                        <span className="text-[10px] text-gray-300 uppercase font-bold">Anchor</span>
+                                        <NumericInput
+                                            label="X"
+                                            value={selectedToken.anchorX}
+                                            onChange={(val) => updateToken(selectedToken.id, { anchorX: val })}
+                                            step={0.1}
+                                            precision={2}
+                                            min={0}
+                                            max={1}
+                                        />
+                                        <div className="text-center text-gray-400 font-bold">:</div>
+                                        <NumericInput
+                                            label="Y"
+                                            value={selectedToken.anchorY}
+                                            onChange={(val) => updateToken(selectedToken.id, { anchorY: val })}
+                                            step={0.1}
+                                            precision={2}
+                                            min={0}
+                                            max={1}
+                                        />
+                                        <button 
+                                            onClick={() => updateToken(selectedToken.id, { anchorX: 0.5, anchorY: 0.8 })} 
+                                            className="w-9 h-9 !p-0 flex items-center justify-center bg-[#27272a] hover:bg-yellow-500/20 text-gray-100 hover:text-yellow-400 rounded border border-white/30 transition-colors shadow-sm"
+                                            title="Reset Anchor"
+                                        >
+                                            <RefreshCcw className="w-4 h-4" />
+                                        </button>
+                                    </div>
 
                                     {/* SLIDER CONTROLS */}
                                     <div className="space-y-3 mt-4 px-1">
                                         {/* ROTATION */}
-                                        <div className="grid grid-cols-[60px_1fr_50px_28px] items-center gap-3">
-                                            <span className="text-[10px] text-gray-500 uppercase font-medium">Rotate</span>
+                                        <div className="grid grid-cols-[60px_1fr_60px_36px] items-center gap-3">
+                                            <span className="text-[10px] text-gray-300 uppercase font-bold">Rotate</span>
                                             <input
                                                 type="range" min="-180" max="180"
                                                 value={selectedToken.rotation}
                                                 onChange={(e) => updateToken(selectedToken.id, { rotation: parseInt(e.target.value) })}
-                                                className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-yellow-500"
+                                                className="w-full h-1.5 bg-[#27272a] rounded-lg appearance-none cursor-pointer accent-yellow-500 border border-white/10"
                                             />
-                                            <input
-                                                type="number"
+                                            <NumericInput
                                                 value={selectedToken.rotation}
-                                                onChange={(e) => updateToken(selectedToken.id, { rotation: parseInt(e.target.value) || 0 })}
-                                                className="bg-black border border-gray-800 py-0.5 px-1 rounded text-[10px] text-yellow-500 font-mono text-center outline-none w-full"
+                                                onChange={(val) => updateToken(selectedToken.id, { rotation: val })}
+                                                step={5}
+                                                min={-360}
+                                                max={360}
                                             />
-                                            <button onClick={() => updateToken(selectedToken.id, { rotation: 0 })} className="text-gray-700 hover:text-white"><RefreshCcw className="w-2.5 h-2.5" /></button>
+                                            <button 
+                                                onClick={() => updateToken(selectedToken.id, { rotation: 0 })} 
+                                                className="w-9 h-9 !p-0 flex items-center justify-center bg-[#27272a] hover:bg-yellow-500/20 rounded border border-white/30 transition-colors group shadow-sm"
+                                            >
+                                                <RefreshCcw className="w-4 h-4 text-gray-100 group-hover:text-yellow-400" />
+                                            </button>
                                         </div>
 
                                         {/* LAYER DEPTH */}
@@ -2494,11 +2507,11 @@ const SceneCanvas = () => {
                                                         updateToken(selectedToken.id, { zIndex: 1 });
                                                     }
                                                 }}
-                                                className="flex-1 bg-[#18181b] hover:bg-[#27272a] text-white text-[11px] font-bold py-3 rounded border border-white/5 transition-colors"
+                                                className="flex-1 bg-[#27272a] hover:bg-[#3f3f46] text-white text-[11px] font-bold h-11 !p-0 rounded border border-white/30 transition-colors flex items-center justify-center shadow-sm"
                                             >
                                                 BACK
                                             </button>
-                                            <div className="w-12 h-11 flex items-center justify-center bg-[#09090b] border border-white/10 rounded text-yellow-500 font-mono text-sm font-bold">
+                                            <div className="w-12 h-11 flex items-center justify-center bg-[#18181b] border border-gray-600 rounded text-yellow-500 font-mono text-sm font-bold shadow-[inset_0_2px_10px_rgba(0,0,0,0.5)]">
                                                 {selectedToken.zIndex}
                                             </div>
                                             <button
@@ -2513,7 +2526,7 @@ const SceneCanvas = () => {
                                                         updateToken(selectedToken.id, { zIndex: currentZ + 1 });
                                                     }
                                                 }}
-                                                className="flex-1 bg-[#18181b] hover:bg-[#27272a] text-white text-[11px] font-bold py-3 rounded border border-white/5 transition-colors"
+                                                className="flex-1 bg-[#27272a] hover:bg-[#3f3f46] text-white text-[11px] font-bold h-11 !p-0 rounded border border-white/30 transition-colors flex items-center justify-center shadow-sm"
                                             >
                                                 FRONT
                                             </button>
@@ -2533,22 +2546,22 @@ const SceneCanvas = () => {
 
                                     <div className="space-y-4 px-1">
                                         <div>
-                                            <span className="text-[9px] text-gray-500 uppercase font-bold block mb-2">Occlusion Mode</span>
+                                            <span className="text-[9px] text-gray-300 uppercase font-bold block mb-2">Occlusion Mode</span>
                                             <div className="flex gap-1.5">
                                                 <button
                                                     onClick={() => updateToken(selectedToken.id, { occlusionMode: 'auto' })}
-                                                    className={`flex-1 py-3 text-[10px] font-bold uppercase rounded border transition-all ${(selectedToken.occlusionMode || 'auto') === 'auto'
+                                                    className={`group !p-0 flex-1 h-11 flex items-center justify-center text-[10px] font-bold uppercase rounded border transition-all ${(selectedToken.occlusionMode || 'auto') === 'auto'
                                                         ? 'bg-purple-600/20 border-purple-500 text-purple-400 shadow-[0_0_12px_rgba(168,85,247,0.2)]'
-                                                        : 'bg-[#18181b] border-white/5 text-gray-500 hover:text-gray-300'
+                                                        : 'bg-[#27272a] border-white/30 text-gray-200 hover:text-white hover:bg-[#3f3f46]'
                                                         }`}
                                                 >
                                                     AUTO (DEPTH)
                                                 </button>
                                                 <button
                                                     onClick={() => updateToken(selectedToken.id, { occlusionMode: 'front' })}
-                                                    className={`flex-1 py-3 text-[10px] font-bold uppercase rounded border transition-all ${selectedToken.occlusionMode === 'front'
+                                                    className={`group !p-0 flex-1 h-11 flex items-center justify-center text-[10px] font-bold uppercase rounded border transition-all ${selectedToken.occlusionMode === 'front'
                                                         ? 'bg-purple-600/20 border-purple-500 text-purple-400 shadow-[0_0_12px_rgba(168,85,247,0.2)]'
-                                                        : 'bg-[#18181b] border-white/5 text-gray-500 hover:text-gray-300'
+                                                        : 'bg-[#27272a] border-white/30 text-gray-200 hover:text-white hover:bg-[#3f3f46]'
                                                         }`}
                                                 >
                                                     FORCE FRONT
@@ -2558,25 +2571,24 @@ const SceneCanvas = () => {
 
                                         <div className="space-y-2">
                                             <div className="flex justify-between items-center">
-                                                <span className="text-[9px] text-gray-500 uppercase font-bold">Depth Bias</span>
+                                                <span className="text-[9px] text-gray-300 uppercase font-bold">Depth Bias</span>
                                                 <span className="text-[10px] text-purple-400 font-mono font-bold">{(selectedToken.occlusionBias ?? 0).toFixed(2)}</span>
                                             </div>
                                             <input
                                                 type="range" min="-1" max="1" step="0.01"
                                                 value={selectedToken.occlusionBias ?? 0}
                                                 onChange={(e) => updateToken(selectedToken.id, { occlusionBias: parseFloat(e.target.value) })}
-                                                className="w-full h-1.5 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-purple-500 border-none"
+                                                className="w-full h-1.5 bg-[#27272a] rounded-lg appearance-none cursor-pointer accent-purple-500 border border-white/10"
                                             />
                                             <div className="flex items-center justify-between mt-1">
-                                                <span className="text-[8px] text-gray-600 uppercase font-bold">Pull Closer</span>
+                                                <span className="text-[8px] text-gray-300 uppercase font-bold">Pull Closer</span>
                                                 <button
                                                     onClick={() => updateToken(selectedToken.id, { occlusionBias: 0 })}
-                                                    className="px-3 py-1 bg-[#18181b] border border-white/5 rounded text-[8px] text-gray-500 hover:text-white uppercase font-bold transition-colors"
+                                                    className="w-16 h-8 !p-0 flex items-center justify-center bg-[#27272a] border border-white/30 rounded text-[9px] text-gray-100 hover:text-white hover:bg-[#3f3f46] uppercase font-bold transition-colors shadow-sm"
                                                 >
                                                     RESET
                                                 </button>
-                                                <span className="text-[8px] text-gray-600 uppercase font-bold">Push Back</span>
-                                            </div>
+                                                <span className="text-[8px] text-gray-300 uppercase font-bold">Push Back</span>
                                             </div>
                                         </div>
                                     </div>
@@ -2914,23 +2926,6 @@ const SceneCanvas = () => {
                 <div className="flex-1 flex flex-col gap-4 min-w-0">
                     <div className="flex shrink-0 h-14 w-full bg-[#09090b] border border-[#27272a] rounded-xl items-center px-4 justify-between">
                         <div className="flex flex-col gap-0.5 justify-center max-w-[60%]">
-                            <div className="flex items-center gap-3">
-                                <span className="text-xs font-bold text-gray-400 uppercase tracking-widest pl-2">Director Canvas Pipeline</span>
-                                <div className="flex items-center gap-1 bg-black rounded p-0.5 border border-[#27272a]">
-                                    <button
-                                        onClick={() => setBlueprintMode('basic')}
-                                        className={`px-3 py-1 rounded text-[10px] uppercase font-bold tracking-wider transition-colors ${blueprintMode === 'basic' ? 'bg-[#27272a] text-white' : 'text-gray-500 hover:text-gray-300'}`}
-                                    >
-                                        Basic
-                                    </button>
-                                    <button
-                                        onClick={() => setBlueprintMode('cinematic')}
-                                        className={`px-3 py-1 rounded text-[10px] uppercase font-bold tracking-wider transition-colors ${blueprintMode === 'cinematic' ? 'bg-[#27272a] text-white' : 'text-gray-500 hover:text-gray-300'}`}
-                                    >
-                                        Cinematic
-                                    </button>
-                                </div>
-                            </div>
                             {/* Depth Assist UI */}
                             {(() => {
                                 const warnings = collectDepthAssistWarnings();
@@ -2962,6 +2957,11 @@ const SceneCanvas = () => {
                                     </div>
                                 );
                             })()}
+                        </div>
+
+                        {/* Technical Specs Moved to right header space */}
+                        <div className="flex items-center gap-4 text-[10px] text-gray-500 font-mono">
+                            VB: {Math.round(viewportBox.w)}x{Math.round(viewportBox.h)} @ {Math.round(viewportBox.x)},{Math.round(viewportBox.y)} | Img: {state.backgroundUrl ? 'YES' : 'NO'} | Depth: {state.depthMapUrl ? 'YES' : 'NO'}
                         </div>
                     </div>
                     
@@ -3016,9 +3016,12 @@ const SceneCanvas = () => {
                             <button
                                 onClick={generateBg}
                                 disabled={state.isProcessing}
-                                className="px-6 py-1.5 bg-yellow-500 hover:bg-yellow-400 text-black rounded text-[10px] font-bold tracking-widest uppercase transition-colors disabled:opacity-50"
+                                className="relative group px-8 py-2 bg-[#09090b] hover:bg-black border border-white/10 hover:border-purple-500/50 rounded-lg text-[10px] font-bold tracking-widest uppercase transition-all disabled:opacity-50 shadow-lg overflow-hidden"
                             >
-                                {state.isProcessing ? 'Processing...' : 'Generate Composite'}
+                                <div className="absolute inset-0 bg-gradient-to-r from-blue-500/10 via-purple-500/10 to-pink-500/10 opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                                <span className={`relative transition-colors duration-300 ${state.isProcessing ? 'text-gray-400' : 'text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-purple-400 to-pink-400 drop-shadow-[0_0_8px_rgba(192,132,252,0.5)] group-hover:from-cyan-300 group-hover:via-purple-300 group-hover:to-pink-300'}`}>
+                                    {state.isProcessing ? 'Processing... ' : 'Generate Composite'}
+                                </span>
                             </button>
                         </div>
                     </div>
@@ -3084,10 +3087,7 @@ const SceneCanvas = () => {
                                 </div>
                             )}
 
-                            {/* DEV DEBUG: Always show Viewport size */}
-                            <div className="absolute top-2 left-2 bg-black/80 text-red-500 font-mono text-[10px] px-2 py-1 rounded border border-red-500/50 z-[9999]">
-                                VB: {Math.round(viewportBox.w)}x{Math.round(viewportBox.h)} @ {Math.round(viewportBox.x)},{Math.round(viewportBox.y)} | Img: {state.backgroundUrl ? 'YES' : 'NO'} | Depth: {state.depthMapUrl ? 'YES' : 'NO'}
-                            </div>
+
 
                             <SceneSpecOverlay />
 

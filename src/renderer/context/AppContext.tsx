@@ -15,7 +15,6 @@ export type ViewMode =
     | 'props'
     | 'staging'
     | 'veo'
-    | 'production'
     | 'settings'
     | 'blocking'
     | 'nano_cast'
