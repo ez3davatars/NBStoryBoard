@@ -4,6 +4,11 @@ import type { PlacementIntent } from './spatialHelpers';
 
 export const SCENE_LOCK_NEGATIVE_TOKENS = "scene alteration, background change, lighting shift, camera angle change, style deviation, new composition, structural change, reimagined scene, time of day shift, seasonal change, architectural alteration, furniture movement, lens flares, color grading shift, original studio background, white backgrounds showing through gaps";
 
+export const STAGE_W = 1024;
+export const STAGE_H = 576;
+
+export const lightingProtocol = "Subject MUST inherit the environmental lighting. Match global illumination, color temperature, and atmospheric perspective of the background. Directional lighting matching the environment's light source. Subject is physically grounded in the scene. Generate realistic contact shadows. Match the contrast ratio and black levels of the environment. No crushed blacks.";
+
 export const buildMasterStyleKeywords = (director: DirectorSettings): string[] => {
   const tech: string[] = [];
   if (director.qualityMode === 'Raw Uncompressed') tech.push('Raw Uncompressed', 'hyper-realistic');
@@ -334,6 +339,195 @@ export const buildPlacementPrompt = (
     }
 
     prompt += ` Keep the full body contained inside the masked area. Do not place ${actor.tag} standing, floating, or in any other location. Do not change the room, furniture, camera framing, lighting, crew, or background subjects.`;
+
+    return prompt;
+};
+
+// ==========================================
+// PRODUCTION RENDER PROMPT COMPILERS
+// ==========================================
+
+import { buildHumanPlacementIntents, formatPlacementIntents } from './placementHelpers';
+
+export const buildStrictPrompt = (
+    plan: any[], 
+    dnaForRender: any, 
+    notes: string, 
+    tokens: StageToken[], 
+    annotations: StageAnnotation[],
+    referenceSlots: ReferenceSlot[],
+    director: DirectorSettings
+) => {
+    const tech = buildMasterStyleKeywords(director);
+
+    const dnaBlock = [
+        dnaForRender.environment ? `Environment Match: ${dnaForRender.environment}` : '',
+        dnaForRender.lighting ? `Lighting Setup: ${dnaForRender.lighting}` : '',
+        dnaForRender.camera ? `Camera Settings: ${dnaForRender.camera}` : ''
+    ].filter(Boolean).join('\n');
+
+    const regions = plan.map(r => {
+        const t = r.token;
+
+        const boundsBlock = `BBOX_ABS: [${Math.round(t.x)}, ${Math.round(t.y)}, ${Math.round(t.width)}, ${Math.round(t.height)}]`;
+        const profile = typeof r.profile === 'string' ? r.profile : (r.profile ? JSON.stringify(r.profile) : 'Subject matched to Reference Image');
+
+        return `REGION ${r.region} (${r.actorLabel}):\n- Position: ${boundsBlock}\n- Description: ${profile}`;
+    }).join('\n\n');
+
+    // Director Canvas Semantic Handoff
+    const intents = buildHumanPlacementIntents(tokens, annotations);
+    const intentBlock = intents.length > 0 ? formatPlacementIntents(intents) : "";
+
+    const refStackActive = getActiveReferenceSlots(referenceSlots);
+    const refStackBlock = refStackActive.length > 0
+        ? `GLOBAL STYLE/CONSISTENCY REFERENCES:\n${refStackActive.map(r => `- REFERENCE ${r.index}: ${r.analysis || r.name}`).join('\n')}`
+        : '';
+
+    const rules = [
+        "SCENE RECONSTRUCTION AND COMPOSITING AUTHORIZATION:",
+        "You are a professional digital compositor and lighter.",
+        tech.length > 0 ? `(Master Style: ${tech.join(', ')})\n` : "",
+        director.subject.trim() ? `Subject Focus: ${director.subject.trim()}` : "",
+        director.filmStock.trim() ? `Film Look: ${director.filmStock.trim()}` : "",
+        refStackBlock,
+        "",
+        "CRITICAL COMMANDS (ZERO TOLERANCE):",
+        "1. SINGLE IMAGE OUTPUT: Generate ONLY the final rendered scene. Do NOT render a collage, sidebar, dashboard, or layout showing the references. If the output is not a single clean 16:9 scene, it is a FAILURE.",
+        "- UNIFORM ENVIRONMENT: All background details (walls, props, lighting) must remain 100% identical to the CLEAN_BG_PLATE outside of the character regions.",
+        "- SEAMLESS BLENDING: The ANCHOR_GUIDE contains a rough composite of the characters. Your job is to blend them naturally into the scene. Match the lighting, shadows, and color grading of the background.",
+        "- LIGHTING OVERRIDE: Absolutely DO NOT carry over the original lighting from the character references. You MUST re-light the characters entirely from scratch to naturally match the environment's ambient light and the specified Cinematography lighting.",
+        "- NEGATIVE SPACE: Ignore any solid or white studio backgrounds present in the REGION_REFS. Treat flat white areas (such as inside a hollow helmet, or between arms and torso) as transparent, and fill them perfectly with the scene environment.",
+        "- NO OUTLINES: Do NOT draw any boxes, boundaries, or outlines around the characters. The final image must look like a natural photograph or movie frame.",
+        "- NO Hallucinations: Do not add any extra objects, people, or details not requested in the Director Brief or Region Plan.",
+        "- ASPECT RATIO LOCK: DO NOT STRETCH OR SQUASH. If a character cutout does not perfectly fill its assigned BBOX_ABS, DO NOT distort the character. Maintain natural proportions and fill any remainder with pixels from the CLEAN_BG_PLATE.",
+        "- OVERLAP LOCK: If the ANCHOR_GUIDE shows subjects overlapping, maintain that exact occlusion.",
+        "",
+        dnaBlock ? `### ANCHOR DNA:\n${dnaBlock}\n` : "",
+        notes ? `### DIRECTOR NOTES: ${notes}\n` : "",
+        "",
+        "### REGION COMPOSITION PLAN (FOLLOW EXACTLY):",
+        intentBlock ? `${intentBlock}\n\n` : "",
+        regions,
+        "",
+        "### SCENE LIGHTING PROTOCOL:",
+        lightingProtocol
+    ].filter(Boolean).join("\n");
+
+    return rules;
+};
+
+export const buildLoosePrompt = (
+    dna: { environment: string; lighting: string; camera: string },
+    tokens: StageToken[],
+    annotations: StageAnnotation[],
+    referenceSlots: ReferenceSlot[],
+    director: DirectorSettings
+) => {
+    const sortedTokens = [...tokens].sort((a, b) => a.x - b.x);
+    
+    // Inline implementation of buildReferenceStackText for loose prompt
+    const activeSlots = getActiveReferenceSlots(referenceSlots);
+    const refStackBlock = activeSlots.length > 0
+        ? `GLOBAL REFERENCES:\n${activeSlots.map(r => `- REF ${r.index}: ${r.analysis || r.name}`).join('\n')}`
+        : '';
+
+    const tech = buildMasterStyleKeywords(director);
+
+    // Director Canvas Semantic Handoff
+    const intents = buildHumanPlacementIntents(tokens, annotations);
+    const intentBlock = intents.length > 0 ? formatPlacementIntents(intents) : "";
+
+    let p = "";
+    if (tech.length > 0) p += `(Master Style: ${tech.join(', ')})\n\n`;
+
+    if (director.subject.trim()) p += `Subject: ${director.subject.trim()}. `;
+    if (director.knowledge.trim()) p += `(Reasoning Constraint: Ensure historical/factual accuracy for: "${director.knowledge.trim()}"). `;
+    if (director.filmStock.trim()) p += `Film Look: ${director.filmStock.trim()}. `;
+    if (director.textRender.trim()) {
+        let t = `Render Text: "${director.textRender.trim()}"`;
+        if (director.textStyle.trim()) t += ` in style of ${director.textStyle.trim()}`;
+        p += `(Text Layer: ${t}). `;
+    }
+
+    if (refStackBlock) p += `${refStackBlock}\n\n`;
+    p += "Cinematic composition. ";
+
+    sortedTokens.forEach((t, i) => {
+        const center = t.x + t.width / 2;
+        const relX = center / STAGE_W;
+        const relY = (t.y + t.height) / STAGE_H;
+
+        let posH = "in the center";
+        if (relX < 0.33) posH = "on the left";
+        if (relX > 0.66) posH = "on the right";
+
+        p += `Character ${i + 1} (${t.tag}) is ${posH} at vertical level ${(relY * 100).toFixed(0)}%`;
+        if (t.actionNote) p += `, doing action: ${t.actionNote}`;
+        if (t.intelligence) p += `, with intelligence directives: ${t.intelligence}`;
+        p += ". ";
+    });
+
+    p += "\n\n";
+
+    if (dna.environment) p += `Environment: ${dna.environment}\n`;
+    if (dna.lighting) p += `Lighting: ${dna.lighting}\n`;
+    if (dna.camera) p += `Camera: ${dna.camera}\n`;
+
+    if (intentBlock) {
+        p += `\n### SCENARIO-SPECIFIC ACTOR PLACEMENT\n${intentBlock}\n`;
+    }
+
+    p += `\n### SCENE LIGHTING PROTOCOL:\n${lightingProtocol}\n`;
+
+    return p;
+};
+
+export const normalizeStyleOnlyRequest = (prompt: string, fallbackSubject: string): string => {
+    const isJustStyle =
+        prompt.trim() === '' ||
+        /^(in the style of|style of|photography|cinematic|render|4k|8k|masterpiece|illustration|drawing|painting)[\s,]*$/i.test(prompt);
+
+    if (isJustStyle) {
+        return fallbackSubject ? `${fallbackSubject}, ${prompt}` : prompt;
+    }
+    return prompt;
+};
+
+export const buildStrictAnchorReplacementPrompt = (p: {
+    bgPrompt: string,
+    mergeStrategy: string,
+    sceneLock: boolean,
+    replaceAnchorSubjects: boolean,
+    globalReplaceTarget: string,
+    hasDepthMap: boolean,
+    activeRefs: ReferenceSlot[]
+}): string => {
+
+    const refLines = p.activeRefs.map(r => `[REFERENCE: ${r.name || `Ref ${r.index}`}]: Use this exact image to define the identity, clothing, and traits of the target subject.`);
+
+    let prompt = `You are a Strict Geometry Compositor. Your ONLY job is to replace the specified blank regions (silhouettes/cutouts) with the requested subjects.
+
+CRITICAL DIRECTIVES:
+1. Do NOT touch, alter, or hallucinate anything in the background. The background is pre-rendered and MUST remain identical.
+2. Fill ONLY the boundaries of the provided target regions.
+3. Obey the exact pose, scale, and lighting implied by the empty silhouette.`;
+
+    if (p.sceneLock) {
+        prompt += `\n4. SCENE LOCK ACTIVE: ${SCENE_LOCK_NEGATIVE_TOKENS}`;
+    }
+
+    if (p.hasDepthMap) {
+        prompt += `\n5. DEPTH MAP ACTIVE: Perfectly preserve the 3D spatial relationships and occlusion defined by the depth map.`;
+    }
+
+    if (p.replaceAnchorSubjects) {
+        prompt += `\n6. REPLACE ANCHOR SUBJECTS: Disregard the original subjects defined in the anchor plate. Completely overwrite them with the new Reference/Subject identities.`;
+    }
+
+    prompt += `\n\n=== REFERENCES ===\n${refLines.length > 0 ? refLines.join('\n') : "No direct image references provided. Rely on text description."}`;
+
+    prompt += `\n\n=== OVERALL SCENE & STYLE ===\n${p.bgPrompt || "A generic scene."}`;
 
     return prompt;
 };

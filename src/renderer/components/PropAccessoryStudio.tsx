@@ -5,9 +5,9 @@ import {
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
-import { safeFetchBlob } from '../utils/NativeFileAssets';
 import { removeBackground } from "@imgly/background-removal";
-import { isNativeParams, nativeListFiles, nativeJoinPath, nativeReadFile, nativeWriteFile } from '../utils/NativeFileAssets';
+import { CutoutService } from "../services/CutoutService";
+import { nativeJoinPath, nativeListFiles, nativeReadFile, nativeWriteFile, isNativeParams, safeFetchBlob } from '../utils/NativeFileAssets';
 import type { PropItem, CastMember } from '../context/AppContext';
 import ConfirmDialog from './ui/ConfirmDialog';
 
@@ -500,15 +500,16 @@ extra objects, duplicate prop, altered proportions, floating parts, text, label,
 
         try {
             const blob = await safeFetchBlob(appliedImage!);
-            const maskResBlob = await removeBackground(blob, {
-                progress: (_key: string, current: number, total: number) => {
+            const config = await CutoutService.getImglyConfig(
+                (_key: string, current: number, total: number) => {
                     if (total) {
                         currentPercent = Math.round((current / total) * 100);
                         if (currentPercent > 95) currentPercent = 95;
                         dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text: "Isolating Matte..." } });
                     }
                 }
-            });
+            );
+            const maskResBlob = await removeBackground(blob, config);
             const maskResDataUrl = URL.createObjectURL(maskResBlob);
             setApplyMask(maskResDataUrl);
             dispatch({ type: 'ADD_LOG', payload: { message: "AI Mask refreshed via local engine.", type: 'success' } });

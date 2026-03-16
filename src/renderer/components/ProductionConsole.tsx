@@ -9,11 +9,12 @@ import { StorageService } from '../services/StorageService';
 import {
     buildMasterStyleKeywords,
     mergeNegatives,
-    SCENE_LOCK_NEGATIVE_TOKENS,
+    SCENE_LOCK_NEGATIVE_TOKENS, // Moved back into this import
     getActiveReferenceSlots,
     compileV3DirectorPrompt,
     buildContinuityLockBlock
 } from '../utils/promptHelpers';
+import { buildHumanPlacementIntents, formatPlacementIntents } from '../utils/placementHelpers'; // Added this import
 import type { StageToken, WhitelistProfile, CastMember } from '../context/AppContext';
 
 // --- Production Console Component ---
@@ -756,6 +757,10 @@ const ProductionConsole: React.FC = () => {
         const masterStyleLine = tech.length > 0 ? `MASTER_STYLE: ${tech.join(', ')}` : "";
         const sceneBriefLine = state.director.subject.trim() ? `DIRECTOR_SCENE_BRIEF: ${state.director.subject.trim()}` : "";
         const knowledgeLine = state.director.knowledge.trim() ? `KNOWLEDGE_INJECTION: ${state.director.knowledge.trim()}` : "";
+        
+        // Director Canvas Semantic Handoff
+        const intents = buildHumanPlacementIntents(state.tokens, state.annotations);
+        const intentBlock = intents.length > 0 ? formatPlacementIntents(intents) : "";
         const filmLine = state.director.filmStock.trim() ? `FILM_LOOK: ${state.director.filmStock.trim()}` : "";
         const safetyLine = state.director.safety ? `SAFETY_MODE: ${state.director.safety}` : "";
 
@@ -798,6 +803,7 @@ const ProductionConsole: React.FC = () => {
             notes ? `### DIRECTOR NOTES: ${notes}\n` : "",
             "",
             "### REGION COMPOSITION PLAN (FOLLOW EXACTLY):",
+            intentBlock ? `${intentBlock}\n\n` : "",
             regions
         ].filter(Boolean).join("\n");
 
@@ -808,6 +814,10 @@ const ProductionConsole: React.FC = () => {
         const sortedTokens = [...state.tokens].sort((a, b) => a.x - b.x);
         const refStackBlock = buildReferenceStackText('loose');
         const tech = buildMasterStyleKeywords(state.director);
+
+        // Director Canvas Semantic Handoff
+        const intents = buildHumanPlacementIntents(state.tokens, state.annotations);
+        const intentBlock = intents.length > 0 ? formatPlacementIntents(intents) : "";
 
         let p = "";
         if (tech.length > 0) p += `(Master Style: ${tech.join(', ')})\n\n`;
@@ -838,6 +848,8 @@ const ProductionConsole: React.FC = () => {
             if (t.intelligence) p += `, with intelligence directives: ${t.intelligence}`;
             p += ". ";
         });
+
+        if (intentBlock) p += `\n${intentBlock}\n\n`;
 
         const notes = state.annotations.filter(a => a.type === 'note' && a.text).map(a => a.text).join(". ");
         if (notes) p += ` DIRECTOR NOTES: ${notes}.`;
@@ -1182,6 +1194,11 @@ const ProductionConsole: React.FC = () => {
                         <div>
                             <h2 className="text-2xl font-bold text-white mb-2">Production Console</h2>
                             <p className="text-gray-500 text-sm">Strict compositor mode: anchor plate + region plan + per-token whitelist.</p>
+                            {state.tokens.length > 0 && (
+                                <p className="text-emerald-500 text-xs mt-1 font-mono uppercase font-bold tracking-wider">
+                                    Director Canvas Semantic Mapping: Injected
+                                </p>
+                            )}
                         </div>
 
                         <button

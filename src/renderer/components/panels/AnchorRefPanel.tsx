@@ -1,7 +1,7 @@
-import { ImageIcon, X, Upload as UploadIcon, RefreshCcw, Maximize as MaximizeIcon, Lock, AlertTriangle } from 'lucide-react';
+import { ImageIcon, X, Upload as UploadIcon, RefreshCcw, Maximize as MaximizeIcon, Lock } from 'lucide-react';
 import { SidebarPanel } from '../ui/SidebarPanel';
 import { Dropdown } from '../ui/Dropdown';
-import type { DirectorMergeStrategy, CameraMode, Framing, EnvironmentPreservation } from '../../context/AppContext';
+import type { DirectorMergeStrategy } from '../../context/AppContext';
 
 interface AnchorRefPanelProps {
  state: any;
@@ -88,61 +88,6 @@ export const AnchorRefPanel = ({
  {/* Anchor Tools */}
             <div className="space-y-3">
                 
-                {/* Explicit Spatial Controls */}
-                <div className="grid grid-cols-2 gap-2">
-                    <div className="flex flex-col gap-1 col-span-2">
-                        <label className="text-[10px] uppercase font-bold text-gray-500">Camera Mode</label>
-                        <Dropdown
-                            value={state.director.cameraMode || 'locked'}
-                            options={[
-                                { type: "option", label: 'Locked View', value: 'locked' },
-                                { type: "option", label: 'Reframed Crop', value: 'reframed' },
-                                { type: "option", label: 'Repositioned Camera', value: 'repositioned' }
-                            ]}
-                            onChange={(v) => setDirector({ cameraMode: v as CameraMode })}
-                        />
-                    </div>
-                    
-                    <div className="flex flex-col gap-1">
-                        <label className="text-[10px] uppercase font-bold text-gray-500">Framing</label>
-                        <Dropdown
-                            value={state.director.framing || 'full_body'}
-                            options={[
-                                { type: "option", label: 'Wide Shot', value: 'wide' },
-                                { type: "option", label: 'Full Body', value: 'full_body' },
-                                { type: "option", label: 'Three-Quarter', value: 'three_quarter' },
-                                { type: "option", label: 'Medium Shot', value: 'medium' },
-                                { type: "option", label: 'Close-Up', value: 'close_up' }
-                            ]}
-                            onChange={(v) => setDirector({ framing: v as Framing })}
-                        />
-                    </div>
-
-                    <div className="flex flex-col gap-1">
-                        <label className="text-[10px] uppercase font-bold text-gray-500">Environment</label>
-                        <Dropdown
-                            value={state.director.environmentPreservation || 'high'}
-                            options={[
-                                { type: "option", label: 'Exact', value: 'exact' },
-                                { type: "option", label: 'High', value: 'high' },
-                                { type: "option", label: 'Moderate', value: 'moderate' },
-                                { type: "option", label: 'Loose', value: 'loose' }
-                            ]}
-                            onChange={(v) => setDirector({ environmentPreservation: v as EnvironmentPreservation })}
-                        />
-                    </div>
-                </div>
-
-                {/* Compatibility Warning */}
-                {state.director.cameraMode === 'repositioned' && state.director.environmentPreservation === 'exact' && (
-                    <div className="bg-orange-500/10 border border-orange-500/30 rounded p-2 flex gap-2 items-start mt-2">
-                        <AlertTriangle className="w-4 h-4 text-orange-400 shrink-0 mt-0.5" />
-                        <p className="text-[9px] text-orange-200/80 leading-snug">
-                            <span className="font-bold text-orange-400">Environment Conflict:</span> Exact environment preservation is not fully compatible with a repositioned camera. The scene will be reconstructed from a new viewpoint, so some surrounding elements may be naturally reinterpreted.
-                        </p>
-                    </div>
-                )}
-
                 <div className="flex flex-col gap-1">
                     <div className="flex gap-2">
                         <input
@@ -161,12 +106,7 @@ export const AnchorRefPanel = ({
                             onClick={generateBg}
                             disabled={
                                 state.isProcessing || 
-                                !(
-                                    !!bgPrompt.trim() || !!state.backgroundUrl ||
-                                    (state.director.cameraMode || 'locked') !== 'locked' ||
-                                    (state.director.framing || 'full_body') !== 'full_body' ||
-                                    (state.director.environmentPreservation || 'high') !== 'high'
-                                )
+                                !(!!bgPrompt.trim() || !!state.backgroundUrl)
                             }
                             className="bg-blue-600 hover:bg-blue-500 text-white p-2 rounded flex items-center justify-center disabled:opacity-50 disabled:bg-gray-800"
                             title="Generate Background"
@@ -174,7 +114,7 @@ export const AnchorRefPanel = ({
                             {state.isProcessing ? <RefreshCcw className="w-3.5 h-3.5 animate-spin" /> : <MaximizeIcon className="w-3.5 h-3.5" />}
                         </button>
                     </div>
-                    <p className="text-[8px] text-gray-500 italic px-1">Text is optional when using the spatial controls above.</p>
+                    <p className="text-[8px] text-gray-500 italic px-1">Text is optional if you only want to extract the style of your reference.</p>
                 </div>
 
                 <div className="mt-4 flex gap-2 items-end">

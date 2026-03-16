@@ -170,7 +170,7 @@ export const buildAnchorSurfaceFromZone = (
 
     return {
         id: zone.id,
-        kind: zone.anchorKind || 'stand',
+        kind: (zone.anchorKind as 'stand' | 'lean' | 'seat') || 'stand',
         label: zone.label || '',
         rect: { x: zone.x - zone.width/2, y: zone.y - zone.height/2, w: zone.width, h: zone.height },
         surfaceDepth,

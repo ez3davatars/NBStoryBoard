@@ -551,6 +551,81 @@ Hard constraints:
     return `data:image/png;base64,${imgData}`;
   },
 
+  async refineCompositeFromLayout(args: {
+    apiKey: string;
+    model?: string;
+    sourceImageUrl: string;
+    protectionMaskUrl?: string | null;
+    editMaskUrl?: string | null;
+    instructions: string;
+  }): Promise<string> {
+    const { apiKey, model = 'gemini-2.5-flash-image', sourceImageUrl, protectionMaskUrl, editMaskUrl, instructions } = args;
+    const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+
+    const base = await GeminiService._resolveImageData(sourceImageUrl);
+    const parts: any[] = [];
+    
+    parts.push({ inlineData: { mimeType: base.mimeType, data: base.data } });
+    parts.push({ text: `[IMAGE 1] BASE IMAGE.` });
+
+    let promptEnforcement = `Instruction: ${instructions}\n\n`;
+
+    if (protectionMaskUrl) {
+      const pMask = await GeminiService._resolveImageData(protectionMaskUrl);
+      parts.push({ inlineData: { mimeType: pMask.mimeType, data: pMask.data } });
+      parts.push({ text: `[IMAGE 2] PROTECTION MASK. WHITE = MUST PRESERVE/PROTECT EXACTLY. BLACK = UNPROTECTED.` });
+      promptEnforcement += `- Strictly preserve all white pixels shown in the PROTECTION MASK without altering them.\n`;
+    }
+
+    if (editMaskUrl) {
+      const eMask = await GeminiService._resolveImageData(editMaskUrl);
+      parts.push({ inlineData: { mimeType: eMask.mimeType, data: eMask.data } });
+      const imgIdx = protectionMaskUrl ? 3 : 2;
+      parts.push({ text: `[IMAGE ${imgIdx}] EDIT ALLOWANCE MASK. WHITE = PREFERRED EDITABLE REGION. BLACK = DO NOT EDIT.` });
+      promptEnforcement += `- Confine requested edits predominantly to the white pixels shown in the EDIT ALLOWANCE MASK.\n`;
+    }
+
+    if (!protectionMaskUrl && !editMaskUrl) {
+      promptEnforcement += `- Perform a cautious, holistic refinement prioritizing the existing composition.\n`;
+    }
+
+    parts.push({
+      text: `
+You are a precision Scene Compositor.
+${promptEnforcement}
+
+Hard constraints:
+- No new primary objects or characters.
+- No morphing of faces/hair/body.
+- No style drift.
+- No extra text/watermarks.
+`
+    });
+
+    const response = await fetch(`${baseUrl}?key=${apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts }],
+        generationConfig: { temperature: 0.2 }
+      })
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      let cleanMsg = errText;
+      try { cleanMsg = JSON.parse(errText).error?.message || cleanMsg; } catch { }
+      throw new Error(`Gemini Refine Error: ${cleanMsg}`);
+    }
+
+    const result = await response.json();
+    const imgData = result.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData)?.inlineData?.data;
+
+    if (!imgData) throw new Error('No refined image returned from Gemini.');
+
+    return `data:image/png;base64,${imgData}`;
+  },
+
   async generateText(prompt: string, apiKey: string): Promise<string> {
     if (!apiKey) throw new Error("No API Key provided.");
     const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent`;
@@ -646,6 +721,133 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
 `;
 
     return this.generateJson<any>(prompt, apiKey);
+  },
+
+  /**
+   * Layout-driven composite generator (Director Canvas Phase 2)
+   */
+  async generateCompositeFromLayout(args: {
+    apiKey: string;
+    model: string;
+    aspectRatio?: string;
+    imageSize?: '1K' | '2K' | '4K';
+    backgroundUrl?: string;
+    blueprintUrl?: string | null;
+    protectionMaskUrl?: string | null;
+    elements: Array<{
+      id: string;
+      url: string;
+      label: string;
+      type: 'actor' | 'prop';
+      preserveIdentity?: boolean;
+      preserveWardrobe?: boolean;
+      groundingMode?: string;
+      notes?: string;
+    }>;
+    instructions: string;
+  }): Promise<string> {
+    const { apiKey, model, aspectRatio, imageSize, backgroundUrl, blueprintUrl, protectionMaskUrl, elements, instructions } = args;
+
+    if (!apiKey) {
+      console.warn("No API Key. Returning mock composite.");
+      await new Promise(r => setTimeout(r, 1500));
+      return `https://placehold.co/1024x576/1a1a1a/FFF?text=Mock+Composite:+${elements.length}+Elements`;
+    }
+
+    const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+    const contentsParts: any[] = [];
+
+    // 1. Text Instructions
+    contentsParts.push({ text: instructions });
+
+    // 2. Base Background
+    if (backgroundUrl) {
+      contentsParts.push({ text: `[BACKGROUND PLATE]` });
+      const bg = await GeminiService._resolveImageData(backgroundUrl);
+      contentsParts.push({ inlineData: { mimeType: bg.mimeType, data: bg.data } });
+    }
+
+    // 3. Layout Blueprint
+    if (blueprintUrl) {
+      contentsParts.push({ text: `[LAYOUT BLUEPRINT]` });
+      const bp = await GeminiService._resolveImageData(blueprintUrl);
+      contentsParts.push({ inlineData: { mimeType: bp.mimeType, data: bp.data } });
+    }
+
+    // 4. Elements in z-order
+    for (let i = 0; i < elements.length; i++) {
+      const el = elements[i];
+      if (!el.url) continue;
+      
+      const identityText = el.preserveIdentity ? ' (PRESERVE IDENTITY)' : '';
+      const wardrobeText = el.preserveWardrobe ? ' (PRESERVE WARDROBE)' : '';
+      
+      contentsParts.push({ text: `[ELEMENT ${i + 1}: ${el.label}] Type: ${el.type}${identityText}${wardrobeText}` });
+      const elData = await GeminiService._resolveImageData(el.url);
+      contentsParts.push({ inlineData: { mimeType: elData.mimeType, data: elData.data } });
+    }
+
+    // 5. Protection Mask
+    if (protectionMaskUrl) {
+      contentsParts.push({ text: `[PROTECTION MASK] (White = Editable, Black = Protected)` });
+      const mask = await GeminiService._resolveImageData(protectionMaskUrl);
+      contentsParts.push({ inlineData: { mimeType: mask.mimeType, data: mask.data } });
+    }
+
+    // Force strict structure behavior and Google grounding disabled for tight compositing
+    const generationConfig: any = {
+      responseModalities: ["IMAGE"],
+      candidateCount: 1,
+      imageConfig: {
+        aspectRatio: aspectRatio || "16:9",
+        ...(imageSize && { imageSize })
+      },
+       // High thinking helps Gemini organize strict layouts better
+      thinkingConfig: GeminiService._buildThinkingConfigForModel(model, "high")
+    };
+
+    let response = await fetch(`${baseUrl}?key=${apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: contentsParts }],
+        generationConfig
+      })
+    });
+
+    if (!response.ok) {
+       let errText = await response.text();
+       let cleanMsg = errText;
+       try { cleanMsg = JSON.parse(errText).error?.message || cleanMsg; } catch {}
+
+       // Fallback without thinking config if model rejects it
+       const thinkingRejected = response.status === 400 && /thinking level/i.test(cleanMsg) && generationConfig.thinkingConfig;
+       
+       if (thinkingRejected) {
+         delete generationConfig.thinkingConfig;
+         response = await fetch(`${baseUrl}?key=${apiKey}`, {
+           method: 'POST',
+           headers: { 'Content-Type': 'application/json' },
+           body: JSON.stringify({ contents: [{ parts: contentsParts }], generationConfig })
+         });
+         
+         if (!response.ok) {
+            errText = await response.text();
+            cleanMsg = errText;
+            try { cleanMsg = JSON.parse(errText).error?.message || cleanMsg; } catch {}
+            throw new Error(`Composite Generation Error (Retry): ${cleanMsg}`);
+         }
+       } else {
+         throw new Error(`Composite Generation Error: ${cleanMsg}`);
+       }
+    }
+
+    const result = await response.json();
+    const imgData = result.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData)?.inlineData?.data;
+    
+    if (!imgData) throw new Error("No image returned from generation.");
+    
+    return `data:image/png;base64,${imgData}`;
   }
 
 };

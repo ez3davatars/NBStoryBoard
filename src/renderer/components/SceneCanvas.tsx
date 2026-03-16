@@ -5,10 +5,10 @@ import {
     RotateCw,
     RefreshCcw,
     X,
-    MonitorPlay,
     Copy,
     Trash2 as TrashIcon,
     Link2,
+    Layers,
     StickyNote,
     BoxSelect,
     UserPlus,
@@ -20,6 +20,7 @@ import {
     Pencil,
     Target,
     MoveUpRight,
+    MonitorPlay
 } from 'lucide-react';
 import { SidebarPanel } from './ui/SidebarPanel';
 
@@ -32,14 +33,18 @@ import type {
     SpatialAuthorityStatus,
     CastMember,
     DirectorSettings,
-    CameraMode,
-    Framing,
-    EnvironmentPreservation
+    DepthAssistWarning,
+    WhitelistProfile
 } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
 import { DepthService } from '../services/DepthService';
-import { compileV3DirectorPrompt, buildPlacementPrompt, getActiveReferenceSlots } from '../utils/promptHelpers';
+import { compileV3DirectorPrompt, buildPlacementPrompt, getActiveReferenceSlots, buildStrictAnchorReplacementPrompt } from '../utils/promptHelpers';
+import { useProductionExports } from '../hooks/useProductionExports';
+import { useAdvancedRender } from '../hooks/useAdvancedRender';
 import { buildPlacementIntentsFromAnnotations, buildAnchorSurfaceFromZone, buildAllowanceMaskFromAnchor, buildForegroundProtectMaskFromDepth } from '../utils/spatialHelpers';
+import { CutoutService } from '../services/CutoutService';
+
+import React from 'react';
 
 // UI Components
 import ConfirmDialog from './ui/ConfirmDialog';
@@ -54,6 +59,7 @@ import { GlobalSpecsPanel } from './panels/GlobalSpecsPanel';
 import { AnchorRefPanel } from './panels/AnchorRefPanel';
 import { RefStacksPanel } from './panels/RefStacksPanel';
 import { ActorIntelligencePanel } from './panels/ActorIntelligencePanel';
+import { AdvancedRenderPanel } from './panels/AdvancedRenderPanel';
 import { SceneDirectorPanel } from './panels/SceneDirectorPanel';
 import { PromptTerminalPanel } from './panels/PromptTerminalPanel';
 import { RefInspectorModal } from './panels/RefInspectorModal';
@@ -61,6 +67,7 @@ import { RefInspectorModal } from './panels/RefInspectorModal';
 import { DEPTH_BAND_RADIUS } from '../services/SpatialIntelligence';
 
 import { useSceneSpec } from "../../scene/useSceneSpec"
+
 
 // B. Scene Blocking Component
 
@@ -80,6 +87,120 @@ const SceneCanvas = () => {
         w: 1,
         h: 1
     });
+
+    // --- MANUAL DOWNLOADS ---
+    const downloadStageImage = async () => {
+        if (!viewportRef.current) return;
+        dispatch({ type: 'SET_PROCESSING', payload: true });
+
+        try {
+            // IF we are looking at the final result, just download that image directly
+            if (viewMode === 'result' && (state.resultImage || (activeShot && activeShot.latestCompositeResultUrl))) {
+                dispatch({ type: 'ADD_LOG', payload: { message: 'Downloading Final Result Image...', type: 'info' } });
+                const url = state.resultImage || activeShot?.latestCompositeResultUrl;
+                if (!url) throw new Error("No result image available.");
+                
+                // For data URLs we can download directly
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `NB_Result_${Date.now()}.png`;
+                link.click();
+                dispatch({ type: 'ADD_LOG', payload: { message: 'Result image downloaded successfully.', type: 'success' } });
+                return;
+            }
+
+            // OTHERWISE, we are in 'Stage' mode, so composite the DOM view
+            dispatch({ type: 'ADD_LOG', payload: { message: 'Composting Stage for Storyboard Capture...', type: 'info' } });
+            const dataUrl = await captureSceneImage();
+            if (dataUrl) {
+                const link = document.createElement('a');
+                link.href = dataUrl;
+                link.download = `NB_Stage_${Date.now()}.png`;
+                link.click();
+                dispatch({ type: 'ADD_LOG', payload: { message: 'Stage captured successfully.', type: 'success' } });
+            } else {
+                throw new Error("Canvas composition returned empty.");
+            }
+        } catch (e: any) {
+             dispatch({ type: 'ADD_LOG', payload: { message: `Download failed: ${e.message}`, type: 'error' } });
+        } finally {
+            dispatch({ type: 'SET_PROCESSING', payload: false });
+        }
+    };
+
+    const downloadDepthMap = () => {
+        if (!state.depthMapUrl) {
+            dispatch({ type: 'ADD_LOG', payload: { message: 'No depth map available to capture.', type: 'error' } });
+            return;
+        }
+        dispatch({ type: 'ADD_LOG', payload: { message: 'Capturing Scene Depth Map...', type: 'info' } });
+        const depthLink = document.createElement('a');
+        depthLink.href = state.depthMapUrl;
+        depthLink.download = `NB_Scene_Depth_${Date.now()}.png`;
+        depthLink.click();
+        dispatch({ type: 'ADD_LOG', payload: { message: 'Depth map captured successfully.', type: 'success' } });
+    };
+
+    // --- DOM CAPTURE FOR SHOTS ---
+    // Tracks processing status by `${tokenId}-${sourceUrl}` to allow retries if image changes
+    const [cutoutStatuses, setCutoutStatuses] = useState<Record<string, 'processing' | 'failed'>>({});
+
+    // Auto-Cutout Effect
+    useEffect(() => {
+        if (!state.tokens || state.tokens.length === 0) return;
+
+        console.log('[CutoutTrigger] Evaluating tokens...', state.tokens.map(t => ({ id: t.id, tag: t.tag, type: t.elementType, hasUrl: !!t.url, cutout: !!t.cutoutUrl })));
+
+        state.tokens.forEach(async (t) => {
+            // Only process actors or newly dropped assets (we assume missing type is actor from CastingForge)
+            const isEligibleToken = t.elementType === 'actor' || t.elementType === 'prop' || !t.elementType;
+            
+            console.log(`[CutoutTrigger] Checking ${t.id} - isEligible: ${isEligibleToken}, hasUrl: ${!!t.url}, hasCutout: ${!!t.cutoutUrl}`);
+
+            if (!isEligibleToken || !t.url) return;
+            // If already has cutout, skip
+            if (t.cutoutUrl) return;
+
+            const jobKey = `${t.id}-${t.url}`;
+            // If currently processing or permanently failed for THIS exact image, skip
+            if (cutoutStatuses[jobKey]) {
+                console.log(`[CutoutTrigger] Skipping ${t.id} - status is already ${cutoutStatuses[jobKey]}`);
+                return;
+            }
+
+            console.log(`[CutoutTrigger] Starting cutout process for ${t.id} (${t.tag})`);
+            setCutoutStatuses(prev => ({ ...prev, [jobKey]: 'processing' }));
+
+            try {
+                // Generate Cutouts
+                const { cutoutUrl, alphaMaskUrl } = await CutoutService.processImage(t.url);
+                
+                console.log(`[CutoutTrigger] Success for ${t.id}`);
+                // Update Token cleanly preserving source
+                dispatch({
+                    type: 'UPDATE_TOKEN',
+                    payload: {
+                        id: t.id,
+                        cutoutUrl,
+                        alphaMaskUrl,
+                        sourceImageUrl: t.url // Preserve original as source
+                    }
+                });
+
+                setCutoutStatuses(prev => {
+                    const next = { ...prev };
+                    delete next[jobKey];
+                    return next;
+                });
+                
+                dispatch({ type: 'ADD_LOG', payload: { message: `Cutout ready for ${t.tag}`, type: 'success' } });
+
+            } catch (err) {
+                console.warn(`[CutoutTrigger] Failed for ${t.id}`, err);
+                setCutoutStatuses(prev => ({ ...prev, [jobKey]: 'failed' }));
+            }
+        });
+    }, [state.tokens, cutoutStatuses, dispatch]);
     useEffect(() => {
         const store = useSceneSpec.getState();
         const currentActors = store.scene.actors;
@@ -166,6 +287,38 @@ const SceneCanvas = () => {
     const [showColorEditor, setShowColorEditor] = useState(false);
     const [showClearConfirm, setShowClearConfirm] = useState(false);
 
+    // --- STAGING & RESULT VIEWS ---
+    const [viewMode, setViewMode] = useState<'stage' | 'result'>('stage');
+    
+    // --- ADVANCED RENDER CONTROLS ---
+    const {
+        strictMode, setStrictMode,
+        autoAnchorDNA, setAutoAnchorDNA,
+        dnaStatus, anchorDNA, analyzeBackgroundDNA,
+        autoTokenProfiles, setAutoTokenProfiles, ensureTokenProfiles,
+        handleAnalyzeMissingTokenProfiles,
+        tokenProfilesReady, tokenProfilesTotal
+    } = useAdvancedRender(state, dispatch as any);
+
+    useProductionExports(state, dispatch as any);
+
+    const [bgPrompt, setBgPrompt] = useState('');
+
+    const activeReferences = useMemo(() => getActiveReferenceSlots(state.referenceSlots), [state.referenceSlots]);
+    
+    const compiledPrompt = useMemo(() => {
+        if (!strictMode) return compileV3DirectorPrompt(state.director, state.referenceSlots, state.tokens);
+        return buildStrictAnchorReplacementPrompt({
+            bgPrompt: bgPrompt || state.director.subject,
+            mergeStrategy: state.director.mergeStrategy,
+            sceneLock: state.director.sceneLock,
+            replaceAnchorSubjects: state.director.replaceAnchorSubjects,
+            globalReplaceTarget: state.director.globalReplaceTarget,
+            hasDepthMap: !!state.depthMapUrl,
+            activeRefs: activeReferences
+        });
+    }, [strictMode, bgPrompt, state.director, state.depthMapUrl, activeReferences, state.tokens]);
+
 
     const [dragItem, setDragItem] = useState<{ id: string, type: 'token' | 'annotation', startX: number, startY: number, initialX: number, initialY: number } | null>(null);
     const [resizeItem, setResizeItem] = useState<{
@@ -248,6 +401,9 @@ const SceneCanvas = () => {
         }
     }, [state.backgroundUrl, state.apiKey, state.model, state.isDepthProcessing, dispatch]);
 
+    // Lifted utilities from ProductionConsole
+
+    // analyzeBackgroundDNA extracted to useAdvancedRender hook
     useEffect(() => {
         const syncSpatialData = async () => {
             // 1. Detect Change
@@ -519,6 +675,262 @@ const SceneCanvas = () => {
         return () => obs.disconnect();
     }, [state.director.aspectRatio]);
 
+    // analyzeWhitelistProfile was moved to useAdvancedRender
+    const buildRegionPlan = (overrides?: { token?: Map<string, WhitelistProfile>; cast?: Map<string, WhitelistProfile> }) => {
+        const sorted = [...state.tokens].sort((a, b) => (a.zIndex - b.zIndex) || (a.x - b.x));
+
+        return sorted.map((t, idx) => {
+            const cast = (state.cast || []).find(c => c.id === t.castId) || null;
+            const tokenOverride = overrides?.token?.get(t.id);
+            const castOverride = overrides?.cast?.get(t.castId);
+
+            const profile =
+                tokenOverride ||
+                t.profile ||
+                castOverride ||
+                cast?.profile ||
+                { identity: cast?.name || `Token ${t.tag}`, wardrobe: "", accessories: "", style: "" };
+
+            return {
+                region: idx + 1,
+                token: t,
+                cast,
+                profile
+            };
+        });
+    };
+
+    const buildAnchorPlate = async (regionPlan: ReturnType<typeof buildRegionPlan>): Promise<string> => {
+        const canvas = document.createElement('canvas');
+        const STAGE_W = 960;
+        const STAGE_H = 540;
+        const RENDER_SCALE = 2; // Pro level scale
+        const PRO_W = STAGE_W * RENDER_SCALE;
+        const PRO_H = STAGE_H * RENDER_SCALE;
+        canvas.width = PRO_W;
+        canvas.height = PRO_H;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error("Canvas context unavailable.");
+
+        ctx.scale(RENDER_SCALE, RENDER_SCALE);
+
+        // Base Black
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, 0, STAGE_W, STAGE_H);
+
+        // Background
+        if (state.backgroundUrl) {
+            const bg = await loadDataUrlImage(state.backgroundUrl);
+            const imgRatio = bg.width / bg.height;
+            const boxRatio = STAGE_W / STAGE_H;
+            let dw = STAGE_W;
+            let dh = STAGE_H;
+            let dx = 0;
+            let dy = 0;
+            if (imgRatio > boxRatio) {
+                dh = STAGE_H;
+                dw = STAGE_H * imgRatio;
+                dx = 0 - (dw - STAGE_W) / 2;
+            } else {
+                dw = STAGE_W;
+                dh = STAGE_W / imgRatio;
+                dy = 0 - (dh - STAGE_H) / 2;
+            }
+            ctx.drawImage(bg, dx, dy, dw, dh);
+        }
+
+        // Draw tokens
+        const tokensByDepth = [...regionPlan].sort((a, b) => a.token.zIndex - b.token.zIndex);
+        for (const r of tokensByDepth) {
+            try {
+                const t = r.token;
+                const img = await loadDataUrlImage(t.url);
+
+                const ax = (t.anchorX ?? 0.5) * t.width;
+                const ay = (t.anchorY ?? 0.8) * t.height;
+
+                const imgRatio = img.width / img.height;
+                const boxRatio = t.width / t.height;
+                let drawW = t.width;
+                let drawH = t.height;
+                let offX = 0;
+                let offY = 0;
+
+                if (imgRatio > boxRatio) {
+                    drawW = t.width;
+                    drawH = t.width / imgRatio;
+                    offY = (t.height - drawH) / 2;
+                } else {
+                    drawH = t.height;
+                    drawW = t.height * imgRatio;
+                    offX = (t.width - drawW) / 2;
+                }
+
+                ctx.save();
+                ctx.translate(t.x + ax, t.y + ay);
+                ctx.rotate((t.rotation * Math.PI) / 180);
+                ctx.scale(t.scaleX, t.scaleY || 1);
+                ctx.drawImage(img, -ax + offX, -ay + offY, drawW, drawH);
+                ctx.restore();
+            } catch (e) {
+                console.warn("Failed to draw token on anchor plate", r.token.id, e);
+            }
+        }
+
+        return canvas.toDataURL('image/png');
+    };
+
+    // Unified Workflow Generate Button
+    const generateBg = async () => {
+        if (!state.apiKey) return;
+        const hasSourceScene = !!state.backgroundUrl;
+        const hasPromptText = !!bgPrompt?.trim() || !!state.director.subject?.trim();
+
+        if (!hasPromptText && !hasSourceScene) return;
+
+        dispatch({ type: 'SET_PROCESSING', payload: true });
+
+        // Show result view right away so users see the loader overlay
+        setViewMode('result');
+
+        let currentPercent = 5;
+        dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text: "Initializing Staging Render" } });
+        const etaMs = state.imageResolution === '4K' ? 45000 : 30000;
+        const increment = (1000 / etaMs) * 100;
+        const progressInterval = window.setInterval(() => {
+            currentPercent += increment;
+            if (currentPercent > 95) currentPercent = 95;
+
+            let text = "Initializing Staging Render";
+            if (currentPercent > 20) text = "Building Spatial Composition Plan...";
+            if (currentPercent > 40) text = "Compiling Director Prompt...";
+            if (currentPercent > 60) text = "Rendering Cinematic Shot...";
+            if (currentPercent >= 95) text = "Rendering Cinematic Shot... (Still working, please wait)";
+
+            dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text } });
+        }, 1000);
+
+        try {
+            let dnaForRender = anchorDNA;
+
+            // In Strict Mode, we attempt to refresh the Anchor DNA if it is missing
+            if (
+                strictMode &&
+                autoAnchorDNA &&
+                state.backgroundUrl &&
+                state.apiKey &&
+                !dnaForRender.environment &&
+                !dnaForRender.lighting &&
+                !dnaForRender.camera
+            ) {
+                const fresh = await analyzeBackgroundDNA();
+                if (fresh) dnaForRender = fresh;
+            }
+
+            const tokenOverrides = await ensureTokenProfiles(state.tokens, { force: autoTokenProfiles });
+
+            const { buildStrictPrompt, buildLoosePrompt } = await import('../utils/promptHelpers');
+
+            if (strictMode) {
+                const plan = buildRegionPlan({ token: tokenOverrides });
+                const anchorPlate = await buildAnchorPlate(plan);
+                
+                const strictPromptText = buildStrictPrompt(
+                    plan, 
+                    dnaForRender, 
+                    compiledPrompt, // reusing real-time compiledPrompt as notes
+                    state.tokens, 
+                    state.annotations, 
+                    state.referenceSlots, 
+                    state.director
+                );
+
+                const refs: { url: string; label: string }[] = [];
+                refs.push({ url: anchorPlate, label: "ANCHOR_GUIDE" });
+
+                if (state.backgroundUrl) refs.push({ url: state.backgroundUrl, label: "CLEAN_BG_PLATE" });
+                for (const r of plan) refs.push({ url: r.token.url, label: `REGION_${r.region}_REF` });
+
+                const activeRefs = getActiveReferenceSlots(state.referenceSlots);
+                const urls = new Set(refs.map(r => r.url));
+                for (const rs of activeRefs) {
+                    if (!rs.url) continue;
+                    if (refs.length >= 14) break;
+                    if (urls.has(rs.url)) continue;
+                    refs.push({ url: rs.url, label: `REFERENCE ${rs.index} (global consistency)` });
+                    urls.add(rs.url);
+                }
+
+                const limitedRefs = refs.slice(0, 14);
+
+                const img = await GeminiService.generateImage(
+                    strictPromptText,
+                    state.apiKey!,
+                    state.model,
+                    limitedRefs,
+                    { aspectRatio: '16:9', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, strictMode: true }
+                );
+
+                dispatch({ type: 'SET_RESULT_IMAGE', payload: img });
+                dispatch({ type: 'SET_COMPOSITE_METADATA', payload: { latestCompositeSource: 'directorCanvas', latestCompositeResultUrl: img } });
+                setViewMode('result');
+                dispatch({ type: 'ADD_LOG', payload: { message: "Staging strictly rendered.", type: 'success' } });
+            } else {
+                const references: { url: string; label: string }[] = [];
+                const activeRefs = getActiveReferenceSlots(state.referenceSlots);
+                if (activeRefs.length > 0) {
+                    for (const r of activeRefs) {
+                        if (!r.url) continue;
+                        references.push({ url: r.url, label: `REFERENCE ${r.index}: ${r.name || r.analysis || ''}`.trim() });
+                    }
+                } else {
+                    const uniqueCastIds = new Set(state.tokens.map(t => t.castId));
+                    uniqueCastIds.forEach(id => {
+                        const member = (state.cast || []).find(c => c.id === id);
+                        if (member) references.push({ url: member.url, label: `Character: ${member.name}` });
+                    });
+                }
+
+                if (state.backgroundUrl && !references.some(r => r.url === state.backgroundUrl)) {
+                    references.push({ url: state.backgroundUrl, label: "Environment/Lighting Anchor" });
+                }
+
+                const safeCast = state.cast || [];
+                if (references.length === 0 && safeCast.length > 0) {
+                    references.push({ url: safeCast[0].url, label: "Style Reference" });
+                }
+
+                const loosePromptText = buildLoosePrompt(
+                    dnaForRender,
+                    state.tokens,
+                    state.annotations,
+                    state.referenceSlots,
+                    state.director
+                );
+
+                const img = await GeminiService.generateImage(
+                    loosePromptText,
+                    state.apiKey!,
+                    state.model,
+                    references.slice(0, 14),
+                    { aspectRatio: state.director.aspectRatio, imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding }
+                );
+
+                dispatch({ type: 'SET_RESULT_IMAGE', payload: img });
+                dispatch({ type: 'SET_COMPOSITE_METADATA', payload: { latestCompositeSource: 'directorCanvas', latestCompositeResultUrl: img } });
+                setViewMode('result');
+                dispatch({ type: 'ADD_LOG', payload: { message: "Staging (loose) rendered.", type: 'success' } });
+            }
+        } catch (e: any) {
+            dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });
+            setViewMode('stage');
+        } finally {
+            clearInterval(progressInterval);
+            dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
+            dispatch({ type: 'SET_PROCESSING', payload: false });
+        }
+    };
+
     // Keyboard Shortcuts (Global)
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -559,7 +971,7 @@ const SceneCanvas = () => {
     }, [state.selection, state.selectionType, dispatch]);
 
     // --- SIDEBAR STATE ---
-    const [panelOrder, setPanelOrder] = useState<string[]>(['specs', 'layers', 'shots', 'ref_stacks', 'region_edit', 'scene_director']);
+    const [panelOrder, setPanelOrder] = useState<string[]>(['specs', 'layers', 'shots', 'advanced_render', 'ref_stacks', 'region_edit', 'scene_director']);
 
     // Use global panel state from AppContext to persist during navigation
     const collapsedPanels = (state as any).stagePanelState || {
@@ -569,6 +981,7 @@ const SceneCanvas = () => {
         'specs': true,
         'anchor': true,
         'scene_director': true,
+        'advanced_render': true,
         'shots': false
     };
     const [draggedPanelId, setDraggedPanelId] = useState<string | null>(null);
@@ -615,7 +1028,7 @@ const SceneCanvas = () => {
 
     // --- V3-STYLE REFERENCE STACK (integrated) ---
     const refFileInputs = useRef<Record<number, HTMLInputElement | null>>({});
-    const [bgPrompt, setBgPrompt] = useState('');
+
     // --- SHOTS (Storyboard) ---
     // Shots live in AppContext so SceneCanvas / Veo / Production stay in sync.
     const [newShotName, setNewShotName] = useState('');
@@ -644,6 +1057,9 @@ const SceneCanvas = () => {
     const [rawProtectMaskUrl, setRawProtectMaskUrl] = useState<string | null>(null);
     const [protectErosion, setProtectErosion] = useState(0);
     const [protectStatus, setProtectStatus] = useState<'idle' | 'generating' | 'ready' | 'error'>('idle');
+
+
+
 
     const loadDataUrlImage = (url: string): Promise<HTMLImageElement> =>
         new Promise((resolve, reject) => {
@@ -980,7 +1396,7 @@ const SceneCanvas = () => {
                             allowance,
                             anchorSurface.surfaceDepth,
                             viewportBox,
-                            (_url, _nx, _ny) => 255 // Provide fallback or real sync-depth here if available in context
+                            (_url: string, _nx: number, _ny: number) => 255 // Provide fallback or real sync-depth here if available in context
                         );
                         if (protMask && finalMask) {
                             finalMask = await subtractProtectionMask(finalMask, protMask);
@@ -1156,9 +1572,7 @@ const SceneCanvas = () => {
                 let cast: CastMember | undefined;
 
                 if (parsed.type === 'cast_member') {
-                    // Fetch full data using ID to avoid transferring massive base64 URIs via IPC
-                    cast = state.cast.find(c => c.id === parsed.id);
-                    console.log('[handleRefSlotDrop] parsed cast_member ID:', parsed.id, 'found cast:', !!cast);
+                    cast = (state.cast || []).find(c => c.id === parsed.id);
                 } else if (parsed.url) {
                     cast = parsed as CastMember;
                 }
@@ -1548,7 +1962,7 @@ const SceneCanvas = () => {
                 // Handle Actor Drop
                 let castItem: CastMember | undefined;
                 if (item.type === 'cast_member') {
-                    castItem = state.cast.find(c => c.id === item.id);
+                    castItem = (state.cast || []).find(c => c.id === item.id);
                 } else if (item.url) {
                     castItem = item as CastMember;
                 }
@@ -1562,7 +1976,9 @@ const SceneCanvas = () => {
                         id,
                         castId: castItem.id,
                         url: castItem.url,
+                        sourceImageUrl: castItem.url,
                         tag: castItem.name || 'Actor',
+                        elementType: 'actor',
                         x: x - 100,
                         y: y - 150,
                         width: 200,
@@ -1577,6 +1993,7 @@ const SceneCanvas = () => {
                         zIndex: state.tokens.length + 1,
                         uniformScale: true,
                         depth: 0.5,
+                        occlusionMode: 'front',
                         placementAuthority: 'auto',
                         hasUserCommittedIntent: false,
                         hasConfirmedPlacement: false,
@@ -1643,349 +2060,98 @@ const SceneCanvas = () => {
 
 
 
-    const normalizeStyleOnlyRequest = (input: string): string => {
-        const raw = String(input || '').trim();
-        if (!raw) return 'No additional stylistic request provided.';
 
-        // Strip the most common spatial / pose override language so the user text
-        // cannot easily fight the anchor-scene lock.
-        const blockedPatterns = [
-            /\bclose\s*up\b/gi,
-            /\bextreme\s+close\s*up\b/gi,
-            /\bwide\s+shot\b/gi,
-            /\bmedium\s+shot\b/gi,
-            /\bfull\s+body\b/gi,
-            /\bfrom\s+the\s+photographer'?s\s+camera\b/gi,
-            /\bfrom\s+above\b/gi,
-            /\bfrom\s+below\b/gi,
-            /\blow\s+angle\b/gi,
-            /\bhigh\s+angle\b/gi,
-            /\bbird'?s\s+eye\b/gi,
-            /\bdutch\s+angle\b/gi,
-            /\bprofile\b/gi,
-            /\bside\s+view\b/gi,
-            /\bturn\s+head\b/gi,
-            /\blooking\s+at\s+camera\b/gi,
-            /\blook\s+at\s+camera\b/gi,
-            /\bsmile\b/gi,
-            /\bfrown\b/gi,
-            /\bgrin\b/gi,
-            /\bopen\s+mouth\b/gi,
-            /\bpose\b/gi,
-            /\bposture\b/gi,
-            /\braise\s+hand\b/gi,
-            /\bwave\b/gi,
-            /\bwalk(?:ing)?\b/gi,
-            /\brun(?:ning)?\b/gi,
-            /\bsit(?:ting)?\b/gi,
-            /\bstand(?:ing)?\b/gi,
-            /\bnew\s+background\b/gi,
-            /\badd\s+(?:a|an|the)\b/gi,
-            /\bremove\s+(?:a|an|the)\b/gi,
-            /\bextra\s+person\b/gi,
-            /\bcamera\b/gi,
-            /\bframing\b/gi,
-            /\bperspective\b/gi,
-            /\bangle\b/gi,
-            /\bshot\b/gi,
-            /\bzoom\b/gi,
-            /\bpan\b/gi,
-            /\btilt\b/gi,
-        ];
 
-        let sanitized = raw;
-        for (const pattern of blockedPatterns) {
-            sanitized = sanitized.replace(pattern, ' ');
-        }
+    // --- DIRECTOR CANVAS LAYOUT COMPOSITE PIPELINE (NEW) ---
 
-        sanitized = sanitized.replace(/\s+/g, ' ').trim();
-        return sanitized || 'Keep the existing scene exactly the same. Only enhance lighting, color grade, texture richness, and cinematic finish.';
-    };
+    const [blueprintMode, setBlueprintMode] = useState<'basic' | 'cinematic'>('cinematic');
 
-    const buildStrictAnchorReplacementPrompt = (args: {
-        bgPrompt: string;
-        mergeStrategy?: string;
-        sceneLock?: boolean;
-        replaceAnchorSubjects?: boolean;
-        globalReplaceTarget?: string;
-        cameraMode?: CameraMode;
-        framing?: Framing;
-        environmentPreservation?: EnvironmentPreservation;
-        hasDepthMap?: boolean;
-        activeRefs: ReferenceSlot[];
-    }) => {
-        const {
-            bgPrompt,
-            mergeStrategy,
-            sceneLock,
-            replaceAnchorSubjects,
-            globalReplaceTarget,
-            cameraMode = 'locked',
-            framing = 'full_body',
-            environmentPreservation = 'high',
-            hasDepthMap,
-            activeRefs
-        } = args;
+    const collectVisibleCompositeElements = useCallback(() => {
+        return state.tokens
+            .filter(t => t.visible !== false && !!t.url)
+            .sort((a, b) => a.zIndex - b.zIndex)
+            .map(t => ({
+                id: t.id,
+                url: t.cutoutUrl || t.url,
+                sourceImageUrl: t.sourceImageUrl || t.url,
+                label: t.tag,
+                type: t.elementType || 'actor',
+                x: t.x,
+                y: t.y,
+                width: t.width,
+                height: t.height,
+                anchorX: t.anchorX !== undefined ? t.anchorX : 0.5,
+                anchorY: t.anchorY !== undefined ? t.anchorY : 0.8,
+                preserveIdentity: t.preserveIdentity,
+                preserveWardrobe: t.preserveWardrobe,
+                groundingMode: t.groundingMode,
+                notes: t.notes
+            }));
+    }, [state.tokens]);
 
-        const styleOnlyRequest = normalizeStyleOnlyRequest(bgPrompt);
+    const collectDepthAssistWarnings = useCallback((): DepthAssistWarning[] => {
+        const warnings: DepthAssistWarning[] = [];
+        if (!state.depthMapUrl || state.isDepthProcessing) return warnings;
 
-        // Resolve Environment Preservation compatibility
-        let effectiveEnv = environmentPreservation;
-        if (cameraMode === 'repositioned' && environmentPreservation === 'exact') {
-            effectiveEnv = 'high';
-        }
+        const elements = collectVisibleCompositeElements();
+        
+        elements.forEach(t => {
+            // Normalized center-ish point for depth check
+            const nx = (t.x) / viewportBox.w;
+            const ny = (t.y) / viewportBox.h;
+            
+            // Fast synchronous sample from pre-cached depth data via DepthService
+            const anchorDepth = DepthService.getDepthAtPointSync(state.depthMapUrl, nx, ny);
+            
+            // 1. Check Grounding against floor plane (if available)
+            if (state.floorPlane && state.floorPlane.depth !== undefined) {
+                // If anchor is significantly further back (darker/lower depth value) than floor, it might clip
+                if (anchorDepth < state.floorPlane.depth - 0.15) {
+                    warnings.push({
+                        id: `warn-ground-${t.id}`,
+                        type: 'grounding',
+                        severity: 'medium',
+                        message: `${t.label} may be clipping through floor.`,
+                        tokenId: t.id
+                    });
+                }
+            }
 
-        const activeTargets = activeRefs
-            .filter(r => !!r.url)
-            .map(r => {
-                const slotName = r.name || `Ref ${r.index}`;
-                const targetName = r.target?.trim();
-                return targetName
-                    ? `- SLOT ${r.index}: replace "${targetName}" using identity from ${slotName}.`
-                    : `- SLOT ${r.index}: use identity from ${slotName} for subject replacement.`;
-            })
-            .join('\n');
+            // 2. Check Occlusion against volumes (if available)
+            if (state.occupiedVolumes && state.occupiedVolumes.length > 0) {
+               for (const vol of state.occupiedVolumes) {
+                   const vx = vol.footprint.x * viewportBox.w;
+                   const vy = vol.footprint.y * viewportBox.h;
+                   const vw = vol.footprint.w * viewportBox.w;
+                   const vh = vol.footprint.h * viewportBox.h;
+                   
+                   // Basic intersection check of token anchor point within volume bounding box
+                   if (t.x >= vx && t.x <= vx + vw && t.y >= vy && t.y <= vy + vh) {
+                        warnings.push({
+                            id: `warn-occ-${t.id}`,
+                            type: 'occlusion',
+                            severity: 'medium',
+                            message: `${t.label} placed within occupied volume.`,
+                            tokenId: t.id
+                        });
+                        break;
+                   }
+               }
+            }
+        });
 
-        const replaceTargetSummary = globalReplaceTarget?.trim()
-            ? `"${globalReplaceTarget.trim()}"`
-            : 'the anchor-scene subject(s)';
+        return warnings;
+    }, [collectVisibleCompositeElements, state.depthMapUrl, state.isDepthProcessing, state.floorPlane, state.occupiedVolumes, viewportBox.w, viewportBox.h]);
 
-        // Build Camera Directives
-        let cameraDirectives = '';
-        switch (cameraMode) {
-            case 'locked':
-                cameraDirectives = '- EXACT CAMERA MATCH: Do not move the camera. Use the exact same focal length and perspective as the anchor image.';
-                break;
-            case 'reframed':
-                cameraDirectives = '- REFRAMED CROP: You may zoom in or out, or crop the scene differently, but preserve the original camera angle and spatial relationships.';
-                break;
-            case 'repositioned':
-                cameraDirectives = '- REPOSITIONED CAMERA: Move the camera to a completely new viewpoint (e.g., from the side, from behind, varying elevation). This is a CAMERA RELOCATION, not a subject restaging. The subject must remain in their original pose and orientation relative to the environment, but the framing, crop, and visible arrangement of the surrounding environment MUST adapt to the new camera angle.';
-                break;
-        }
 
-        // Build Framing Directives
-        let framingDirectives = '';
-        switch (framing) {
-            case 'wide':
-                framingDirectives = '- WIDE SHOT: Show the subject within a broad view of the environment.';
-                break;
-            case 'full_body':
-                framingDirectives = '- FULL BODY: Ensure the subject is visible from head to toe within the frame.';
-                break;
-            case 'three_quarter':
-                framingDirectives = '- THREE-QUARTER SHOT: Frame the subject from roughly the knees or thighs up.';
-                break;
-            case 'medium':
-                framingDirectives = '- MEDIUM SHOT: Frame the subject from roughly the waist up.';
-                break;
-            case 'close_up':
-                framingDirectives = '- CLOSE-UP: Frame the subject tightly, focusing on the head and shoulders.';
-                break;
-        }
-
-        // Build Environment Directives
-        let envDirectives = '';
-        switch (effectiveEnv) {
-            case 'exact':
-                envDirectives = '- EXACT PRESERVATION: Do not alter the background, props, or lighting drastically. Preserve every detail of the anchor environment.';
-                break;
-            case 'high':
-                envDirectives = '- HIGH PRESERVATION: Keep the primary environment structure, key props, and recognizable setting intact, but minor details and lighting may naturally adjust.';
-                break;
-            case 'moderate':
-                envDirectives = '- MODERATE PRESERVATION: Keep the general theme and vibe of the environment, but allow structural changes to fit the new framing or camera angle.';
-                break;
-            case 'loose':
-                envDirectives = '- LOOSE PRESERVATION: You are free to heavily alter the environment, keeping only the most basic context of the original scene.';
-                break;
-        }
-
-        return `You are a precision image compositor performing scene generation under strict spatial controls.
-
-=== SCENE GENERATION MODE ===
-${replaceAnchorSubjects ? 'ANCHOR SUBJECT IDENTITY REPLACEMENT' : 'SCENE ENHANCEMENT / PRESERVATION'}
-
-=== SPATIAL DIRECTIVES ===
-Driven by Camera Mode '${cameraMode}':
-${cameraDirectives}
-
-=== FRAMING DIRECTIVES ===
-Driven by Framing Setting '${framing}':
-${framingDirectives}
-
-=== ENVIRONMENT PRESERVATION ===
-Driven by Environment Setting '${effectiveEnv}':
-${envDirectives}
-
-=== SUBJECT / SCENE LOCKS ===
-Treat ANCHOR_SCENE_MASTER_REFERENCE as the source of truth for the existing scene content.
-${cameraMode === 'repositioned'
-                ? 'For REPOSITIONED CAMERA mode: Do NOT freeze the exact original composition or crop. Allow the camera position and spatial framing to change drastically as long as subject and scene identity are preserved.'
-                : 'For locked or reframed modes: Preserve the exact structural composition of the anchor scene.'}
-${replaceAnchorSubjects ? `Replace ${replaceTargetSummary} in the anchor scene with the identity from the active CHARACTER_REFERENCE stack.
-- Face, hair, and likeness must match the CHARACTER_REFERENCE.
-- Body proportions and skin tone must match the CHARACTER_REFERENCE.
-` : 'Do not perform identity replacement unless other controls explicitly require it.'}
-
-**CRITICAL SUBJECT CONTINUITY:**
-- Preserve subject facing direction unless explicitly changed.
-- Preserve body pose and stance.
-- Preserve head direction and expression.
-- Preserve wardrobe and subject continuity while changing only camera viewpoint/framing.
-
-${replaceAnchorSubjects ? `=== ACTIVE REFERENCE STACK ASSIGNMENTS ===
-${activeTargets || '- No named target overrides provided. Use the active references to replace the anchor-scene subject(s).'}\n` : ''}
-${sceneLock ? `Scene lock is ON.
-- Maintain the subject's exact physical footprint and interaction with the environment (sitting, holding props).
-- Do not adapt the environment to the prompt.
-` : 'Scene lock is OFF. Minor environmental adjustments are allowed, but the subject continuity rules above still apply.'}
-
-=== STYLE REQUEST ===
-Apply only lighting, color grading, tonal, texture, and cinematic finish instructions from the sanitized user request below.
-Do not let these words override the explicit Camera, Framing, or Environment directives listed above.
-
-SANITIZED_STYLE_REQUEST:
-"""${styleOnlyRequest}"""
-
-=== OUTPUT REQUIREMENT ===
-${cameraMode === 'repositioned'
-                ? 'Produce a photoreal result from a distinctly new camera angle that preserves the original subject performance and overall scene identity.'
-                : 'Produce a photoreal, composition-locked result that preserves the anchor scene exactly while transferring only the identity from the CHARACTER_REFERENCE stack.'
-            }${hasDepthMap ? `
-Use ANCHOR_SCENE_DEPTH_MAP as supporting evidence for occlusion, volume, and foreground/background ordering. Preserve those relationships.` : ''}
-
-MERGE STRATEGY: ${mergeStrategy || 'preserve-anchor-scene'}
-`;
-    };
 
 
     // --- BACKGROUND GENERATION ---
 
-    const generateBg = async () => {
-        if (!state.apiKey) return;
-
-        const hasSourceScene = !!state.backgroundUrl;
-        const hasPromptText = !!bgPrompt.trim();
-        const hasNonDefaultSpatialIntent =
-            (state.director.cameraMode || 'locked') !== 'locked' ||
-            (state.director.framing || 'full_body') !== 'full_body' ||
-            (state.director.environmentPreservation || 'high') !== 'high';
-
-        const canGenerateScene = hasPromptText || hasNonDefaultSpatialIntent || hasSourceScene;
-
-        if (!canGenerateScene) return;
-
-        dispatch({ type: 'SET_PROCESSING', payload: true });
-        dispatch({ type: 'ADD_LOG', payload: { message: `Generating Scene${hasPromptText ? ': ' + bgPrompt : ' with manual spatial controls.'}`, type: 'info' } });
-
-        try {
-            const references: Array<{ url: string; label: string }> = [];
-            const activeRefs = getActiveReferenceSlots(state.referenceSlots).filter(r => !!r.url);
-
-            // 1) Anchor scene first so composition stays dominant.
-            if (state.backgroundUrl) {
-                references.push({
-                    url: state.backgroundUrl,
-                    label: 'ANCHOR_SCENE_MASTER_REFERENCE'
-                });
-            }
-
-            // 2) Reference stack second and explicitly identity-only.
-            for (const r of activeRefs) {
-                references.push({
-                    url: r.url!,
-                    label: `CHARACTER_REFERENCE_${r.index}: ${(r.name || r.analysis || '').trim()}`
-                });
-            }
-
-            // 3) Depth map last as structural support only.
-            if (state.depthMapUrl) {
-                references.push({
-                    url: state.depthMapUrl,
-                    label: 'ANCHOR_SCENE_DEPTH_MAP'
-                });
-            }
-
-            // Use the new structured scene builder
-            const finalPrompt = buildStrictAnchorReplacementPrompt({
-                bgPrompt,
-                mergeStrategy: state.director.mergeStrategy,
-                sceneLock: state.director.sceneLock,
-                replaceAnchorSubjects: state.director.replaceAnchorSubjects,
-                globalReplaceTarget: state.director.globalReplaceTarget,
-                cameraMode: state.director.cameraMode,
-                framing: state.director.framing,
-                environmentPreservation: state.director.environmentPreservation,
-                hasDepthMap: !!state.depthMapUrl,
-                activeRefs
-            });
-
-            console.log('SCENE STRICT MODE:', {
-                model: state.model,
-                strictMode: true,
-                googleGrounding: false,
-                aspectRatio: state.director.aspectRatio || '16:9'
-            });
-
-            const url = await GeminiService.generateImage(
-                finalPrompt,
-                state.apiKey,
-                state.model,
-                references,
-                {
-                    aspectRatio: state.director.aspectRatio || '16:9',
-                    imageSize: state.imageResolution,
-                    thinkingLevel: state.enableImageThinking,
-                    googleGrounding: false,
-                    strictMode: true
-                }
-            );
-
-            dispatch({ type: 'SET_BG', payload: url });
-            dispatch({ type: 'ADD_LOG', payload: { message: 'Scene generated successfully.', type: 'success' } });
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Scene generation failed: ${e.message}`, type: 'error' } });
-        } finally {
-            dispatch({ type: 'SET_PROCESSING', payload: false });
-        }
-    };
+    // Old generateBg logic removed and consolidated above into unified generateBg
 
 
-    const downloadStageImage = async () => {
-        if (!viewportRef.current) return;
-        dispatch({ type: 'SET_PROCESSING', payload: true });
-        dispatch({ type: 'ADD_LOG', payload: { message: 'Composting Stage for Storyboard Capture...', type: 'info' } });
-        try {
-            const dataUrl = await captureSceneImage();
-            if (dataUrl) {
-                const link = document.createElement('a');
-                link.href = dataUrl;
-                link.download = `NB_Scene_${Date.now()}.png`;
-                link.click();
-                dispatch({ type: 'ADD_LOG', payload: { message: 'Stage captured successfully.', type: 'success' } });
-            } else {
-                throw new Error("Canvas composition returned empty.");
-            }
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Capture failed: ${e.message}`, type: 'error' } });
-        } finally {
-            dispatch({ type: 'SET_PROCESSING', payload: false });
-        }
-    };
 
-    const downloadDepthMap = () => {
-        if (!state.depthMapUrl) {
-            dispatch({ type: 'ADD_LOG', payload: { message: 'No depth map available to capture.', type: 'error' } });
-            return;
-        }
-        dispatch({ type: 'ADD_LOG', payload: { message: 'Capturing Scene Depth Map...', type: 'info' } });
-        const depthLink = document.createElement('a');
-        depthLink.href = state.depthMapUrl;
-        depthLink.download = `NB_Scene_Depth_${Date.now()}.png`;
-        depthLink.click();
-        dispatch({ type: 'ADD_LOG', payload: { message: 'Depth map captured successfully.', type: 'success' } });
-    };
 
     // --- INTERNAL UI HELPERS ---
 
@@ -2057,9 +2223,19 @@ MERGE STRATEGY: ${mergeStrategy || 'preserve-anchor-scene'}
     };
 
 
+    const processingCutoutsCount = Object.values(cutoutStatuses).filter(v => v === 'processing').length;
+    const isProcessingCutouts = processingCutoutsCount > 0;
+
     return (
         <>
-            {state.isProcessing && <NanobananaThinking />}
+            <div className={`flex flex-col h-full overflow-hidden`}>
+                {state.isProcessing && <NanobananaThinking />}
+            {isProcessingCutouts && (
+                <div className="absolute top-4 right-4 z-50 flex items-center gap-2 px-3 py-1.5 bg-indigo-950/80 border border-indigo-500/30 rounded shadow-lg text-indigo-200">
+                    <Layers className="w-4 h-4 animate-pulse text-indigo-400" />
+                    <span className="text-xs font-bold tracking-wider">Removing Background ({processingCutoutsCount})...</span>
+                </div>
+            )}
 
             <div className="flex h-full gap-4 p-4 overflow-hidden select-none">
                 {/* 1. LEFT SIDEBAR: ACTIVE ACTOR INTELLIGENCE & PROPERTIES */}
@@ -2211,6 +2387,15 @@ MERGE STRATEGY: ${mergeStrategy || 'preserve-anchor-scene'}
                                         </div>
                                         <button onClick={() => updateToken(selectedToken.id, { x: 0, y: 0 })} className="text-gray-700 hover:text-white"><RefreshCcw className="w-2.5 h-2.5" /></button>
 
+                                        {/* QUICK NUDGE ROW */}
+                                        <span className="text-[10px] text-gray-500 uppercase font-medium">Nudge</span>
+                                        <div className="col-span-4 flex items-center gap-1 mt-1">
+                                            <button onClick={() => updateToken(selectedToken.id, { x: selectedToken.x - 5 })} className="flex-1 py-1.5 bg-[#18181b] hover:bg-[#27272a] rounded border border-white/5 text-[10px] text-gray-400 hover:text-white font-bold transition-colors">LEFT</button>
+                                            <button onClick={() => updateToken(selectedToken.id, { x: selectedToken.x + 5 })} className="flex-1 py-1.5 bg-[#18181b] hover:bg-[#27272a] rounded border border-white/5 text-[10px] text-gray-400 hover:text-white font-bold transition-colors">RIGHT</button>
+                                            <button onClick={() => updateToken(selectedToken.id, { y: selectedToken.y - 5 })} className="flex-1 py-1.5 bg-[#18181b] hover:bg-[#27272a] rounded border border-white/5 text-[10px] text-gray-400 hover:text-white font-bold transition-colors">UP</button>
+                                            <button onClick={() => updateToken(selectedToken.id, { y: selectedToken.y + 5 })} className="flex-1 py-1.5 bg-[#18181b] hover:bg-[#27272a] rounded border border-white/5 text-[10px] text-gray-400 hover:text-white font-bold transition-colors">DOWN</button>
+                                        </div>
+
                                         {/* ZOOM ROW */}
                                         <span className="text-[10px] text-gray-500 uppercase font-medium">Zoom</span>
                                         <div className="relative group">
@@ -2274,7 +2459,6 @@ MERGE STRATEGY: ${mergeStrategy || 'preserve-anchor-scene'}
                                             />
                                         </div>
                                         <button onClick={() => updateToken(selectedToken.id, { anchorX: 0.5, anchorY: 0.8 })} className="text-gray-700 hover:text-white"><RefreshCcw className="w-2.5 h-2.5" /></button>
-                                    </div>
 
                                     {/* SLIDER CONTROLS */}
                                     <div className="space-y-3 mt-4 px-1">
@@ -2393,17 +2577,14 @@ MERGE STRATEGY: ${mergeStrategy || 'preserve-anchor-scene'}
                                                 </button>
                                                 <span className="text-[8px] text-gray-600 uppercase font-bold">Push Back</span>
                                             </div>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
                             </div>
-                        ) : (
-                            <div className="flex-grow flex flex-col items-center justify-center text-gray-700 gap-3 opacity-50 py-10">
-                                <BoxSelect className="w-10 h-10 stroke-[1]" />
-                                <p className="text-xs font-bold uppercase tracking-widest">No Token Selected</p>
-                            </div>
-                        )}
+                        ) : null}
                     </SidebarPanel>
+                    {/* End Token Properties */}
 
 
                     {/* CAST PALETTE */}
@@ -2417,12 +2598,12 @@ MERGE STRATEGY: ${mergeStrategy || 'preserve-anchor-scene'}
                         onDragStart={setDraggedPanelId}
                         onDrop={handlePanelDrop}
                         rightElement={
-                            <span className="text-[9px] bg-purple-500/10 px-1.5 py-0.5 rounded text-purple-400 font-mono border border-purple-500/20">{state.cast.length}</span>
+                            <span className="text-[9px] bg-purple-500/10 px-1.5 py-0.5 rounded text-purple-400 font-mono border border-purple-500/20">{(state.cast || []).length}</span>
                         }
                     >
                         <div className="p-3 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-800 scrollbar-track-transparent">
                             <div className="grid grid-cols-3 gap-2 pb-2">
-                                {state.cast.map(c => (
+                                {(state.cast || []).map(c => (
                                     <div
                                         key={c.id}
                                         className="aspect-square bg-black border border-gray-700 rounded-lg overflow-hidden cursor-move hover:border-purple-500 transition-all relative group "
@@ -2443,14 +2624,10 @@ MERGE STRATEGY: ${mergeStrategy || 'preserve-anchor-scene'}
                                         </div>
                                     </div>
                                 ))}
-                                {state.cast.length === 0 && (
-                                    <div className="col-span-3 text-center py-8 opacity-30">
-                                        <p className="text-[9px] uppercase font-bold">No Cast Loaded</p>
-                                    </div>
-                                )}
                             </div>
                         </div>
                     </SidebarPanel>
+                    {/* End Cast Palette */}
 
                     {/* ANNOTATION PROPERTIES (NEW) */}
                     {selectedAnnotation && (
@@ -2482,7 +2659,8 @@ MERGE STRATEGY: ${mergeStrategy || 'preserve-anchor-scene'}
                                 />
 
                                 {/* Type Info - Show only if editor is CLOSED */}
-                                {!showColorEditor && (
+                                <>
+                                    {!showColorEditor && (
                                     <div className="flex items-center justify-between bg-[#09090b] px-3 py-2 rounded border border-gray-800">
                                         <div className="flex flex-col">
                                             <span className="text-[9px] text-gray-500 font-bold uppercase tracking-tighter">Selected Item</span>
@@ -2720,21 +2898,149 @@ MERGE STRATEGY: ${mergeStrategy || 'preserve-anchor-scene'}
                                                 </button>
                                             </div>
                                         </div>
-
                                     </div>
                                 )}
-                                {/* End of ternary */}
-
+                                </>
                             </div>
                         </SidebarPanel>
                     )}
-
+                
+                {/* SPACE RESERVED FOR FUTURE TAB MODULES */}
 
                 </div>
                 {/* End of Left Sidebar */}
 
                 {/* 2. CENTER AREA: THE STAGE */}
                 <div className="flex-1 flex flex-col gap-4 min-w-0">
+                    <div className="flex shrink-0 h-14 w-full bg-[#09090b] border border-[#27272a] rounded-xl items-center px-4 justify-between">
+                        <div className="flex flex-col gap-0.5 justify-center max-w-[60%]">
+                            <div className="flex items-center gap-3">
+                                <span className="text-xs font-bold text-gray-400 uppercase tracking-widest pl-2">Director Canvas Pipeline</span>
+                                <div className="flex items-center gap-1 bg-black rounded p-0.5 border border-[#27272a]">
+                                    <button
+                                        onClick={() => setBlueprintMode('basic')}
+                                        className={`px-3 py-1 rounded text-[10px] uppercase font-bold tracking-wider transition-colors ${blueprintMode === 'basic' ? 'bg-[#27272a] text-white' : 'text-gray-500 hover:text-gray-300'}`}
+                                    >
+                                        Basic
+                                    </button>
+                                    <button
+                                        onClick={() => setBlueprintMode('cinematic')}
+                                        className={`px-3 py-1 rounded text-[10px] uppercase font-bold tracking-wider transition-colors ${blueprintMode === 'cinematic' ? 'bg-[#27272a] text-white' : 'text-gray-500 hover:text-gray-300'}`}
+                                    >
+                                        Cinematic
+                                    </button>
+                                </div>
+                            </div>
+                            {/* Depth Assist UI */}
+                            {(() => {
+                                const warnings = collectDepthAssistWarnings();
+                                const topWarnings = warnings.filter(w => w.severity === 'high' || w.severity === 'medium').slice(0, 2);
+                                const hasDepth = !!state.depthMapUrl && !state.isDepthProcessing;
+                                
+                                let depthStatusText = "Unavailable";
+                                let depthStatusColor = "text-gray-500";
+                                if (hasDepth) {
+                                     if (topWarnings.length > 0) {
+                                         depthStatusText = "Available with warnings";
+                                         depthStatusColor = "text-yellow-500";
+                                     } else {
+                                         depthStatusText = "Available";
+                                         depthStatusColor = "text-green-500";
+                                     }
+                                }
+
+                                return (
+                                    <div className="flex items-center gap-2 pl-2 overflow-hidden truncate">
+                                        <span className={`text-[9px] uppercase font-bold tracking-wider ${depthStatusColor}`}>
+                                            Depth Assist: {depthStatusText}
+                                        </span>
+                                        {hasDepth && topWarnings.length > 0 && (
+                                            <span className="text-[9px] text-gray-500 truncate">
+                                                | {topWarnings.map(w => w.message).join(' | ')}
+                                            </span>
+                                        )}
+                                    </div>
+                                );
+                            })()}
+                        </div>
+                    </div>
+                    
+                    {/* --- PRIMARY ACTION BAR --- */}
+                    <div className="flex w-full bg-[#18181b] border border-[#27272a] rounded-lg items-center px-4 py-2 justify-between shrink-0 mb-4 shadow-xl">
+                        <div className="flex items-center gap-4">
+                            {/* VIEW MODE TOGGLE */}
+                            <div className="flex bg-black rounded p-1 border border-gray-800 relative shadow-inner">
+                                <button
+                                    onClick={() => setViewMode('stage')}
+                                    className={`px-4 py-1.5 text-[10px] font-bold tracking-widest uppercase rounded transition-colors z-10 ${viewMode === 'stage' ? 'text-white' : 'text-gray-500 hover:text-gray-300'}`}
+                                >
+                                    Stage
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        if (state.resultImage || (activeShot && activeShot.latestCompositeResultUrl)) {
+                                            setViewMode('result');
+                                        } else {
+                                            dispatch({ type: 'ADD_LOG', payload: { message: "No result generated yet.", type: 'error' } });
+                                        }
+                                    }}
+                                    className={`px-4 py-1.5 text-[10px] font-bold tracking-widest uppercase rounded transition-colors z-10 flex items-center gap-2 ${viewMode === 'result' ? 'text-green-400' : 'text-gray-500 hover:text-gray-300'} ${!(state.resultImage || (activeShot && activeShot.latestCompositeResultUrl)) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                >
+                                    Result
+                                    {viewMode === 'result' && <span className="text-[8px] text-green-500/80 font-mono tracking-tighter uppercase leading-none mt-0.5">(Final Output Monitor)</span>}
+                                </button>
+                                {/* Animated Background Pill */}
+                                <div 
+                                    className="absolute top-1 bottom-1 w-1/2 bg-gray-800 rounded transition-transform duration-300 ease-in-out border border-gray-700/50 -z-0"
+                                    style={{ transform: `translateX(${viewMode === 'stage' ? '0%' : '100%'})` }}
+                                />
+                            </div>
+
+                            {/* ACTIVE REFERENCES SUMMARY */}
+                            <div className="hidden lg:flex items-center gap-2 px-3 py-1 bg-[#09090b] border border-white/5 rounded">
+                                <span className="text-[9px] font-bold text-gray-500 tracking-wider uppercase">Active Scene References:</span>
+                                <span className="text-[10px] text-purple-400 font-mono">
+                                    {activeReferences.length} Slots
+                                </span>
+                                {activeReferences.length > 0 && (
+                                    <span className="text-[9px] text-gray-500 truncate max-w-[200px]">
+                                        ({activeReferences.map(r => r.name || `Ref ${r.index}`).join(', ')})
+                                    </span>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* RENDER ACTIONS */}
+                        <div className="flex gap-2">
+
+                            <button
+                                onClick={generateBg}
+                                disabled={state.isProcessing}
+                                className="px-6 py-1.5 bg-yellow-500 hover:bg-yellow-400 text-black rounded text-[10px] font-bold tracking-widest uppercase transition-colors disabled:opacity-50"
+                            >
+                                {state.isProcessing ? 'Processing...' : 'Generate Composite'}
+                            </button>
+                        </div>
+                    </div>
+                    {/* --- END ACTION BAR --- */}
+
+                    {/* Compact Director Canvas Shot State Block */}
+                    {activeShot && (
+                        <div className="flex flex-col gap-1 w-full relative">
+                            <div className="flex shrink-0 w-full bg-[#0e0e11] border border-[#27272a]/50 rounded items-center px-4 py-1.5 justify-between">
+                                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                                    Director Canvas Shot State: <span className="text-white ml-2">{activeShot.latestCompositeStage === 'generate' ? 'Generated' : activeShot.latestCompositeStage === 'refine' ? 'Refined' : 'None'}</span>
+                                </span>
+                                {(activeShot.latestCompositeTimestamp || activeShot.latestCompositeTemplateId) && (
+                                    <div className="flex gap-4 text-[9px] text-gray-500 font-mono">
+                                        {activeShot.latestCompositeTemplateId && <span>TEMPLATE: {activeShot.latestCompositeTemplateId}</span>}
+                                        {activeShot.latestCompositeTimestamp && <span>UPDATED: {new Date(activeShot.latestCompositeTimestamp).toLocaleTimeString()}</span>}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
                     <div
                         ref={stageRef}
                         className="flex-1 bg-[#09090b] border border-[#27272a] rounded-xl relative overflow-hidden group"
@@ -2759,7 +3065,13 @@ MERGE STRATEGY: ${mergeStrategy || 'preserve-anchor-scene'}
                                 zIndex: 10
                             }}
                         >
-                            {state.backgroundUrl ? (
+                            {viewMode === 'result' && (state.resultImage || (activeShot && activeShot.latestCompositeResultUrl)) ? (
+                                <img
+                                    src={state.resultImage || activeShot?.latestCompositeResultUrl || undefined}
+                                    alt="Generated Result"
+                                    className="absolute inset-0 w-full h-full object-contain bg-black pointer-events-none z-[60]"
+                                />
+                            ) : state.backgroundUrl ? (
                                 <img
                                     src={state.backgroundUrl}
                                     alt="Stage Background"
@@ -2883,7 +3195,9 @@ MERGE STRATEGY: ${mergeStrategy || 'preserve-anchor-scene'}
                             )}
 
                             {/* Tokens Layer */}
-                            {[...state.tokens].filter(t => t.visible !== false).sort((a, b) => a.zIndex - b.zIndex).map(token => (
+                            {viewMode === 'stage' && (
+                                <>
+                                    {[...state.tokens].filter(t => t.visible !== false).sort((a, b) => a.zIndex - b.zIndex).map(token => (
                                 <div
                                     key={token.id}
                                     className={`absolute cursor-move group/token ${state.selection === token.id ? 'ring-2 ring-yellow-500 ring-offset-2 ring-offset-[#09090b]' : ''}`}
@@ -2931,8 +3245,20 @@ MERGE STRATEGY: ${mergeStrategy || 'preserve-anchor-scene'}
                                     }}
                                 >
                                     <div className={`absolute inset-0 transition-all duration-500 pointer-events-none`} />
+                                    {/* Cutout Status Fallback Badge */}
+                                    <div className="absolute top-0 right-0 z-50 pointer-events-none p-1 flex items-center justify-end">
+                                        {token.cutoutUrl ? (
+                                            <span className="bg-green-500/80 text-white text-[8px] px-1.5 py-0.5 rounded shadow whitespace-nowrap">Cutout Ready</span>
+                                        ) : cutoutStatuses[`${token.id}-${token.url}`] === 'failed' ? (
+                                            <span className="bg-red-500/80 text-white text-[8px] px-1.5 py-0.5 rounded shadow whitespace-nowrap">Cutout Failed</span>
+                                        ) : cutoutStatuses[`${token.id}-${token.url}`] === 'processing' ? (
+                                            <span className="bg-blue-500/80 text-white text-[8px] px-1.5 py-0.5 rounded shadow whitespace-nowrap">Removing BG...</span>
+                                        ) : (
+                                            <span className="bg-gray-700/80 text-white text-[8px] px-1.5 py-0.5 rounded shadow whitespace-nowrap">Original Image</span>
+                                        )}
+                                    </div>
                                     {(() => {
-                                        const finalUrl = token.url || state.actorLibrary.find(a => a.id === token.castId)?.url;
+                                        const finalUrl = token.cutoutUrl || token.url || state.actorLibrary.find(a => a.id === token.castId)?.url;
                                         if (!finalUrl) {
                                             return (
                                                 <div className="w-full h-full flex flex-col items-center justify-center bg-black/40 rounded border border-dashed border-white/20 text-white/40">
@@ -2952,7 +3278,7 @@ MERGE STRATEGY: ${mergeStrategy || 'preserve-anchor-scene'}
                                                         let f = '';
                                                         if (layer === 'foreground') f = 'contrast(1.15) saturate(1.1) drop-shadow(0 4px 8px rgba(0,0,0,0.5))';
                                                         if (layer === 'background') f = 'contrast(0.85) brightness(1.05) blur(0.5px)';
-                                                        if (token.intelligence) f += (f ? ' ' : '') + 'drop-shadow(0 0 8px rgba(34,197,94,0.6))';
+                                                        if (token. intelligence) f += (f ? ' ' : '') + 'drop-shadow(0 0 8px rgba(34,197,94,0.6))';
 
                                                         // Apply manual filters
                                                         const bright = token.brightness ?? 100;
@@ -3153,7 +3479,7 @@ MERGE STRATEGY: ${mergeStrategy || 'preserve-anchor-scene'}
                                             }}
                                         />
                                     )}
-                                    {/* Rotation Handle (Top Center) */}
+                            {/* Rotation Handle (Top Center) */}
                                     {state.selection === note.id && (
                                         <div
                                             className="absolute left-1/2 -top-6 -translate-x-1/2 w-5 h-5 bg-white border border-blue-500 rounded-full flex items-center justify-center cursor-grabbing z-50 group/rotate"
@@ -3184,9 +3510,9 @@ MERGE STRATEGY: ${mergeStrategy || 'preserve-anchor-scene'}
                                     )}
                                 </div>
                             ))}
-
+                            </>
+                            )}
                         </div>
-
                     </div>
 
                     {/* 2b. CANVAS TOOLBAR (Moved Horizontal Below Stage) */}
@@ -3322,18 +3648,16 @@ MERGE STRATEGY: ${mergeStrategy || 'preserve-anchor-scene'}
                             <button
                                 onClick={downloadDepthMap}
                                 disabled={!state.depthMapUrl}
-                                className={`bg-black/80 hover:bg-black border border-white/10 text-purple-500 px-4 py-1.5 rounded-md flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-widest transition-all ${state.depthMapUrl ? 'hover:text-purple-400 active:scale-95' : 'opacity-50 cursor-not-allowed'
-                                    }`}
+                                className={`bg-black/80 hover:bg-black border border-white/10 text-purple-500 px-4 py-1.5 rounded-md flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-widest transition-all ${state.depthMapUrl ? 'hover:text-purple-400 active:scale-95' : 'opacity-50 cursor-not-allowed'}`}
                                 title="Download generated Depth Map"
                             >
                                 <MonitorPlay className="w-3 h-3" />
                                 Save Depth
                             </button>
                         </div>
-
                     </div>
-
                 </div>
+
                 {/* 3. RIGHT SIDEBAR: GLOBAL SPECS, ANCHOR, & REFERENCES */}
                 <div className="w-[400px] flex flex-col gap-4 h-full overflow-hidden">
                     {/* DYNAMIC SIDEBAR PANELS */}
@@ -3359,6 +3683,31 @@ MERGE STRATEGY: ${mergeStrategy || 'preserve-anchor-scene'}
                                             onDrop={handlePanelDrop}
                                             isProcessing={state.isProcessing ?? false}
                                             onOpenStoryboard={() => dispatch({ type: 'SET_VIEW', payload: 'veo' })}
+                                        />
+                                    );
+                                }
+
+                                if (panelId === 'advanced_render') {
+                                    return (
+                                        <AdvancedRenderPanel
+                                            key="advanced_render"
+                                            collapsed={collapsedPanels['advanced_render']}
+                                            onToggle={togglePanel}
+                                            onDragStart={setDraggedPanelId}
+                                            onDrop={handlePanelDrop}
+                                            strictMode={strictMode}
+                                            setStrictMode={setStrictMode}
+                                            autoAnchorDNA={autoAnchorDNA}
+                                            setAutoAnchorDNA={setAutoAnchorDNA}
+                                            dnaStatus={dnaStatus}
+                                            anchorDNA={anchorDNA}
+                                            analyzeBackgroundDNA={analyzeBackgroundDNA}
+                                            autoTokenProfiles={autoTokenProfiles}
+                                            setAutoTokenProfiles={setAutoTokenProfiles}
+                                            handleAnalyzeMissingTokenProfiles={handleAnalyzeMissingTokenProfiles}
+                                            tokenProfilesReady={tokenProfilesReady}
+                                            tokenProfilesTotal={tokenProfilesTotal}
+                                            compiledPrompt={compiledPrompt}
                                         />
                                     );
                                 }
@@ -3523,23 +3872,20 @@ MERGE STRATEGY: ${mergeStrategy || 'preserve-anchor-scene'}
                             onSave={(updates) => updateRefSlot(inspectRefIndex!, updates)}
                         />
                     )}
-
-
-
-                </div> {/* Close Right Sidebar */}
-            </div> {/* Close Root */}
-
-            <ConfirmDialog
-                isOpen={showClearConfirm}
-                onClose={() => setShowClearConfirm(false)}
-                onConfirm={() => dispatch({ type: 'CLEAR_STAGE' })}
-                title="Clear Entire Stage?"
-                message="This will remove all characters, annotations, and background data from the current scene. This action can be undone."
-                confirmText="Clear Stage"
-                cancelText="Keep Stage"
-                variant="danger"
-            />
-        </>
+                </div>
+            </div>
+        </div>
+        <ConfirmDialog
+            isOpen={showClearConfirm}
+            onClose={() => setShowClearConfirm(false)}
+            onConfirm={() => dispatch({ type: 'CLEAR_STAGE' })}
+            title="Clear Entire Stage?"
+            message="This will remove all characters, annotations, and background data from the current scene. This action can be undone."
+            confirmText="Clear Stage"
+            cancelText="Keep Stage"
+            variant="danger"
+        />
+    </>
     );
 };
 

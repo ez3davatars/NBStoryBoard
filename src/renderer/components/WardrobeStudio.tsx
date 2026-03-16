@@ -10,6 +10,7 @@ import { GeminiService } from '../services/GeminiService';
 import type { WardrobeItem, CastMember, WardrobeState } from '../context/AppContext';
 import { nativeJoinPath, nativeListFiles, nativeReadFile, nativeWriteFile, safeFetchBlob } from '../utils/NativeFileAssets';
 import { removeBackground } from "@imgly/background-removal";
+import { CutoutService } from "../services/CutoutService";
 // Style Imports for Save Modal
 import styleRealism from '../assets/styles/style_exact_studio_masc.png';
 import styleAnimation from '../assets/styles/style_pixar_masc.png';
@@ -639,11 +640,13 @@ const WardrobeStudio = () => {
 
             const blob = await safeFetchBlob(fittedImage);
 
-            const blobResult = await removeBackground(blob, {
-                progress: (_key: string, current: number, total: number) => {
+            const config = await CutoutService.getImglyConfig(
+                (_key: string, current: number, total: number) => {
                     if (total > 0) setIsolationProgress(Math.round((current / total) * 100));
                 }
-            });
+            );
+
+            const blobResult = await removeBackground(blob, config);
 
             const url = URL.createObjectURL(blobResult);
             setTryOnMask(url);

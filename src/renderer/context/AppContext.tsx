@@ -5,7 +5,7 @@ import { computeDepthScore } from '../utils/spatialHelpers';
 
 import type { VeoFivePartDraft, VeoAudioBlock, VeoTimestampBeat } from '../promptEngine/veoFivePart';
 
-export const APP_SCHEMA_VERSION = 4; // bump when persisted state shape changes
+export const APP_SCHEMA_VERSION = 5; // bump when persisted state shape changes
 // --- SHARED TYPES ---
 
 export type ViewMode =
@@ -125,6 +125,18 @@ export interface StageToken {
     actionNote?: string;
     intelligence?: string;
     profile?: WhitelistProfile;
+    // New fields for Layout Composite Pipeline
+    elementType?: 'actor' | 'prop';
+    preserveIdentity?: boolean;
+    preserveWardrobe?: boolean;
+    groundingMode?: 'auto' | 'floor' | 'seat' | 'lean' | 'float';
+    locked?: boolean;
+    notes?: string;
+    cutoutUrl?: string;
+    alphaMaskUrl?: string;
+    sourceImageUrl?: string;
+    sourceFraming?: 'head' | 'bust' | 'waist' | 'threeQuarter' | 'fullBody';
+    // ---
     uniformScale: boolean;
     zIndex: number;
     visible?: boolean;
@@ -169,11 +181,11 @@ export interface StageAnnotation {
     visible?: boolean;
 
     // Semantic Intent Fields
-    role?: 'note' | 'anchor' | 'lookAt' | 'protect';
+    role?: 'note' | 'anchor' | 'lookAt' | 'protect' | 'edit';
     label?: string;
     hard?: boolean;
-    anchorKind?: 'seat' | 'stand' | 'lean';
-    relation?: 'place' | 'lookAt' | 'moveToward';
+    anchorKind?: 'floor' | 'seat' | 'wall' | 'rail' | 'table' | 'counter' | 'doorway' | 'bed' | 'stairs' | 'vehicle' | 'object' | 'path' | 'gazeTarget';
+    relation?: 'place' | 'lookAt' | 'moveToward' | 'interact';
     sourceId?: string;
     targetId?: string;
     x1?: number;
@@ -181,6 +193,15 @@ export interface StageAnnotation {
     x2?: number;
     y2?: number;
     targetTokenId?: string;
+    blueprintType?: 'floorLine' | 'gazeArrow' | 'pathArrow' | 'protectRegion' | 'editRegion' | 'occlusionHint' | 'poseStick';
+}
+
+export interface DepthAssistWarning {
+    id: string;
+    type: 'scale' | 'grounding' | 'occlusion' | 'perspective';
+    severity: 'low' | 'medium' | 'high';
+    message: string;
+    tokenId?: string;
 }
 
 export type RefSlotStatus = 'empty' | 'loading' | 'analyzed' | 'error' | 'ready' | 'analyzing';
@@ -213,10 +234,6 @@ export type DirectorLighting = 'Studio Flash' | 'Natural Window' | 'Cinematic Da
 export type DirectorRenderScale = '1K (Draft)' | '2K (HD)' | '4K (Pro)';
 export type DirectorMergeStrategy = 'Character Identity' | 'Style Transfer' | 'Composition Reference' | 'Photo Merge';
 
-export type CameraMode = 'locked' | 'reframed' | 'repositioned';
-export type Framing = 'wide' | 'full_body' | 'three_quarter' | 'medium' | 'close_up';
-export type EnvironmentPreservation = 'exact' | 'high' | 'moderate' | 'loose';
-
 export interface DirectorSettings {
     prompt: string;
     aspectRatio: DirectorAspectRatio;
@@ -239,11 +256,6 @@ export interface DirectorSettings {
     markerType: DirectorMarkerType;
     negativePrompt: string;
     sceneLock: boolean;
-    
-    // Explicit UI Layout Overrides
-    cameraMode: CameraMode;
-    framing: Framing;
-    environmentPreservation: EnvironmentPreservation;
 }
 
 export interface StoryboardGeneration {
@@ -332,6 +344,28 @@ export interface Shot {
 
     // ✅ store full region edit state per shot (optional for backwards compatibility)
     regionEdit?: RegionEditState;
+
+    // Director Canvas Result Context
+    latestCompositeResultUrl?: string | null;
+    latestCompositeSource?: 'directorCanvas' | 'legacy';
+    latestCompositeStage?: 'generate' | 'refine';
+    latestCompositeTemplateId?: string;
+    latestCompositeTemplateNotes?: string;
+    latestCompositeTimestamp?: string;
+    
+    // Director Canvas Result History (Max 4 for performance)
+    compositeHistory?: Array<{
+        id: string;
+        url: string;
+        stage: 'generate' | 'refine';
+        timestamp: string;
+        label: string; // E.g., G1, R1, R2
+        templateId?: string;
+        templateNotes?: string;
+        isActive?: boolean;
+    }>;
+    _internalGenerateCount?: number;
+    _internalRefineCount?: number;
 }
 
 export interface LogEntry {
@@ -390,6 +424,14 @@ export interface AppState {
     imageResolution: '1K' | '2K' | '4K';
     enableImageThinking: boolean;
     enableGoogleGrounding: boolean;
+
+    // Director Canvas Refinement Tracking
+    latestCompositeSource?: 'directorCanvas' | 'legacy';
+    latestCompositeResultUrl?: string | null;
+
+    // Director Blocking Templates
+    activeTemplateId?: string;
+    templateNotes?: string;
 
     // Persist panel open/closed states in memory only (reset on reload)
     stagePanelState: Record<string, boolean>;
@@ -516,6 +558,7 @@ export type Action =
     | { type: 'SET_FLOOR_PLANE'; payload: FloorPlane | null }
     | { type: 'SET_OCCUPIED_VOLUMES'; payload: OccupiedVolume[] }
     | { type: 'SET_RESULT_IMAGE'; payload: string | null }
+    | { type: 'SET_COMPOSITE_METADATA'; payload: { latestCompositeSource?: 'directorCanvas' | 'legacy'; latestCompositeResultUrl?: string } }
     | { type: 'ADD_LOG'; payload: Omit<LogEntry, 'id' | 'timestamp'> }
     | { type: 'SET_PROCESSING'; payload: boolean }
     | { type: 'SET_GLOBAL_PROGRESS'; payload: { percent: number; text: string } | null }
@@ -561,7 +604,7 @@ export type Action =
     | { type: 'CLEAR_SHOTS' }
     | { type: 'SET_ACTIVE_SHOT'; payload: { id: string | null } }
     | { type: 'SAVE_ACTIVE_SHOT'; payload?: { touchUpdatedAt?: boolean } }
-    | { type: 'UPDATE_SHOT_META'; payload: { id: string; updates: Partial<Pick<Shot, 'name' | 'notes' | 'veoPromptDraft' | 'veoTimeline'>> } }
+    | { type: 'UPDATE_SHOT_META'; payload: { id: string; updates: Partial<Pick<Shot, 'name' | 'notes' | 'veoPromptDraft' | 'veoTimeline' | 'latestCompositeResultUrl' | 'latestCompositeSource' | 'latestCompositeStage' | 'latestCompositeTemplateId' | 'latestCompositeTemplateNotes' | 'latestCompositeTimestamp' | 'compositeHistory' | '_internalGenerateCount' | '_internalRefineCount'>> } }
     | { type: 'SET_SHOT_FRAME'; payload: { id: string; which: 'start' | 'end'; url: string | null } }
     | { type: 'UNDO' }
     | { type: 'REDO' }
@@ -580,7 +623,7 @@ export type Action =
     | { type: 'SYNC_SPATIAL_DESCRIPTORS' }
     | { type: 'DUPLICATE_TOKEN'; payload: { id: string } }
     | { type: 'SET_GLOBAL_VEO_DRAFT'; payload: VeoFivePartDraft & { audio?: VeoAudioBlock, concept?: string, negativePrompt?: string } | undefined }
-    ;
+    | { type: 'SET_TEMPLATE_NOTES'; payload: { activeTemplateId?: string; templateNotes?: string } };
 
 // --- HELPERS ---
 
@@ -627,6 +670,8 @@ export type HistorySnapshot = {
     shots: Shot[];
     activeShotId: string | null;
     resultImage: string | null;
+    latestCompositeSource?: 'directorCanvas' | 'legacy';
+    latestCompositeResultUrl?: string | null;
 };
 
 export const deduplicateTokens = (tokens: StageToken[]): StageToken[] => {
@@ -672,6 +717,8 @@ const snapshotOf = (s: AppState): HistorySnapshot => ({
     sourceBackgroundHash: s.sourceBackgroundHash,
     floorPlane: s.floorPlane,
     occupiedVolumes: smartClone(s.occupiedVolumes),
+    latestCompositeSource: s.latestCompositeSource,
+    latestCompositeResultUrl: s.latestCompositeResultUrl,
 });
 
 const applySnapshot = (s: AppState, snap: HistorySnapshot): AppState => ({
@@ -692,7 +739,7 @@ const shouldRecordHistory = (type: Action['type']) => {
         'SET_REGION_EDIT', 'SET_REGION_ACTIVE_LAYER', 'UPDATE_REGION_LAYER', 'CLEAR_REGION_LAYER_MASK', 'CLEAR_ALL_REGION_MASKS',
         'SET_SHOTS', 'ADD_SHOT_FROM_STAGE', 'DUPLICATE_SHOT', 'REMOVE_SHOT', 'SET_ACTIVE_SHOT', 'SAVE_ACTIVE_SHOT', 'UPDATE_SHOT_META', 'SET_SHOT_FRAME',
         'SET_STORYBOARD_SOURCE', 'SET_STORYBOARD_END_SOURCE', 'SET_STORYBOARD_GENERATIONS', 'UPDATE_STORYBOARD_GENERATION',
-        'SET_RESULT_IMAGE'
+        'SET_RESULT_IMAGE', 'SET_COMPOSITE_METADATA'
     ]);
     return set.has(type);
 };
@@ -714,9 +761,6 @@ const defaultDirector: DirectorSettings = {
     textStyle: '',
     envAuto: false,
     mergeStrategy: 'Character Identity',
-    cameraMode: 'locked',
-    framing: 'full_body',
-    environmentPreservation: 'high',
     sceneLock: false,
     replaceAnchorSubjects: false,
     globalReplaceTarget: '',
@@ -1086,6 +1130,12 @@ export const reducer = (state: AppState, action: Action): AppState => {
             return { ...state, occupiedVolumes: action.payload };
         case 'SET_RESULT_IMAGE':
             return { ...state, resultImage: action.payload };
+        case 'SET_COMPOSITE_METADATA':
+            return {
+                ...state,
+                latestCompositeSource: action.payload.latestCompositeSource !== undefined ? action.payload.latestCompositeSource : state.latestCompositeSource,
+                latestCompositeResultUrl: action.payload.latestCompositeResultUrl !== undefined ? action.payload.latestCompositeResultUrl : state.latestCompositeResultUrl
+            };
         case 'SET_PROCESSING':
             // Clear global progress when processing stops
             return {
@@ -1385,6 +1435,9 @@ export const reducer = (state: AppState, action: Action): AppState => {
                 regionEdit: smartClone(shot.regionEdit ?? DEFAULT_REGION_EDIT),
                 selection: null,
                 selectionType: null,
+                latestCompositeSource: shot.latestCompositeSource,
+                latestCompositeResultUrl: shot.latestCompositeResultUrl,
+                ...(shot.latestCompositeResultUrl ? { resultImage: shot.latestCompositeResultUrl } : {})
             };
         }
 
@@ -1418,9 +1471,35 @@ export const reducer = (state: AppState, action: Action): AppState => {
                 ...state,
                 shots: state.shots.map(s => {
                     if (s.id !== action.payload.id) return s;
+                    
+                    const updates = { ...action.payload.updates };
+                    
+                    if (updates.compositeHistory && updates.compositeHistory.length > 0) {
+                        const history = [...updates.compositeHistory];
+                        let foundActive = false;
+                        
+                        // Keep only the newest active entry if multiple exist
+                        for (let i = history.length - 1; i >= 0; i--) {
+                            if (history[i].isActive) {
+                                if (!foundActive) {
+                                    foundActive = true;
+                                } else {
+                                    history[i] = { ...history[i], isActive: false };
+                                }
+                            }
+                        }
+                        
+                        // If none are active, mark the newest as active
+                        if (!foundActive) {
+                            history[history.length - 1] = { ...history[history.length - 1], isActive: true };
+                        }
+                        
+                        updates.compositeHistory = history;
+                    }
+
                     return {
                         ...s,
-                        ...action.payload.updates,
+                        ...updates,
                         updatedAt: Date.now()
                     };
                 })
@@ -1436,6 +1515,13 @@ export const reducer = (state: AppState, action: Action): AppState => {
             });
             return { ...state, shots: nextShots };
         }
+
+        case 'SET_TEMPLATE_NOTES':
+            return {
+                ...state,
+                activeTemplateId: action.payload.activeTemplateId,
+                templateNotes: action.payload.templateNotes
+            };
 
         default:
             return state;

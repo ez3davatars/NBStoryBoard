@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { removeBackground } from "@imgly/background-removal";
+import { CutoutService } from "../services/CutoutService";
 import { GeminiService } from '../services/GeminiService';
 import HelpTooltip from './ui/HelpTooltip';
 import InlineHint from './ui/InlineHint';
@@ -535,12 +536,8 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
 
         // Run @imgly/background-removal
         // Note: The first run will download model assets (approx 40MB)
-        const blobResult = await removeBackground(blob, {
-          progress: (key: string, current: number, total: number) => {
-            // Optional: Update progress
-            console.log(`Downloading ${key}: ${current} of ${total}`);
-          }
-        });
+        const config = await CutoutService.getImglyConfig();
+        const blobResult = await removeBackground(blob, config);
 
         const cutoutUrl = URL.createObjectURL(blobResult);
 
@@ -1230,11 +1227,8 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
             try {
               dispatch({ type: 'ADD_LOG', payload: { message: "Isolating character silhouette locally...", type: 'info' } });
               const blob = await safeFetchBlob(standardizedUrl);
-              const maskResBlob = await removeBackground(blob, {
-                progress: () => {
-                  // Keep it simple, or emit progress if needed. Imgly handles it.
-                }
-              });
+              const config = await CutoutService.getImglyConfig();
+              const maskResBlob = await removeBackground(blob, config);
               const maskResDataUrl = URL.createObjectURL(maskResBlob);
 
               if (generationIdRef.current === currentGenId) {
@@ -2265,11 +2259,12 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
                                   setIsIsolating(true);
                                   setIsolationProgress(5);
                                   const blob = await safeFetchBlob(state.lastCastedImage);
-                                  const res = await removeBackground(blob, {
-                                    progress: (_key: string, current: number, total: number) => {
+                                  const config = await CutoutService.getImglyConfig(
+                                    (_key: string, current: number, total: number) => {
                                       if (total) setIsolationProgress(Math.round((current / total) * 100));
                                     }
-                                  });
+                                  );
+                                  const res = await removeBackground(blob, config);
                                   const url = URL.createObjectURL(res);
                                   dispatch({ type: 'SET_LAST_CASTED_MASK', payload: url });
                                   dispatch({ type: 'ADD_LOG', payload: { message: "Isolation Complete", type: 'success' } });

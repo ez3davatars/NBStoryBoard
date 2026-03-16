@@ -21,6 +21,10 @@ interface ShotListPanelProps {
  onDrop: (targetId: string) => void;
  isProcessing?: boolean;
  onOpenStoryboard?: () => void;
+ handleSaveActiveShot?: () => void;
+ handleExportActiveShotPack?: () => void;
+ handleExportAllShotPacks?: () => void;
+ handleExportDiagnostics?: () => void;
 }
 
 export const ShotListPanel = ({
@@ -37,7 +41,12 @@ export const ShotListPanel = ({
  collapsed,
  onToggle,
  onDrop,
- onOpenStoryboard
+ onOpenStoryboard,
+ isProcessing,
+ handleSaveActiveShot,
+ handleExportActiveShotPack,
+ handleExportAllShotPacks,
+ handleExportDiagnostics
 }: ShotListPanelProps) => {
  return (
  <HelpTooltip zone="stage" id="storyboardTimeline">
@@ -111,6 +120,32 @@ export const ShotListPanel = ({
  Save
  </button>
  </div>
+ 
+ {/* Advanced Shot Render Actions */}
+ {(handleSaveActiveShot || handleExportActiveShotPack) && (
+     <div className="flex gap-2 pt-1 border-t border-[#27272a] mt-2">
+         {handleSaveActiveShot && (
+             <button 
+                 onClick={handleSaveActiveShot} 
+                 disabled={isProcessing}
+                 className="flex-1 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] rounded py-1.5 text-[9px] font-bold uppercase text-gray-400 disabled:opacity-50"
+                 title="Save current staging canvas to this shot"
+             >
+                 Save Snapshot
+             </button>
+         )}
+         {handleExportActiveShotPack && (
+             <button 
+                 onClick={handleExportActiveShotPack} 
+                 disabled={isProcessing}
+                 className="flex-1 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] rounded py-1.5 text-[9px] font-bold uppercase text-orange-500 disabled:opacity-50"
+                 title="Export full shot pack (Prompt + Assets)"
+             >
+                 Export Pack
+             </button>
+         )}
+     </div>
+ )}
  </div>
  )}
 
@@ -153,6 +188,37 @@ export const ShotListPanel = ({
  );
  })}
  </div>
+ 
+ {/* Global Production Export Actions */}
+ {(handleExportAllShotPacks || handleExportDiagnostics) && (
+     <details className="mt-2 pt-2 border-t border-[#27272a] group">
+         <summary className="text-[10px] font-bold text-gray-500 uppercase cursor-pointer select-none hover:text-gray-300 list-none flex items-center justify-between">
+             Production Utilities
+             <span className="text-gray-600 transition-transform group-open:-rotate-180">▼</span>
+         </summary>
+         <div className="flex gap-2 shrink-0 mt-2">
+             {handleExportAllShotPacks && (
+                 <button 
+                     onClick={handleExportAllShotPacks} 
+                     disabled={shots.length === 0 || isProcessing}
+                     className="flex-[2] bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] rounded py-1.5 text-[9px] font-bold uppercase text-emerald-500 disabled:opacity-50 transition-colors"
+                     title="Export all shots to the save directory"
+                 >
+                     Export All Packs
+                 </button>
+             )}
+             {handleExportDiagnostics && (
+                 <button 
+                     onClick={handleExportDiagnostics} 
+                     className="flex-1 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] rounded py-1.5 text-[9px] font-bold uppercase text-gray-500 disabled:opacity-50 transition-colors"
+                     title="Export system diagnostics"
+                 >
+                     Diag
+                 </button>
+             )}
+         </div>
+     </details>
+ )}
  </SidebarPanel>
  </HelpTooltip>
  );
