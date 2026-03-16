@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import type { AppState, Action, Shot } from '../context/AppContext';
+import type { AppState, Action } from '../context/AppContext';
 import { StorageService } from '../services/StorageService';
 import { APP_SCHEMA_VERSION } from '../context/AppContext';
 import { compileV3DirectorPrompt, getActiveReferenceSlots } from '../utils/promptHelpers';
