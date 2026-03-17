@@ -81,7 +81,7 @@ Your journey begins here. Use the Casting Forge to generate new high-fidelity ac
 
 *   **Reference Sheets (Toggle):** 
     *   **What it does:** Changes the output format from a single portrait to a multi-angle character design sheet. Options include *Form* (Full body turnaround), *Face* (Close-up portrait angles), and *Split* (Dynamic dual-angle presentation).
-    *   **When to use it:** Turn this on when you need strict identity continuity across multiple angles (essential for 3D modeling, AI consistence or consistent comic book panels).
+    *   **When to use it:** Turn this on when you need strict identity continuity across multiple angles (essential for 3D modeling, AI consistency, or consistent comic book panels).
 
 *   **Canvas Actions (Manual Slicing / Crop):**
     *   **What it does:** Activates a manual crop/slice tool directly on the generated canvas preview, allowing you to isolate specific parts of the image (like just the headshot from a full body render, or a specific prop they are holding).

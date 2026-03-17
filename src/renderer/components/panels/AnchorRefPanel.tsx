@@ -22,6 +22,9 @@ interface AnchorRefPanelProps {
  isAnalyzingStyle: boolean;
  extractedStyle: any;
  handleAutoStyleEnvironment: () => void;
+ sceneIntent?: any;
+ previousBackgroundUrl?: string | null;
+ onRestoreBackground?: () => void;
 }
 
 export const AnchorRefPanel = ({
@@ -40,7 +43,10 @@ export const AnchorRefPanel = ({
  selectedTokenId,
  isAnalyzingStyle,
  extractedStyle,
- handleAutoStyleEnvironment
+ handleAutoStyleEnvironment,
+ sceneIntent,
+ previousBackgroundUrl,
+ onRestoreBackground
 }: AnchorRefPanelProps) => {
  return (
  <SidebarPanel
@@ -147,6 +153,23 @@ export const AnchorRefPanel = ({
                             <div className="text-[9px] text-blue-300/70 italic px-1 leading-tight border-l border-blue-500/30 ml-1 pl-2">
                                 Style locked: {extractedStyle.styleSummary}
                             </div>
+                        )}
+                        {sceneIntent && !isAnalyzingStyle && (
+                            <div className="text-[9px] text-emerald-400/80 italic px-1 leading-tight border-l border-emerald-500/30 ml-1 pl-2 flex justify-between items-start mt-1">
+                                <span>Scene Intent: {
+                                    [sceneIntent.location, sceneIntent.action, ...(sceneIntent.furniture || []), ...(sceneIntent.propContext || [])]
+                                        .filter(Boolean)
+                                        .join(', ') || 'No core elements detected'
+                                }</span>
+                            </div>
+                        )}
+                        {previousBackgroundUrl && onRestoreBackground && (
+                            <button
+                                onClick={onRestoreBackground}
+                                className="mt-1 text-[8px] uppercase tracking-wider text-gray-400 hover:text-white border border-gray-700 hover:border-gray-500 rounded px-1.5 py-0.5 self-start ml-1 transition-colors"
+                            >
+                                Revert Background
+                            </button>
                         )}
                         {!extractedStyle && !isAnalyzingStyle && (
                             <p className="text-[8px] text-gray-500 italic px-1">Select an actor on stage to extract their style.</p>

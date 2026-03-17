@@ -1,7 +1,7 @@
 import type { DirectorSettings, ReferenceSlot, StageToken, StageAnnotation } from '../context/AppContext';
 import { computeDepthScore } from './spatialHelpers';
 import type { PlacementIntent } from './spatialHelpers';
-import type { ExtractedStyle } from '../services/GeminiService';
+import type { ExtractedStyle, SceneIntent } from '../services/GeminiService';
 
 export const SCENE_LOCK_NEGATIVE_TOKENS = "scene alteration, background change, lighting shift, camera angle change, style deviation, new composition, structural change, reimagined scene, time of day shift, seasonal change, architectural alteration, furniture movement, lens flares, color grading shift, original studio background, white backgrounds showing through gaps";
 
@@ -81,7 +81,7 @@ export const getActiveReferenceSlots = (slots: ReferenceSlot[]) => {
 
 import { LIGHTING_PRESETS, CAMERA_PRESETS } from '../../prompts/portraitPrompts';
 
-export const compileV3DirectorPrompt = (director: DirectorSettings, slots: ReferenceSlot[], tokens: StageToken[] = []): string => {
+export const compileV3DirectorPrompt = (director: DirectorSettings, slots: ReferenceSlot[], tokens: StageToken[] = [], bgPrompt: string = ''): string => {
   const activeRefs = getActiveReferenceSlots(slots);
 
   const segments: string[] = [];
@@ -215,7 +215,8 @@ export const compileV3DirectorPrompt = (director: DirectorSettings, slots: Refer
 
   // 3) Subject + Environment
   let main = '';
-  if (director.subject.trim()) main += `Subject: ${director.subject.trim()}. `;
+  const mergedNotes = bgPrompt.trim() || director.subject.trim();
+  if (mergedNotes) main += `Scene Notes/Subject: ${mergedNotes}. `;
   if (director.environment.trim()) main += `Environment: ${director.environment.trim()}. `;
   if (main.trim()) segments.push(main.trim());
 
@@ -363,16 +364,17 @@ export const buildStrictPrompt = (
     const tech = buildMasterStyleKeywords(director);
 
     const dnaBlock = [
-        dnaForRender.environment ? `Environment Match: ${dnaForRender.environment}` : '',
-        dnaForRender.lighting ? `Lighting Setup: ${dnaForRender.lighting}` : '',
-        dnaForRender.camera ? `Camera Settings: ${dnaForRender.camera}` : ''
+        (director.environment || dnaForRender.environment) ? `Environment Match: ${director.environment || dnaForRender.environment}` : '',
+        (director.lighting || dnaForRender.lighting) ? `Lighting Setup: ${director.lighting || dnaForRender.lighting}` : '',
+        (director.camera || dnaForRender.camera) ? `Camera Settings: ${director.camera || dnaForRender.camera}` : ''
     ].filter(Boolean).join('\n');
 
     const regions = plan.map(r => {
         const t = r.token;
 
         const boundsBlock = `BBOX_ABS: [${Math.round(t.x)}, ${Math.round(t.y)}, ${Math.round(t.width)}, ${Math.round(t.height)}]`;
-        const profile = typeof r.profile === 'string' ? r.profile : (r.profile ? JSON.stringify(r.profile) : 'Subject matched to Reference Image');
+        let profile = typeof r.profile === 'string' ? r.profile : (r.profile ? JSON.stringify(r.profile) : `You MUST perfectly match the facial identity, skin tone, hair, and clothing of the subject in the attached image labeled "REGION_${r.region}_REF"`);
+        if (t.intelligence) profile += `\nMANDATORY ACTION/POSE: ${t.intelligence}`;
 
         return `REGION ${r.region} (${r.actorLabel}):\n- Position: ${boundsBlock}\n- Description: ${profile}`;
     }).join('\n\n');
@@ -433,7 +435,8 @@ export const buildLoosePrompt = (
     annotations: StageAnnotation[],
     referenceSlots: ReferenceSlot[],
     director: DirectorSettings,
-    extractedStyle?: ExtractedStyle | null
+    extractedStyle?: ExtractedStyle | null,
+    bgPrompt?: string
 ) => {
     const sortedTokens = [...tokens].sort((a, b) => a.x - b.x);
     
@@ -452,7 +455,8 @@ export const buildLoosePrompt = (
     let p = "";
     if (tech.length > 0) p += `(Master Style: ${tech.join(', ')})\n\n`;
 
-    if (director.subject.trim()) p += `Subject: ${director.subject.trim()}. `;
+    const mergedNotes = (bgPrompt || "").trim() || director.subject.trim();
+    if (mergedNotes) p += `Scene Notes/Subject: ${mergedNotes}. `;
     if (director.knowledge.trim()) p += `(Reasoning Constraint: Ensure historical/factual accuracy for: "${director.knowledge.trim()}"). `;
     if (director.filmStock.trim()) p += `Film Look: ${director.filmStock.trim()}. `;
     if (director.textRender.trim()) {
@@ -475,19 +479,28 @@ export const buildLoosePrompt = (
 
         p += `Character ${i + 1} (${t.tag}) is ${posH} at vertical level ${(relY * 100).toFixed(0)}%`;
         if (t.actionNote) p += `, doing action: ${t.actionNote}`;
-        if (t.intelligence) p += `, with intelligence directives: ${t.intelligence}`;
-        p += ". ";
+        if (t.intelligence) p += `. MANDATORY ACTION/POSE: ${t.intelligence}`;
+        p += `. You MUST perfectly preserve the facial identity, features, and overall look of the subject in the attached image labeled "Character: ${t.tag}". `;
     });
 
     p += "\n\n";
 
-    if (dna.environment) p += `Environment: ${dna.environment}\n`;
-    if (dna.lighting) p += `Lighting: ${dna.lighting}\n`;
-    if (dna.camera) p += `Camera: ${dna.camera}\n`;
+    if (dna.environment || director.environment) p += `Environment: ${director.environment || dna.environment}\n`;
+    if (dna.lighting || director.lighting) p += `Lighting: ${director.lighting || dna.lighting}\n`;
+    if (dna.camera || director.camera) p += `Camera: ${director.camera || dna.camera}\n`;
 
     if (intentBlock) {
         p += `\n### SCENARIO-SPECIFIC ACTOR PLACEMENT\n${intentBlock}\n`;
     }
+
+    p += `\n### ENVIRONMENT INTEGRATION GUARDRAIL
+CRITICAL: You are compositing these characters into the provided background anchor image.
+- DO NOT duplicate props. If a table or surface in the background already has a coffee, book, or object, the characters must interact with THAT existing object. DO NOT generate a second coffee cup if one is already visible.
+- DO NOT duplicate furniture. The characters must sit on or interact with the chairs/seating ALREADY PRESENT in the background image. DO NOT generate new chairs cutting through the existing ones.
+- Seamlessly wrap the characters into the existing environment physics.
+
+### ANATOMY & REALISM GUARDRAIL
+CRITICAL NEGATIVE PROMPT: You MUST NOT generate extra limbs, extra legs, phantom body parts, or disembodied characters. Ensure perfect anatomical structure. Characters must have exactly two legs and two arms. No floating legs under tables or detached hands.\n`;
 
     if (extractedStyle) {
         p += `\n### STYLE ENVELOPE (VISUAL TREATMENT ONLY):
@@ -502,6 +515,64 @@ ANTI-STYLE-DRIFT GUARDRAIL: This style envelope MUST ONLY affect the rendering l
     p += `\n### SCENE LIGHTING PROTOCOL:\n${lightingProtocol}\n`;
 
     return p;
+};
+
+export const buildEnvironmentOnlyPrompt = (
+    sceneIntent: SceneIntent,
+    extractedStyle?: ExtractedStyle | null,
+    cameraSetting?: string,
+    tokens: StageToken[] = [],
+    annotations: StageAnnotation[] = []
+) => {
+    let prompt = `CRITICAL DIRECTIVE: Generate the environment/background plate ONLY.\n`;
+    prompt += `- STRONGLY FORBIDDEN: Do NOT generate a person or character.\n`;
+    prompt += `- STRONGLY FORBIDDEN: Do NOT include a human subject.\n`;
+    prompt += `- This pass is exclusively for the empty background plate/scene.\n\n`;
+
+    prompt += `### SCENE INTENT (MANDATORY REQUIREMENTS):\n`;
+    prompt += `CRITICAL: You MUST fulfill this core request exactly as described: "${sceneIntent.summary}"\n`;
+    
+    // Add structured extractions if they exist to help guide the generation safely
+    if (sceneIntent.location) prompt += `- Location/Setting: ${sceneIntent.location}\n`;
+    if (sceneIntent.action) prompt += `- Implied Context: ${sceneIntent.action}\n`;
+    if (sceneIntent.furniture && sceneIntent.furniture.length > 0) prompt += `- Necessary Furniture: ${sceneIntent.furniture.join(', ')}\n`;
+    if (sceneIntent.propContext && sceneIntent.propContext.length > 0) prompt += `- Necessary Props: ${sceneIntent.propContext.join(', ')}\n`;
+
+    // Stronger fallback guardrail
+    if (!sceneIntent.location && !sceneIntent.action) {
+        prompt += `\nANTI-SCENE-DRIFT GUARDRAIL: You MUST generate exactly what is described in the Core Request. Do not invent a room or forest if one is not asked for.\n\n`;
+    } else {
+        prompt += `\nANTI-SCENE-DRIFT GUARDRAIL: You MUST honor the requested location and setting above. Do not hallucinate or reinterpret the location into a different genre or environment (e.g. if the intent is a cafe, it must be a cafe; if an office, it must be an office).\n\n`;
+    }
+
+    if (extractedStyle) {
+        prompt += `### STYLE ENVELOPE (VISUAL TREATMENT ONLY):
+- Artistic Medium: ${extractedStyle.medium}
+- Render Style: ${extractedStyle.renderStyle}
+- Color Palette: ${extractedStyle.palette}
+- Mood/Vibe: ${extractedStyle.mood}
+
+ANTI-STYLE-DRIFT GUARDRAIL: This style envelope MUST ONLY affect the rendering look, colors, and visual treatment. It MUST NOT reinterpret the core scene intent nouns defined above.\n`;
+    }
+
+    if (cameraSetting) {
+        prompt += `\n### CAMERA SHOT SIZE:\n`;
+        prompt += `CRITICAL DIRECTIVE: You MUST frame this background composition as a ${cameraSetting} shot. Do NOT generate a wide room if a Close-Up or Medium shot is requested. The framing must match a ${cameraSetting} perspective of the ${sceneIntent.location || 'location'}.\n`;
+    }
+
+    const intents = buildHumanPlacementIntents(tokens, annotations);
+    const intentBlock = intents.length > 0 ? formatPlacementIntents(intents) : "";
+    if (intentBlock) {
+        prompt += `\n### FOREGROUND STAGING & LAYOUT REQUIREMENTS:\n`;
+        prompt += `CRITICAL DIRECTIVE: You MUST design the room layout to physically accommodate the following actions in the foreground or midground. `;
+        prompt += `DO NOT generate the people, but DO generate the necessary empty tables, surfaces, or open floor space for them to occupy later:\n`;
+        prompt += `${intentBlock}\n`;
+        prompt += `\nANTI-DUPLICATION GUARDRAIL: If the human is described as drinking, reading, or holding an object (e.g. coffee, book, laptop), DO NOT generate those props on the table. Leave the table surface completely EMPTY and clean so the characters can be generated holding those items in the next compositing pass. Do NOT generate duplicate seating where the characters are intended to stand/sit, leave the space open.\n`;
+    }
+
+    prompt += `\nABSOLUTE FINAL NEGATIVE PROMPT: No people, no humans, nobody, empty, empty room, uninhabited, landscape only, scenery only, body parts, floating limbs.`;
+
+    return prompt;
 };
 
 export const normalizeStyleOnlyRequest = (prompt: string, fallbackSubject: string): string => {

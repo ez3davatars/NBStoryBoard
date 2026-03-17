@@ -9,6 +9,20 @@ export type ExtractedStyle = {
   styleSummary: string;
 };
 
+export type SceneIntent = {
+  location?: string;
+  action?: string;
+  furniture?: string[];
+  propContext?: string[];
+  mood?: string;
+  supportContext?: string[];
+  mustInclude?: string[];
+  mustAvoid?: string[];
+  summary?: string;
+  recommendedCamera?: string;
+  recommendedLighting?: string;
+};
+
 export const GeminiService = {
 
   // Helper: Convert Blob/Data URL to Base64
@@ -120,9 +134,16 @@ export const GeminiService = {
     const negBlockMatch = p.match(/\n\nNEGATIVE\s+CONSTRAINTS[\s\S]*?:\s*([\s\S]+)$/i);
     if (negBlockMatch?.[1]) {
       const negCsv = negBlockMatch[1].trim();
-      // Remove the negative block from the main prompt
       p = p.replace(/\n\nNEGATIVE\s+CONSTRAINTS[\s\S]*?$/i, '').trim();
       avoid.push(...negCsv.split(',').map(s => s.trim()).filter(Boolean));
+    }
+
+    // Convert the Environment generator's ABSOLUTE FINAL NEGATIVE PROMPT block into bullets
+    const absNegMatch = p.match(/ABSOLUTE\s+FINAL\s+NEGATIVE\s+PROMPT:\s*([^\n]+)/i);
+    if (absNegMatch?.[1]) {
+        const absCsv = absNegMatch[1].trim();
+        p = p.replace(/ABSOLUTE\s+FINAL\s+NEGATIVE\s+PROMPT:\s*[^\n]+/i, '').trim();
+        avoid.push(...absCsv.split(',').map(s => s.trim()).filter(Boolean));
     }
 
     // Deduplicate avoid bullets
@@ -679,6 +700,213 @@ Hard constraints:
     if (!imgData) throw new Error('No refined image returned from Gemini.');
 
     return `data:image/png;base64,${imgData}`;
+  },
+
+  /**
+   * Calculates the Levenshtein distance between two strings.
+   * @param a The first string.
+   * @param b The second string.
+   * @returns The Levenshtein distance.
+   */
+  getLevenshteinDistance(a: string, b: string): number {
+    const an = a.length;
+    const bn = b.length;
+
+    if (an === 0) return bn;
+    if (bn === 0) return an;
+
+    const matrix: number[][] = [];
+
+    // Initialize first row and column
+    for (let i = 0; i <= an; i++) {
+      matrix[i] = [i];
+    }
+    for (let j = 0; j <= bn; j++) {
+      matrix[0][j] = j;
+    }
+
+    // Fill the matrix
+    for (let i = 1; i <= an; i++) {
+      for (let j = 1; j <= bn; j++) {
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j] + 1,      // Deletion
+          matrix[i][j - 1] + 1,      // Insertion
+          matrix[i - 1][j - 1] + cost // Substitution
+        );
+      }
+    }
+
+    return matrix[an][bn];
+  },
+
+  /**
+   * Phase 3: Semantic scene intent parser using Gemini LLM (with rule-based fallback)
+   */
+  async analyzeSceneIntent(prompt: string, apiKey?: string): Promise<SceneIntent> {
+    const p = prompt.toLowerCase();
+    // Split prompt into words, removing basic punctuation
+    const words = p.replace(/[.,!?]/g, '').split(/\s+/);
+    
+    const intent: SceneIntent = {
+      furniture: [],
+      propContext: [],
+      mustInclude: [],
+      summary: prompt.trim()
+    };
+
+    if (!prompt.trim()) return intent;
+
+    if (apiKey) {
+      try {
+        const strictPrompt = `
+Analyze this scene description for a background plate generator.
+Description: "${prompt}"
+
+Extract the following details if present:
+- location: The specific physical place or setting. Do NOT return null if a place is implied. If it's a compound noun like 'theme park', extract 'theme park'. If it's vague, describe the setting context (e.g. 'sky', 'space', 'abstract void').
+- action: The implied activity (e.g., sitting, flying, reading, standing).
+- furniture: Any necessary support furniture (e.g., bench, table, chair, couch, desk).
+- propContext: Any necessary props (e.g., coffee, book, laptop).
+- mood: The atmospheric vibe (optional).
+- recommendedCamera: Infer the best camera framing for this action (e.g., 'Close-Up', 'Medium Full', 'Wide Angle', 'Establishing Shot'). Choose Medium Full or Wide if standing/walking, Close-Up or Medium if sitting/details.
+- recommendedLighting: Infer the most natural cinematic lighting style (e.g., 'Cinematic Dark', 'Natural Window', 'Overcast', 'Golden Hour').
+
+Return ONLY valid JSON without markdown formatting. Exact schema:
+{
+  "location": "string",
+  "action": "string",
+  "furniture": ["array of strings"],
+  "propContext": ["array of strings"],
+  "mood": "string",
+  "recommendedCamera": "string",
+  "recommendedLighting": "string"
+}
+`;
+        const rawText = await GeminiService.generateText(strictPrompt, apiKey);
+        const cleaned = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
+        const parsed = JSON.parse(cleaned);
+
+        return {
+          location: parsed.location || prompt.trim(), 
+          action: parsed.action || undefined,
+          furniture: Array.isArray(parsed.furniture) ? parsed.furniture : [],
+          propContext: Array.isArray(parsed.propContext) ? parsed.propContext : [],
+          mood: parsed.mood || undefined,
+          recommendedCamera: parsed.recommendedCamera || undefined,
+          recommendedLighting: parsed.recommendedLighting || undefined,
+          mustInclude: [
+            ...(parsed.location ? [parsed.location] : []),
+            ...(parsed.action ? [parsed.action] : []),
+            ...(Array.isArray(parsed.furniture) ? parsed.furniture : []),
+            ...(Array.isArray(parsed.propContext) ? parsed.propContext : [])
+          ],
+          summary: prompt.trim()
+        };
+      } catch (e) {
+        console.warn('LLM intent analysis failed, falling back to rule-based parser.', e);
+      }
+    }
+
+    // Helper to check for exact or fuzzy match (allow 1 typo for words length > 3, 2 for > 5)
+    // Also allows checking multi-word phrases exact match
+    const hasMatch = (triggers: string[]) => {
+        for (const t of triggers) {
+            if (p.includes(t)) return true; // exact phrase match
+            
+            // fuzzy match single words
+            if (!t.includes(' ')) {
+                const maxDist = t.length > 5 ? 2 : (t.length > 3 ? 1 : 0);
+                for (const w of words) {
+                    if (Math.abs(w.length - t.length) <= maxDist) {
+                        if (this.getLevenshteinDistance(w, t) <= maxDist) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    };
+
+    // Hard Locations (with common typos)
+    const locations = [
+      { id: 'cafe', triggers: ['cafe', 'cfe', 'caffe', 'coffee shop', 'coffeeshop'] },
+      { id: 'office', triggers: ['office', 'ofice', 'offce'] },
+      { id: 'bedroom', triggers: ['bedroom', 'bed room'] },
+      { id: 'park', triggers: ['park'] },
+      { id: 'room', triggers: ['room'] },
+      { id: 'street', triggers: ['street'] },
+      { id: 'alley', triggers: ['alley'] },
+      { id: 'tavern', triggers: ['tavern', 'bar', 'pub'] },
+      { id: 'dungeon', triggers: ['dungeon'] },
+      { id: 'kitchen', triggers: ['kitchen'] },
+      { id: 'studio', triggers: ['studio'] }
+    ];
+    for (const loc of locations) {
+      if (hasMatch(loc.triggers)) {
+        intent.location = loc.id;
+        intent.mustInclude!.push(loc.id);
+        break; // take first primary location
+      }
+    }
+
+    // Hard Actions
+    const actions = [
+      { id: 'sitting', triggers: ['sitting', 'sit', 'seated', 'sited', 'siting'] },
+      { id: 'standing', triggers: ['standing', 'stand'] },
+      { id: 'leaning', triggers: ['leaning', 'lean'] },
+      { id: 'waiting', triggers: ['waiting', 'wait'] },
+      { id: 'reading', triggers: ['reading', 'read'] },
+      { id: 'sleeping', triggers: ['sleeping', 'sleep', 'asleep'] },
+      { id: 'drinking', triggers: ['drinking', 'drink'] },
+      { id: 'walking', triggers: ['walking', 'walk'] },
+      { id: 'running', triggers: ['running', 'run'] }
+    ];
+    for (const act of actions) {
+      if (hasMatch(act.triggers)) {
+        intent.action = act.id;
+        intent.mustInclude!.push(act.id);
+        break; 
+      }
+    }
+
+    // Hard Furniture / Support Context
+    const furnitureTokens = [
+      { id: 'bench', triggers: ['bench'] },
+      { id: 'table', triggers: ['table', 'tabel'] },
+      { id: 'bed', triggers: ['bed'] },
+      { id: 'couch', triggers: ['couch', 'sofa'] },
+      { id: 'desk', triggers: ['desk'] },
+      { id: 'chair', triggers: ['chair', 'seat', 'stool'] }
+    ];
+    for (const f of furnitureTokens) {
+      if (hasMatch(f.triggers)) {
+        intent.furniture!.push(f.id);
+        intent.mustInclude!.push(f.id);
+      }
+    }
+
+    // Hard Props
+    const propTokens = [
+      { id: 'coffee', triggers: ['coffee', 'cofee', 'caffee', 'latte', 'espresso'] },
+      { id: 'book', triggers: ['book'] },
+      { id: 'laptop', triggers: ['laptop', 'computer', 'macbook'] },
+      { id: 'phone', triggers: ['phone', 'cellphone', 'mobile'] },
+      { id: 'window', triggers: ['window'] },
+      { id: 'mug', triggers: ['mug', 'cup', 'glass'] }
+    ];
+    // Deduplicate props if they overlap with location
+    for (const pr of propTokens) {
+      if (hasMatch(pr.triggers)) {
+        if (!intent.propContext!.includes(pr.id)) {
+            intent.propContext!.push(pr.id);
+            intent.mustInclude!.push(pr.id);
+        }
+      }
+    }
+
+    return intent;
   },
 
   async generateText(prompt: string, apiKey: string): Promise<string> {

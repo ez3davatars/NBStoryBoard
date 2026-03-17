@@ -71,6 +71,53 @@ export class CutoutService {
     }
 
     /**
+     * Checks if an image blob already has a transparent background.
+     */
+    private static hasTransparency(blob: Blob): Promise<boolean> {
+        return new Promise((resolve) => {
+            const tempUrl = URL.createObjectURL(blob);
+            const img = new Image();
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                // Downscale for performance
+                const MAX_SIZE = 128;
+                const scale = Math.min(MAX_SIZE / img.width, MAX_SIZE / img.height, 1);
+                canvas.width = Math.max(1, Math.floor(img.width * scale));
+                canvas.height = Math.max(1, Math.floor(img.height * scale));
+                
+                const ctx = canvas.getContext('2d');
+                if (!ctx) {
+                    URL.revokeObjectURL(tempUrl);
+                    resolve(false);
+                    return;
+                }
+                
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                const data = imageData.data;
+                
+                let transparentPixels = 0;
+                const totalPixels = data.length / 4;
+                
+                for (let i = 0; i < data.length; i += 4) {
+                    if (data[i + 3] < 20) { // Check for mostly transparent pixels
+                        transparentPixels++;
+                    }
+                }
+                
+                URL.revokeObjectURL(tempUrl);
+                // If more than 5% of the image is transparent, assume it's already a cutout
+                resolve((transparentPixels / totalPixels) > 0.05);
+            };
+            img.onerror = () => {
+                URL.revokeObjectURL(tempUrl);
+                resolve(false);
+            };
+            img.src = tempUrl;
+        });
+    }
+
+    /**
      * Processes an image URL to remove its background.
      * Returns a transparent cutout PNG and an alpha mask PNG as Data URLs.
      */
@@ -78,11 +125,27 @@ export class CutoutService {
         try {
             if (onProgress) onProgress("Fetching image...");
             
-            // 1. Fetch image as blob 
-            // Handle both local and remote URLs safely
+            // 1. Fetch image as blob handle both local and remote URLs safely
             let blob: Blob;
             const res = await fetch(imageUrl);
             blob = await res.blob();
+            
+            // 2. Check if already transparent to prevent artifacts from double-processing
+            const isAlreadyTransparent = await this.hasTransparency(blob);
+            
+            if (isAlreadyTransparent) {
+                console.log(`[CutoutService] Image already transparent, skipping AI cutout for: ${imageUrl}`);
+                if (onProgress) onProgress("Image already transparent, generating mask...");
+                
+                // Need to use object URL since raw imageUrl might be a local path that taints canvas in generateAlphaMaskFromCutout
+                const tempUrl = URL.createObjectURL(blob);
+                const alphaMaskUrl = await this.generateAlphaMaskFromCutout(tempUrl);
+                
+                return {
+                    cutoutUrl: tempUrl, // Return the safe object URL
+                    alphaMaskUrl
+                };
+            }
 
             if (onProgress) onProgress("Running AI isolation...");
 

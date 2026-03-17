@@ -3,7 +3,7 @@ import type { AppState, Action, StageToken, WhitelistProfile } from '../context/
 import { GeminiService } from '../services/GeminiService';
 
 export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Action>) => {
-    const [strictMode, setStrictMode] = useState(false);
+    const [strictMode, setStrictMode] = useState(true);
     const [autoAnchorDNA, setAutoAnchorDNA] = useState(true);
     const [autoTokenProfiles, setAutoTokenProfiles] = useState(true);
     const [dnaStatus, setDnaStatus] = useState<'idle' | 'analyzing' | 'ready' | 'error'>('idle');

@@ -37,14 +37,13 @@ import type {
     DepthAssistWarning,
     WhitelistProfile
 } from '../context/AppContext';
-import { GeminiService } from '../services/GeminiService';
+import { GeminiService, type ExtractedStyle, type SceneIntent } from '../services/GeminiService';
 import { DepthService } from '../services/DepthService';
 import { compileV3DirectorPrompt, buildPlacementPrompt, getActiveReferenceSlots, buildStrictAnchorReplacementPrompt } from '../utils/promptHelpers';
 import { useProductionExports } from '../hooks/useProductionExports';
 import { useAdvancedRender } from '../hooks/useAdvancedRender';
 import { buildPlacementIntentsFromAnnotations, buildAnchorSurfaceFromZone, buildAllowanceMaskFromAnchor, buildForegroundProtectMaskFromDepth } from '../utils/spatialHelpers';
 import { CutoutService } from '../services/CutoutService';
-import type { ExtractedStyle } from '../services/GeminiService';
 
 import React from 'react';
 
@@ -284,11 +283,12 @@ const SceneCanvas = () => {
 
     // DRAG STATE FOR CANVAS ITEMS
     const [editingAnnotationId, setEditingAnnotationId] = useState<string | null>(null);
-    const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
 
-    // Style Transfer Pipeline (Phase 1)
-    const [extractedStyle, setExtractedStyle] = useState<ExtractedStyle | null>(null);
+    // Style Transfer State
     const [isAnalyzingStyle, setIsAnalyzingStyle] = useState(false);
+    const [extractedStyle, setExtractedStyle] = useState<ExtractedStyle | null>(null);
+    const [sceneIntent, setSceneIntent] = useState<SceneIntent | null>(null);
+    const [previousBackgroundUrl, setPreviousBackgroundUrl] = useState<string | null>(null);
     
     const colorPickerRef = useRef<HTMLInputElement>(null);
     const [lastCustomColor, setLastCustomColor] = useState('#ffffff');
@@ -315,7 +315,7 @@ const SceneCanvas = () => {
     const activeReferences = useMemo(() => getActiveReferenceSlots(state.referenceSlots), [state.referenceSlots]);
     
     const compiledPrompt = useMemo(() => {
-        if (!strictMode) return compileV3DirectorPrompt(state.director, state.referenceSlots, state.tokens);
+        if (!strictMode) return compileV3DirectorPrompt(state.director, state.referenceSlots, state.tokens, bgPrompt);
         return buildStrictAnchorReplacementPrompt({
             bgPrompt: bgPrompt || state.director.subject,
             mergeStrategy: state.director.mergeStrategy,
@@ -434,17 +434,61 @@ const SceneCanvas = () => {
         try {
             const style = await GeminiService.analyzeCharacterStyle(
                 analysisUrl, 
-                state.apiKey, 
-                // We default inside the service, but explicitly pass here if state.model is expected or just omit
+                state.apiKey
             );
             
             setExtractedStyle(style);
             dispatch({ type: 'ADD_LOG', payload: { message: `Style extracted: ${style.styleSummary}`, type: 'success' } });
+
+            // Phase 3: Automated Environment Plate Generation
+            if (bgPrompt.trim()) {
+                dispatch({ type: 'ADD_LOG', payload: { message: `Parsing scene intent...`, type: 'info' } });
+                const intent = await GeminiService.analyzeSceneIntent(bgPrompt, state.apiKey);
+                setSceneIntent(intent);
+
+                dispatch({ type: 'ADD_LOG', payload: { message: `Generating style-matched environment plate...`, type: 'info' } });
+                
+                // --- PHASE 4: Automated Inference for Scene Settings ---
+                const inferredCamera = (!state.director.camera || state.director.camera === 'Default / Auto') ? intent.recommendedCamera : state.director.camera;
+                const inferredLighting = (!state.director.lighting || state.director.lighting === 'Default / Auto') ? intent.recommendedLighting : state.director.lighting;
+
+                if (inferredCamera && inferredCamera !== state.director.camera) {
+                     dispatch({ type: 'SET_DIRECTOR', payload: { camera: inferredCamera } });
+                     dispatch({ type: 'ADD_LOG', payload: { message: `Auto-inferred Camera: ${inferredCamera}`, type: 'success' } });
+                }
+                if (inferredLighting && inferredLighting !== state.director.lighting) {
+                     dispatch({ type: 'SET_DIRECTOR', payload: { lighting: inferredLighting } });
+                    dispatch({ type: 'ADD_LOG', payload: { message: `Auto-inferred Lighting: ${inferredLighting}`, type: 'success' } });
+                }
+
+                const { buildEnvironmentOnlyPrompt } = await import('../utils/promptHelpers');
+                const envPrompt = buildEnvironmentOnlyPrompt(intent, style, inferredCamera || state.director.camera, state.tokens, state.annotations);
+
+                dispatch({ type: 'SET_PROCESSING', payload: true });
+
+                const img = await GeminiService.generateImage(
+                    envPrompt,
+                    state.apiKey!,
+                    state.model,
+                    [], 
+                    { aspectRatio: state.director.aspectRatio || '16:9', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, strictMode: true }
+                );
+
+                setPreviousBackgroundUrl(state.backgroundUrl || null);
+                dispatch({ type: 'SET_BG', payload: img });
+                dispatch({ type: 'ADD_LOG', payload: { message: `Environment plate generated successfully.`, type: 'success' } });
+
+                // Phase 4: Automatically trigger the composite pass to place the actor in the new environment
+                dispatch({ type: 'ADD_LOG', payload: { message: `Auto-starting composite pass...`, type: 'info' } });
+                generateBg(img);
+            }
+
         } catch (err: any) {
-            console.error("Style Extract Error", err);
+            console.error("Style Extract / BG Gen Error", err);
             dispatch({ type: 'ADD_LOG', payload: { message: err.message, type: 'error' } });
         } finally {
             setIsAnalyzingStyle(false);
+            dispatch({ type: 'SET_PROCESSING', payload: false });
         }
     };
 
@@ -828,9 +872,10 @@ const SceneCanvas = () => {
     };
 
     // Unified Workflow Generate Button
-    const generateBg = async () => {
+    const generateBg = async (overrideBgUrl?: string | any) => {
         if (!state.apiKey) return;
-        const hasSourceScene = !!state.backgroundUrl;
+        const activeBgUrl = (typeof overrideBgUrl === 'string' ? overrideBgUrl : undefined) || state.backgroundUrl;
+        const hasSourceScene = !!activeBgUrl;
         const hasPromptText = !!bgPrompt?.trim() || !!state.director.subject?.trim();
 
         if (!hasPromptText && !hasSourceScene) return;
@@ -864,7 +909,7 @@ const SceneCanvas = () => {
             if (
                 strictMode &&
                 autoAnchorDNA &&
-                state.backgroundUrl &&
+                activeBgUrl &&
                 state.apiKey &&
                 !dnaForRender.environment &&
                 !dnaForRender.lighting &&
@@ -896,7 +941,7 @@ const SceneCanvas = () => {
                 const refs: { url: string; label: string }[] = [];
                 refs.push({ url: anchorPlate, label: "ANCHOR_GUIDE" });
 
-                if (state.backgroundUrl) refs.push({ url: state.backgroundUrl, label: "CLEAN_BG_PLATE" });
+                if (activeBgUrl) refs.push({ url: activeBgUrl, label: "CLEAN_BG_PLATE" });
                 for (const r of plan) refs.push({ url: r.token.url, label: `REGION_${r.region}_REF` });
 
                 const activeRefs = getActiveReferenceSlots(state.referenceSlots);
@@ -939,8 +984,8 @@ const SceneCanvas = () => {
                     });
                 }
 
-                if (state.backgroundUrl && !references.some(r => r.url === state.backgroundUrl)) {
-                    references.push({ url: state.backgroundUrl, label: "Environment/Lighting Anchor" });
+                if (activeBgUrl && !references.some(r => r.url === activeBgUrl)) {
+                    references.push({ url: activeBgUrl, label: "Environment/Lighting Anchor" });
                 }
 
                 const safeCast = state.cast || [];
@@ -954,7 +999,8 @@ const SceneCanvas = () => {
                     state.annotations,
                     state.referenceSlots,
                     state.director,
-                    extractedStyle
+                    extractedStyle,
+                    bgPrompt
                 );
 
                 const img = await GeminiService.generateImage(
@@ -2028,8 +2074,8 @@ const SceneCanvas = () => {
                         sourceImageUrl: castItem.url,
                         tag: castItem.name || 'Actor',
                         elementType: 'actor',
-                        x: x - 100,
-                        y: y - 150,
+                        x: x,
+                        y: y,
                         width: 200,
                         height: 300,
                         rotation: 0,
@@ -2307,6 +2353,14 @@ const SceneCanvas = () => {
                         isAnalyzingStyle={isAnalyzingStyle}
                         extractedStyle={extractedStyle}
                         handleAutoStyleEnvironment={handleAutoStyleEnvironment}
+                        sceneIntent={sceneIntent}
+                        previousBackgroundUrl={previousBackgroundUrl}
+                        onRestoreBackground={() => {
+                            if (previousBackgroundUrl) {
+                                dispatch({ type: 'SET_BG', payload: previousBackgroundUrl });
+                                setPreviousBackgroundUrl(null);
+                            }
+                        }}
                     />
 
                     <ActorIntelligencePanel
@@ -3844,6 +3898,14 @@ const SceneCanvas = () => {
                                             isAnalyzingStyle={isAnalyzingStyle}
                                             extractedStyle={extractedStyle}
                                             handleAutoStyleEnvironment={handleAutoStyleEnvironment}
+                                            sceneIntent={sceneIntent}
+                                            previousBackgroundUrl={previousBackgroundUrl}
+                                            onRestoreBackground={() => {
+                                                if (previousBackgroundUrl) {
+                                                    dispatch({ type: 'SET_BG', payload: previousBackgroundUrl });
+                                                    setPreviousBackgroundUrl(null);
+                                                }
+                                            }}
                                         />
                                     );
                                 }
@@ -3933,7 +3995,12 @@ const SceneCanvas = () => {
         <ConfirmDialog
             isOpen={showClearConfirm}
             onClose={() => setShowClearConfirm(false)}
-            onConfirm={() => dispatch({ type: 'CLEAR_STAGE' })}
+            onConfirm={() => {
+                dispatch({ type: 'CLEAR_STAGE' });
+                setStrictMode(false);
+                dispatch({ type: 'SET_RESULT_IMAGE', payload: null });
+                setViewMode('stage');
+            }}
             title="Clear Entire Stage?"
             message="This will remove all characters, annotations, and background data from the current scene. This action can be undone."
             confirmText="Clear Stage"
