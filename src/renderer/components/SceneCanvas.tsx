@@ -889,7 +889,8 @@ const SceneCanvas = () => {
                     state.tokens, 
                     state.annotations, 
                     state.referenceSlots, 
-                    state.director
+                    state.director,
+                    extractedStyle
                 );
 
                 const refs: { url: string; label: string }[] = [];
@@ -952,7 +953,8 @@ const SceneCanvas = () => {
                     state.tokens,
                     state.annotations,
                     state.referenceSlots,
-                    state.director
+                    state.director,
+                    extractedStyle
                 );
 
                 const img = await GeminiService.generateImage(
@@ -3825,7 +3827,7 @@ const SceneCanvas = () => {
                                 if (panelId === 'anchor') {
                                     return (
                                         <AnchorRefPanel
-                                            key="anchor"
+                                            key="anchor-panel"
                                             state={state}
                                             dispatch={dispatch}
                                             bgPrompt={bgPrompt}
@@ -3838,6 +3840,10 @@ const SceneCanvas = () => {
                                             onToggle={togglePanel}
                                             onDragStart={setDraggedPanelId}
                                             onDrop={handlePanelDrop}
+                                            selectedTokenId={selectedToken?.id || null}
+                                            isAnalyzingStyle={isAnalyzingStyle}
+                                            extractedStyle={extractedStyle}
+                                            handleAutoStyleEnvironment={handleAutoStyleEnvironment}
                                         />
                                     );
                                 }

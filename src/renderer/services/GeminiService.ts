@@ -488,9 +488,11 @@ export const GeminiService = {
   ): Promise<ExtractedStyle> {
     if (!apiKey) throw new Error("No API Key provided for style analysis.");
 
-    const prompt = `Analyze this character image. Return a JSON object describing their exact artistic medium, color palette, and lighting style. Do NOT describe the character's physical features or clothing. Only describe the aesthetic style (e.g., 3D animated, Pixar-style, pastel colors, soft studio lighting, cel-shaded, gritty cinematic, etc.). Return only style descriptors. No full sentences.
+    const prompt = `Analyze this character image. Return a JSON object describing their exact artistic medium, color palette, and mood. Do NOT describe the character's physical features or clothing. Only describe the aesthetic style (e.g., 3D animated, Pixar-style, pastel colors, cel-shaded, gritty cinematic, etc.). Return only style descriptors. No full sentences.
 
-Required JSON Structure:
+    CRITICAL LIGHTING RULE: Do NOT include character-specific or studio lighting descriptors (e.g., "soft studio lighting", "portrait lighting", "beauty lighting", "rim lighting", "flat"). These will conflict with environment generation later. If you describe lighting, keep it broad and environment-safe (e.g., "volumetric", "cinematic", "moody", or prioritize "mood").
+
+    Return EXACTLY this JSON structure:
 {
   "medium": "string (e.g., '3D render', 'Digital painting', 'Photograph')",
   "palette": "string (e.g., 'Cyberpunk neon', 'Muted earth tones')",

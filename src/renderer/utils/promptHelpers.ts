@@ -1,6 +1,7 @@
 import type { DirectorSettings, ReferenceSlot, StageToken, StageAnnotation } from '../context/AppContext';
 import { computeDepthScore } from './spatialHelpers';
 import type { PlacementIntent } from './spatialHelpers';
+import type { ExtractedStyle } from '../services/GeminiService';
 
 export const SCENE_LOCK_NEGATIVE_TOKENS = "scene alteration, background change, lighting shift, camera angle change, style deviation, new composition, structural change, reimagined scene, time of day shift, seasonal change, architectural alteration, furniture movement, lens flares, color grading shift, original studio background, white backgrounds showing through gaps";
 
@@ -356,7 +357,8 @@ export const buildStrictPrompt = (
     tokens: StageToken[], 
     annotations: StageAnnotation[],
     referenceSlots: ReferenceSlot[],
-    director: DirectorSettings
+    director: DirectorSettings,
+    extractedStyle?: ExtractedStyle | null
 ) => {
     const tech = buildMasterStyleKeywords(director);
 
@@ -404,12 +406,20 @@ export const buildStrictPrompt = (
         "- OVERLAP LOCK: If the ANCHOR_GUIDE shows subjects overlapping, maintain that exact occlusion.",
         "",
         dnaBlock ? `### ANCHOR DNA:\n${dnaBlock}\n` : "",
-        notes ? `### DIRECTOR NOTES: ${notes}\n` : "",
+        notes ? `### DIRECTOR NOTES (EXPLICIT USER REQUEST - MANDATORY LOCATION/SCENE):\n${notes}\n` : "",
         "",
         "### REGION COMPOSITION PLAN (FOLLOW EXACTLY):",
         intentBlock ? `${intentBlock}\n\n` : "",
         regions,
         "",
+        extractedStyle ? `### STYLE ENVELOPE (VISUAL TREATMENT ONLY):
+- Artistic Medium: ${extractedStyle.medium}
+- Render Style: ${extractedStyle.renderStyle}
+- Color Palette: ${extractedStyle.palette}
+- Mood/Vibe: ${extractedStyle.mood}
+
+ANTI-STYLE-DRIFT GUARDRAIL: This style envelope MUST ONLY affect the rendering look, colors, and visual treatment. It MUST NOT reinterpret or replace the requested location, scene category, furniture, props, or world (e.g., do not turn a cafe into a dungeon). The core scene nouns from the Director Notes remain mandatory and primary.` : "",
+        extractedStyle ? "\n" : "",
         "### SCENE LIGHTING PROTOCOL:",
         lightingProtocol
     ].filter(Boolean).join("\n");
@@ -422,7 +432,8 @@ export const buildLoosePrompt = (
     tokens: StageToken[],
     annotations: StageAnnotation[],
     referenceSlots: ReferenceSlot[],
-    director: DirectorSettings
+    director: DirectorSettings,
+    extractedStyle?: ExtractedStyle | null
 ) => {
     const sortedTokens = [...tokens].sort((a, b) => a.x - b.x);
     
@@ -476,6 +487,16 @@ export const buildLoosePrompt = (
 
     if (intentBlock) {
         p += `\n### SCENARIO-SPECIFIC ACTOR PLACEMENT\n${intentBlock}\n`;
+    }
+
+    if (extractedStyle) {
+        p += `\n### STYLE ENVELOPE (VISUAL TREATMENT ONLY):
+- Artistic Medium: ${extractedStyle.medium}
+- Render Style: ${extractedStyle.renderStyle}
+- Color Palette: ${extractedStyle.palette}
+- Mood/Vibe: ${extractedStyle.mood}
+
+ANTI-STYLE-DRIFT GUARDRAIL: This style envelope MUST ONLY affect the rendering look, colors, and visual treatment. It MUST NOT reinterpret or replace the requested location, scene category, furniture, props, or world (e.g., do not turn a modern office into a fantasy tavern). The core scene nouns remain mandatory and primary.\n`;
     }
 
     p += `\n### SCENE LIGHTING PROTOCOL:\n${lightingProtocol}\n`;
