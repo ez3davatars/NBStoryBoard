@@ -1,5 +1,14 @@
 import type { VeoFivePartDraft, VeoAudioBlock } from '../promptEngine/veoFivePart';
 
+export type ExtractedStyle = {
+  medium?: string;
+  palette?: string;
+  lighting?: string;
+  renderStyle?: string;
+  mood?: string;
+  styleSummary: string;
+};
+
 export const GeminiService = {
 
   // Helper: Convert Blob/Data URL to Base64
@@ -465,6 +474,50 @@ export const GeminiService = {
     } catch (e) {
       console.error("JSON Parse Error on:", rawText);
       throw new Error("Gemini failed to return valid JSON. Please try again.");
+    }
+  },
+
+  /**
+   * Style Transfer Pipeline: Phase 1
+   * Analyzes a character image to extract aesthetic style descriptors.
+   */
+  async analyzeCharacterStyle(
+    imageUrl: string,
+    apiKey: string,
+    model: string = 'gemini-2.5-flash' // Defaulting to the fast multimodal model
+  ): Promise<ExtractedStyle> {
+    if (!apiKey) throw new Error("No API Key provided for style analysis.");
+
+    const prompt = `Analyze this character image. Return a JSON object describing their exact artistic medium, color palette, and lighting style. Do NOT describe the character's physical features or clothing. Only describe the aesthetic style (e.g., 3D animated, Pixar-style, pastel colors, soft studio lighting, cel-shaded, gritty cinematic, etc.). Return only style descriptors. No full sentences.
+
+Required JSON Structure:
+{
+  "medium": "string (e.g., '3D render', 'Digital painting', 'Photograph')",
+  "palette": "string (e.g., 'Cyberpunk neon', 'Muted earth tones')",
+  "lighting": "string (e.g., 'Volumetric', 'Flat cel-shaded')",
+  "renderStyle": "string (e.g., 'Unreal Engine 5', 'Anime')",
+  "mood": "string (e.g., 'Gritty', 'Whimsical')",
+  "styleSummary": "string (A comma-separated list of the best descriptors from above)"
+}
+    `;
+
+    try {
+      // Reuse the JSON generation logic with the image attached
+      const result = await this.analyzeMultiFrameJson<ExtractedStyle>(
+        prompt,
+        apiKey,
+        model,
+        [{ url: imageUrl, label: 'Character Asset' }]
+      );
+      
+      if (!result || !result.styleSummary) {
+          throw new Error("Invalid style analysis payload returned.");
+      }
+
+      return result;
+    } catch (err: any) {
+      console.error("[GeminiService.analyzeCharacterStyle] Failed:", err);
+      throw new Error("Failed to extract style from character. Please try again.");
     }
   },
 

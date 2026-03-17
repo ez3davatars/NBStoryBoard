@@ -44,6 +44,7 @@ import { useProductionExports } from '../hooks/useProductionExports';
 import { useAdvancedRender } from '../hooks/useAdvancedRender';
 import { buildPlacementIntentsFromAnnotations, buildAnchorSurfaceFromZone, buildAllowanceMaskFromAnchor, buildForegroundProtectMaskFromDepth } from '../utils/spatialHelpers';
 import { CutoutService } from '../services/CutoutService';
+import type { ExtractedStyle } from '../services/GeminiService';
 
 import React from 'react';
 
@@ -283,6 +284,12 @@ const SceneCanvas = () => {
 
     // DRAG STATE FOR CANVAS ITEMS
     const [editingAnnotationId, setEditingAnnotationId] = useState<string | null>(null);
+    const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
+
+    // Style Transfer Pipeline (Phase 1)
+    const [extractedStyle, setExtractedStyle] = useState<ExtractedStyle | null>(null);
+    const [isAnalyzingStyle, setIsAnalyzingStyle] = useState(false);
+    
     const colorPickerRef = useRef<HTMLInputElement>(null);
     const [lastCustomColor, setLastCustomColor] = useState('#ffffff');
     const [showColorEditor, setShowColorEditor] = useState(false);
@@ -401,6 +408,45 @@ const SceneCanvas = () => {
             dispatch({ type: 'SET_DEPTH_PROCESSING', payload: false });
         }
     }, [state.backgroundUrl, state.apiKey, state.model, state.isDepthProcessing, dispatch]);
+
+    useEffect(() => {
+        if (state.backgroundUrl !== lastBgRef.current) {
+            lastBgRef.current = state.backgroundUrl;
+            refreshSpatialData();
+        }
+    }, [state.backgroundUrl, refreshSpatialData]);
+
+    // Style Transfer Pipeline: Phase 1 Logic
+    const handleAutoStyleEnvironment = async () => {
+        // StageTokens are actors if they have a sourceImage or cutoutUrl in this context
+        const activeToken = state.tokens.find((t: StageToken) => t.id === state.selection);
+        if (!activeToken) return;
+        
+        // Prefer original sourceImage for best aesthetic analysis, fallback to cutout
+        // Note: activeToken properties depend on the exact definition of StageToken in AppContext.
+        const analysisUrl = (activeToken as any).sourceImageUrl || (activeToken as any).sourceImage || activeToken.cutoutUrl || activeToken.url;
+        if (!analysisUrl) return;
+
+        setIsAnalyzingStyle(true);
+        const tokenLabel = (activeToken as any).label || activeToken.tag || 'Actor';
+        dispatch({ type: 'ADD_LOG', payload: { message: `Analyzing aesthetic style for ${tokenLabel}...`, type: 'info' } });
+        
+        try {
+            const style = await GeminiService.analyzeCharacterStyle(
+                analysisUrl, 
+                state.apiKey, 
+                // We default inside the service, but explicitly pass here if state.model is expected or just omit
+            );
+            
+            setExtractedStyle(style);
+            dispatch({ type: 'ADD_LOG', payload: { message: `Style extracted: ${style.styleSummary}`, type: 'success' } });
+        } catch (err: any) {
+            console.error("Style Extract Error", err);
+            dispatch({ type: 'ADD_LOG', payload: { message: err.message, type: 'error' } });
+        } finally {
+            setIsAnalyzingStyle(false);
+        }
+    };
 
     // Lifted utilities from ProductionConsole
 
@@ -2255,6 +2301,10 @@ const SceneCanvas = () => {
                         onToggle={togglePanel}
                         onDragStart={setDraggedPanelId}
                         onDrop={handlePanelDrop}
+                        selectedTokenId={selectedToken?.id || null}
+                        isAnalyzingStyle={isAnalyzingStyle}
+                        extractedStyle={extractedStyle}
+                        handleAutoStyleEnvironment={handleAutoStyleEnvironment}
                     />
 
                     <ActorIntelligencePanel

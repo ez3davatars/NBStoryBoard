@@ -16,6 +16,12 @@ interface AnchorRefPanelProps {
  onToggle: (id: string) => void;
  onDragStart: (id: string) => void;
  onDrop: (targetId: string) => void;
+ 
+ // Style Transfer Props
+ selectedTokenId: string | null;
+ isAnalyzingStyle: boolean;
+ extractedStyle: any;
+ handleAutoStyleEnvironment: () => void;
 }
 
 export const AnchorRefPanel = ({
@@ -30,7 +36,11 @@ export const AnchorRefPanel = ({
  collapsed,
  onToggle,
  onDragStart,
- onDrop
+ onDrop,
+ selectedTokenId,
+ isAnalyzingStyle,
+ extractedStyle,
+ handleAutoStyleEnvironment
 }: AnchorRefPanelProps) => {
  return (
  <SidebarPanel
@@ -114,7 +124,35 @@ export const AnchorRefPanel = ({
                             {state.isProcessing ? <RefreshCcw className="w-3.5 h-3.5 animate-spin" /> : <MaximizeIcon className="w-3.5 h-3.5" />}
                         </button>
                     </div>
-                    <p className="text-[8px] text-gray-500 italic px-1">Text is optional if you only want to extract the style of your reference.</p>
+                    
+                    {/* Style Transfer Button */}
+                    <div className="flex flex-col gap-1 mt-1">
+                        <button
+                            onClick={handleAutoStyleEnvironment}
+                            disabled={isAnalyzingStyle || !selectedTokenId || !state.tokens.find((t: any) => t.id === selectedTokenId)}
+                            className="w-full py-1 px-2 border border-blue-500/30 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 rounded text-[10px] uppercase font-bold tracking-wider disabled:opacity-30 disabled:hover:bg-blue-500/10 transition-colors flex items-center justify-center gap-2"
+                        >
+                            {isAnalyzingStyle ? (
+                                <>
+                                    <RefreshCcw className="w-3 h-3 animate-spin" />
+                                    Analyzing character aesthetic...
+                                </>
+                            ) : (
+                                <>
+                                    ✨ Auto-Style Environment
+                                </>
+                            )}
+                        </button>
+                        {extractedStyle && !isAnalyzingStyle && (
+                            <div className="text-[9px] text-blue-300/70 italic px-1 leading-tight border-l border-blue-500/30 ml-1 pl-2">
+                                Style locked: {extractedStyle.styleSummary}
+                            </div>
+                        )}
+                        {!extractedStyle && !isAnalyzingStyle && (
+                            <p className="text-[8px] text-gray-500 italic px-1">Select an actor on stage to extract their style.</p>
+                        )}
+                    </div>
+
                 </div>
 
                 <div className="mt-4 flex gap-2 items-end">
