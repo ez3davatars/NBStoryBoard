@@ -25,7 +25,7 @@ import {
 import { NumericInput } from './ui/NumericInput';
 import { SidebarPanel } from './ui/SidebarPanel';
 
-import { useAppContext } from '../context/AppContext';
+import { useAppContext, getShotsActorOptionsForScene } from '../context/AppContext';
 import type {
     DirectorAspectRatio,
     ReferenceSlot,
@@ -64,6 +64,9 @@ import { AdvancedRenderPanel } from './panels/AdvancedRenderPanel';
 import { SceneDirectorPanel } from './panels/SceneDirectorPanel';
 import { PromptTerminalPanel } from './panels/PromptTerminalPanel';
 import { RefInspectorModal } from './panels/RefInspectorModal';
+import { ShotsPanel } from './shots/ShotsPanel';
+import { getActorIdentityReferenceSetsForScene, getEffectiveResultAnchorForScene } from '../context/AppContext';
+import { buildOrderedActorIdentityInputs, hasStrongFaceAnchor } from '../utils/identityReferenceHelpers';
 
 import { DEPTH_BAND_RADIUS } from '../services/SpatialIntelligence';
 
@@ -296,7 +299,17 @@ const SceneCanvas = () => {
     const [showClearConfirm, setShowClearConfirm] = useState(false);
 
     // --- STAGING & RESULT VIEWS ---
-    const [viewMode, setViewMode] = useState<'stage' | 'result'>('stage');
+    const [viewMode, setViewMode] = useState<'stage' | 'result' | 'shots'>('stage');
+    
+    // Auto-fallback if the current view's anchor becomes invalid (e.g. user clears stage or removes bg)
+    useEffect(() => {
+        const _activeShot = state.shots.find(s => s.id === (state.activeShotId || 'default'));
+        if (viewMode === 'result' && !(state.resultImage || (_activeShot && _activeShot.latestCompositeResultUrl))) {
+            setViewMode('stage');
+        } else if (viewMode === 'shots' && !getEffectiveResultAnchorForScene(state, state.activeShotId || 'default')) {
+            setViewMode('stage');
+        }
+    }, [viewMode, state.resultImage, state.shots, state.activeShotId]);
     
     // --- ADVANCED RENDER CONTROLS ---
     const {
@@ -835,33 +848,44 @@ const SceneCanvas = () => {
         for (const r of tokensByDepth) {
             try {
                 const t = r.token;
+                
+                const vw = viewportBox.w > 0 ? viewportBox.w : STAGE_W;
+                const vh = viewportBox.h > 0 ? viewportBox.h : STAGE_H;
+                const scaleX = STAGE_W / vw;
+                const scaleY = STAGE_H / vh;
+                
+                const normX = t.x * scaleX;
+                const normY = t.y * scaleY;
+                const normW = t.width * scaleX;
+                const normH = t.height * scaleY;
+
                 const img = await loadDataUrlImage(t.url);
 
-                const ax = (t.anchorX ?? 0.5) * t.width;
-                const ay = (t.anchorY ?? 0.8) * t.height;
+                const ax = t.anchorX ?? 0.5;
+                const ay = t.anchorY ?? 0.8;
 
                 const imgRatio = img.width / img.height;
-                const boxRatio = t.width / t.height;
-                let drawW = t.width;
-                let drawH = t.height;
+                const boxRatio = normW / normH;
+                let drawW = normW;
+                let drawH = normH;
                 let offX = 0;
                 let offY = 0;
 
                 if (imgRatio > boxRatio) {
-                    drawW = t.width;
-                    drawH = t.width / imgRatio;
-                    offY = (t.height - drawH) / 2;
+                    drawW = normW;
+                    drawH = normW / imgRatio;
+                    offY = (normH - drawH) / 2;
                 } else {
-                    drawH = t.height;
-                    drawW = t.height * imgRatio;
-                    offX = (t.width - drawW) / 2;
+                    drawH = normH;
+                    drawW = normH * imgRatio;
+                    offX = (normW - drawW) / 2;
                 }
 
                 ctx.save();
-                ctx.translate(t.x + ax, t.y + ay);
+                ctx.translate(normX, normY);
                 ctx.rotate((t.rotation * Math.PI) / 180);
                 ctx.scale(t.scaleX, t.scaleY || 1);
-                ctx.drawImage(img, -ax + offX, -ay + offY, drawW, drawH);
+                ctx.drawImage(img, (-normW * ax) + offX, (-normH * ay) + offY, drawW, drawH);
                 ctx.restore();
             } catch (e) {
                 console.warn("Failed to draw token on anchor plate", r.token.id, e);
@@ -922,6 +946,16 @@ const SceneCanvas = () => {
             const tokenOverrides = await ensureTokenProfiles(state.tokens, { force: autoTokenProfiles });
 
             const { buildStrictPrompt, buildLoosePrompt } = await import('../utils/promptHelpers');
+            const { sanitizeStyleForStrictIdentity } = await import('../utils/analysisSanitizers');
+
+            const identitySets = getActorIdentityReferenceSetsForScene(state, state.activeShotId || 'default');
+            const hasStrictIdentityRefs = identitySets.some(s => s.identityPriority === 'strict' && hasStrongFaceAnchor(s));
+
+            let safeExtractedStyle = extractedStyle;
+            if (hasStrictIdentityRefs && extractedStyle) {
+                safeExtractedStyle = sanitizeStyleForStrictIdentity(extractedStyle);
+                console.warn(`[IdentityPrecedence] Subject/style analysis demoted in STAGE generation because strict actor refs are present`);
+            }
 
             if (strictMode) {
                 const plan = buildRegionPlan({ token: tokenOverrides });
@@ -935,7 +969,7 @@ const SceneCanvas = () => {
                     state.annotations, 
                     state.referenceSlots, 
                     state.director,
-                    extractedStyle
+                    safeExtractedStyle
                 );
 
                 const refs: { url: string; label: string }[] = [];
@@ -944,14 +978,20 @@ const SceneCanvas = () => {
                 if (activeBgUrl) refs.push({ url: activeBgUrl, label: "CLEAN_BG_PLATE" });
                 for (const r of plan) refs.push({ url: r.token.url, label: `REGION_${r.region}_REF` });
 
-                const activeRefs = getActiveReferenceSlots(state.referenceSlots);
                 const urls = new Set(refs.map(r => r.url));
-                for (const rs of activeRefs) {
-                    if (!rs.url) continue;
-                    if (refs.length >= 14) break;
-                    if (urls.has(rs.url)) continue;
-                    refs.push({ url: rs.url, label: `REFERENCE ${rs.index} (global consistency)` });
-                    urls.add(rs.url);
+                
+                for (const set of identitySets) {
+                    if (!hasStrongFaceAnchor(set)) {
+                         console.warn(`[IdentityLock] Missing face anchor for generation request`, { actorId: set.actorId, path: 'scene-strict' });
+                    }
+                    const orderedUrls = buildOrderedActorIdentityInputs(set);
+                    for (const url of orderedUrls) {
+                        if (!url) continue;
+                        if (refs.length >= 14) break;
+                        if (urls.has(url)) continue;
+                        refs.push({ url, label: `ACTOR IDENTITY ANCHOR` });
+                        urls.add(url);
+                    }
                 }
 
                 const limitedRefs = refs.slice(0, 14);
@@ -970,12 +1010,24 @@ const SceneCanvas = () => {
                 dispatch({ type: 'ADD_LOG', payload: { message: "Staging strictly rendered.", type: 'success' } });
             } else {
                 const references: { url: string; label: string }[] = [];
-                const activeRefs = getActiveReferenceSlots(state.referenceSlots);
-                if (activeRefs.length > 0) {
-                    for (const r of activeRefs) {
-                        if (!r.url) continue;
-                        references.push({ url: r.url, label: `REFERENCE ${r.index}: ${r.name || r.analysis || ''}`.trim() });
+                const urls = new Set<string>();
+
+                for (const set of identitySets) {
+                    if (!hasStrongFaceAnchor(set)) {
+                         console.warn(`[IdentityLock] Missing face anchor for generation request`, { actorId: set.actorId, path: 'scene-loose' });
                     }
+                    const orderedUrls = buildOrderedActorIdentityInputs(set);
+                    for (const url of orderedUrls) {
+                        if (!url) continue;
+                        if (references.length >= 14) break;
+                        if (urls.has(url)) continue;
+                        references.push({ url, label: `ACTOR IDENTITY ANCHOR` });
+                        urls.add(url);
+                    }
+                }
+                
+                if (urls.size > 0) {
+                    // Identity injected safely
                 } else {
                     const uniqueCastIds = new Set(state.tokens.map(t => t.castId));
                     uniqueCastIds.forEach(id => {
@@ -999,7 +1051,7 @@ const SceneCanvas = () => {
                     state.annotations,
                     state.referenceSlots,
                     state.director,
-                    extractedStyle,
+                    safeExtractedStyle,
                     bgPrompt
                 );
 
@@ -3094,10 +3146,22 @@ const SceneCanvas = () => {
                                     Result
                                     {viewMode === 'result' && <span className="text-[8px] text-green-500/80 font-mono tracking-tighter uppercase leading-none mt-0.5">(Final Output Monitor)</span>}
                                 </button>
+                                <button
+                                    onClick={() => {
+                                        if (getEffectiveResultAnchorForScene(state, state.activeShotId || 'default')) {
+                                            setViewMode('shots');
+                                        } else {
+                                            dispatch({ type: 'ADD_LOG', payload: { message: "Choose or generate a result first.", type: 'error' } });
+                                        }
+                                    }}
+                                    className={`px-4 py-1.5 text-[10px] font-bold tracking-widest uppercase rounded transition-colors z-10 flex items-center gap-2 ${viewMode === 'shots' ? 'text-blue-400' : 'text-gray-500 hover:text-gray-300'} ${!getEffectiveResultAnchorForScene(state, state.activeShotId || 'default') ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                >
+                                    Shots
+                                </button>
                                 {/* Animated Background Pill */}
                                 <div 
-                                    className="absolute top-1 bottom-1 w-1/2 bg-gray-800 rounded transition-transform duration-300 ease-in-out border border-gray-700/50 -z-0"
-                                    style={{ transform: `translateX(${viewMode === 'stage' ? '0%' : '100%'})` }}
+                                    className="absolute top-1 bottom-1 w-1/3 bg-gray-800 rounded transition-transform duration-300 ease-in-out border border-gray-700/50 -z-0"
+                                    style={{ transform: `translateX(${viewMode === 'stage' ? '0%' : viewMode === 'result' ? '100%' : '200%'})` }}
                                 />
                             </div>
 
@@ -3116,8 +3180,22 @@ const SceneCanvas = () => {
                         </div>
 
                         {/* RENDER ACTIONS */}
-                        <div className="flex gap-2">
-
+                        <div className="flex gap-2 items-center">
+                            {viewMode === 'result' && (state.resultImage || (activeShot && activeShot.latestCompositeResultUrl)) && (
+                                <button
+                                    onClick={() => {
+                                        const url = state.resultImage || activeShot?.latestCompositeResultUrl;
+                                        if (url) {
+                                            dispatch({ type: 'SET_BG', payload: url });
+                                            setViewMode('stage');
+                                            dispatch({ type: 'ADD_LOG', payload: { message: "Result promoted to Stage Background.", type: 'success' } });
+                                        }
+                                    }}
+                                    className="px-6 py-2 h-full bg-[#09090b] hover:bg-green-950/40 border border-green-500/30 hover:border-green-500/80 rounded-lg text-[10px] font-bold tracking-widest text-green-400 uppercase transition-all shadow-[0_0_10px_rgba(34,197,94,0.05)] hover:shadow-[0_0_15px_rgba(34,197,94,0.2)]"
+                                >
+                                    Use as Stage Scene
+                                </button>
+                            )}
                             <button
                                 onClick={generateBg}
                                 disabled={state.isProcessing}
@@ -3149,6 +3227,47 @@ const SceneCanvas = () => {
                         </div>
                     )}
 
+                    {viewMode === 'shots' ? (() => {
+                        const effectiveAnchor = getEffectiveResultAnchorForScene(state, state.activeShotId || 'default');
+                        let computedActorCount: number | undefined = undefined;
+                        if (effectiveAnchor) {
+                            if (effectiveAnchor.kind === 'generated_result') {
+                                computedActorCount = state.tokens.filter((t: any) => t.type === 'actor').length;
+                            } else if (effectiveAnchor.kind === 'uploaded_result') {
+                                computedActorCount = effectiveAnchor.visibleActorCount;
+                            }
+                        }
+
+                        return (
+                        <div className="flex-1 bg-[#09090b] border border-[#27272a] rounded-xl relative overflow-hidden">
+                           <ShotsPanel 
+                              sceneId={state.activeShotId || 'default'} 
+                              apiKey={state.apiKey!} 
+                              model={state.model}
+                              effectiveResultImageUrl={getEffectiveResultAnchorForScene(state, state.activeShotId || 'default')?.imageUrl}
+                              subjectActionText={bgPrompt}
+                              environmentText={state.director?.environment}
+                              lightingText={state.director?.lighting}
+                              expectedActorCount={computedActorCount}
+                              actorIdentitySets={getActorIdentityReferenceSetsForScene(state, state.activeShotId || 'default')}
+                              shotsActorOptions={getShotsActorOptionsForScene(state, state.activeShotId || 'default')}
+                              session={state.shotSessionsBySceneId?.[state.activeShotId || 'default']}
+                              onCreateOrReplaceSession={(sId, sess) => dispatch({ type: 'CREATE_OR_REPLACE_SHOT_SESSION', payload: { sceneId: sId, session: sess } })}
+                              onUpdateSession={(sId, updater) => {
+                                 dispatch({ type: 'UPDATE_SHOT_SESSION', payload: { sceneId: sId, updater } });
+                              }}
+                              onToggleVariantSelected={(sId, vId, sel) => dispatch({ type: 'SET_SHOT_VARIANT_SELECTED', payload: { sceneId: sId, variantId: vId, selected: sel } })}
+                              onSaveVariant={(url, prefix) => {
+                                 const link = document.createElement('a');
+                                 link.href = url;
+                                 link.download = `NB_${prefix}_${Date.now()}.png`;
+                                 link.click();
+                                 dispatch({ type: 'ADD_LOG', payload: { message: 'Shot saved successfully.', type: 'success' } });
+                              }}
+                           />
+                        </div>
+                        );
+                    })() : (
                     <div
                         ref={stageRef}
                         className="flex-1 bg-[#09090b] border border-[#27272a] rounded-xl relative overflow-hidden group"
@@ -3619,6 +3738,7 @@ const SceneCanvas = () => {
                             )}
                         </div>
                     </div>
+                )}
 
                     {/* 2b. CANVAS TOOLBAR (Moved Horizontal Below Stage) */}
                     <div className="flex items-center justify-between gap-4 p-2 bg-[#09090b] border border-[#27272a] rounded-xl shrink-0">
@@ -3742,23 +3862,58 @@ const SceneCanvas = () => {
 
                         {/* Right Group: Capture */}
                         <div className="flex items-center gap-2 flex-1 justify-end">
-                            <button
-                                onClick={downloadStageImage}
-                                className="bg-black/80 hover:bg-black border border-white/10 text-blue-500 hover:text-green-500 px-4 py-1.5 rounded-md flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-widest transition-all active:scale-95"
-                                title="Download composed stage image"
-                            >
-                                <MonitorPlay className="w-3 h-3" />
-                                Save Image
-                            </button>
-                            <button
-                                onClick={downloadDepthMap}
-                                disabled={!state.depthMapUrl}
-                                className={`bg-black/80 hover:bg-black border border-white/10 text-purple-500 px-4 py-1.5 rounded-md flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-widest transition-all ${state.depthMapUrl ? 'hover:text-purple-400 active:scale-95' : 'opacity-50 cursor-not-allowed'}`}
-                                title="Download generated Depth Map"
-                            >
-                                <MonitorPlay className="w-3 h-3" />
-                                Save Depth
-                            </button>
+                            {viewMode === 'shots' ? (
+                                (() => {
+                                    const currentSession = state.shotSessionsBySceneId?.[state.activeShotId || 'default'];
+                                    const selectedShots = currentSession?.variants.filter(v => v.selected && (v.status === 'done' || v.status === 'error')) || [];
+                                    const isDisabled = selectedShots.length === 0;
+                                    const label = selectedShots.length > 1 ? 'DOWNLOAD SELECTED SHOTS' : 'SAVE SELECTED SHOT';
+
+                                    const handleSaveShots = () => {
+                                        selectedShots.forEach(variant => {
+                                            const url = variant.finalUrl || variant.previewUrl;
+                                            if (!url) return;
+                                            const link = document.createElement('a');
+                                            link.href = url;
+                                            link.download = `NB_shot_${variant.presetId}_${Date.now()}.png`;
+                                            link.click();
+                                        });
+                                        dispatch({ type: 'ADD_LOG', payload: { message: `Saved ${selectedShots.length} shot(s).`, type: 'success' } });
+                                    };
+
+                                    return (
+                                        <button
+                                            onClick={handleSaveShots}
+                                            disabled={isDisabled}
+                                            className={`bg-black/80 hover:bg-black border border-white/10 px-4 py-1.5 rounded-md flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-widest transition-all ${!isDisabled ? 'text-blue-500 hover:text-green-500 active:scale-95' : 'text-gray-500 opacity-50 cursor-not-allowed'}`}
+                                            title={isDisabled ? "Select a shot to download" : "Download selected SHOTS"}
+                                        >
+                                            <MonitorPlay className="w-3 h-3" />
+                                            {label}
+                                        </button>
+                                    );
+                                })()
+                            ) : (
+                                <>
+                                    <button
+                                        onClick={downloadStageImage}
+                                        className="bg-black/80 hover:bg-black border border-white/10 text-blue-500 hover:text-green-500 px-4 py-1.5 rounded-md flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-widest transition-all active:scale-95"
+                                        title="Download composed stage image"
+                                    >
+                                        <MonitorPlay className="w-3 h-3" />
+                                        Save Image
+                                    </button>
+                                    <button
+                                        onClick={downloadDepthMap}
+                                        disabled={!state.depthMapUrl}
+                                        className={`bg-black/80 hover:bg-black border border-white/10 text-purple-500 px-4 py-1.5 rounded-md flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-widest transition-all ${state.depthMapUrl ? 'hover:text-purple-400 active:scale-95' : 'opacity-50 cursor-not-allowed'}`}
+                                        title="Download generated Depth Map"
+                                    >
+                                        <MonitorPlay className="w-3 h-3" />
+                                        Save Depth
+                                    </button>
+                                </>
+                            )}
                         </div>
                     </div>
                 </div>

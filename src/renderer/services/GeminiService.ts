@@ -1,4 +1,6 @@
 import type { VeoFivePartDraft, VeoAudioBlock } from '../promptEngine/veoFivePart';
+import type { ActorIdentityReferenceSet } from '../context/AppContext';
+import { buildOrderedActorIdentityInputs, hasStrongFaceAnchor } from '../utils/identityReferenceHelpers';
 
 export type ExtractedStyle = {
   medium?: string;
@@ -24,6 +26,21 @@ export type SceneIntent = {
 };
 
 export const GeminiService = {
+
+  // Helper: Flatten structured actor references for multi-image Gemini injection
+  flattenActorReferenceImageUrls(actorReferences: Array<{ actorId: string, referenceImageUrls: string[] }>): string[] {
+    if (!actorReferences || actorReferences.length === 0) return [];
+    
+    const flattened: string[] = [];
+    actorReferences.forEach(actor => {
+      if (!actor.referenceImageUrls || actor.referenceImageUrls.length === 0) {
+        console.warn(`[Face Fidelity] Actor ${actor.actorId} is missing reference images in pipeline.`);
+      } else {
+        flattened.push(...actor.referenceImageUrls);
+      }
+    });
+    return flattened;
+  },
 
   // Helper: Convert Blob/Data URL to Base64
   async _resolveImageData(url: string, maxSize: number = 3072): Promise<{ mimeType: string; data: string }> {
@@ -1027,9 +1044,10 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
       groundingMode?: string;
       notes?: string;
     }>;
+    actorIdentitySets?: ActorIdentityReferenceSet[];
     instructions: string;
   }): Promise<string> {
-    const { apiKey, model, aspectRatio, imageSize, backgroundUrl, blueprintUrl, protectionMaskUrl, elements, instructions } = args;
+    const { apiKey, model, aspectRatio, imageSize, backgroundUrl, blueprintUrl, protectionMaskUrl, elements, actorIdentitySets, instructions } = args;
 
     if (!apiKey) {
       console.warn("No API Key. Returning mock composite.");
@@ -1075,6 +1093,20 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
       contentsParts.push({ text: `[PROTECTION MASK] (White = Editable, Black = Protected)` });
       const mask = await GeminiService._resolveImageData(protectionMaskUrl);
       contentsParts.push({ inlineData: { mimeType: mask.mimeType, data: mask.data } });
+    }
+
+    // 6. Actor References (Face Fidelity Identity Anchors)
+    if (actorIdentitySets && actorIdentitySets.length > 0) {
+      for (const set of actorIdentitySets) {
+        if (!hasStrongFaceAnchor(set)) {
+           console.warn(`[IdentityLock] Missing face anchor for generation request`, { actorId: set.actorId, path: 'composite-from-layout' });
+        }
+        const orderedUrls = buildOrderedActorIdentityInputs(set);
+        for (let i = 0; i < orderedUrls.length; i++) {
+           const refData = await GeminiService._resolveImageData(orderedUrls[i]);
+           contentsParts.push({ inlineData: { mimeType: refData.mimeType, data: refData.data } });
+        }
+      }
     }
 
     // Force strict structure behavior and Google grounding disabled for tight compositing
@@ -1131,6 +1163,154 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
     if (!imgData) throw new Error("No image returned from generation.");
     
     return `data:image/png;base64,${imgData}`;
+  },
+
+  /**
+   * Generates a preview shot variation
+   */
+  async generateShotPreview(args: {
+    anchorImageUrl: string;
+    actorIdentitySets?: ActorIdentityReferenceSet[];
+    prompt: string;
+    aspectRatio?: string;
+    apiKey: string;
+    model: string;
+  }): Promise<string> {
+    const { anchorImageUrl, actorIdentitySets = [], prompt, aspectRatio, apiKey, model } = args;
+    
+    if (!apiKey) throw new Error("No API Key provided for shot generation");
+    
+    const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+    const parts: any[] = [];
+    
+    // 1. Supplemental identity anchors
+    for (const set of actorIdentitySets) {
+        if (!hasStrongFaceAnchor(set)) {
+            console.warn(`[IdentityLock] Missing face anchor for generation request`, { actorId: set.actorId, path: 'shots-preview' });
+        }
+        const orderedUrls = buildOrderedActorIdentityInputs(set);
+        for (let i = 0; i < orderedUrls.length; i++) {
+            const ref = await GeminiService._resolveImageData(orderedUrls[i]);
+            parts.push({ text: `[ACTOR REFERENCE ${i + 1}]` });
+            parts.push({ inlineData: { mimeType: ref.mimeType, data: ref.data } });
+        }
+    }
+    
+    // 2. Primary scene anchor
+    const anchor = await GeminiService._resolveImageData(anchorImageUrl);
+    parts.push({ text: `[AUTHORITATIVE SCENE AND LAYOUT ANCHOR]` });
+    parts.push({ inlineData: { mimeType: anchor.mimeType, data: anchor.data } });
+    
+    // Shot Prompt
+    parts.push({ text: prompt });
+    
+    const payload = {
+      contents: [{ parts }],
+      generationConfig: {
+        responseModalities: ["IMAGE"],
+        candidateCount: 1,
+        imageConfig: {
+          aspectRatio: aspectRatio || "16:9",
+          imageSize: "1K" // preview quality
+        }
+      }
+    };
+    
+    const response = await fetch(`${baseUrl}?key=${apiKey}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    
+    if (!response.ok) {
+      const err = await response.text();
+      let cleanMsg = err;
+      try { cleanMsg = JSON.parse(err).error?.message || cleanMsg; } catch {}
+      throw new Error(`Shot Preview Generation Error: ${cleanMsg}`);
+    }
+    
+    const result = await response.json();
+    const data = result.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData)?.inlineData?.data;
+    if (!data) throw new Error("No image data in shot preview response.");
+    
+    return `data:image/png;base64,${data}`;
+  },
+
+  /**
+   * Re-renders a selected shot variation at final quality (4K)
+   */
+  async rerenderShotFinal(args: {
+    sourceResultUrl: string;
+    selectedShotPreviewUrl: string;
+    actorIdentitySets?: ActorIdentityReferenceSet[];
+    prompt: string;
+    aspectRatio?: string;
+    apiKey: string;
+    model: string;
+  }): Promise<string> {
+    const { sourceResultUrl, selectedShotPreviewUrl, actorIdentitySets = [], prompt, aspectRatio, apiKey, model } = args;
+    
+    if (!apiKey) throw new Error("No API Key provided for shot generation");
+    
+    const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+    const parts: any[] = [];
+    
+    // 1. Supplemental identity anchors
+    for (const set of actorIdentitySets) {
+        if (!hasStrongFaceAnchor(set)) {
+            console.warn(`[IdentityLock] Missing face anchor for generation request`, { actorId: set.actorId, path: 'shots-final' });
+        }
+        const orderedUrls = buildOrderedActorIdentityInputs(set);
+        for (let i = 0; i < orderedUrls.length; i++) {
+            const ref = await GeminiService._resolveImageData(orderedUrls[i]);
+            parts.push({ text: `[ACTOR REFERENCE ${i + 1}]` });
+            parts.push({ inlineData: { mimeType: ref.mimeType, data: ref.data } });
+        }
+    }
+    
+    // 2. Primary framing anchor (the selected preview shot)
+    const previewAnchor = await GeminiService._resolveImageData(selectedShotPreviewUrl);
+    parts.push({ text: `[COMPOSITION ANCHOR - MATCH FRAMING AND PERSPECTIVE ONLY]` });
+    parts.push({ inlineData: { mimeType: previewAnchor.mimeType, data: previewAnchor.data } });
+
+    // 3. Supporting scene anchor (the original staged result)
+    const sceneAnchor = await GeminiService._resolveImageData(sourceResultUrl);
+    parts.push({ text: `[AUTHORITATIVE SCENE AND LAYOUT TRUTH ANCHOR - PRESERVE EXACT ROOM AND ACTOR COUNT]` });
+    parts.push({ inlineData: { mimeType: sceneAnchor.mimeType, data: sceneAnchor.data } });
+    
+    // Shot Prompt
+    parts.push({ text: prompt });
+    
+    const payload = {
+      contents: [{ parts }],
+      generationConfig: {
+        responseModalities: ["IMAGE"],
+        candidateCount: 1,
+        imageConfig: {
+          aspectRatio: aspectRatio || "16:9",
+          imageSize: "4K" // final quality target
+        }
+      }
+    };
+    
+    const response = await fetch(`${baseUrl}?key=${apiKey}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    
+    if (!response.ok) {
+      const err = await response.text();
+      let cleanMsg = err;
+      try { cleanMsg = JSON.parse(err).error?.message || cleanMsg; } catch {}
+      throw new Error(`Shot Final Rerender Error: ${cleanMsg}`);
+    }
+    
+    const result = await response.json();
+    const data = result.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData)?.inlineData?.data;
+    if (!data) throw new Error("No image data in shot final response.");
+    
+    return `data:image/png;base64,${data}`;
   }
 
 };

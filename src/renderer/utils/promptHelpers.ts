@@ -2,6 +2,9 @@ import type { DirectorSettings, ReferenceSlot, StageToken, StageAnnotation } fro
 import { computeDepthScore } from './spatialHelpers';
 import type { PlacementIntent } from './spatialHelpers';
 import type { ExtractedStyle, SceneIntent } from '../services/GeminiService';
+import type { ShotPackId, ShotPresetId, ShotLocks, DirectedShotSlot } from '../types/shots';
+import type { ActorIdentityReferenceSet, ShotsActorOption } from '../context/AppContext';
+import { SHOT_PRESETS } from './shotsPresets';
 
 export const SCENE_LOCK_NEGATIVE_TOKENS = "scene alteration, background change, lighting shift, camera angle change, style deviation, new composition, structural change, reimagined scene, time of day shift, seasonal change, architectural alteration, furniture movement, lens flares, color grading shift, original studio background, white backgrounds showing through gaps";
 
@@ -423,7 +426,21 @@ export const buildStrictPrompt = (
 ANTI-STYLE-DRIFT GUARDRAIL: This style envelope MUST ONLY affect the rendering look, colors, and visual treatment. It MUST NOT reinterpret or replace the requested location, scene category, furniture, props, or world (e.g., do not turn a cafe into a dungeon). The core scene nouns from the Director Notes remain mandatory and primary.` : "",
         extractedStyle ? "\n" : "",
         "### SCENE LIGHTING PROTOCOL:",
-        lightingProtocol
+        lightingProtocol,
+        "",
+        "### IDENTITY PRECEDENCE",
+        buildIdentityPrecedenceBlock({
+            hasFaceAnchors: refStackActive.length > 0,
+            hasActorReferences: refStackActive.length > 0,
+            hasSubjectStyleAnalysis: !!extractedStyle
+        }),
+        "### FACE IDENTITY LOCK",
+        buildStrictFaceIdentityLockBlock({
+            actorIdentitySets: refStackActive.map(r => ({ actorId: String(r.castId || r.index), angleFaceAnchors: [], supportIdentityRefs: [], wardrobeRefs: [], primaryFaceAnchor: r.url!, identityPriority: 'strict' })),
+            allowWardrobeChange: true,
+            multiActor: refStackActive.length > 1
+        }),
+        "IDENTITY LOCK: FACE_STRICT"
     ].filter(Boolean).join("\n");
 
     return rules;
@@ -513,6 +530,21 @@ ANTI-STYLE-DRIFT GUARDRAIL: This style envelope MUST ONLY affect the rendering l
     }
 
     p += `\n### SCENE LIGHTING PROTOCOL:\n${lightingProtocol}\n`;
+
+    p += `\n### IDENTITY PRECEDENCE\n`;
+    p += `${buildIdentityPrecedenceBlock({
+        hasFaceAnchors: activeSlots.length > 0,
+        hasActorReferences: activeSlots.length > 0,
+        hasSubjectStyleAnalysis: !!extractedStyle
+    })}\n`;
+
+    const identityArgs: BuildStrictFaceIdentityLockBlockArgs = {
+        actorIdentitySets: activeSlots.map(r => ({ actorId: String(r.castId || r.index), angleFaceAnchors: [], supportIdentityRefs: [], wardrobeRefs: [], primaryFaceAnchor: r.url!, identityPriority: 'strict' })),
+        allowWardrobeChange: true,
+        multiActor: activeSlots.length > 1
+    };
+    p += `\n### FACE IDENTITY LOCK\n${buildStrictFaceIdentityLockBlock(identityArgs)}\n`;
+    p += `\nIDENTITY LOCK: FACE_STRICT\n`;
 
     return p;
 };
@@ -623,3 +655,309 @@ CRITICAL DIRECTIVES:
 
     return prompt;
 };
+
+
+
+export type BuildIdentityPrecedenceBlockArgs = {
+  hasActorReferences: boolean;
+  hasFaceAnchors: boolean;
+  hasSubjectStyleAnalysis: boolean;
+};
+
+export function buildIdentityPrecedenceBlock(args: BuildIdentityPrecedenceBlockArgs): string {
+  const { hasActorReferences, hasFaceAnchors, hasSubjectStyleAnalysis } = args;
+
+  if (!hasActorReferences && !hasFaceAnchors) return '';
+
+  const lines = [
+    "Use the actor reference stack and face anchors as the definitive source of facial identity.",
+    "Treat any subject or style analysis as secondary guidance only.",
+    "Do not let style analysis, aesthetic inference, or subject summarization override the exact facial likeness shown in the reference images.",
+    "If there is any conflict, preserve the reference-defined face exactly."
+  ];
+
+  if (hasSubjectStyleAnalysis) {
+    lines.push("Subject/style analysis may help with scene mood, wardrobe tone, or environment styling only, and may not redefine the actor's face.");
+  }
+
+  return lines.join('\\n');
+}
+
+export type BuildStrictFaceIdentityLockBlockArgs = {
+  actorIdentitySets?: ActorIdentityReferenceSet[];
+  allowWardrobeChange?: boolean;
+  multiActor?: boolean;
+};
+
+export function buildStrictFaceIdentityLockBlock(args: BuildStrictFaceIdentityLockBlockArgs): string {
+  const { actorIdentitySets = [], allowWardrobeChange = false, multiActor = false } = args;
+
+  const base = [
+    "Facial identity is non-negotiable and must remain locked to the provided actor reference images.",
+    "Preserve the actor's exact facial geometry and feature relationships.",
+    "Match the same person's eye spacing, eye shape, brow shape, nose structure, lip shape, jawline, cheek structure, chin, hairline, and skin tone.",
+    "Do not create a similar-looking person.",
+    "Do not beautify, idealize, or genericize the face.",
+    "Do not let costume, scene styling, or cinematic treatment alter facial identity.",
+    allowWardrobeChange
+      ? "Wardrobe and styling may adapt only where requested, but the face must remain the same person."
+      : "Wardrobe continuity is mandatory unless an explicit wardrobe change has been requested.",
+  ];
+
+  const actorSpecific = actorIdentitySets.length
+    ? [
+        "Use the primary face anchor as the definitive identity source.",
+        "Use angle face anchors only to preserve the same face across alternate camera views.",
+        "Use wardrobe references only for clothing and styling, not for facial identity.",
+        "Match each actor to that actor's own reference inputs only.",
+      ]
+    : [];
+
+  const multi = multiActor
+    ? [
+        "Preserve each actor according to that actor's own reference stack only.",
+        "Do not blend, swap, average, or transfer facial traits between actors.",
+      ]
+    : [];
+
+  const negatives = [
+    "No lookalikes.",
+    "No actor blending.",
+    "No ethnicity-presenting facial drift.",
+    "No trait borrowing between actors.",
+    "No face changes caused by wardrobe changes.",
+  ];
+
+  return [...base, ...actorSpecific, ...multi, ...negatives].join('\n');
+}
+
+export type BuildEnvironmentConsistencyLockBlockArgs = {
+  environmentText?: string;
+  preserveArchitecture?: boolean;
+  preserveLayout?: boolean;
+  preserveSetDressing?: boolean;
+};
+
+export function buildEnvironmentConsistencyLockBlock(_args: BuildEnvironmentConsistencyLockBlockArgs): string {
+  return [
+    "Preserve the exact same room, architecture, layout, and set dressing as shown in the scene anchor.",
+    "Maintain the same wall positions, window arrangement, ceiling lines, lighting fixture placement, glass partition layout, furniture placement, and overall spatial proportions.",
+    "Reframe the camera within the same room.",
+    "Do not redesign, reinterpret, or substitute the environment.",
+    "If the shot is wider, reveal more of the same room rather than inventing a new version of it.",
+    "Do not alter room architecture or move walls/windows.",
+    "Do not invent new ceiling layouts or substitute a similar-looking room.",
+    "Do not remove or relocate major fixtures or furniture geography unless explicitly directed."
+  ].join('\n');
+}
+
+export type BuildSceneLayoutLockBlockArgs = {
+  expectedActorCount?: number;
+  preserveActorOrder?: boolean;
+  preserveRelativePositions?: boolean;
+  preserveSpacing?: boolean;
+  preservePoseRoles?: boolean;
+};
+
+export function buildSceneLayoutLockBlock(args: BuildSceneLayoutLockBlockArgs): string {
+  const base = [
+    "Preserve the exact same scene layout and blocking shown in the source anchor.",
+    "Keep the same people in the same relative positions.",
+    "Maintain the same left-to-right ordering, seating/standing roles, spacing, and subject-to-room relationships.",
+    "Only change the camera framing and viewpoint.",
+    "Do not add, remove, duplicate, merge, or invent any additional people.",
+    "No extra people, no background bystanders unless already present.",
+    "No shifting actor positions, no swapping left/right ordering.",
+    "No changing seated subject into standing subject.",
+    "No moving subjects closer or farther unless caused only by camera reframing."
+  ];
+  if (args.expectedActorCount !== undefined) {
+    base.push(`CRITICAL DIRECTIVE: The scene must contain exactly ${args.expectedActorCount} visible person(s). Do not hallucinate crowds.`);
+  }
+  return base.join('\n');
+}
+
+export type BuildShotVariantPromptArgs = {
+  sourceResultUrl: string;
+  actorIdentitySets?: ActorIdentityReferenceSet[];
+  shotsActorOptions?: ShotsActorOption[];
+  packId: ShotPackId;
+  presetId: ShotPresetId;
+  locks: ShotLocks;
+  environmentText?: string;
+  subjectActionText?: string;
+  lightingText?: string;
+  expectedActorCount?: number;
+  coveragePurpose?: string;
+  targetRole?: string;
+  sceneType?: string;
+  directedSlot?: DirectedShotSlot;
+};
+
+export function buildShotVariantPrompt(args: BuildShotVariantPromptArgs): string {
+    const preset = SHOT_PRESETS[args.presetId];
+    
+    let p = `CRITICAL DIRECTIVE: Use the provided staged result image as the primary visual anchor.\n`;
+    p += `Recompose this image as a ${preset.label}.\n`;
+    p += `${preset.shotInstruction}\n`;
+    p += `Lens Note: ${preset.defaultLensNote}\n\n`;
+
+    p += `### PRESERVATION & REALISM GUARDRAILS\n`;
+    p += `Generate a new coherent camera framing rather than a simple crop.\n`;
+    p += `Preserve the same person/people, facial structure, hair, proportions, and key accessories.\n`;
+    p += `Do not change the character, outfit, scene logic, lighting logic, or realism level.\n`;
+    
+    if (args.locks.identity) p += `- Identity preservation is mandatory.\n`;
+    if (args.locks.wardrobe) p += `- Wardrobe and accessory continuity are mandatory.\n`;
+    if (args.locks.background) p += `- Maintain the same environment and set dressing continuity.\n`;
+    if (args.locks.lighting) p += `- Maintain the same lighting direction, tone, and exposure logic.\n`;
+    
+    if (args.environmentText) p += `- Environment context: ${args.environmentText}\n`;
+    if (args.subjectActionText) p += `- Action context: ${args.subjectActionText}\n`;
+    if (args.lightingText) p += `- Lighting context: ${args.lightingText}\n`;
+
+    p += `\n### NEGATIVE CONSTRAINTS\n`;
+    p += `No text, no watermark, no duplicate subjects, no distorted anatomy, no unrealistic perspective warping.\n`;
+    p += `Do not output a contact sheet, grid, or collage.\n`;
+    p += `Do not turn this into a simple zoom or crop.\n`;
+    p += `Do not add cinematic black bars unless already present in the anchor.\n`;
+
+    if (args.actorIdentitySets && args.actorIdentitySets.length > 0) {
+        p += `\n### ACTOR REFERENCE ANCHORS\n`;
+        p += `CRITICAL: Use the provided actor reference stack images as identity anchors for the corresponding actors in the scene.\n`;
+        p += `Preserve each actor according to that actor's own references.\n`;
+        p += `Do not merge, swap, or blend identities, wardrobe ownership, accessories, or distinguishing facial traits across actors.\n`;
+        p += `Preserve side-dependent details and ensure stable traits across angles.\n`;
+    }
+
+    const hasFaceAnchors = args.actorIdentitySets?.some(s => !!s.primaryFaceAnchor || s.angleFaceAnchors.length > 0) || false;
+    const hasActorReferences = (args.actorIdentitySets?.length || 0) > 0;
+    
+    p += `\n### IDENTITY PRECEDENCE\n`;
+    p += `${buildIdentityPrecedenceBlock({
+        hasFaceAnchors,
+        hasActorReferences,
+        hasSubjectStyleAnalysis: true // Safety fallback since Shots presets apply styles
+    })}\n`;
+
+    const identityArgs: BuildStrictFaceIdentityLockBlockArgs = {
+        actorIdentitySets: args.actorIdentitySets,
+        allowWardrobeChange: !args.locks.wardrobe,
+        multiActor: (args.actorIdentitySets?.length || 0) > 1
+    };
+    p += `\n### FACE IDENTITY LOCK\n${buildStrictFaceIdentityLockBlock(identityArgs)}\n`;
+    p += `\n### ENVIRONMENT & LAYOUT LOCK\n`;
+    p += `${buildEnvironmentConsistencyLockBlock({})}\n`;
+    p += `${buildSceneLayoutLockBlock({ expectedActorCount: args.expectedActorCount })}\n`;
+    
+    p += buildDirectedSlotBlock(args.directedSlot, args.shotsActorOptions, false);
+
+    p += `\nIDENTITY LOCK: FACE_STRICT\n`;
+
+    return p;
+}
+
+export function buildDirectedSlotBlock(slot?: DirectedShotSlot, actorOptions?: ShotsActorOption[], isFinalRerender?: boolean): string {
+  if (!slot) return '';
+
+  const lines = [
+    `\n### DIRECTED SLOT PLAN`
+  ];
+
+  let targetDisplay = 'the scene';
+  if (slot.targetType === 'actor' && slot.targetActorId && actorOptions) {
+     const actor = actorOptions.find(a => a.actorId === slot.targetActorId);
+     if (actor) targetDisplay = `Actor ${actor.actorLabel}`;
+  } else if (slot.targetType === 'pair') {
+     const actor1 = actorOptions?.find(a => a.actorId === slot.targetActorId);
+     const actor2 = actorOptions?.find(a => a.actorId === slot.secondaryActorId);
+     if (actor1 && actor2) targetDisplay = `Actor ${actor1.actorLabel} and Actor ${actor2.actorLabel}`;
+  }
+
+  lines.push(`TARGET FOCUS: ${targetDisplay}`);
+  
+  if (slot.actionText) lines.push(`ACTION / INTENT: ${slot.actionText}`);
+  if (slot.cameraFlavor && slot.cameraFlavor !== 'neutral') lines.push(`CAMERA FLAVOR: ${slot.cameraFlavor.toUpperCase()}`);
+  if (slot.shotNotes) lines.push(`DIRECTOR NOTES: ${slot.shotNotes}`);
+  if (slot.coveragePurpose) lines.push(`COVERAGE ROLE: ${slot.coveragePurpose}`);
+
+  if (!isFinalRerender) {
+    let differentiation = `DIFFERENTIATION MANDATE: This shot is part of a professional coverage set. `;
+    differentiation += `You must uniquely compose this shot according to the directed slot plan (focusing on ${targetDisplay}) while strictly obeying all scene truth and identity locks.`;
+    lines.push(differentiation);
+  } else {
+    lines.push(`COVERAGE REINFORCEMENT: Ensure the final render faithfully captures the directed slot purpose of the preview.`);
+  }
+
+  return lines.join('\n') + '\n';
+}
+
+export type BuildShotFinalRerenderPromptArgs = {
+  sourceResultUrl: string;
+  selectedShotPreviewUrl: string;
+  actorIdentitySets?: ActorIdentityReferenceSet[];
+  shotsActorOptions?: ShotsActorOption[];
+  presetId: ShotPresetId;
+  locks: ShotLocks;
+  environmentText?: string;
+  subjectActionText?: string;
+  lightingText?: string;
+  expectedActorCount?: number;
+  coveragePurpose?: string;
+  targetRole?: string;
+  sceneType?: string;
+  directedSlot?: DirectedShotSlot;
+};
+
+export function buildShotFinalRerenderPrompt(args: BuildShotFinalRerenderPromptArgs): string {
+  let p = `CRITICAL DIRECTIVE: Use the selected shot image as the primary composition and framing anchor.\n`;
+  p += `Preserve the exact composition, camera angle, crop, subject placement, pose relationships, and scene arrangement from that selected shot.\n`;
+  p += `Use the original staged result image only as supporting scene continuity context.\n`;
+  
+  if (args.actorIdentitySets && args.actorIdentitySets.length > 0) {
+      p += `Use actor reference images only to reinforce identity fidelity.\n`;
+  }
+  
+  p += `Do not reinterpret the scene into a different shot.\n`;
+  p += `Do not change framing, subject positions, or camera relationship.\n`;
+  p += `Generate a higher-quality final render of this same shot.\n\n`;
+
+  p += `### PRESERVATION & CONSTRAINTS\n`;
+  if (args.locks.identity) p += `- Identity preservation is mandatory.\n`;
+  if (args.locks.wardrobe) p += `- Wardrobe and accessory continuity are mandatory.\n`;
+  if (args.locks.background) p += `- Maintain the same environment and set dressing continuity.\n`;
+  if (args.locks.lighting) p += `- Maintain the same lighting direction, tone, and exposure logic.\n`;
+
+  p += `\n### NEGATIVE CONSTRAINTS\n`;
+  p += `Do not generate a new alternative shot.\n`;
+  p += `Do not zoom or crop differently.\n`;
+  p += `Do not rearrange subjects.\n`;
+  p += `Do not duplicate subjects.\n`;
+  p += `Do not add text or watermark.\n`;
+
+  const hasFaceAnchors = args.actorIdentitySets?.some(s => !!s.primaryFaceAnchor || s.angleFaceAnchors.length > 0) || false;
+  const hasActorReferences = (args.actorIdentitySets?.length || 0) > 0;
+  
+  p += `\n### IDENTITY PRECEDENCE\n`;
+  p += `${buildIdentityPrecedenceBlock({
+      hasFaceAnchors,
+      hasActorReferences,
+      hasSubjectStyleAnalysis: true
+  })}\n`;
+
+  const identityArgs: BuildStrictFaceIdentityLockBlockArgs = {
+      actorIdentitySets: args.actorIdentitySets,
+      allowWardrobeChange: !args.locks.wardrobe,
+      multiActor: (args.actorIdentitySets?.length || 0) > 1
+  };
+  p += `\n### FACE IDENTITY LOCK\n${buildStrictFaceIdentityLockBlock(identityArgs)}\n`;
+  p += `\n### ENVIRONMENT & LAYOUT LOCK\n`;
+  p += `${buildEnvironmentConsistencyLockBlock({})}\n`;
+  p += `${buildSceneLayoutLockBlock({ expectedActorCount: args.expectedActorCount })}\n`;
+
+  p += buildDirectedSlotBlock(args.directedSlot, args.shotsActorOptions, true);
+
+  p += `\nIDENTITY LOCK: FACE_STRICT\n`;
+
+  return p;
+}

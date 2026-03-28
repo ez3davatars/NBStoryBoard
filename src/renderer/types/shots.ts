@@ -1,0 +1,127 @@
+import type { ActorIdentityReferenceSet } from '../context/AppContext';
+
+export type ShotsModeTab = 'stage' | 'result' | 'shots';
+
+export type ShotPackId =
+  | 'auto'
+  | 'cinematic'
+  | 'portrait'
+  | 'coverage';
+
+export type ShotPresetId =
+  | 'closeup'
+  | 'mediumClose'
+  | 'medium'
+  | 'wide'
+  | 'lowAngleHero'
+  | 'highAngle'
+  | 'threeQuarterLeft'
+  | 'threeQuarterRight'
+  | 'profile';
+
+export type ShotTargetType = 'actor' | 'scene' | 'pair' | 'object';
+
+export type CameraFlavor = 
+  | 'neutral' 
+  | 'dramatic' 
+  | 'procedural' 
+  | 'commercial_clean' 
+  | 'intimate' 
+  | 'kinetic';
+
+export type DirectedShotSlot = {
+  id: string;
+  index: number;
+  targetType: ShotTargetType;
+  targetActorId?: string;
+  secondaryActorId?: string;
+  targetLabel?: string;
+  shotType: ShotPresetId;
+  actionText?: string;
+  cameraFlavor?: CameraFlavor;
+  coveragePurpose?: string;
+  shotNotes?: string;
+};
+
+export type ShotVariantStatus =
+  | 'idle'
+  | 'queued'
+  | 'generating'
+  | 'done'
+  | 'error'
+  | 'rerendering';
+
+export type ShotActorReferenceInput = {
+  actorId: string;
+  actorLabel?: string;
+  referenceImageUrls: string[];
+  referenceStackId?: string;
+};
+
+export type ShotVariant = {
+  id: string;
+  presetId: ShotPresetId;
+  label: string;
+  description: string;
+  prompt: string;
+  previewUrl?: string;
+  finalUrl?: string;
+  coveragePurpose?: string;
+  targetRole?: string;
+  targetType?: ShotTargetType;
+  actionText?: string;
+  cameraFlavor?: CameraFlavor;
+  shotNotes?: string;
+  sceneType?: string;
+  selected: boolean;
+  status: ShotVariantStatus;
+  error?: string;
+};
+
+export type ShotLocks = {
+  identity: boolean;
+  wardrobe: boolean;
+  background: boolean;
+  lighting: boolean;
+};
+
+export type ShotSession = {
+  id: string;
+  sceneId: string;
+  sourceResultUrl: string;
+  actorIdentitySets?: ActorIdentityReferenceSet[];
+  packId: ShotPackId;
+  count: 4 | 6 | 9;
+  directedShots?: DirectedShotSlot[];
+  locks: ShotLocks;
+  variants: ShotVariant[];
+  createdAt: string;
+  updatedAt: string;
+  isGenerating: boolean;
+  isRerenderingSelected: boolean;
+};
+
+export type CoverageSceneType =
+  | 'courtroom'
+  | 'dialogue'
+  | 'action'
+  | 'commercial'
+  | 'interview'
+  | 'fashion'
+  | 'office'
+  | 'generic';
+
+export type CoverageShotPlanItem = {
+  presetId: ShotPresetId;
+  purpose: string;
+  targetRole?: string;
+  notes?: string;
+};
+
+export type CoverageTemplate = {
+  sceneType: CoverageSceneType;
+  label: string;
+  shots4: CoverageShotPlanItem[];
+  shots6: CoverageShotPlanItem[];
+  shots9: CoverageShotPlanItem[];
+};

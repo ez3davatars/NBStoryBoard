@@ -10,9 +10,9 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
     const lastDnaBgRef = useRef<string | null>(null);
 
     const anchorDNA = {
-        environment: state.director.environment,
-        lighting: state.director.lighting,
-        camera: state.director.camera,
+        environment: state.director?.environment || '',
+        lighting: state.director?.lighting || '',
+        camera: state.director?.camera || '',
     };
 
     const safeParseJson = (raw: string): any | null => {
@@ -78,11 +78,11 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
     // Auto DNA on background change
     useEffect(() => {
         if (!autoAnchorDNA || !state.backgroundUrl || !state.apiKey) return;
-        if (state.director.environment || state.director.lighting || state.director.camera) return;
+        if (state.director?.environment || state.director?.lighting || state.director?.camera) return;
         if (lastDnaBgRef.current === state.backgroundUrl) return;
 
         analyzeBackgroundDNA();
-    }, [autoAnchorDNA, state.backgroundUrl, state.apiKey, state.director.environment, state.director.lighting, state.director.camera, analyzeBackgroundDNA]);
+    }, [autoAnchorDNA, state.backgroundUrl, state.apiKey, state.director?.environment, state.director?.lighting, state.director?.camera, analyzeBackgroundDNA]);
 
     const analyzeWhitelistProfile = async (imageUrl: string, label: string): Promise<WhitelistProfile> => {
         const raw = await GeminiService.analyzeImage(

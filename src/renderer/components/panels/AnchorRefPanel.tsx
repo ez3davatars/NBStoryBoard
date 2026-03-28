@@ -1,6 +1,7 @@
 import { ImageIcon, X, Upload as UploadIcon, RefreshCcw, Maximize as MaximizeIcon, Lock } from 'lucide-react';
 import { SidebarPanel } from '../ui/SidebarPanel';
 import { Dropdown } from '../ui/Dropdown';
+import { getEffectiveResultAnchorForScene } from '../../context/AppContext';
 import type { DirectorMergeStrategy } from '../../context/AppContext';
 
 interface AnchorRefPanelProps {
@@ -48,6 +49,28 @@ export const AnchorRefPanel = ({
  previousBackgroundUrl,
  onRestoreBackground
 }: AnchorRefPanelProps) => {
+  const activeShotId = state.activeShotId || 'default';
+  const currentAnchor = getEffectiveResultAnchorForScene(state, activeShotId);
+  const isCurrentSource = currentAnchor?.kind === 'uploaded_result' && currentAnchor?.imageUrl === state.backgroundUrl;
+
+  const handlePromoteToResult = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!state.backgroundUrl) return;
+    dispatch({
+      type: 'SET_SCENE_RESULT_ANCHOR',
+      payload: {
+        sceneId: activeShotId,
+        anchor: { 
+          kind: 'uploaded_result', 
+          imageUrl: state.backgroundUrl, 
+          sourceImageId: 'background',
+          visibleActorCount: state.tokens.filter((t: any) => t.type === 'actor').length
+        }
+      }
+    });
+    dispatch({ type: 'ADD_LOG', payload: { message: "Uploaded image set as SHOTS source.", type: 'success' } });
+  };
+
  return (
  <SidebarPanel
  key="anchor"
@@ -100,6 +123,26 @@ export const AnchorRefPanel = ({
  }}
  />
  </div>
+
+  {state.backgroundUrl && (
+      <div className="flex items-center justify-between">
+          {isCurrentSource ? (
+              <div className="flex items-center gap-1.5 text-[10px] font-bold text-orange-400 uppercase tracking-widest bg-orange-500/10 px-2 py-1.5 rounded border border-orange-500/30 w-full justify-center">
+                  <ImageIcon className="w-3.5 h-3.5" />
+                  Current SHOTS Source
+              </div>
+          ) : (
+              <button
+                  onClick={handlePromoteToResult}
+                  className="flex items-center gap-1.5 w-full justify-center text-[10px] font-bold text-gray-300 hover:text-white uppercase tracking-widest bg-gray-800 hover:bg-gray-700 px-2 py-1.5 rounded border border-[#27272a] hover:border-gray-500 transition-colors"
+                  title="Use this uploaded image as the direct source for SHOTS coverage"
+              >
+                  <ImageIcon className="w-3.5 h-3.5" />
+                  Use as Result
+              </button>
+          )}
+      </div>
+  )}
 
  {/* Anchor Tools */}
             <div className="space-y-3">

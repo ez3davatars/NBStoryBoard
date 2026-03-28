@@ -4,6 +4,7 @@ import { StorageService } from '../services/StorageService';
 import { computeDepthScore } from '../utils/spatialHelpers';
 
 import type { VeoFivePartDraft, VeoAudioBlock, VeoTimestampBeat } from '../promptEngine/veoFivePart';
+import type { ShotSession, ShotActorReferenceInput } from '../types/shots';
 
 export const APP_SCHEMA_VERSION = 5; // bump when persisted state shape changes
 // --- SHARED TYPES ---
@@ -37,7 +38,6 @@ export interface PropItem {
     category?: string;
     timestamp: number;
 }
-
 export interface WhitelistProfile {
     identity: string;
     wardrobe: string;
@@ -318,6 +318,13 @@ export const smartClone = <T,>(v: T): T => {
     return cloned;
 };
 
+export type SceneResultAnchor = {
+  kind: 'generated_result' | 'uploaded_result';
+  imageUrl: string;
+  sourceImageId?: string;
+  visibleActorCount?: number;
+};
+
 export interface Shot {
     id: string;
     name: string;
@@ -345,6 +352,7 @@ export interface Shot {
     regionEdit?: RegionEditState;
 
     // Director Canvas Result Context
+    promotedResultAnchor?: SceneResultAnchor;
     latestCompositeResultUrl?: string | null;
     latestCompositeSource?: 'directorCanvas' | 'legacy';
     latestCompositeStage?: 'generate' | 'refine';
@@ -418,6 +426,7 @@ export interface AppState {
 
     shots: Shot[];
     activeShotId: string | null;
+    shotSessionsBySceneId: Record<string, ShotSession>;
     isStoryboardEnabled: boolean;
     showHelpHints: boolean;
     imageResolution: '1K' | '2K' | '4K';
@@ -598,6 +607,10 @@ export type Action =
     | { type: 'LOAD_SESSION_STATE'; payload: Partial<AppState> }
     | { type: 'SET_SHOTS'; payload: Shot[] }
     | { type: 'ADD_SHOT_FROM_STAGE'; payload: { name?: string } }
+    | { type: 'CREATE_OR_REPLACE_SHOT_SESSION'; payload: { sceneId: string; session: ShotSession } }
+    | { type: 'UPDATE_SHOT_SESSION'; payload: { sceneId: string; updater: (prev?: ShotSession) => ShotSession | undefined } }
+    | { type: 'SET_SHOT_VARIANT_SELECTED'; payload: { sceneId: string; variantId: string; selected: boolean } }
+    | { type: 'CLEAR_SHOT_SESSION'; payload: { sceneId: string } }
     | { type: 'DUPLICATE_SHOT'; payload: { id: string } }
     | { type: 'REMOVE_SHOT'; payload: { id: string } }
     | { type: 'CLEAR_SHOTS' }
@@ -622,6 +635,7 @@ export type Action =
     | { type: 'SYNC_SPATIAL_DESCRIPTORS' }
     | { type: 'DUPLICATE_TOKEN'; payload: { id: string } }
     | { type: 'SET_GLOBAL_VEO_DRAFT'; payload: VeoFivePartDraft & { audio?: VeoAudioBlock, concept?: string, negativePrompt?: string } | undefined }
+    | { type: 'SET_SCENE_RESULT_ANCHOR'; payload: { sceneId: string; anchor?: SceneResultAnchor } }
     | { type: 'SET_TEMPLATE_NOTES'; payload: { activeTemplateId?: string; templateNotes?: string } };
 
 // --- HELPERS ---
@@ -738,7 +752,7 @@ const shouldRecordHistory = (type: Action['type']) => {
         'SET_REGION_EDIT', 'SET_REGION_ACTIVE_LAYER', 'UPDATE_REGION_LAYER', 'CLEAR_REGION_LAYER_MASK', 'CLEAR_ALL_REGION_MASKS',
         'SET_SHOTS', 'ADD_SHOT_FROM_STAGE', 'DUPLICATE_SHOT', 'REMOVE_SHOT', 'SET_ACTIVE_SHOT', 'SAVE_ACTIVE_SHOT', 'UPDATE_SHOT_META', 'SET_SHOT_FRAME',
         'SET_STORYBOARD_SOURCE', 'SET_STORYBOARD_END_SOURCE', 'SET_STORYBOARD_GENERATIONS', 'UPDATE_STORYBOARD_GENERATION',
-        'SET_RESULT_IMAGE', 'SET_COMPOSITE_METADATA'
+        'SET_RESULT_IMAGE', 'SET_COMPOSITE_METADATA', 'SET_SCENE_RESULT_ANCHOR'
     ]);
     return set.has(type);
 };
@@ -853,6 +867,7 @@ export const initialState: AppState = {
 
     shots: [],
     activeShotId: localStorage.getItem('nano_active_shot_id') || null,
+    shotSessionsBySceneId: {},
     isStoryboardEnabled: loadJson<boolean>('nano_storyboard_enabled', false), // Persistent setting
     showHelpHints: loadJson<boolean>('nano_help_hints', true),
     stagePanelState: {
@@ -1050,11 +1065,41 @@ export const reducer = (state: AppState, action: Action): AppState => {
                         regionEdit: smartClone(DEFAULT_REGION_EDIT),
                         director: smartClone(defaultDirector),
                         updatedAt: Date.now(),
+                        promotedResultAnchor: undefined,
+                        latestCompositeResultUrl: undefined,
+                        latestCompositeStage: undefined,
+                        latestCompositeTimestamp: undefined,
+                        latestCompositeSource: undefined,
                     };
                 });
             }
 
             return { ...nextState, shots: nextShots };
+        }
+
+        case 'SET_SCENE_RESULT_ANCHOR': {
+            let found = false;
+            const nextShots = state.shots.map(s => {
+                if (s.id !== action.payload.sceneId) return s;
+                found = true;
+                return { ...s, promotedResultAnchor: action.payload.anchor, updatedAt: Date.now() };
+            });
+            if (!found) {
+                nextShots.push({
+                    id: action.payload.sceneId,
+                    name: 'Scene 1',
+                    createdAt: Date.now(),
+                    updatedAt: Date.now(),
+                    backgroundUrl: null,
+                    tokens: [],
+                    annotations: [],
+                    occupiedVolumes: [],
+                    referenceSlots: defaultRefSlots,
+                    director: defaultDirector,
+                    promotedResultAnchor: action.payload.anchor
+                });
+            }
+            return { ...state, shots: nextShots, activeShotId: action.payload.sceneId };
         }
 
         case 'SYNC_SPATIAL_DESCRIPTORS': {
@@ -1114,8 +1159,25 @@ export const reducer = (state: AppState, action: Action): AppState => {
         case 'SET_SHOW_HELP_HINTS':
             return { ...state, showHelpHints: action.payload };
 
-        case 'SET_BG':
-            return { ...state, backgroundUrl: action.payload };
+        case 'SET_BG': {
+            let nextShots = state.shots;
+            if (state.activeShotId) {
+                nextShots = state.shots.map(s => {
+                    if (s.id !== state.activeShotId) return s;
+                    return { 
+                        ...s, 
+                        backgroundUrl: action.payload,
+                        promotedResultAnchor: undefined,
+                        latestCompositeResultUrl: undefined,
+                        latestCompositeStage: undefined,
+                        latestCompositeTimestamp: undefined,
+                        latestCompositeSource: undefined,
+                        updatedAt: Date.now() 
+                    };
+                });
+            }
+            return { ...state, backgroundUrl: action.payload, shots: nextShots };
+        }
         case 'SET_DEPTH_MAP': {
             const { url, hash, sourceHash } = typeof action.payload === 'string' || action.payload === null
                 ? { url: action.payload, hash: null, sourceHash: null }
@@ -1302,6 +1364,49 @@ export const reducer = (state: AppState, action: Action): AppState => {
             return { ...state, regionEdit: { ...state.regionEdit, protectMaskDataUrl: action.payload.maskDataUrl } };
 
         // --- SHOTS ---
+        case 'CREATE_OR_REPLACE_SHOT_SESSION':
+            return {
+                ...state,
+                shotSessionsBySceneId: {
+                    ...state.shotSessionsBySceneId,
+                    [action.payload.sceneId]: action.payload.session
+                }
+            };
+        case 'UPDATE_SHOT_SESSION': {
+            const currentSession = state.shotSessionsBySceneId[action.payload.sceneId];
+            if (!currentSession) return state;
+            const updated = action.payload.updater(currentSession);
+            if (!updated) return state;
+            return {
+                ...state,
+                shotSessionsBySceneId: {
+                    ...state.shotSessionsBySceneId,
+                    [action.payload.sceneId]: updated
+                }
+            };
+        }
+        case 'SET_SHOT_VARIANT_SELECTED': {
+            const currentSession = state.shotSessionsBySceneId[action.payload.sceneId];
+            if (!currentSession) return state;
+            const updatedVariants = currentSession.variants.map(v => 
+                v.id === action.payload.variantId ? { ...v, selected: action.payload.selected } : v
+            );
+            return {
+                ...state,
+                shotSessionsBySceneId: {
+                    ...state.shotSessionsBySceneId,
+                    [action.payload.sceneId]: {
+                        ...currentSession,
+                        variants: updatedVariants,
+                        updatedAt: new Date().toISOString()
+                    }
+                }
+            };
+        }
+        case 'CLEAR_SHOT_SESSION': {
+            const { [action.payload.sceneId]: _, ...rest } = state.shotSessionsBySceneId;
+            return { ...state, shotSessionsBySceneId: rest };
+        }
         case 'SET_SHOTS':
             return { ...state, shots: action.payload };
 
@@ -1428,7 +1533,7 @@ export const reducer = (state: AppState, action: Action): AppState => {
                 tokens: deduplicateTokens(smartClone(shot.tokens) || []),
                 annotations: smartClone(shot.annotations) || [],
                 referenceSlots: smartClone(shot.referenceSlots) || [],
-                director: smartClone(shot.director),
+                director: smartClone(shot.director) || smartClone(defaultDirector),
                 floorPlane: shot.floorPlane || null,
                 occupiedVolumes: smartClone(shot.occupiedVolumes) || [],
                 regionEdit: smartClone(shot.regionEdit ?? DEFAULT_REGION_EDIT),
@@ -1526,6 +1631,185 @@ export const reducer = (state: AppState, action: Action): AppState => {
             return state;
     }
 };
+
+// --- SELECTORS ---
+
+export type ActorIdentityReferenceSet = {
+    actorId: string;
+    actorLabel?: string;
+    primaryFaceAnchor?: string;
+    angleFaceAnchors: string[];
+    supportIdentityRefs: string[];
+    wardrobeRefs: string[];
+    identityPriority?: 'strict';
+};
+
+export type ShotsActorOption = {
+    actorId: string;
+    actorLabel: string;
+    referenceSlotId?: string;
+    targetInAnchorScene?: string;
+    isActiveInScene?: boolean;
+};
+
+export function getShotsActorOptionsForScene(state: AppState, sceneId: string): ShotsActorOption[] {
+    let tokens = state.tokens || [];
+    let referenceSlots = state.referenceSlots || [];
+    
+    if (sceneId && sceneId !== state.activeShotId && sceneId !== 'default') {
+        const archived = state.shots?.find(s => s.id === sceneId);
+        if (archived) {
+            tokens = archived.tokens || [];
+            referenceSlots = archived.referenceSlots || [];
+        } else {
+            return [];
+        }
+    }
+
+    const activeCastIds = new Set(tokens.map(t => t.castId).filter(Boolean));
+
+    const options: ShotsActorOption[] = [];
+    const castMembers = state.cast || [];
+
+    for (const actor of castMembers) {
+        if (!actor) continue;
+
+        const hasToken = activeCastIds.has(actor.id);
+        const hasRefSlot = referenceSlots.some(s => s.castId === actor.id && s.active);
+
+        // Rule: Only include if linked to the current scene
+        if (!hasToken && !hasRefSlot) continue;
+
+        const slot = referenceSlots.find(s => s.castId === actor.id && s.active);
+        const targetInAnchor = slot?.target || undefined;
+
+        let parsedLabel = actor.name || targetInAnchor;
+        if (!parsedLabel || parsedLabel.trim() === '') {
+            parsedLabel = `Actor ${options.length + 1}`;
+        }
+
+        options.push({
+            actorId: actor.id,
+            actorLabel: parsedLabel,
+            referenceSlotId: slot?.index?.toString(),
+            targetInAnchorScene: targetInAnchor,
+            isActiveInScene: hasToken || hasRefSlot
+        });
+    }
+
+    return options.sort((a, b) => {
+        if (a.isActiveInScene && !b.isActiveInScene) return -1;
+        if (!a.isActiveInScene && b.isActiveInScene) return 1;
+        return 0;
+    });
+}
+
+export function getActorIdentityReferenceSetsForScene(state: AppState, sceneId: string): ActorIdentityReferenceSet[] {
+    let tokens = state.tokens || [];
+    let referenceSlots = state.referenceSlots || [];
+    
+    if (sceneId && sceneId !== state.activeShotId && sceneId !== 'default') {
+        const archived = state.shots?.find(s => s.id === sceneId);
+        if (archived) {
+            tokens = archived.tokens || [];
+            referenceSlots = archived.referenceSlots || [];
+        } else {
+            return [];
+        }
+    }
+
+    const activeCastIds = new Set(tokens.map(t => t?.castId).filter(Boolean));
+    // also include anyone strictly in reference array just in case they have no explicit token staged yet!
+    referenceSlots.filter(s => s.active && s.castId).forEach(s => activeCastIds.add(s.castId!));
+    
+    const referenceSets: ActorIdentityReferenceSet[] = [];
+    const castMembers = state.cast || [];
+    
+    for (const castId of Array.from(activeCastIds)) {
+        const actor = castMembers.find(c => c?.id === castId);
+        const slots = referenceSlots.filter(s => s?.castId === castId && s?.url && s?.active);
+        
+        if (slots.length > 0) {
+            let primaryFaceAnchor: string | undefined = undefined;
+            const angleFaceAnchors: string[] = [];
+            const supportIdentityRefs: string[] = [];
+            const wardrobeRefs: string[] = [];
+            
+            const remainingSlots: string[] = [];
+            
+            // Heuristic sorting based on available metadata
+            for (const s of slots) {
+                const text = `${s.name || ''} ${s.analysis || ''} ${s.target || ''}`.toLowerCase();
+                const isWardrobe = text.includes('wardrobe') || text.includes('outfit') || text.includes('clothes') || text.includes('style') || text.includes('costume') || text.includes('body');
+                const isAngle = text.includes('profile') || text.includes('3/4') || text.includes('angle') || text.includes('side');
+                
+                if (isWardrobe) {
+                    wardrobeRefs.push(s.url!);
+                } else if (isAngle) {
+                    angleFaceAnchors.push(s.url!);
+                } else {
+                    remainingSlots.push(s.url!);
+                }
+            }
+            
+            if (remainingSlots.length > 0) {
+                primaryFaceAnchor = remainingSlots[0];
+                supportIdentityRefs.push(...remainingSlots.slice(1));
+            } else if (angleFaceAnchors.length > 0) {
+                // Fallback: promote an angle anchor if no primary straight face exists
+                primaryFaceAnchor = angleFaceAnchors.shift();
+            }
+            
+            if (!primaryFaceAnchor) {
+                console.warn(`[IdentityLock] Missing primary face anchor for actor ${actor?.name || castId}`);
+            }
+
+            referenceSets.push({
+                actorId: castId as string,
+                actorLabel: actor?.name || undefined,
+                primaryFaceAnchor,
+                angleFaceAnchors,
+                supportIdentityRefs,
+                wardrobeRefs,
+                identityPriority: 'strict'
+            });
+        }
+    }
+    
+    return referenceSets;
+}
+
+export function getActorIdentityReferencesForScene(state: AppState, sceneId: string): ShotActorReferenceInput[] {
+    const shots = state.shots || [];
+    const shot = shots.find(s => s?.id === sceneId);
+    if (!shot) return [];
+    
+    // The active actors are built from the reference slots that have a cast member matched in the shot's tokens.
+    const tokens = shot.tokens || [];
+    const activeCastIds = new Set(tokens.map(t => t?.castId).filter(Boolean));
+    
+    const references: ShotActorReferenceInput[] = [];
+    const castMembers = state.cast || [];
+    const referenceSlots = shot.referenceSlots || [];
+    
+    for (const castId of Array.from(activeCastIds)) {
+        const actor = castMembers.find(c => c?.id === castId);
+        // Find reference slots for this castId
+        const slots = referenceSlots.filter(s => s?.castId === castId && s?.url && s?.active);
+        if (slots.length > 0) {
+            references.push({
+                actorId: castId,
+                actorLabel: actor?.name || undefined,
+                referenceImageUrls: slots.map(s => s.url!),
+                referenceStackId: `stack_for_${castId}`
+            });
+        }
+    }
+    
+    return references;
+}
+
+export const getActiveShotActorReferencesForScene = getActorIdentityReferencesForScene;
 
 // --- CONTEXT ---
 
@@ -1701,6 +1985,18 @@ export const useAppContext = () => {
     const context = useContext(AppContext);
     if (!context) throw new Error('useAppContext must be used within an AppProvider');
     return context;
+};
+
+export const getEffectiveResultAnchorForScene = (state: AppState, sceneId: string): SceneResultAnchor | undefined => {
+    const shot = state.shots.find(s => s.id === sceneId);
+    if (!shot) return undefined;
+    if (shot.promotedResultAnchor) {
+        return shot.promotedResultAnchor;
+    }
+    if (shot.latestCompositeResultUrl) {
+        return { kind: 'generated_result', imageUrl: shot.latestCompositeResultUrl };
+    }
+    return undefined;
 };
 
 
