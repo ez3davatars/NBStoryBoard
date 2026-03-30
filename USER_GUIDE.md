@@ -270,7 +270,11 @@ Generate standalone items before bringing them onto the Stage.
 
 > **[PREVIEW] Feature Notification:**
 > **Advanced scene composition, now in preview.**
-> The Staging module empowers you to explore multi-element visual storytelling. Use this environment to test character placement and scene direction by translating your cast, props, and scene logic into a unified 2D blocking matrix. Currently powerful for rapid concepting and creative experimentation, the underlying "Scene Truth" physics are still evolving toward fully production-ready consistency.
+> The Staging module empowers you to explore multi-element visual storytelling. Use this environment to test character placement and scene direction by translating your cast, props, and scene logic into a unified 2D blocking matrix. 
+> 
+> **The Power of Directed SHOTS:** This module encompasses the new SHOTS functionality, allowing you to generate cinematic angle variations directly from your arranged staged result. Utilizing rigid Semantic Locks (Identity, Wardrobe, Background, and Lighting), you can photograph your scene from multiple perspectives while retaining character and environment integrity.
+> 
+> Currently powerful for rapid concepting and creative experimentation, the underlying "Scene Truth" physics are still evolving toward fully production-ready consistency.
 
 Compose your shot by dragging your generated actors and props onto the canvas and arranging your dynamic workspace.
 
