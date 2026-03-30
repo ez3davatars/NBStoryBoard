@@ -449,7 +449,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
                                  return { ...prev, isGenerating: false, isRerenderingSelected: false, variants: [] };
                                });
                              }} 
-                             className="text-[9px] text-gray-500 hover:text-red-400 font-bold uppercase tracking-widest transition-colors"
+                             className="text-[12px] text-gray-500 hover:text-red-400 font-bold uppercase tracking-widest transition-colors"
                          >Reset Session</button>
                      </div>
                  </div>
@@ -462,20 +462,20 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
                              {(['identity', 'wardrobe', 'background', 'lighting'] as Array<keyof ShotLocks>).map(lockKey => (
                                  <button
                                      key={lockKey} disabled={isGeneratingFull || isRerenderingFull} onClick={() => setLocks(p => ({ ...p, [lockKey]: !p[lockKey] }))}
-                                     className={`uppercase font-bold px-1.5 py-1 rounded transition-colors ${locks[lockKey] ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30' : 'bg-transparent text-gray-500 hover:text-gray-300 border border-transparent'}`}
-                                     style={{ fontSize: '11px', letterSpacing: '0.05em' }}
+                                     className={`uppercase font-bold px-3 py-1.5 rounded transition-colors ${locks[lockKey] ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30' : 'bg-transparent text-gray-500 hover:text-gray-300 border border-transparent'}`}
+                                     style={{ fontSize: '14px', letterSpacing: '0.05em' }}
                                  >{lockKey}</button>
                              ))}
                          </div>
                      </div>
                      <div className="flex items-center gap-1.5 shrink-0">
                           {hasResult && !isConfiguring && (
-                              <button onClick={() => setIsConfiguring(true)} className="font-bold uppercase tracking-widest text-gray-400 hover:text-white bg-black border border-gray-800 hover:border-gray-600 rounded px-2 py-1 transition-colors" style={{ fontSize: '11.5px' }}>Config</button>
+                              <button onClick={() => setIsConfiguring(true)} className="font-bold uppercase tracking-widest text-gray-400 hover:text-white bg-black border border-gray-800 hover:border-gray-600 rounded px-4 py-2 transition-colors" style={{ fontSize: '14.5px' }}>Config</button>
                           )}
-                          <button onClick={handleGenerateShots} disabled={!hasResult || isGeneratingFull || isRerenderingFull || (isConfiguring && slots.length === 0)} className={`font-bold uppercase tracking-widest rounded transition-all border px-2 py-1 ${!hasResult || isGeneratingFull || isRerenderingFull ? 'bg-black border-gray-800 text-gray-600 cursor-not-allowed' : 'bg-green-600/10 border-green-500/30 text-green-500 hover:bg-green-600/20 hover:border-green-400/50 shadow-[0_0_15px_rgba(34,197,94,0.1)]'}`} style={{ fontSize: '11.5px' }}>
+                          <button onClick={handleGenerateShots} disabled={!hasResult || isGeneratingFull || isRerenderingFull || (isConfiguring && slots.length === 0)} className={`font-bold uppercase tracking-widest rounded transition-all border px-4 py-2 ${!hasResult || isGeneratingFull || isRerenderingFull ? 'bg-black border-gray-800 text-gray-600 cursor-not-allowed' : 'bg-green-600/10 border-green-500/30 text-green-500 hover:bg-green-600/20 hover:border-green-400/50 shadow-[0_0_15px_rgba(34,197,94,0.1)]'}`} style={{ fontSize: '14.5px' }}>
                               {isGeneratingFull ? 'Generating...' : 'Generate'}
                           </button>
-                          <button onClick={handleRender4K} disabled={!hasSelectedVariants || isGeneratingFull || isRerenderingFull} className={`font-bold uppercase tracking-widest rounded transition-all border px-2 py-1 ${!hasSelectedVariants || isGeneratingFull || isRerenderingFull ? 'bg-black border-gray-800 text-gray-600 cursor-not-allowed' : 'bg-indigo-950/40 border-indigo-500/30 text-indigo-400 hover:bg-indigo-900/60 shadow-[0_0_15px_rgba(99,102,241,0.1)]'}`} style={{ fontSize: '11.5px' }}>
+                          <button onClick={handleRender4K} disabled={!hasSelectedVariants || isGeneratingFull || isRerenderingFull} className={`font-bold uppercase tracking-widest rounded transition-all border px-4 py-2 ${!hasSelectedVariants || isGeneratingFull || isRerenderingFull ? 'bg-black border-gray-800 text-gray-600 cursor-not-allowed' : 'bg-indigo-950/40 border-indigo-500/30 text-indigo-400 hover:bg-indigo-900/60 shadow-[0_0_15px_rgba(99,102,241,0.1)]'}`} style={{ fontSize: '14.5px' }}>
                               {isRerenderingFull ? 'Rendering...' : 'Render 4K'}
                           </button>
                      </div>

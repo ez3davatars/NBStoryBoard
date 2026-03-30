@@ -399,6 +399,27 @@ Use **REGION EDIT / POST-PRODUCTION** to fix local mistakes or make targeted cha
 | **Staging feels inconsistent** | Remember that STAGE is currently a preview-tier system. Use it for concepting, selective production, and shot planning. |
 | **Download or save issues** | Confirm your save folder is linked and that permissions are still granted. |
 
+
+## SHOTS: Multi-Angle Cinematic Generation
+The **SHOTS** tab allows you to generate a consistent "pack" of camera angles from a single staged scene. This is a powerful way to create a cinematic sequence or coverage for a story without losing actor identity or scene geometry.
+
+### 1. Requirements
+Before using the SHOTS tab, you must have:
+- Created a scene in the **STAGE** sub-tab.
+- Generated at least one composite image (**GENERATE COMPOSITE**). This image serves as the "Scene Truth" from which all camera angles are derived.
+
+### 2. The Directed Shot Plan
+The **Directed Shot Plan** is where you define the specific angles and actions for your shot pack.
+- **Pack Select**: Choose a preset collection of shots (Cinematic, Coverage, etc.).
+- **Shot Cards**: Each card in the list represents one camera angle. You can customize the **Angle** (Close-up, Wide, etc.), the **Target** (Scene or specific Actor), and the **Action / Intent**.
+- **Action / Intent**: Describe what is happening in the shot (e.g., "looking surprised," "running toward camera").
+
+### 3. Generation Workflow
+1. Click the green **GENERATE** button to render low-resolution previews for the entire pack.
+2. Review the results in the **Shot Grid**.
+3. **Semantic Locks**: Use these to toggle which parts of the scene (Identity, Wardrobe, Background, Lighting) should remain strictly locked to the "Scene Truth" during generation.
+4. **Final Render**: Select your favorite previews and click **RENDER 4K** to generate high-fidelity, production-ready cinematic shots.
+
 ---
 
 ## Final Note

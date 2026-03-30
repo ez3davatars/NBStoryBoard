@@ -98,11 +98,12 @@ export const HelpCenterDrawer: React.FC = () => {
                     title: "SHOTS Help",
                     desc: "Generate consistent multi-angle cinematic shots.",
                     actions: [
-                        "Ensure your scene layout is finalized in the 'Stage' tab.",
-                        "Click 'Lock Scene Truth' to freeze the physical arrangement.",
-                        "Add a new Shot and describe the angle (e.g., 'Low angle wide shot').",
-                        "Click 'Generate Shot' and wait for the AI to render the variant.",
-                        "Use the 'Variants' panel to pick the best result or regenerate."
+                        "Finalize your scene in the STAGE sub-tab first (generate at least one composite).",
+                        "Switch to the SHOTS tab to begin multi-angle generation.",
+                        "Select a Pack (e.g., Cinematic) and Count to auto-populate the Directed Shot Plan.",
+                        "Customize each shot card with specific Camera Angles, Action/Intent, and Lighting.",
+                        "Click the green GENERATE button to render the full pack of shot previews.",
+                        "Select your favorite variants and click RENDER 4K to generate high-fidelity finals."
                     ]
                 };
             case 'veo':
