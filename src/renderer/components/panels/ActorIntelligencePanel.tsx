@@ -60,7 +60,6 @@ export const ActorIntelligencePanel = ({
             onToggle={onToggle}
             onDragStart={onDragStart}
             onDrop={onDrop}
-            draggable={false}
             style={style}
             headerColor={authorityStatus === 'AUTHORITATIVE' ? 'text-green-400' : authorityStatus === 'DEGRADED' ? 'text-amber-400' : 'text-red-500'}
             rightElement={
