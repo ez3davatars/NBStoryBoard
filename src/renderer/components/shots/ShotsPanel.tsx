@@ -65,27 +65,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
   const isGeneratingRef = useRef(false);
 
   const panelRef = useRef<HTMLDivElement>(null);
-  const [isCompact, setIsCompact] = useState(false);
 
-  useEffect(() => {
-    const el = panelRef.current;
-    if (!el) return;
-
-    const update = () => {
-      if (!panelRef.current) return;
-      const width = panelRef.current.clientWidth;
-      setIsCompact(prev => {
-         if (prev && width > 1050) return false;
-         if (!prev && width < 1000) return true;
-         return prev;
-      });
-    };
-
-    update();
-    const obs = new ResizeObserver(() => requestAnimationFrame(update));
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, []);
 
   // Sync state with existing session if any
   useEffect(() => {
@@ -428,7 +408,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
       
       {/* Top Controls Bar */}
       <div className="flex flex-col w-full bg-[#18181b] border-b border-[#27272a] shrink-0">
-         {isCompact ? (
+
              <div className="flex flex-col p-2 gap-2">
                  {/* Row 1: Left Dropdowns, Right Config Actions */}
                  <div className="flex justify-between items-center w-full gap-2">
@@ -438,9 +418,12 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
                              <span className="text-[8px] font-bold text-gray-500 uppercase tracking-widest mr-1.5 whitespace-nowrap">Pack</span>
                              <select 
                                value={packId} onChange={(e) => setPackId(e.target.value as ShotPackId)} disabled={isGeneratingFull || isRerenderingFull}
-                               className="bg-transparent text-[10px] text-gray-200 outline-none border-l border-gray-800 py-1 px-1.5 hover:bg-gray-900 cursor-pointer w-[100px]"
+                               className="bg-transparent text-[10px] text-gray-200 outline-none border-l border-gray-800 py-1 px-1.5 hover:bg-gray-900 cursor-pointer w-[140px]"
                              >
-                               <option value="auto">Auto (Scene-Aware)</option><option value="cinematic">Cinematic</option><option value="portrait">Portrait</option><option value="coverage">Coverage</option>
+                               <option value="auto" className="bg-[#18181b] text-gray-200">Auto (Scene-Aware)</option>
+                               <option value="cinematic" className="bg-[#18181b] text-gray-200">Cinematic</option>
+                               <option value="portrait" className="bg-[#18181b] text-gray-200">Portrait</option>
+                               <option value="coverage" className="bg-[#18181b] text-gray-200">Coverage</option>
                              </select>
                          </div>
                          {/* Count */}
@@ -448,9 +431,11 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
                              <span className="text-[8px] font-bold text-gray-500 uppercase tracking-widest mr-1.5 whitespace-nowrap">Count</span>
                              <select 
                                value={count} onChange={(e) => setCount(Number(e.target.value) as 4|6|9)} disabled={isGeneratingFull || isRerenderingFull}
-                               className="bg-transparent text-[10px] text-gray-200 outline-none border-l border-gray-800 py-1 px-1.5 hover:bg-gray-900 cursor-pointer w-[80px]"
+                               className="bg-transparent text-[10px] text-gray-200 outline-none border-l border-gray-800 py-1 px-1.5 hover:bg-gray-900 cursor-pointer w-[110px]"
                              >
-                               <option value={4}>4 Variants</option><option value={6}>6 Variants</option><option value={9}>9 Variants</option>
+                               <option value={4} className="bg-[#18181b] text-gray-200">4 Variants</option>
+                               <option value={6} className="bg-[#18181b] text-gray-200">6 Variants</option>
+                               <option value={9} className="bg-[#18181b] text-gray-200">9 Variants</option>
                              </select>
                          </div>
                      </div>
@@ -472,97 +457,31 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
                  {/* Row 2: Locks and Generate */}
                  <div className="flex justify-between items-center w-full gap-2 border-t border-[#27272a] pt-2">
                      <div className="flex items-center gap-1.5 shrink-0 overflow-x-auto scrollbar-hide pr-2">
+                         <span className="text-[8px] font-bold text-gray-500 uppercase tracking-widest mr-1 whitespace-nowrap hidden sm:block">Semantic Locks</span>
                          <div className="flex bg-black border border-gray-800 rounded p-0.5 gap-0.5 shadow-inner">
                              {(['identity', 'wardrobe', 'background', 'lighting'] as Array<keyof ShotLocks>).map(lockKey => (
                                  <button
                                      key={lockKey} disabled={isGeneratingFull || isRerenderingFull} onClick={() => setLocks(p => ({ ...p, [lockKey]: !p[lockKey] }))}
-                                     className={`text-[8.5px] uppercase font-bold px-1.5 py-1 rounded transition-colors ${locks[lockKey] ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30' : 'bg-transparent text-gray-500 border border-transparent'}`}
+                                     className={`uppercase font-bold px-1.5 py-1 rounded transition-colors ${locks[lockKey] ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30' : 'bg-transparent text-gray-500 hover:text-gray-300 border border-transparent'}`}
+                                     style={{ fontSize: '11px', letterSpacing: '0.05em' }}
                                  >{lockKey}</button>
                              ))}
                          </div>
                      </div>
-                     <div className="flex items-center gap-2 shrink-0">
+                     <div className="flex items-center gap-1.5 shrink-0">
                           {hasResult && !isConfiguring && (
-                              <button onClick={() => setIsConfiguring(true)} className="text-[9px] font-bold uppercase tracking-widest text-gray-400 hover:text-white bg-black border border-gray-800 hover:border-gray-600 rounded px-2 py-1.5 transition-colors">Config</button>
+                              <button onClick={() => setIsConfiguring(true)} className="font-bold uppercase tracking-widest text-gray-400 hover:text-white bg-black border border-gray-800 hover:border-gray-600 rounded px-2 py-1 transition-colors" style={{ fontSize: '11.5px' }}>Config</button>
                           )}
-                          <button onClick={handleGenerateShots} disabled={!hasResult || isGeneratingFull || isRerenderingFull || (isConfiguring && slots.length === 0)} className={`font-bold uppercase tracking-widest text-[9px] rounded transition-all border px-3 py-1.5 ${!hasResult || isGeneratingFull || isRerenderingFull ? 'bg-black border-gray-800 text-gray-600 cursor-not-allowed' : 'bg-green-600/10 border-green-500/30 text-green-500 hover:bg-green-600/20 hover:border-green-400/50 shadow-[0_0_15px_rgba(34,197,94,0.1)]'}`}>
+                          <button onClick={handleGenerateShots} disabled={!hasResult || isGeneratingFull || isRerenderingFull || (isConfiguring && slots.length === 0)} className={`font-bold uppercase tracking-widest rounded transition-all border px-2 py-1 ${!hasResult || isGeneratingFull || isRerenderingFull ? 'bg-black border-gray-800 text-gray-600 cursor-not-allowed' : 'bg-green-600/10 border-green-500/30 text-green-500 hover:bg-green-600/20 hover:border-green-400/50 shadow-[0_0_15px_rgba(34,197,94,0.1)]'}`} style={{ fontSize: '11.5px' }}>
                               {isGeneratingFull ? 'Generating...' : 'Generate'}
                           </button>
-                          <button onClick={handleRender4K} disabled={!hasSelectedVariants || isGeneratingFull || isRerenderingFull} className={`font-bold uppercase tracking-widest text-[9px] rounded transition-all border px-3 py-1.5 ${!hasSelectedVariants || isGeneratingFull || isRerenderingFull ? 'bg-black border-gray-800 text-gray-600 cursor-not-allowed' : 'bg-indigo-950/40 border-indigo-500/30 text-indigo-400 hover:bg-indigo-900/60 shadow-[0_0_15px_rgba(99,102,241,0.1)]'}`}>
+                          <button onClick={handleRender4K} disabled={!hasSelectedVariants || isGeneratingFull || isRerenderingFull} className={`font-bold uppercase tracking-widest rounded transition-all border px-2 py-1 ${!hasSelectedVariants || isGeneratingFull || isRerenderingFull ? 'bg-black border-gray-800 text-gray-600 cursor-not-allowed' : 'bg-indigo-950/40 border-indigo-500/30 text-indigo-400 hover:bg-indigo-900/60 shadow-[0_0_15px_rgba(99,102,241,0.1)]'}`} style={{ fontSize: '11.5px' }}>
                               {isRerenderingFull ? 'Rendering...' : 'Render 4K'}
                           </button>
                      </div>
                  </div>
              </div>
-         ) : (
-             <div className="flex items-center justify-between p-3 gap-4 overflow-x-auto scrollbar-hide">
-                 <div className="flex items-center gap-3 lg:gap-4 shrink-0">
-                     {/* Pack */}
-                     <div className="flex items-center bg-black border border-gray-800 rounded pl-2.5 overflow-hidden">
-                         <span className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mr-2 whitespace-nowrap">Pack</span>
-                         <select 
-                           value={packId} onChange={(e) => setPackId(e.target.value as ShotPackId)} disabled={isGeneratingFull || isRerenderingFull}
-                           className="bg-transparent text-[11px] font-medium text-gray-200 outline-none border-l border-gray-800 py-1.5 px-2 hover:bg-gray-900 cursor-pointer w-[120px]"
-                         ><option value="auto">Auto (Scene-Aware)</option><option value="cinematic">Cinematic</option><option value="portrait">Portrait</option><option value="coverage">Coverage</option></select>
-                     </div>
 
-                     {/* Count */}
-                     <div className="flex items-center bg-black border border-gray-800 rounded pl-2.5 overflow-hidden">
-                         <span className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mr-2 whitespace-nowrap">Count</span>
-                         <select 
-                           value={count} onChange={(e) => setCount(Number(e.target.value) as 4|6|9)} disabled={isGeneratingFull || isRerenderingFull}
-                           className="bg-transparent text-[11px] font-medium text-gray-200 outline-none border-l border-gray-800 py-1.5 px-2 hover:bg-gray-900 cursor-pointer w-[80px]"
-                         ><option value={4}>4 Variants</option><option value={6}>6 Variants</option><option value={9}>9 Variants</option></select>
-                     </div>
-
-                     {/* Locks */}
-                     <div className="flex items-center gap-1.5 shrink-0 pl-1 lg:pl-2">
-                         <span className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mr-1 hidden lg:block">Locks</span>
-                         <div className="flex bg-black border border-gray-800 rounded p-0.5 gap-0.5 shadow-inner">
-                             {(['identity', 'wardrobe', 'background', 'lighting'] as Array<keyof ShotLocks>).map(lockKey => (
-                                 <button
-                                     key={lockKey} disabled={isGeneratingFull || isRerenderingFull} onClick={() => setLocks(p => ({ ...p, [lockKey]: !p[lockKey] }))}
-                                     className={`text-[9.5px] uppercase font-bold px-2 py-1 rounded transition-colors ${locks[lockKey] ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30' : 'bg-transparent text-gray-500 hover:text-gray-300 border border-transparent'}`}
-                                 >{lockKey}</button>
-                             ))}
-                         </div>
-                     </div>
-                 </div>
-
-                 <div className="flex items-center gap-2 lg:gap-3 shrink-0 pl-3 md:pl-4 border-l border-[#27272a] ml-auto">
-                     <button 
-                         onClick={() => {
-                           isGeneratingRef.current = false;
-                           onUpdateSession(sceneId, prev => {
-                             if (!prev) return prev;
-                             return { ...prev, isGenerating: false, isRerenderingSelected: false, variants: [] };
-                           });
-                         }}
-                         className="text-[9.5px] text-gray-500 hover:text-red-400 font-bold uppercase tracking-widest transition-colors mr-1 lg:mr-2"
-                     >Reset Session</button>
-                     
-                     {hasResult && !isConfiguring && (
-                         <button onClick={() => setIsConfiguring(true)} className="text-[9.5px] font-bold uppercase tracking-widest text-gray-400 hover:text-white bg-black border border-gray-800 hover:border-gray-600 rounded px-2.5 py-1.5 transition-colors">Config Plan</button>
-                     )}
-                     
-                     <button
-                         onClick={handleGenerateShots}
-                         disabled={!hasResult || isGeneratingFull || isRerenderingFull || (isConfiguring && slots.length === 0)}
-                         className={`text-[9.5px] font-bold uppercase tracking-widest rounded px-3 lg:px-4 py-1.5 transition-all border ${!hasResult || isGeneratingFull || isRerenderingFull ? 'bg-black border-gray-800 text-gray-600 cursor-not-allowed' : 'bg-green-600/10 border-green-500/30 text-green-500 hover:bg-green-600/20 hover:border-green-400/50 shadow-[0_0_15px_rgba(34,197,94,0.1)]'}`}
-                     >
-                         {isGeneratingFull ? 'Generating...' : 'Generate Shots'}
-                     </button>
-                     
-                     <button
-                         onClick={handleRender4K}
-                         disabled={!hasSelectedVariants || isGeneratingFull || isRerenderingFull}
-                         className={`text-[9.5px] font-bold uppercase tracking-widest rounded px-3 lg:px-4 py-1.5 transition-all border ${!hasSelectedVariants || isGeneratingFull || isRerenderingFull ? 'bg-black border-gray-800 text-gray-600 cursor-not-allowed' : 'bg-blue-600/10 border-blue-500/30 text-blue-400 hover:bg-blue-600/20 hover:border-blue-400/50 shadow-[0_0_15px_rgba(59,130,246,0.15)]'}`}
-                     >
-                         {isRerenderingFull ? 'Rendering...' : 'Render In 4K'}
-                     </button>
-                 </div>
-             </div>
-         )}
       </div>
 
       <div className="px-4 py-1.5 bg-black/40 border-b border-[#27272a] text-[9px] text-gray-500 font-mono tracking-wider truncate shrink-0">
