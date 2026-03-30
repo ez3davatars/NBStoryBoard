@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useAppContext } from '../../context/AppContext';
 import { SessionService } from '../../services/SessionService';
-import { File, Save, FolderOpen, FilePlus, SaveAll } from 'lucide-react';
+import { File, Save, FolderOpen, FilePlus, SaveAll, BookOpen } from 'lucide-react';
 import ConfirmDialog from './ConfirmDialog';
 
 export const FileMenu = () => {
@@ -210,6 +210,14 @@ export const FileMenu = () => {
                     <MenuButton icon={<SaveAll className="w-3.5 h-3.5" />} label="Save Session As..." shortcut="Ctrl+Shift+S" onClick={() => {
                         setIsOpen(false);
                         doSave(true);
+                    }} />
+
+                    <div className="h-px bg-gray-700/50 my-1 mx-2" />
+
+                    <MenuButton icon={<BookOpen className="w-3.5 h-3.5 text-yellow-500" />} label="Help & Guides" onClick={() => {
+                        setIsOpen(false);
+                        dispatch({ type: 'SET_HELP_SECTION', payload: 'start' });
+                        dispatch({ type: 'TOGGLE_HELP', payload: true });
                     }} />
 
                 </div>

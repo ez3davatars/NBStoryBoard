@@ -430,6 +430,13 @@ export interface AppState {
     shotSessionsBySceneId: Record<string, ShotSession>;
     isStoryboardEnabled: boolean;
     showHelpHints: boolean;
+
+    // --- HELP CENTER STATE ---
+    isHelpOpen: boolean;
+    helpContextSection: string;
+    hasSeenWelcome: boolean;
+    // -------------------------
+
     imageResolution: '1K' | '2K' | '4K';
     enableImageThinking: boolean;
     enableGoogleGrounding: boolean;
@@ -624,6 +631,9 @@ export type Action =
     | { type: 'REDO' }
     | { type: 'SET_STORYBOARD_ENABLED'; payload: boolean }
     | { type: 'SET_SHOW_HELP_HINTS'; payload: boolean }
+    | { type: 'TOGGLE_HELP'; payload: boolean }
+    | { type: 'SET_HELP_SECTION'; payload: string }
+    | { type: 'SET_SEEN_WELCOME'; payload: boolean }
     | { type: 'SET_CUSTOM_COVERS'; payload: Record<string, string> }
     | { type: 'SET_STAGE_PANEL_STATE'; payload: { id: string; isOpen: boolean } }
     | { type: 'SET_WARDROBE_STATE'; payload: Partial<WardrobeState> }
@@ -872,6 +882,11 @@ export const initialState: AppState = {
     shotSessionsBySceneId: {},
     isStoryboardEnabled: loadJson<boolean>('nano_storyboard_enabled', false), // Persistent setting
     showHelpHints: loadJson<boolean>('nano_help_hints', true),
+    
+    isHelpOpen: false,
+    helpContextSection: 'start',
+    hasSeenWelcome: loadJson<boolean>('nano_has_seen_welcome', false),
+
     stagePanelState: loadJson<Record<string, boolean>>('nano_stage_panel_state', {
         'anchor': false,       // Scene Generator (Open = false)
         'cast_palette': false,  // Available Cast (Open = false)
@@ -1360,6 +1375,14 @@ export const reducer = (state: AppState, action: Action): AppState => {
 
         case 'SET_WARDROBE_STATE':
             return { ...state, wardrobeState: { ...state.wardrobeState, ...action.payload } };
+
+        case 'TOGGLE_HELP':
+            return { ...state, isHelpOpen: action.payload };
+        case 'SET_HELP_SECTION':
+            return { ...state, helpContextSection: action.payload };
+        case 'SET_SEEN_WELCOME':
+            localStorage.setItem('nano_has_seen_welcome', JSON.stringify(action.payload));
+            return { ...state, hasSeenWelcome: action.payload };
 
         // --- REGION EDIT ---
         case 'SET_REGION_EDIT':

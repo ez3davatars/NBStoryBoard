@@ -24,6 +24,8 @@ import CastingForge from './components/CastingForge';
 import NanoCastingDirector from './components/NanoCastingDirector';
 import { FileMenu } from './components/ui/FileMenu';
 import { AppCloseDialog } from './components/ui/AppCloseDialog';
+import { HelpCenterDrawer } from './components/ui/HelpCenterDrawer';
+import { WelcomeModal } from './components/ui/WelcomeModal';
 
 import {
   Settings,
@@ -32,7 +34,8 @@ import {
   Download,
   Copy,
   X,
-  Hammer
+  Hammer,
+  HelpCircle
 } from 'lucide-react';
 
 // --- 1. TYPES & INTERFACES ---
@@ -727,6 +730,16 @@ const App = () => {
                 <nav className="flex items-center rounded-lg border border-[#27272a] bg-[#09090b] p-1 gap-1">
                   <FileMenu />
                   <button
+                    onClick={() => {
+                        dispatch({ type: 'SET_HELP_SECTION', payload: 'start' });
+                        dispatch({ type: 'TOGGLE_HELP', payload: true });
+                    }}
+                    className="px-2 lg:px-3 py-1.5 rounded text-[10px] lg:text-xs font-bold uppercase transition-all flex items-center justify-center text-gray-500 hover:text-yellow-500 hover:bg-yellow-500/10 focus:outline-none"
+                    title="Help & Guides"
+                  >
+                    <HelpCircle className="w-4 h-4 shrink-0" />
+                  </button>
+                  <button
                     onClick={() => setShowSettings(true)}
                     className="px-2 lg:px-3 py-1.5 rounded text-[10px] lg:text-xs font-bold uppercase transition-all flex items-center justify-center text-gray-500 hover:text-gray-300 hover:bg-white/5 focus:outline-none"
                     title="Settings"
@@ -758,6 +771,9 @@ const App = () => {
             />
 
             <ImageInspector />
+
+            <HelpCenterDrawer />
+            <WelcomeModal />
 
             {/* Footer / Logs */}
             <footer className="border-t border-[#27272a] bg-black px-3 sm:px-4 py-2 text-[10px] font-mono">
