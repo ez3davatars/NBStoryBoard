@@ -269,7 +269,8 @@ Generate standalone items before bringing them onto the Stage.
 **The "Blocking Stage"**
 
 > **[PREVIEW] Feature Notification:**
-> The Staging module is currently in **PREVIEW**. It is a powerful experimental layout engine designed to spatially organize your characters, props, and semantic logic into a unified 2D blocking matrix before executing the final cinematic render. Because the underlying multi-angle scene physics, prompt reasoning logic, and "Scene Truth" architectures are actively being tuned for higher fidelity, certain layout mechanics (especially within multi-angle workflows) are subject to significant evolution over time.
+> **Advanced scene composition, now in preview.**
+> The Staging module empowers you to explore multi-element visual storytelling. Use this environment to test character placement and scene direction by translating your cast, props, and scene logic into a unified 2D blocking matrix. Currently powerful for rapid concepting and creative experimentation, the underlying "Scene Truth" physics are still evolving toward fully production-ready consistency.
 
 Compose your shot by dragging your generated actors and props onto the canvas and arranging your dynamic workspace.
 
