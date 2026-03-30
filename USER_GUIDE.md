@@ -14,7 +14,7 @@
     *   **Phase 2: NANO CAST** (Biometric & Style Engine)
     *   **Phase 3: WARDROBE STUDIO** (Designer & Virtual Try-On)
     *   **Phase 4: PROPS** (Asset Management)
-    *   **Phase 5: STAGE** (Scene Composition)
+    *   **Phase 5: STAGE [PREVIEW]** (Scene Composition)
     *   **Phase 6: ACTION** (Production Rendering)
 4.  **Troubleshooting**
 
@@ -94,6 +94,9 @@ Your journey begins here. Use the Casting Forge to generate new high-fidelity ac
 *   **Send to Director:** 
     *   **What it does:** Automatically transfers the currently visible generated image into Phase 2 (Nano Cast) and locks it as a biometric reference identity.
     *   **When to use it:** Use this shortcut to rapidly transition from generating a raw character into applying a specific art style or injecting a logo over their outfit.
+
+*   **Cast Assets List & Global Clear:**
+    *   **What it does:** Displays all active generated tokens for this casting session. Includes a global **Delete All (Trash Can)** button next to the token count to securely wipe all temporary cast tokens from memory simultaneously.
 
 ---
 
@@ -262,9 +265,17 @@ Generate standalone items before bringing them onto the Stage.
 
 ---
 
-### Phase 5: STAGE (Scene Composition)
+### Phase 5: STAGE [PREVIEW] (Scene Composition)
 **The "Blocking Stage"**
-Compose your shot by dragging your generated actors and props onto the canvas.
+
+> **[PREVIEW] Feature Notification:**
+> The Staging module is currently in **PREVIEW**. It is a powerful experimental layout engine designed to spatially organize your characters, props, and semantic logic into a unified 2D blocking matrix before executing the final cinematic render. Because the underlying multi-angle scene physics, prompt reasoning logic, and "Scene Truth" architectures are actively being tuned for higher fidelity, certain layout mechanics (especially within multi-angle workflows) are subject to significant evolution over time.
+
+Compose your shot by dragging your generated actors and props onto the canvas and arranging your dynamic workspace.
+
+#### Workspace Customization
+*   **Modular Sidebars:** All operational panels inside the Stage (such as *Actor Intelligence*, *Token Properties*, *Stage Layers*, etc.) are fully modular. You can **drag and drop** them vertically on either the left or right columns to reorder your workspace.
+*   **Persistent Layouts:** Your configuration—including panel order and collapsed/expanded panel states—is persistently saved to local memory and will be restored exactly how you left it upon your next session launch.
 
 #### Stage Navigation Bar (Top)
 Before diving into individual panels, note the global controls resting above the Stage canvas:
@@ -303,6 +314,7 @@ When an actor or prop is on stage, you control them via two distinct panels:
         *   **What it does:** Quickly clones a character and all their exact spatial/semantic properties.
         *   **When to use it:** Creating identical crowds or symmetrical designs.
     *   **Spatial & Occlusion:** Fine-tune how the character physically blends into the background environment's 3D space:
+        *   **Scene-Agnostic Support Placement:** The system actively projects tokens mathematically onto classified physical architecture visible within the environment (e.g., forcing a seating pose onto specific chairs instead of generating a new one). Ensure you place token anchors directly over valid structural supports on your background plate to leverage physical grounding without hallucinating new objects underneath them.
         *   **Occlusion Mode (Auto vs. Force Front):**
             *   **What it does:** "Auto (Depth)" analyzes the background's 3D geometry and computationally masks the actor based on their position (e.g., cutting off their legs so they look like they are standing *behind* a desk). "Force Front" completely disables this 3D masking.
             *   **When to use it:** Use "Auto" when you want an actor to naturally sit inside the environment (like in a chair or behind a counter). Use "Force Front" if the AI is accidentally deleting parts of your character because it mistakenly thinks they are behind a wall, or if you just want them plastered uniformly on top of the background.
@@ -318,7 +330,7 @@ When an actor or prop is on stage, you control them via two distinct panels:
         *   **When to use it:** Click this first when placing an actor to ensure the Master Layout engine knows what they currently look like.
     *   **Semantic DNA (Text Box):** 
         *   **What it does:** Contains the manually editable text descriptor describing the character's actions ("Pose, Action, Lighting DNA...").
-        *   **When to use it:** To override their visual identity (e.g., typing *"Kneeling, holding a sword, angry expression"* will force the engine to render them that way, regardless of what the original image looks like).
+        *   **When to use it:** To establish specific posing (e.g., typing *"Kneeling, holding a sword, angry expression"*). *Crucial Pipeline Mechanics:* The engine prioritizes the strict mathematical biometric identity extracted from the actor's reference photograph. Avoid adding generic profile descriptions (e.g., "tall blonde man") here, as the engine natively enforces their visual identity, preserving facial structure and silhouette even when occluded by scene layout architecture.
     *   **Grounding (The Green Toggle):** 
         *   **What it does:** Forces the actor's 3D Z-depth to mathematically bind to the physical "Ground Plane" detected in the background scene.
         *   **When to use it:** Keep this ON to ensure the actor is sorted correctly in space exactly where their feet touch the ground, preventing them from floating in front of tables they should be standing behind.
@@ -385,6 +397,15 @@ Instead of dragging actors onto the stage, you can use the **Reference Stack** m
     *   **Direct by Name:** Write specific instructions using the names you just assigned (e.g., *"Commander Shepherd standing on the left..."*).
     *   **Visual Aid:** Draw arrows on the canvas pointing to where you want them.
 4.  **Result:** The AI reads the highlighted "Reference Stack" and places them according to your text/arrow instructions.
+
+### Phase 5c: SHOTS Module (Multi-Angle Photography) [PREVIEW]
+**For creating sequential storytelling without redrawing the set.**
+
+The Directed Shots pipeline (currently in PREVIEW alongside the Stage module) allows you to setup your arranged 2D canvas and "photograph" it from multiple consecutive camera angles.
+
+*   **Scene Truth Snapshot:** Before rendering a multi-angle sequence, the system locks a "Scene Truth Snapshot". This freezes the semantic DNA covering your background environment, spatial positioning bounds, and biometric actor data across all subsequent shot generations.
+*   **Preventing Set Hallucination:** This architecture explicitly prevents "environmental drift" (the walls or doors of a room changing shape) and stops the AI engine from hallucinating random new furniture or actors when the camera perspective shifts.
+*   **Camera-Pivot Continuity:** To trigger perfect spatial identity continuity during your session, rely exclusively on "Camera-pivot-only" lens/angle changes (e.g., switching the dropdown from an *Establishing Shot* to an *Extreme Close-Up*). Avoid altering the overarching "Environment" or "Lighting" prompts in the middle of a SHOTS sequence to prevent breaking the Snapshot lock.
 
 ---
 
