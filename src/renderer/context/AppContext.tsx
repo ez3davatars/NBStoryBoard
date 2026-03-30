@@ -873,7 +873,7 @@ export const initialState: AppState = {
     showHelpHints: loadJson<boolean>('nano_help_hints', true),
     stagePanelState: loadJson<Record<string, boolean>>('nano_stage_panel_state', {
         'anchor': false,       // Scene Generator (Open = false)
-        'cast_palette': true,  // Available Cast (Collapsed = true)
+        'cast_palette': false,  // Available Cast (Open = false)
         'actor_intel': true,   // Actor Intelligence (Collapsed = true)
         'token_props': true,   // Token Properties (Collapsed = true)
         'annotation_props': true,
