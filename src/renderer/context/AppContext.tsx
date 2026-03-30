@@ -550,6 +550,7 @@ export type Action =
     | { type: 'SET_MODEL'; payload: AppState['model'] }
     | { type: 'ADD_CAST'; payload: CastMember }
     | { type: 'REMOVE_CAST'; payload: string }
+    | { type: 'CLEAR_CAST' }
     | { type: 'UPDATE_CAST'; payload: Partial<CastMember> & { id: string } }
     | { type: 'ADD_TOKEN'; payload: StageToken }
     | { type: 'UPDATE_TOKEN'; payload: Partial<StageToken> & { id: string } }
@@ -955,6 +956,8 @@ export const reducer = (state: AppState, action: Action): AppState => {
 
         case 'ADD_CAST':
             return { ...state, cast: [...state.cast, action.payload] };
+        case 'CLEAR_CAST':
+            return { ...state, cast: [] };
         case 'UPDATE_CAST':
             return { ...state, cast: state.cast.map(c => (c.id === action.payload.id ? { ...c, ...action.payload } : c)) };
         case 'REMOVE_CAST': {

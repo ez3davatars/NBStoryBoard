@@ -579,13 +579,16 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
   const generationIdRef = useRef<number>(0);
 
   // DELETE CONFIRMATION STATE
-  const [deleteTarget, setDeleteTarget] = useState<{ type: 'cast' | 'library', payload: string, name: string } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ type: 'cast' | 'library' | 'cast_all', payload: string, name: string } | null>(null);
 
   const executeDelete = () => {
     if (!deleteTarget) return;
     if (deleteTarget.type === 'cast') {
       dispatch({ type: 'REMOVE_CAST', payload: deleteTarget.payload });
       dispatch({ type: 'ADD_LOG', payload: { message: "Actor removed from Cast List", type: 'info' } });
+    } else if (deleteTarget.type === 'cast_all') {
+      dispatch({ type: 'CLEAR_CAST' } as any);
+      dispatch({ type: 'ADD_LOG', payload: { message: `Removed all ${state.cast.length} actors from Cast List`, type: 'info' } });
     } else {
       // Library Deletion with Disk Persistence
       const actorId = deleteTarget.payload;
@@ -2122,7 +2125,18 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
         <div className="bg-[#18181b] p-6 rounded-xl border border-gray-800 flex flex-col shrink-0">
           <h2 className="text-sm font-bold text-gray-400 uppercase mb-4 tracking-wider flex justify-between items-center shrink-0">
             <span>Cast Assets</span>
-            <span className="text-xs bg-gray-800 px-2 py-1 rounded text-gray-500">{state.cast.length} tokens</span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs bg-gray-800 px-2 py-1 rounded text-gray-500">{state.cast.length} tokens</span>
+              {state.cast.length > 0 && (
+                <button
+                  onClick={() => setDeleteTarget({ type: 'cast_all', payload: 'all', name: 'All Cast Assets' })}
+                  className="bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white p-1 rounded-md transition-colors"
+                  title="Delete All Cast Assets"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
           </h2>
           <div className="pb-2">
             <div className="grid grid-cols-3 gap-2">
