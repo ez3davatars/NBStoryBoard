@@ -3,7 +3,7 @@ import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Upload, RefreshCcw, Maximize, Shirt, Sparkles, Download,
-    UserPlus, X, Eraser, Trash2, Undo2, Redo2, CheckCircle2, FolderPlus, Zap
+    UserPlus, X, Eraser, Trash2, Undo2, Redo2, CheckCircle2, FolderPlus, Zap, HelpCircle
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
@@ -1882,6 +1882,17 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                         className={`pb-3 px-4 text-xs font-bold uppercase tracking-widest border-b-2 transition-all ${activeTab === 'library' ? 'border-yellow-500 text-yellow-500' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
                     >
                         Virtual Try-On Room
+                    </button>
+                    <div className="flex-grow" />
+                    <button
+                        onClick={() => {
+                            dispatch({ type: 'SET_HELP_SECTION', payload: 'tab' });
+                            dispatch({ type: 'TOGGLE_HELP', payload: true });
+                        }}
+                        title="Wardrobe Help"
+                        className="pb-3 px-2 text-gray-500 hover:text-yellow-500 transition-colors"
+                    >
+                        <HelpCircle className="w-4 h-4" />
                     </button>
                 </div>
 

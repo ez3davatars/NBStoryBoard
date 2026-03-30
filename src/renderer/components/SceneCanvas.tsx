@@ -15,6 +15,7 @@ import {
     Pipette,
     Undo,
     Redo,
+    Clapperboard,
     Settings as SettingsIcon,
     Square,
     Pencil,
@@ -24,7 +25,8 @@ import {
     ArrowLeft,
     ArrowRight,
     ArrowUp,
-    ArrowDown
+    ArrowDown,
+    HelpCircle
 } from 'lucide-react';
 import { NumericInput } from './ui/NumericInput';
 import { SidebarPanel } from './ui/SidebarPanel';
@@ -4139,9 +4141,25 @@ const SceneCanvas = () => {
                 </div>
 
                 {/* 3. RIGHT SIDEBAR: GLOBAL SPECS, ANCHOR, & REFERENCES */}
-                <div className={`${isCompactStageToolbar ? 'w-[320px]' : 'w-[400px]'} flex flex-col gap-4 h-full overflow-hidden shrink-0 transition-[width] duration-200`}>
+                <div className={`${isCompactStageToolbar ? 'w-[320px]' : 'w-[400px]'} flex flex-col gap-0 h-full overflow-hidden shrink-0 transition-[width] duration-200 bg-[#18181b] border-l border-white/5`}>
+                    <div className="px-4 py-4 border-b border-white/5 flex justify-between items-center bg-black/20 shrink-0">
+                        <h2 className="text-[10px] font-black text-gray-400 tracking-widest uppercase flex items-center gap-2">
+                            <Clapperboard className="w-3.5 h-3.5 text-red-400" /> Stage Controls
+                        </h2>
+                        <button
+                            onClick={() => {
+                                dispatch({ type: 'SET_HELP_SECTION', payload: 'tab' });
+                                dispatch({ type: 'TOGGLE_HELP', payload: true });
+                            }}
+                            title="Staging & SHOTS Help"
+                            className="p-1 rounded-full hover:bg-yellow-500/10 text-gray-500 hover:text-yellow-500 transition-colors"
+                        >
+                            <HelpCircle className="w-3.5 h-3.5" />
+                        </button>
+                    </div>
+
                     {/* DYNAMIC SIDEBAR PANELS */}
-                    <div className="flex-1 overflow-y-auto pl-2 custom-scrollbar flex flex-col gap-3 pb-4">
+                    <div className="flex-1 overflow-y-auto pl-2 custom-scrollbar flex flex-col gap-3 pb-4 pt-4">
                         {
                             panelOrder.filter(id => id !== 'shots' || state.isStoryboardEnabled).map(panelId => {
                                 if (panelId === 'shots') {

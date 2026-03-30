@@ -2573,6 +2573,16 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
             >
               <RefreshCw className="w-3 h-3" />
             </button>
+            <button
+              onClick={() => {
+                dispatch({ type: 'SET_HELP_SECTION', payload: 'tab' });
+                dispatch({ type: 'TOGGLE_HELP', payload: true });
+              }}
+              title="Casting Help"
+              className="p-1 rounded-full hover:bg-yellow-500/10 text-gray-500 hover:text-yellow-500 transition-colors"
+            >
+              <HelpCircle className="w-3.5 h-3.5" />
+            </button>
             <div className="text-[10px] bg-blue-500/20 px-2 py-0.5 rounded border border-blue-500/30 text-blue-400 font-mono font-bold">{state.actorLibrary.length}</div>
           </div>
         </div>
