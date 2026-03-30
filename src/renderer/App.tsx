@@ -1,4 +1,4 @@
-import { useEffect, useState, Component } from 'react';
+import { useEffect, useState, Component, useCallback } from 'react';
 import type { ReactNode, ErrorInfo } from 'react';
 // ... existing imports ...
 
@@ -17,8 +17,7 @@ import type {
   CastMember
 } from './context/AppContext';
 import {
-  useAppContext,
-  AppContext
+  useAppContext
 } from './context/AppContext';
 import { HelpProvider } from './context/HelpContext';
 import CastingForge from './components/CastingForge';
@@ -235,6 +234,30 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boole
 
 // --- 5. MAIN APP SHELL ---
 
+const renderTabLabel = (mode: string, isActive: boolean) => {
+  switch(mode) {
+    case 'veo': return (
+      <div className="flex items-center gap-1 lg:gap-1.5">
+        <span>STORYBOARD</span>
+        <span className="text-[7px] font-black bg-yellow-500 text-black px-1 py-0.5 rounded-sm leading-none tracking-widest -[0_0_5px_rgba(234,179,8,0.4)]">EXP</span>
+        <Clapperboard className={`hidden md:block w-3.5 h-3.5 ${isActive ? 'text-yellow-500' : 'text-yellow-600/50'}`} />
+      </div>
+    );
+    case 'staging': return (
+      <div className="flex flex-row items-center gap-1.5">
+        <span>STAGING</span>
+        <span className="text-[7px] font-black text-blue-300 bg-blue-500/10 border border-blue-500/20 px-1 py-0.5 rounded uppercase tracking-widest flex items-center justify-center">PREVIEW</span>
+      </div>
+    );
+    case 'casting': return 'CAST';
+    case 'nano_cast': return 'NANO CAST';
+    case 'portrait': return 'PORTRAIT';
+    case 'wardrobe': return 'WARDROBE';
+    case 'props': return 'PROPS';
+    default: return mode.toUpperCase();
+  }
+};
+
 const App = () => {
   const { state, dispatch } = useAppContext();
 
@@ -250,7 +273,7 @@ const App = () => {
     }
   }, [state.isStoryboardEnabled, state.view, dispatch]);
 
-  const performDiscardSession = async () => {
+  const performDiscardSession = useCallback(async () => {
     // Clear Context State
     dispatch({ type: 'DISCARD_SESSION' });
 
@@ -277,23 +300,32 @@ const App = () => {
     if (window.electronAPI?.confirmDiscardSession) {
       window.electronAPI?.confirmDiscardSession();
     }
-  };
+  }, [dispatch]);
 
   // Session Discard Interception (From Main)
   useEffect(() => {
+    let cleanup: (() => void) | void;
     if (window.electronAPI?.onRequestDiscardSession) {
-      window.electronAPI.onRequestDiscardSession(() => performDiscardSession());
+      cleanup = window.electronAPI.onRequestDiscardSession(() => performDiscardSession());
     }
-  }, [dispatch]);
+    return () => {
+      // Clean up the IPC listener on unmount if the bridge returned a function
+      if (typeof cleanup === 'function') cleanup();
+    };
+  }, [dispatch, performDiscardSession]);
 
   // App Close Interception (Custom Dialog)
   const [showAppCloseDialog, setShowAppCloseDialog] = useState(false);
   useEffect(() => {
+    let cleanup: (() => void) | void;
     if (window.electronAPI?.onRequestAppClose) {
-      window.electronAPI.onRequestAppClose(() => {
+      cleanup = window.electronAPI.onRequestAppClose(() => {
         setShowAppCloseDialog(true);
       });
     }
+    return () => {
+      if (typeof cleanup === 'function') cleanup();
+    };
   }, []);
 
   const handleSaveClose = () => {
@@ -491,6 +523,7 @@ const App = () => {
     if (state.saveDirectoryHandle) {
       syncFromDisk();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.saveDirectoryHandle]); // Only run when folder connection changes
 
   // --- NATIVE DISK SYNC (Electron) ---
@@ -631,12 +664,12 @@ const App = () => {
     if (state.saveDirectoryPath && window.electronAPI) {
       syncFromNative();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.saveDirectoryPath]);
 
   return (
     <ErrorBoundary>
       <HelpProvider>
-        <AppContext.Provider value={{ state, dispatch }}>
           <div className="flex min-h-screen h-[100dvh] min-w-0 flex-col overflow-hidden bg-[#0f0f11] text-gray-200 font-sans select-none">
 
             {/* Header */}
@@ -682,13 +715,7 @@ const App = () => {
                           onClick={() => dispatch({ type: 'SET_VIEW', payload: mode })}
                           className={`px-2.5 sm:px-3 lg:px-4 py-1.5 rounded text-[9px] sm:text-[10px] lg:text-xs font-bold uppercase transition-all flex items-center gap-1 sm:gap-1.5 whitespace-nowrap ${state.view === mode ? 'bg-[#27272a] text-white ' : 'text-gray-500 hover:text-gray-300'}`}
                         >
-                          {mode === 'veo' ? (
-                            <div className="flex items-center gap-1 lg:gap-1.5">
-                              <span>STORYBOARD</span>
-                              <span className="text-[7px] font-black bg-yellow-500 text-black px-1 py-0.5 rounded-sm leading-none tracking-widest -[0_0_5px_rgba(234,179,8,0.4)]">EXP</span>
-                              <Clapperboard className={`hidden md:block w-3.5 h-3.5 ${state.view === 'veo' ? 'text-yellow-500' : 'text-yellow-600/50'}`} />
-                            </div>
-                          ) : mode === 'casting' ? 'CAST' : mode === 'nano_cast' ? 'NANO CAST' : mode === 'staging' ? 'STAGING' : mode === 'props' ? 'PROPS' : mode}
+                          {renderTabLabel(mode, state.view === mode)}
                         </button>
                       ))}
                   </nav>
@@ -934,7 +961,7 @@ const App = () => {
                             </button>
                           </div>
                           <p className="text-[10px] text-gray-500 mt-1">
-                            Unlocks the purely experimental Veo 3.1 storyboarding interface under the Storyboard tab. Please do not have expectations for production results yet.
+                            Unlocks the Storyboard interface for early-access creative exploration. This feature is still evolving and is best used for testing, concept development, and selective workflows.
                           </p>
                         </div>
                       </div>
@@ -950,7 +977,6 @@ const App = () => {
             }
 
           </div>
-        </AppContext.Provider>
       </HelpProvider >
     </ErrorBoundary >
   );

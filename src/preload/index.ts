@@ -3,7 +3,8 @@ import { contextBridge, ipcRenderer } from 'electron';
 contextBridge.exposeInMainWorld('electronAPI', {
     selectFolder: () => ipcRenderer.invoke('dialog:openDirectory'),
     readFile: (path: string) => ipcRenderer.invoke('file:read', path),
-    writeFile: (path: string, buffer: ArrayBuffer) => ipcRenderer.invoke('file:write', path, buffer),
+    readTextFile: (path: string) => ipcRenderer.invoke('file:readText', path),
+    writeFile: (path: string, buffer: Uint8Array) => ipcRenderer.invoke('file:write', path, buffer),
     exists: (path: string) => ipcRenderer.invoke('file:exists', path),
     listFiles: (path: string) => ipcRenderer.invoke('file:list', path),
     createDir: (path: string) => ipcRenderer.invoke('dir:create', path),
@@ -20,5 +21,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     confirmClose: () => ipcRenderer.send('confirm-close'),
     showSaveDialog: (options: any) => ipcRenderer.invoke('dialog:showSaveDialog', options),
     showOpenDialog: (options: any) => ipcRenderer.invoke('dialog:showOpenDialog', options),
-    deleteFile: (path: string) => ipcRenderer.invoke('file:delete', path)
+    deleteFile: (path: string) => ipcRenderer.invoke('file:delete', path),
+    renameFile: (oldPath: string, newPath: string) => ipcRenderer.invoke('file:rename', oldPath, newPath)
 });

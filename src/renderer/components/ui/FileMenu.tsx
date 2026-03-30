@@ -78,19 +78,25 @@ export const FileMenu = () => {
 
         dispatch({ type: 'ADD_LOG', payload: { message: "Saving session...", type: 'info' } });
 
-        // Export state
-        const json = SessionService.exportSession(state);
-        const buffer = new TextEncoder().encode(json).buffer;
+        try {
+            // Export state
+            const json = SessionService.exportSession(state);
+            const dataArray = new TextEncoder().encode(json);
 
-        const success = await window.electronAPI.writeFile(defaultPath, buffer);
-        if (success) {
-            // Extract filename to use as session name
-            const filename = defaultPath.split(/[/\\]/).pop()?.replace('.cds', '') || 'Saved Session';
-            dispatch({ type: 'SET_SESSION_INFO', payload: { name: filename, path: defaultPath } });
-            dispatch({ type: 'ADD_LOG', payload: { message: `Saved session: ${filename}`, type: 'success' } });
-            return true;
-        } else {
-            dispatch({ type: 'ADD_LOG', payload: { message: "Failed to save session.", type: 'error' } });
+            const success = await window.electronAPI.writeFile(defaultPath, dataArray);
+            if (success) {
+                // Extract filename to use as session name
+                const filename = defaultPath.split(/[/\\]/).pop()?.replace('.cds', '') || 'Saved Session';
+                dispatch({ type: 'SET_SESSION_INFO', payload: { name: filename, path: defaultPath } });
+                dispatch({ type: 'ADD_LOG', payload: { message: `Saved session: ${filename}`, type: 'success' } });
+                return true;
+            } else {
+                dispatch({ type: 'ADD_LOG', payload: { message: "Failed to save session.", type: 'error' } });
+                return false;
+            }
+        } catch (error: any) {
+            console.error("Session Save Error:", error);
+            dispatch({ type: 'ADD_LOG', payload: { message: `Save error: ${error.message || error}`, type: 'error' } });
             return false;
         }
     };
@@ -115,11 +121,9 @@ export const FileMenu = () => {
         if (filePaths && filePaths.length > 0) {
             dispatch({ type: 'ADD_LOG', payload: { message: "Loading session...", type: 'info' } });
             const p = filePaths[0];
-            const base64 = await window.electronAPI.readFile(p);
-            if (base64) {
-                // Decode base64 to string
-                const json = new TextDecoder().decode(Uint8Array.from(atob(base64), c => c.charCodeAt(0)));
-                const loadedState = SessionService.parseSession(json);
+            const jsonText = await window.electronAPI!.readTextFile(p);
+            if (jsonText) {
+                const loadedState = SessionService.parseSession(jsonText);
                 if (loadedState) {
                     dispatch({ type: 'LOAD_SESSION_STATE', payload: loadedState });
                     const filename = p.split(/[/\\]/).pop()?.replace('.cds', '') || 'Loaded Session';

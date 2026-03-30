@@ -1,4 +1,5 @@
-import type { AppState, StageToken, StageAnnotation, Shot, CastMember, PropItem, DirectorSettings, RegionEditState, HistorySnapshot, WardrobeItem } from '../context/AppContext';
+import type { AppState, StageToken, StageAnnotation, Shot, CastMember, PropItem, DirectorSettings, RegionEditState, HistorySnapshot, WardrobeItem, ReferenceSlot } from '../context/AppContext';
+import type { ShotSession } from '../types/shots';
 
 export interface SessionPayload {
     version: string;
@@ -23,6 +24,8 @@ export interface SessionPayload {
         resultImage: string | null;
         historyPast: HistorySnapshot[];
         historyFuture: HistorySnapshot[];
+        referenceSlots: ReferenceSlot[];
+        shotSessionsBySceneId: Record<string, ShotSession>;
     }
 }
 
@@ -51,11 +54,27 @@ export const SessionService = {
                 occupiedVolumes: state.occupiedVolumes,
                 activeShotId: state.activeShotId,
                 resultImage: state.resultImage,
-                historyPast: state.historyPast,
-                historyFuture: state.historyFuture
+                historyPast: [], // Omit history to prevent "Invalid string length" out-of-memory crash!
+                historyFuture: [], // Omit history to prevent "Invalid string length" stringify crash!
+                referenceSlots: state.referenceSlots || [],
+                shotSessionsBySceneId: state.shotSessionsBySceneId || {}
             }
         };
-        return JSON.stringify(payload, null, 2);
+        
+        // Cycle-safe serialization in case of accidental React Fiber nodes or DOM references in state
+        const cache = new Set();
+        const jsonString = JSON.stringify(payload, (key, value) => {
+            if (typeof value === 'object' && value !== null) {
+                if (cache.has(value)) {
+                    console.warn(`[SessionService] Removed circular reference at key: ${key}`);
+                    return undefined;
+                }
+                cache.add(value);
+            }
+            return value;
+        }, 2);
+        
+        return jsonString;
     },
 
     parseSession(json: string): Partial<AppState> | null {
@@ -85,7 +104,9 @@ export const SessionService = {
                 activeShotId: payload.state.activeShotId || null,
                 resultImage: payload.state.resultImage || null,
                 historyPast: payload.state.historyPast || [],
-                historyFuture: payload.state.historyFuture || []
+                historyFuture: payload.state.historyFuture || [],
+                referenceSlots: payload.state.referenceSlots || [],
+                shotSessionsBySceneId: payload.state.shotSessionsBySceneId || {}
             };
 
             return loadedState;

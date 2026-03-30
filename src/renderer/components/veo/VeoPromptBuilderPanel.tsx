@@ -119,6 +119,7 @@ const VeoPromptBuilderPanel = forwardRef<VeoPromptBuilderRef, VeoPromptBuilderPa
             setAudioAmbience('');
             setAudioMusic('');
         }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [activeShot?.id]); // Re-sync when switching shots
 
     // Auto-save draft changes to Active Shot OR Global State (Debounced)
@@ -161,6 +162,7 @@ const VeoPromptBuilderPanel = forwardRef<VeoPromptBuilderRef, VeoPromptBuilderPa
         activeShot?.id, // Ensure we save to the correct boundary
         concept, cinematography, shotType, lens, motion, subject, action, contextStr, styleAmbiance, negativePrompt,
         audioDialogue, audioSfx, audioAmbience, audioMusic, dispatch
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     ]);
 
     const handleEnhance = async () => {
@@ -271,7 +273,7 @@ const VeoPromptBuilderPanel = forwardRef<VeoPromptBuilderRef, VeoPromptBuilderPa
         // The user requested: "copies formatted 5-part prompt (use formatVeoFivePartPrompt)"
         // We will stick exactly to the requested 5-part format.
 
-        let combined = formatted;
+        const combined = formatted;
 
         if (combined) {
             navigator.clipboard.writeText(combined);

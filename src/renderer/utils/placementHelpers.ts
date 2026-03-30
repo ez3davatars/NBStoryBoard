@@ -258,9 +258,9 @@ export const buildHumanPlacementIntents = (tokens: StageToken[], annotations: St
         }
 
         // Add new fields
-        let sourceFraming = inferSourceFramingForToken(actor);
+        const sourceFraming = inferSourceFramingForToken(actor);
         let poseCompletionMode: HumanPlacementIntent['poseCompletionMode'] = 'none';
-        let relightMode: HumanPlacementIntent['relightMode'] = 'matchEnvironment';
+        const relightMode: HumanPlacementIntent['relightMode'] = 'matchEnvironment';
 
         // IF support surface expects full body but source is cropped
         if (sourceFraming && sourceFraming !== 'fullBody' && sourceFraming !== 'threeQuarter') {

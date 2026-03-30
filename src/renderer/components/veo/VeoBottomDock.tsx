@@ -27,7 +27,7 @@ export default function VeoBottomDock({ mode }: VeoBottomDockProps) {
 
  if (!draft) return "No active draft available. Select a shot and start building your prompt.";
  const combined = buildCombinedPrompt(draft, (draft as any).audio, undefined, draft.negativePrompt);
-    let base = combined.prompt || "Draft is empty...";
+    const base = combined.prompt || "Draft is empty...";
 
  
  return base;

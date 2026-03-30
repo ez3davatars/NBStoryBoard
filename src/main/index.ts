@@ -144,16 +144,28 @@ ipcMain.handle('file:read', async (_event, filePath) => {
   }
 });
 
+ipcMain.handle('file:readText', async (_event, filePath) => {
+  try {
+    return await fs.readFile(filePath, 'utf-8');
+  } catch (error) {
+    console.error("Read Text Error:", error);
+    return null;
+  }
+});
+
 ipcMain.handle('file:write', async (_event, filePath, buffer) => {
   try {
+    console.log(`[IPC file:write] Start writing to: ${filePath}`);
+    console.log(`[IPC file:write] Buffer type: ${typeof buffer}, isBuffer: ${Buffer.isBuffer(buffer)}, byteLength: ${buffer?.byteLength}`);
     // Ensure directory exists
     const dirname = path.dirname(filePath);
     await fs.mkdir(dirname, { recursive: true });
 
     await fs.writeFile(filePath, Buffer.from(buffer));
+    console.log(`[IPC file:write] Write successful`);
     return true;
   } catch (error) {
-    console.error("Write Error:", error);
+    console.error("[IPC file:write] Write Error:", error);
     return false;
   }
 });
@@ -185,6 +197,18 @@ ipcMain.handle('file:delete', async (_event, filePath) => {
     if (error.code !== 'ENOENT') {
       console.error("Delete Error:", error);
     }
+    return false;
+  }
+});
+
+ipcMain.handle('file:rename', async (_event, oldPath: string, newPath: string) => {
+  try {
+    const dirname = path.dirname(newPath);
+    await fs.mkdir(dirname, { recursive: true });
+    await fs.rename(oldPath, newPath);
+    return true;
+  } catch (error) {
+    console.error("Rename Error:", error);
     return false;
   }
 });

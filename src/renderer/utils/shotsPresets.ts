@@ -71,6 +71,20 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     description: 'Profile-oriented composition with side-view emphasis.',
     shotInstruction: 'Recompose with a strong profile emphasis while preserving subject identity and scene logic.',
     defaultLensNote: 'Natural side-view framing, no facial drift.'
+  },
+  overTheShoulder: {
+    id: 'overTheShoulder',
+    label: 'Over-the-Shoulder',
+    description: 'Looking past a foreground subject to focus on the target.',
+    shotInstruction: 'Recompose as an over-the-shoulder shot, placing one subject in the foreground blurring out slightly, focused on the main target.',
+    defaultLensNote: 'Cinematic depth of field, natural perspective.'
+  },
+  twoShot: {
+    id: 'twoShot',
+    label: 'Two-Shot',
+    description: 'Balanced framing containing two subjects.',
+    shotInstruction: 'Recompose as a balanced two-shot highlighting the interaction between both subjects.',
+    defaultLensNote: 'Mid-lens perspective, equitable framing.'
   }
 };
 

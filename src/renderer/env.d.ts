@@ -34,7 +34,8 @@ declare module '*.svg' {
 interface ElectronAPI {
   selectFolder: () => Promise<string | null>;
   readFile: (path: string) => Promise<string | null>; // Returns base64 string
-  writeFile: (path: string, buffer: ArrayBuffer) => Promise<boolean>;
+  readTextFile: (path: string) => Promise<string | null>; // Returns utf-8 string
+  writeFile: (path: string, buffer: Uint8Array) => Promise<boolean>;
   exists: (path: string) => Promise<boolean>;
   listFiles: (path: string) => Promise<string[]>;
   createDir: (path: string) => Promise<boolean>;
@@ -47,6 +48,7 @@ interface ElectronAPI {
   showSaveDialog?: (options: any) => Promise<string | null>;
   showOpenDialog?: (options: any) => Promise<string[] | null>;
   deleteFile?: (path: string) => Promise<boolean>;
+  renameFile?: (oldPath: string, newPath: string) => Promise<boolean>;
 }
 
 interface Window {

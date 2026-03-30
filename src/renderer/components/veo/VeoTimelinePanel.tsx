@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useAppContext } from '../../context/AppContext';
 import { formatVeoTimestampSequence } from '../../promptEngine/veoFivePart';
 import type { VeoTimestampBeat } from '../../promptEngine/veoFivePart';
@@ -13,14 +13,17 @@ export default function VeoTimelinePanel() {
  const [showSaved, setShowSaved] = useState(false);
  const [showCopied, setShowCopied] = useState(false);
 
+ const [prevShotId, setPrevShotId] = useState(activeShot?.id);
+
  // Sync from active shot when it changes
- useEffect(() => {
- if (activeShot?.veoTimeline) {
- setBeats(activeShot.veoTimeline);
- } else {
- setBeats([]);
+ if (activeShot?.id !== prevShotId) {
+    setPrevShotId(activeShot?.id);
+    if (activeShot?.veoTimeline) {
+        setBeats(activeShot.veoTimeline);
+    } else {
+        setBeats([]);
+    }
  }
- }, [activeShot?.id]);
 
  const updateBeats = (newBeats: VeoTimestampBeat[]) => {
  setBeats(newBeats);

@@ -1175,8 +1175,21 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
     aspectRatio?: string;
     apiKey: string;
     model: string;
+    sceneTruth?: import('../types/shots').SceneTruthSnapshot;
+    presetId?: string;
+    hasSubjectStyleAnalysis?: boolean;
   }): Promise<string> {
-    const { anchorImageUrl, actorIdentitySets = [], prompt, aspectRatio, apiKey, model } = args;
+    const { anchorImageUrl, actorIdentitySets = [], prompt, aspectRatio, apiKey, model, sceneTruth, presetId, hasSubjectStyleAnalysis } = args;
+    
+    if (sceneTruth) {
+      console.log(`[GeminiService:generateShotPreview] Metadata Dump:`, {
+         actorCount: sceneTruth.expectedActorCount,
+         orderedActors: sceneTruth.actors.sort((a,b)=> a.leftToRightIndex - b.leftToRightIndex).map(a => a.actorLabel),
+         presetId,
+         cameraConstraints: sceneTruth.cameraConstraints,
+         styleAnalysisDemoted: hasSubjectStyleAnalysis === false
+      });
+    }
     
     if (!apiKey) throw new Error("No API Key provided for shot generation");
     
@@ -1247,8 +1260,19 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
     aspectRatio?: string;
     apiKey: string;
     model: string;
+    sceneTruth?: import('../types/shots').SceneTruthSnapshot;
+    presetId?: string;
   }): Promise<string> {
-    const { sourceResultUrl, selectedShotPreviewUrl, actorIdentitySets = [], prompt, aspectRatio, apiKey, model } = args;
+    const { sourceResultUrl, selectedShotPreviewUrl, actorIdentitySets = [], prompt, aspectRatio, apiKey, model, sceneTruth, presetId } = args;
+    
+    if (sceneTruth) {
+      console.log(`[GeminiService:rerenderShotFinal] Metadata Dump:`, {
+         actorCount: sceneTruth.expectedActorCount,
+         orderedActors: sceneTruth.actors.sort((a,b)=> a.leftToRightIndex - b.leftToRightIndex).map(a => a.actorLabel),
+         presetId,
+         cameraConstraints: sceneTruth.cameraConstraints
+      });
+    }
     
     if (!apiKey) throw new Error("No API Key provided for shot generation");
     

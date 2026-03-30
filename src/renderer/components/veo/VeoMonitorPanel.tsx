@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useAppContext } from '../../context/AppContext';
 import { MonitorPlay, Image as ImageIcon, FileSearch, ArrowRight, Plus } from 'lucide-react';
 
@@ -16,12 +16,15 @@ export default function VeoMonitorPanel() {
  const currentEndUrl = activeShot?.endFrameUrl ||
  (typeof state.storyboardEndSource === 'string' ? state.storyboardEndSource : state.storyboardEndSource?.url);
 
+ const [prevEndUrl, setPrevEndUrl] = useState(currentEndUrl);
+
  // Force activePlate to 'start' if end plate is removed
- useEffect(() => {
- if (!currentEndUrl && activePlate === 'end') {
- setActivePlate('start');
+ if (currentEndUrl !== prevEndUrl) {
+    setPrevEndUrl(currentEndUrl);
+    if (!currentEndUrl && activePlate === 'end') {
+        setActivePlate('start');
+    }
  }
- }, [currentEndUrl, activePlate]);
 
  const displayUrl = activePlate === 'start' ? currentStartUrl : currentEndUrl;
 

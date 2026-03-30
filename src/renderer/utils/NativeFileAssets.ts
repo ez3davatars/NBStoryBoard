@@ -52,7 +52,7 @@ export const nativeSaveCover = async (rootPath: string, studioId: string, file: 
 
     try {
         const buffer = await file.arrayBuffer();
-        return await window.electronAPI.writeFile(fullPath, buffer);
+        return await window.electronAPI.writeFile(fullPath, new Uint8Array(buffer));
     } catch (e) {
         console.error("Native Save Failed:", e);
         return false;
@@ -82,7 +82,7 @@ export const nativeWriteFile = async (fullPath: string, file: File | Blob): Prom
     if (!window.electronAPI) return false;
     try {
         const buffer = await file.arrayBuffer();
-        return await window.electronAPI.writeFile(fullPath, buffer);
+        return await window.electronAPI.writeFile(fullPath, new Uint8Array(buffer));
     } catch (e) {
         console.error("Native Write Failed:", e);
         return false;

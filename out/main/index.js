@@ -216,14 +216,25 @@ ipcMain.handle("file:read", async (_event, filePath) => {
     return null;
   }
 });
+ipcMain.handle("file:readText", async (_event, filePath) => {
+  try {
+    return await fs__namespace.readFile(filePath, "utf-8");
+  } catch (error) {
+    console.error("Read Text Error:", error);
+    return null;
+  }
+});
 ipcMain.handle("file:write", async (_event, filePath, buffer) => {
   try {
+    console.log(`[IPC file:write] Start writing to: ${filePath}`);
+    console.log(`[IPC file:write] Buffer type: ${typeof buffer}, isBuffer: ${Buffer.isBuffer(buffer)}, byteLength: ${buffer?.byteLength}`);
     const dirname = path__namespace.dirname(filePath);
     await fs__namespace.mkdir(dirname, { recursive: true });
     await fs__namespace.writeFile(filePath, Buffer.from(buffer));
+    console.log(`[IPC file:write] Write successful`);
     return true;
   } catch (error) {
-    console.error("Write Error:", error);
+    console.error("[IPC file:write] Write Error:", error);
     return false;
   }
 });
@@ -252,6 +263,17 @@ ipcMain.handle("file:delete", async (_event, filePath) => {
     if (error.code !== "ENOENT") {
       console.error("Delete Error:", error);
     }
+    return false;
+  }
+});
+ipcMain.handle("file:rename", async (_event, oldPath, newPath) => {
+  try {
+    const dirname = path__namespace.dirname(newPath);
+    await fs__namespace.mkdir(dirname, { recursive: true });
+    await fs__namespace.rename(oldPath, newPath);
+    return true;
+  } catch (error) {
+    console.error("Rename Error:", error);
     return false;
   }
 });

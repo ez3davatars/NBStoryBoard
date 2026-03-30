@@ -1805,8 +1805,8 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
             const safeKeywords = getSafeKeywords(targetStyleKey, styleConfig.keywords);
 
             // 3. PROMPT CONSTRUCTION
-            let effectiveStylization = directorControls.stylization;
-            let styleNote = "";
+            const effectiveStylization = directorControls.stylization;
+            const styleNote = "";
             let effectiveIdentityStrength = directorControls.identityStrength;
 
             if (identitySource === 'biometric') {

@@ -299,7 +299,8 @@ export const RegionEditPanel = ({
  payload: { id: activeLayer.id, updates: { prompt: (activeLayer.prompt || '') ? `${activeLayer.prompt}\n${p.text}` : p.text } },
  } as any)
  }
- className="bg-[#18181b] border border-[#27272a] hover:bg-[#27272a] text-gray-300 text-[9px] py-2 rounded uppercase font-bold"
+ className="bg-[#18181b] border border-[#27272a] hover:bg-[#27272a] text-gray-300 h-6 flex items-center justify-center rounded uppercase font-bold tracking-wider transition-colors"
+ style={{ fontSize: '11px' }}
  >
  {p.label}
  </button>
@@ -311,13 +312,15 @@ export const RegionEditPanel = ({
  <button
  onClick={clearActiveMask}
  disabled={!activeLayer}
- className="flex-1 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] text-gray-300 hover:text-white text-[10px] py-2 rounded font-bold uppercase tracking-wider disabled:opacity-50"
+ className="flex-1 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] text-gray-300 hover:text-white h-6 flex items-center justify-center rounded font-bold uppercase tracking-wider disabled:opacity-50 transition-colors"
+ style={{ fontSize: '11px' }}
  >
  Clear Active
  </button>
  <button
  onClick={() => dispatch({ type: 'CLEAR_ALL_REGION_MASKS' } as any)}
- className="flex-1 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] text-gray-300 hover:text-white text-[10px] py-2 rounded font-bold uppercase tracking-wider"
+ className="flex-1 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] text-gray-300 hover:text-white h-6 flex items-center justify-center rounded font-bold uppercase tracking-wider transition-colors"
+ style={{ fontSize: '11px' }}
  >
  Clear All
  </button>
@@ -327,14 +330,16 @@ export const RegionEditPanel = ({
  <button
  onClick={applyRegionEditQueue}
  disabled={isProcessing || !apiKey || isRegionEditRunning}
- className="flex-1 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-black text-[10px] uppercase tracking-[0.25em] py-3 rounded-xl active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+ className="flex-1 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-black h-8 flex items-center justify-center uppercase tracking-[0.1em] rounded-md active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+ style={{ fontSize: '12px' }}
  >
  Apply Enabled Layers
  </button>
  <button
  onClick={requestCancelRegionEdit}
  disabled={!isRegionEditRunning}
- className="px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest border border-red-500/30 bg-red-500/10 text-red-300 hover:bg-red-500/20 disabled:opacity-40 disabled:cursor-not-allowed"
+ className="px-3 h-8 flex items-center justify-center rounded-md font-black uppercase tracking-[0.1em] border border-red-500/30 bg-red-500/10 text-red-300 hover:bg-red-500/20 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+ style={{ fontSize: '12px' }}
  title="Stops after current layer finishes"
  >
  Cancel

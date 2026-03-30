@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useRef } from 'react';
 
 interface NumericInputProps {
     value: number;
@@ -24,14 +24,16 @@ export const NumericInput: React.FC<NumericInputProps> = ({
     // Local draft state allows user to type intermediate garbage (e.g. '-') without snapping instantly
     const [draft, setDraft] = useState<string>(value.toFixed(precision));
     const [isFocused, setIsFocused] = useState(false);
+    const [prevValue, setPrevValue] = useState(value);
     const inputRef = useRef<HTMLInputElement>(null);
 
     // Sync from props when NOT focused, so external changes (like dragging a token) update the field visually
-    useEffect(() => {
+    if (value !== prevValue) {
+        setPrevValue(value);
         if (!isFocused) {
             setDraft(value.toFixed(precision));
         }
-    }, [value, isFocused, precision]);
+    }
 
     const commit = (strValue: string) => {
         let parsed = parseFloat(strValue);

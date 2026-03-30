@@ -15,6 +15,8 @@ interface RefInspectorModalProps {
  replaceAnchorSubjects: boolean;
  toggleReplaceMode: (val: boolean) => void;
  onSave: (updates: Partial<ReferenceSlot>) => void;
+ onAnalyze: () => Promise<void>;
+ isAnalyzing: boolean;
 }
 
 export const RefInspectorModal = ({
@@ -29,7 +31,9 @@ export const RefInspectorModal = ({
  setInspectRefIndex,
  replaceAnchorSubjects,
  toggleReplaceMode,
- onSave
+ onSave,
+ onAnalyze,
+ isAnalyzing
 }: RefInspectorModalProps) => {
  const slot = referenceSlots.find(s => s.index === inspectRefIndex);
  if (!slot || !slot.url) return null;
@@ -70,13 +74,26 @@ export const RefInspectorModal = ({
  onChange={setInspectName}
  placeholder="e.g. Hero Protagonist"
  />
- <PropertyField
- label="Subject & Style Analysis"
- type="textarea"
- value={inspectAnalysis}
- onChange={setInspectAnalysis}
- placeholder="AI analysis for precision generation..."
- />
+ <div className="space-y-2">
+    <div className="flex items-center justify-between">
+      <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest pl-1">
+        Subject & Style Analysis
+      </label>
+      <button
+        onClick={onAnalyze}
+        disabled={isAnalyzing}
+        className={`px-3 py-1 rounded bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 text-[10px] font-bold uppercase tracking-widest transition-colors ${isAnalyzing ? 'opacity-50 cursor-not-allowed' : ''}`}
+      >
+        {isAnalyzing ? 'Analyzing...' : 'Auto-Analyze'}
+      </button>
+    </div>
+    <textarea
+      value={inspectAnalysis}
+      onChange={(e) => setInspectAnalysis(e.target.value)}
+      placeholder="AI analysis for precision generation or type your own notes..."
+      className="w-full bg-[#18181b] border border-[#27272a] rounded-lg p-3 text-sm text-gray-300 placeholder:text-gray-600 focus:outline-none focus:border-blue-500/50 transition-colors resize-y min-h-[100px]"
+    />
+  </div>
 
  <div className="pt-6 border-t border-[#27272a]">
  <div className="flex items-center justify-between mb-4">

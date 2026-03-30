@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useReducer, useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { StorageService } from '../services/StorageService';
@@ -871,10 +872,19 @@ export const initialState: AppState = {
     isStoryboardEnabled: loadJson<boolean>('nano_storyboard_enabled', false), // Persistent setting
     showHelpHints: loadJson<boolean>('nano_help_hints', true),
     stagePanelState: {
-        'ref_stacks': true,
+        'anchor': true,
+        'actor_intel': false,
+        'token_props': true,
+        'cast_palette': true,
+        'annotation_props': true,
+        'shots': true,
+        'advanced_render': false,
         'region_edit': true,
         'layers': true,
-        'actor_library': true,
+        'specs': true,
+        'ref_stacks': true,
+        'scene_director': true,
+        'v3_terminal': false,
     },
 
     // WARDROBE PERSISTENCE
@@ -1031,8 +1041,6 @@ export const reducer = (state: AppState, action: Action): AppState => {
                 depthMapUrl: null,
                 depthMapHash: null,
                 sourceBackgroundHash: null,
-                imageResolution: '1K' as const, // Reset to default
-                enableImageThinking: false, // Reset to default
                 floorPlane: null,
                 occupiedVolumes: [],
                 selection: null,
@@ -1238,13 +1246,20 @@ export const reducer = (state: AppState, action: Action): AppState => {
                 resultImage: null,
                 inspectImage: null,
                 inspectMask: null,
-                regionEdit: smartClone(DEFAULT_REGION_EDIT)
+                regionEdit: smartClone(DEFAULT_REGION_EDIT),
+                sessionName: null,
+                sessionFilePath: null
             };
         }
         case 'SET_SESSION_INFO':
             return { ...state, sessionName: action.payload.name, sessionFilePath: action.payload.path };
         case 'LOAD_SESSION_STATE':
-            return { ...state, ...action.payload };
+            return {
+                ...state,
+                ...action.payload,
+                director: { ...defaultDirector, ...(action.payload.director || {}) },
+                regionEdit: { ...DEFAULT_REGION_EDIT, ...(action.payload.regionEdit || {}) }
+            };
         case 'SET_SAVE_DIRECTORY':
             return { ...state, saveDirectoryHandle: action.payload };
         case 'SET_IMAGE_RESOLUTION':
@@ -1641,6 +1656,7 @@ export type ActorIdentityReferenceSet = {
     angleFaceAnchors: string[];
     supportIdentityRefs: string[];
     wardrobeRefs: string[];
+    biometricProfile?: string;
     identityPriority?: 'strict';
 };
 
@@ -1764,6 +1780,8 @@ export function getActorIdentityReferenceSetsForScene(state: AppState, sceneId: 
                 console.warn(`[IdentityLock] Missing primary face anchor for actor ${actor?.name || castId}`);
             }
 
+            const profileSlot = slots.find(s => s.analysis && s.analysis.trim());
+
             referenceSets.push({
                 actorId: castId as string,
                 actorLabel: actor?.name || undefined,
@@ -1771,6 +1789,7 @@ export function getActorIdentityReferenceSetsForScene(state: AppState, sceneId: 
                 angleFaceAnchors,
                 supportIdentityRefs,
                 wardrobeRefs,
+                biometricProfile: profileSlot?.analysis,
                 identityPriority: 'strict'
             });
         }

@@ -666,6 +666,110 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
     setDeleteTarget(null);
   };
 
+  // DISK PERSISTENCE: Rename or Move Actor
+  const handleActorDiskOperation = async (actorId: string, options: { newName?: string, newFolderId?: string }) => {
+    const actor = state.actorLibrary.find(a => a.id === actorId);
+    if (!actor || !actor.filename) return;
+
+    const isRename = options.newName !== undefined;
+    const isMove = options.newFolderId !== undefined;
+    if (!isRename && !isMove) return;
+
+    // 1. SANITIZATION
+    const rawName = options.newName ?? actor.name;
+    // Trim, remove reserved chars prevent empty
+    let safeName = rawName.trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, '');
+    if (!safeName) safeName = 'Unnamed Actor';
+
+    // Prevent identical no-op
+    if (isRename && safeName === actor.name && !isMove) return;
+
+    const targetFolderId = options.newFolderId ?? (
+      STUDIO_FOLDERS.find(f => f.styles.includes(normalizeStyle(actor.profile?.style)))?.id || 'uncategorized'
+    );
+    const targetFolder = STUDIO_FOLDERS.find(f => f.id === targetFolderId) || STUDIO_FOLDERS.find(f => f.id === 'uncategorized')!;
+    const newStyle = targetFolder.styles[0] || '';
+    const newCatLabel = targetFolder.id === 'uncategorized' ? '' : targetFolder.label;
+
+    const ext = actor.filename.includes('.') ? actor.filename.split('.').pop()! : 'png';
+    const baseNewFilename = `${safeName}.${ext}`;
+
+    try {
+      let finalFilename = baseNewFilename;
+      let finalRelativePath = newCatLabel ? `${newCatLabel}/${finalFilename}` : finalFilename;
+
+      // 2. COLLISION HANDLING (Find a non-colliding filename)
+      if (isNativeParams() && state.saveDirectoryPath && window.electronAPI?.exists && window.electronAPI?.joinPath) {
+        const actorsDir = await window.electronAPI.joinPath(state.saveDirectoryPath, 'Actors');
+        let counter = 1;
+        let testPath = await window.electronAPI.joinPath(actorsDir, finalRelativePath);
+        
+        const oldFullPath = await window.electronAPI.joinPath(actorsDir, actor.filename);
+
+        while (await window.electronAPI.exists(testPath)) {
+          // If the old path and new path are exactly the same (e.g. user typed same name in same folder), we don't need to rename
+          if (oldFullPath === testPath) {
+            break; 
+          }
+          finalFilename = `${safeName} (${counter}).${ext}`;
+          finalRelativePath = newCatLabel ? `${newCatLabel}/${finalFilename}` : finalFilename;
+          testPath = await window.electronAPI.joinPath(actorsDir, finalRelativePath);
+          counter++;
+        }
+
+        // 3. ATOMIC DISK OPERATION
+        if (oldFullPath !== testPath) {
+           const success = await window.electronAPI.renameFile!(oldFullPath, testPath);
+           if (!success) throw new Error("Native Rename IPC Returned False");
+        }
+      } else if (state.saveDirectoryHandle) {
+         // WEB FALLBACK
+         const webPath = finalRelativePath;
+         const res = await fetch(actor.url);
+         const blob = await res.blob();
+         const file = new File([blob], finalFilename, { type: `image/${ext === 'jpeg' ? 'jpeg' : 'png'}` });
+         await saveAssetToDisk(state.saveDirectoryHandle, webPath, file);
+         
+         if (actor.filename !== finalRelativePath) {
+           let curDir = await state.saveDirectoryHandle.getDirectoryHandle('Actors');
+           const oldParts = actor.filename.split(/[\\/]/);
+           for (let i = 0; i < oldParts.length - 1; i++) {
+             curDir = await curDir.getDirectoryHandle(oldParts[i]);
+           }
+           await curDir.removeEntry(oldParts[oldParts.length - 1]);
+         }
+      }
+
+      // 4. ATOMIC MEMORY UPDATE (Only triggers if disk success)
+      const updatedProfile = { 
+         style: newStyle, 
+         identity: safeName,
+         wardrobe: actor.profile?.wardrobe || "",
+         accessories: actor.profile?.accessories || ""
+      };
+      
+      dispatch({
+        type: 'UPDATE_ACTOR_LIBRARY',
+        payload: {
+          id: actor.id,
+          updates: { 
+             name: safeName, 
+             filename: finalRelativePath, 
+             profile: updatedProfile,
+             // url: newUrl // Re-evaluating URL update later if necessary, currently base64 is already safe
+          }
+        }
+      });
+      
+      dispatch({ type: 'ADD_LOG', payload: { message: `Actor ${isMove ? 'organized' : 'renamed'} successfully`, type: 'success' } });
+
+    } catch (e: any) {
+      console.error("Rename/Move failed", e);
+      showToast(`Disk Update Failed: ${e.message}`);
+      dispatch({ type: 'ADD_LOG', payload: { message: `Actor update failed: ${e.message}`, type: 'error' } });
+    }
+  };
+
 
   // --- LIBRARY SEARCH & SORT STATE ---
   const [librarySearch, setLibrarySearch] = useState('');
@@ -685,6 +789,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
   // const [sortOption, setSortOption] = useState<'date' | 'name' | 'type'>('date');
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
   const [organizeTarget, setOrganizeTarget] = useState<{ id: string, name: string } | null>(null);
+  const [editingActorName, setEditingActorName] = useState<{ id: string, name: string } | null>(null);
 
   // Load covers from disk if available
   // This useEffect is removed as per instructions, as customCovers are now in AppContext
@@ -1293,7 +1398,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
       finalPrompt += "\n\nCRITICAL ROTATION OVERRIDE: While the identity and costume must match the reference, YOU MUST NOT COPY THE CAMERA ANGLE OF THE REFERENCE IMAGE across all panels. You MUST dynamically rotate the character's head and body in 3D space to precisely match the requested viewpoints (Profile, 3/4, Back, etc) for each individual panel.\n\n";
 
       // BRANDING INJECTION
-      let inputImages = [{ url: state.lastCastedImage, label: 'Character Reference' }];
+      const inputImages = [{ url: state.lastCastedImage, label: 'Character Reference' }];
 
       if (brandingLogo) {
         inputImages.push({ url: brandingLogo, label: 'Branding Logo' });
@@ -1523,7 +1628,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
     const currY = e.clientY - rect.top;
 
     if (activeHandle && cropRect) {
-      let newRect = { ...cropRect };
+      const newRect = { ...cropRect };
       if (activeHandle.includes('e')) newRect.w = currX - cropRect.x;
       if (activeHandle.includes('s')) newRect.h = currY - cropRect.y;
       if (activeHandle.includes('w')) {
@@ -2689,17 +2794,23 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
                       <HelpTooltip zone="cast" id="actorNameDisplay">
                         <input
                           className="bg-transparent text-[10px] font-black uppercase text-center text-white/70 hover:text-white focus:text-white focus:outline-none w-full tracking-wider transition-colors"
-                          value={actor.name}
-                          onChange={(e) => dispatch({
-                            type: 'UPDATE_ACTOR_LIBRARY',
-                            payload: { id: actor.id, updates: { name: e.target.value } }
-                          })}
+                          value={editingActorName?.id === actor.id ? editingActorName.name : actor.name}
+                          onChange={(e) => setEditingActorName({ id: actor.id, name: e.target.value })}
                           onKeyDown={(e) => {
                             if (e.key === 'Enter') {
                               e.currentTarget.blur();
                             }
                           }}
-                          onFocus={(e) => e.target.select()}
+                          onBlur={() => {
+                            if (editingActorName?.id === actor.id) {
+                              handleActorDiskOperation(actor.id, { newName: editingActorName.name });
+                              setEditingActorName(null);
+                            }
+                          }}
+                          onFocus={(e) => {
+                            setEditingActorName({ id: actor.id, name: actor.name });
+                            e.target.select();
+                          }}
                           title="Click to Rename Actor"
                         />
                       </HelpTooltip>
@@ -2779,19 +2890,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
                       <div
                         key={folder.id}
                         onClick={() => {
-                          const newStyle = folder.styles[0];
-                          const actor = state.actorLibrary.find(a => a.id === organizeTarget.id);
-                          if (actor) {
-                            const updatedProfile = { ...(actor.profile || { identity: "Unknown", wardrobe: "", accessories: "", style: "" }), style: newStyle };
-                            dispatch({
-                              type: 'UPDATE_ACTOR_LIBRARY',
-                              payload: {
-                                id: organizeTarget.id,
-                                updates: { profile: updatedProfile }
-                              }
-                            });
-                            dispatch({ type: 'ADD_LOG', payload: { message: `Moved to ${folder.label}`, type: 'success' } });
-                          }
+                          handleActorDiskOperation(organizeTarget.id, { newFolderId: folder.id });
                           setOrganizeTarget(null);
                         }}
                         className="group relative h-24 w-full rounded-xl overflow-hidden border border-white/10 transition-all hover:scale-[1.02] hover:border-purple-500 cursor-pointer mb-2"

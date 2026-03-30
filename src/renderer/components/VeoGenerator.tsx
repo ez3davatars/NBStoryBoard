@@ -5,6 +5,23 @@ import {
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 
+const InspectorSection = ({ title, children, defaultOpen = true, titleAddon }: any) => (
+ <details open={defaultOpen} className="group rounded-xl bg-white/5 border border-white/10 overflow-hidden shrink-0">
+ <summary className="px-4 py-3 cursor-pointer list-none flex items-center justify-between text-[10px] font-black uppercase tracking-widest text-white/80 select-none bg-white/5 hover:bg-white/10 transition-colors">
+ <div className="flex items-center gap-2">
+ {title}
+ {titleAddon}
+ </div>
+ <svg className="w-4 h-4 text-white/40 group-open:rotate-180 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+ <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+ </svg>
+ </summary>
+ <div className="p-4 pt-2 space-y-3 border-t border-white/5">
+ {children}
+ </div>
+ </details>
+);
+
 const VeoGenerator = ({ smartAnalyze }: { smartAnalyze: any }) => {
  const { state, dispatch } = useAppContext();
  const { analysisResult, isAnalyzing, runSmartAnalyze: doSmartAnalyze, setAnalysisResult } = smartAnalyze;
@@ -92,22 +109,7 @@ const VeoGenerator = ({ smartAnalyze }: { smartAnalyze: any }) => {
     });
  };
 
- const InspectorSection = ({ title, children, defaultOpen = true, titleAddon }: any) => (
- <details open={defaultOpen} className="group rounded-xl bg-white/5 border border-white/10 overflow-hidden shrink-0">
- <summary className="px-4 py-3 cursor-pointer list-none flex items-center justify-between text-[10px] font-black uppercase tracking-widest text-white/80 select-none bg-white/5 hover:bg-white/10 transition-colors">
- <div className="flex items-center gap-2">
- {title}
- {titleAddon}
- </div>
- <svg className="w-4 h-4 text-white/40 group-open:rotate-180 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
- <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
- </svg>
- </summary>
- <div className="p-4 pt-2 space-y-3 border-t border-white/5">
- {children}
- </div>
- </details>
- );
+
 
  return (
  <div className="flex flex-col h-full text-gray-200">

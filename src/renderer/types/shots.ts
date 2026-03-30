@@ -17,7 +17,9 @@ export type ShotPresetId =
   | 'highAngle'
   | 'threeQuarterLeft'
   | 'threeQuarterRight'
-  | 'profile';
+  | 'profile'
+  | 'overTheShoulder'
+  | 'twoShot';
 
 export type ShotTargetType = 'actor' | 'scene' | 'pair' | 'object';
 
@@ -58,6 +60,30 @@ export type ShotActorReferenceInput = {
   referenceStackId?: string;
 };
 
+export type SceneTruthActor = {
+  actorId?: string;
+  actorLabel?: string;
+  leftToRightIndex: number;
+  approxZone: 'left' | 'center' | 'right' | 'background' | 'unknown';
+  role: 'seated' | 'standing' | 'unknown';
+  targetInScene?: string;
+};
+
+export type SceneTruthSnapshot = {
+  sourceResultUrl: string;
+  expectedActorCount: number;
+  actors: SceneTruthActor[];
+  environment: {
+    structuralCues: string[];
+    setDressingCues: string[];
+  };
+  cameraConstraints: {
+    allowOverhead: boolean;
+    allowDutch: boolean;
+    allowExtremeTopDown: boolean;
+  };
+};
+
 export type ShotVariant = {
   id: string;
   presetId: ShotPresetId;
@@ -94,6 +120,7 @@ export type ShotSession = {
   count: 4 | 6 | 9;
   directedShots?: DirectedShotSlot[];
   locks: ShotLocks;
+  sceneTruth?: SceneTruthSnapshot;
   variants: ShotVariant[];
   createdAt: string;
   updatedAt: string;

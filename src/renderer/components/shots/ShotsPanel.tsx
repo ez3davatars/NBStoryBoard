@@ -10,6 +10,8 @@ import { inferCoverageSceneType, extractRoleHints } from '../../utils/sceneTypeI
 import { COVERAGE_TEMPLATES } from '../../utils/coverageTemplates';
 import { ShotGrid } from './ShotGrid';
 import { DirectedShotCard } from './DirectedShotCard';
+import { useAppContext } from '../../context/AppContext';
+import { buildSceneTruthSnapshot } from '../../utils/sceneTruthHelpers';
 
 export type ShotsPanelProps = {
   sceneId: string;
@@ -46,6 +48,8 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
   onToggleVariantSelected,
   onSaveVariant,
 }) => {
+  const { state, dispatch } = useAppContext();
+  
   const [packId, setPackId] = useState<ShotPackId>('cinematic');
   const [count, setCount] = useState<4 | 6 | 9>(9);
   const [locks, setLocks] = useState<ShotLocks>({
@@ -59,6 +63,29 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
   const [slots, setSlots] = useState<DirectedShotSlot[]>([]);
 
   const isGeneratingRef = useRef(false);
+
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [isCompact, setIsCompact] = useState(false);
+
+  useEffect(() => {
+    const el = panelRef.current;
+    if (!el) return;
+
+    const update = () => {
+      if (!panelRef.current) return;
+      const width = panelRef.current.clientWidth;
+      setIsCompact(prev => {
+         if (prev && width > 1050) return false;
+         if (!prev && width < 1000) return true;
+         return prev;
+      });
+    };
+
+    update();
+    const obs = new ResizeObserver(() => requestAnimationFrame(update));
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
 
   // Sync state with existing session if any
   useEffect(() => {
@@ -137,37 +164,59 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
 
     setIsConfiguring(false);
 
-    const variants: ShotVariant[] = slots.map((slot, idx) => {
-      const preset = SHOT_PRESETS[slot.shotType];
-      const prompt = buildShotVariantPrompt({
+    let variants: ShotVariant[] = [];
+    let sceneTruth: import('../../types/shots').SceneTruthSnapshot;
+
+    try {
+      sceneTruth = buildSceneTruthSnapshot({
         sourceResultUrl: effectiveResultImageUrl,
         actorIdentitySets,
         shotsActorOptions,
-        packId,
-        presetId: slot.shotType,
-        directedSlot: slot,
-        locks: { ...locks, identity: true },
-        environmentText,
-        subjectActionText: safeSubjectActionText,
-        lightingText,
-        expectedActorCount
+        tokens: state.tokens,
+        environmentText
       });
 
-      return {
-        id: `shot-variant-${Date.now()}-${idx}`,
-        presetId: slot.shotType,
-        label: preset.label,
-        description: preset.description,
-        prompt,
-        targetType: slot.targetType,
-        actionText: slot.actionText,
-        cameraFlavor: slot.cameraFlavor,
-        shotNotes: slot.shotNotes,
-        coveragePurpose: slot.coveragePurpose,
-        selected: false,
-        status: 'queued'
-      };
-    });
+      variants = slots.map((slot, idx) => {
+        const preset = SHOT_PRESETS[slot.shotType];
+        const prompt = buildShotVariantPrompt({
+          sourceResultUrl: effectiveResultImageUrl,
+          sceneTruth,
+          actorIdentitySets,
+          shotsActorOptions,
+          packId,
+          presetId: slot.shotType,
+          directedSlot: slot,
+          locks: { ...locks, identity: true },
+          environmentText,
+          subjectActionText: safeSubjectActionText,
+          lightingText,
+          expectedActorCount
+        });
+
+        return {
+          id: `shot-variant-${Date.now()}-${idx}`,
+          presetId: slot.shotType,
+          label: preset.label,
+          description: preset.description,
+          prompt,
+          targetType: slot.targetType,
+          actionText: slot.actionText,
+          cameraFlavor: slot.cameraFlavor,
+          shotNotes: slot.shotNotes,
+          coveragePurpose: slot.coveragePurpose,
+          selected: false,
+          status: 'queued'
+        };
+      });
+    } catch (compilationError: any) {
+      console.error("[ShotsPanel] Failed to compile shot variants:", compilationError);
+      dispatch({ 
+        type: 'ADD_LOG', 
+        payload: { message: `Failed to compile scene snapshot: ${compilationError.message}`, type: 'error' } 
+      } as any);
+      setIsConfiguring(true);
+      return;
+    }
 
     const newSession: ShotSession = {
       id: `session-${Date.now()}`,
@@ -178,6 +227,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
       count,
       directedShots: slots,
       locks,
+      sceneTruth,
       variants,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -207,7 +257,10 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
           actorIdentitySets,
           prompt: variant.prompt,
           apiKey,
-          model
+          model,
+          sceneTruth,
+          presetId: variant.presetId,
+          hasSubjectStyleAnalysis: !!safeSubjectActionText 
         });
 
         onUpdateSession(sceneId, prev => {
@@ -264,6 +317,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
       try {
         const finalPrompt = buildShotFinalRerenderPrompt({
           sourceResultUrl: effectiveResultImageUrl,
+          sceneTruth: session.sceneTruth!,
           selectedShotPreviewUrl: variant.previewUrl,
           actorIdentitySets: session.actorIdentitySets,
           shotsActorOptions,
@@ -282,7 +336,9 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
           actorIdentitySets: session.actorIdentitySets,
           prompt: finalPrompt,
           apiKey,
-          model
+          model,
+          sceneTruth: session.sceneTruth,
+          presetId: variant.presetId
         });
 
         onUpdateSession(sceneId, prev => {
@@ -368,88 +424,148 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
   const hasSelectedVariants = session?.variants.some(v => v.selected) || false;
 
   return (
-    <div className="flex flex-col w-full h-full bg-gray-950 overflow-hidden text-gray-200">
+    <div ref={panelRef} className="flex flex-col w-full h-full bg-[#09090b] overflow-hidden text-gray-200">
       
       {/* Top Controls Bar */}
-      <div className="flex flex-wrap items-center justify-between p-4 bg-gray-900 border-b border-gray-800 gap-4">
-        
-        <div className="flex items-center gap-4">
-          <div className="flex flex-col">
-            <label className="text-xs text-gray-500 mb-1">Shot Pack</label>
-            <select 
-              value={packId} 
-              onChange={(e) => setPackId(e.target.value as ShotPackId)}
-              disabled={isGeneratingFull || isRerenderingFull}
-              className="bg-gray-800 text-sm border-gray-700 rounded px-2 py-1 outline-none"
-            >
-              <option value="auto">Auto (Scene-Aware)</option>
-              <option value="cinematic">Cinematic</option>
-              <option value="portrait">Portrait</option>
-              <option value="coverage">Coverage</option>
-            </select>
-          </div>
+      <div className="flex flex-col w-full bg-[#18181b] border-b border-[#27272a] shrink-0">
+         {isCompact ? (
+             <div className="flex flex-col p-2 gap-2">
+                 {/* Row 1: Left Dropdowns, Right Config Actions */}
+                 <div className="flex justify-between items-center w-full gap-2">
+                     <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide shrink-0">
+                         {/* Pack */}
+                         <div className="flex items-center bg-black border border-gray-800 rounded pl-2 overflow-hidden shrink-0">
+                             <span className="text-[8px] font-bold text-gray-500 uppercase tracking-widest mr-1.5 whitespace-nowrap">Pack</span>
+                             <select 
+                               value={packId} onChange={(e) => setPackId(e.target.value as ShotPackId)} disabled={isGeneratingFull || isRerenderingFull}
+                               className="bg-transparent text-[10px] text-gray-200 outline-none border-l border-gray-800 py-1 px-1.5 hover:bg-gray-900 cursor-pointer w-[100px]"
+                             >
+                               <option value="auto">Auto (Scene-Aware)</option><option value="cinematic">Cinematic</option><option value="portrait">Portrait</option><option value="coverage">Coverage</option>
+                             </select>
+                         </div>
+                         {/* Count */}
+                         <div className="flex items-center bg-black border border-gray-800 rounded pl-2 overflow-hidden shrink-0">
+                             <span className="text-[8px] font-bold text-gray-500 uppercase tracking-widest mr-1.5 whitespace-nowrap">Count</span>
+                             <select 
+                               value={count} onChange={(e) => setCount(Number(e.target.value) as 4|6|9)} disabled={isGeneratingFull || isRerenderingFull}
+                               className="bg-transparent text-[10px] text-gray-200 outline-none border-l border-gray-800 py-1 px-1.5 hover:bg-gray-900 cursor-pointer w-[80px]"
+                             >
+                               <option value={4}>4 Variants</option><option value={6}>6 Variants</option><option value={9}>9 Variants</option>
+                             </select>
+                         </div>
+                     </div>
+                     
+                     <div className="flex items-center gap-2 shrink-0">
+                         <button 
+                             onClick={() => {
+                               isGeneratingRef.current = false;
+                               onUpdateSession(sceneId, prev => {
+                                 if (!prev) return prev;
+                                 return { ...prev, isGenerating: false, isRerenderingSelected: false, variants: [] };
+                               });
+                             }} 
+                             className="text-[9px] text-gray-500 hover:text-red-400 font-bold uppercase tracking-widest transition-colors"
+                         >Reset Session</button>
+                     </div>
+                 </div>
 
-          <div className="flex flex-col">
-            <label className="text-xs text-gray-500 mb-1">Count</label>
-            <select 
-              value={count} 
-              onChange={(e) => setCount(Number(e.target.value) as 4 | 6 | 9)}
-              disabled={isGeneratingFull || isRerenderingFull}
-              className="bg-gray-800 text-sm border-gray-700 rounded px-2 py-1 outline-none"
-            >
-              <option value={4}>4 Variants</option>
-              <option value={6}>6 Variants</option>
-              <option value={9}>9 Variants</option>
-            </select>
-          </div>
+                 {/* Row 2: Locks and Generate */}
+                 <div className="flex justify-between items-center w-full gap-2 border-t border-[#27272a] pt-2">
+                     <div className="flex items-center gap-1.5 shrink-0 overflow-x-auto scrollbar-hide pr-2">
+                         <div className="flex bg-black border border-gray-800 rounded p-0.5 gap-0.5 shadow-inner">
+                             {(['identity', 'wardrobe', 'background', 'lighting'] as Array<keyof ShotLocks>).map(lockKey => (
+                                 <button
+                                     key={lockKey} disabled={isGeneratingFull || isRerenderingFull} onClick={() => setLocks(p => ({ ...p, [lockKey]: !p[lockKey] }))}
+                                     className={`text-[8.5px] uppercase font-bold px-1.5 py-1 rounded transition-colors ${locks[lockKey] ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30' : 'bg-transparent text-gray-500 border border-transparent'}`}
+                                 >{lockKey}</button>
+                             ))}
+                         </div>
+                     </div>
+                     <div className="flex items-center gap-2 shrink-0">
+                          {hasResult && !isConfiguring && (
+                              <button onClick={() => setIsConfiguring(true)} className="text-[9px] font-bold uppercase tracking-widest text-gray-400 hover:text-white bg-black border border-gray-800 hover:border-gray-600 rounded px-2 py-1.5 transition-colors">Config</button>
+                          )}
+                          <button onClick={handleGenerateShots} disabled={!hasResult || isGeneratingFull || isRerenderingFull || (isConfiguring && slots.length === 0)} className={`font-bold uppercase tracking-widest text-[9px] rounded transition-all border px-3 py-1.5 ${!hasResult || isGeneratingFull || isRerenderingFull ? 'bg-black border-gray-800 text-gray-600 cursor-not-allowed' : 'bg-green-600/10 border-green-500/30 text-green-500 hover:bg-green-600/20 hover:border-green-400/50 shadow-[0_0_15px_rgba(34,197,94,0.1)]'}`}>
+                              {isGeneratingFull ? 'Generating...' : 'Generate'}
+                          </button>
+                          <button onClick={handleRender4K} disabled={!hasSelectedVariants || isGeneratingFull || isRerenderingFull} className={`font-bold uppercase tracking-widest text-[9px] rounded transition-all border px-3 py-1.5 ${!hasSelectedVariants || isGeneratingFull || isRerenderingFull ? 'bg-black border-gray-800 text-gray-600 cursor-not-allowed' : 'bg-indigo-950/40 border-indigo-500/30 text-indigo-400 hover:bg-indigo-900/60 shadow-[0_0_15px_rgba(99,102,241,0.1)]'}`}>
+                              {isRerenderingFull ? 'Rendering...' : 'Render 4K'}
+                          </button>
+                     </div>
+                 </div>
+             </div>
+         ) : (
+             <div className="flex items-center justify-between p-3 gap-4 overflow-x-auto scrollbar-hide">
+                 <div className="flex items-center gap-3 lg:gap-4 shrink-0">
+                     {/* Pack */}
+                     <div className="flex items-center bg-black border border-gray-800 rounded pl-2.5 overflow-hidden">
+                         <span className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mr-2 whitespace-nowrap">Pack</span>
+                         <select 
+                           value={packId} onChange={(e) => setPackId(e.target.value as ShotPackId)} disabled={isGeneratingFull || isRerenderingFull}
+                           className="bg-transparent text-[11px] font-medium text-gray-200 outline-none border-l border-gray-800 py-1.5 px-2 hover:bg-gray-900 cursor-pointer w-[120px]"
+                         ><option value="auto">Auto (Scene-Aware)</option><option value="cinematic">Cinematic</option><option value="portrait">Portrait</option><option value="coverage">Coverage</option></select>
+                     </div>
 
-          <div className="flex flex-col">
-            <label className="text-xs text-gray-500 mb-1">Locks</label>
-            <div className="flex bg-gray-800 rounded p-1 gap-1">
-              {(['identity', 'wardrobe', 'background', 'lighting'] as Array<keyof ShotLocks>).map(lockKey => (
-                <button
-                  key={lockKey}
-                  disabled={isGeneratingFull || isRerenderingFull}
-                  onClick={() => setLocks(p => ({ ...p, [lockKey]: !p[lockKey] }))}
-                  className={`text-xs px-2 py-1 rounded capitalize transition-colors ${locks[lockKey] ? 'bg-blue-600 text-white' : 'bg-transparent text-gray-400 hover:text-gray-200'}`}
-                >
-                  {lockKey}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
+                     {/* Count */}
+                     <div className="flex items-center bg-black border border-gray-800 rounded pl-2.5 overflow-hidden">
+                         <span className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mr-2 whitespace-nowrap">Count</span>
+                         <select 
+                           value={count} onChange={(e) => setCount(Number(e.target.value) as 4|6|9)} disabled={isGeneratingFull || isRerenderingFull}
+                           className="bg-transparent text-[11px] font-medium text-gray-200 outline-none border-l border-gray-800 py-1.5 px-2 hover:bg-gray-900 cursor-pointer w-[80px]"
+                         ><option value={4}>4 Variants</option><option value={6}>6 Variants</option><option value={9}>9 Variants</option></select>
+                     </div>
 
-        <div className="flex items-center gap-3">
-          {hasResult && !isConfiguring && (
-            <button
-              disabled={isGeneratingFull || isRerenderingFull}
-              onClick={() => setIsConfiguring(true)}
-              className="px-4 py-2 font-medium text-sm rounded transition-all bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-white"
-            >
-              CONFIGURE PLAN
-            </button>
-          )}
+                     {/* Locks */}
+                     <div className="flex items-center gap-1.5 shrink-0 pl-1 lg:pl-2">
+                         <span className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mr-1 hidden lg:block">Locks</span>
+                         <div className="flex bg-black border border-gray-800 rounded p-0.5 gap-0.5 shadow-inner">
+                             {(['identity', 'wardrobe', 'background', 'lighting'] as Array<keyof ShotLocks>).map(lockKey => (
+                                 <button
+                                     key={lockKey} disabled={isGeneratingFull || isRerenderingFull} onClick={() => setLocks(p => ({ ...p, [lockKey]: !p[lockKey] }))}
+                                     className={`text-[9.5px] uppercase font-bold px-2 py-1 rounded transition-colors ${locks[lockKey] ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30' : 'bg-transparent text-gray-500 hover:text-gray-300 border border-transparent'}`}
+                                 >{lockKey}</button>
+                             ))}
+                         </div>
+                     </div>
+                 </div>
 
-          <button
-            disabled={!hasResult || isGeneratingFull || isRerenderingFull || (isConfiguring && slots.length === 0)}
-            onClick={handleGenerateShots}
-            className={`px-4 py-2 font-medium text-sm rounded transition-all ${!hasResult || isGeneratingFull || isRerenderingFull ? 'bg-gray-800 text-gray-500 cursor-not-allowed' : 'bg-green-600 text-white hover:bg-green-500'}`}
-          >
-            {isGeneratingFull ? 'GENERATING...' : 'GENERATE SHOTS'}
-          </button>
-          
-          <button
-            disabled={!hasSelectedVariants || isGeneratingFull || isRerenderingFull}
-            onClick={handleRender4K}
-            className={`px-4 py-2 font-medium text-sm rounded transition-all ${!hasSelectedVariants || isGeneratingFull || isRerenderingFull ? 'bg-gray-800 text-gray-500 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-500'}`}
-          >
-            {isRerenderingFull ? 'RENDERING...' : 'RENDER SELECTED IN 4K'}
-          </button>
-        </div>
+                 <div className="flex items-center gap-2 lg:gap-3 shrink-0 pl-3 md:pl-4 border-l border-[#27272a] ml-auto">
+                     <button 
+                         onClick={() => {
+                           isGeneratingRef.current = false;
+                           onUpdateSession(sceneId, prev => {
+                             if (!prev) return prev;
+                             return { ...prev, isGenerating: false, isRerenderingSelected: false, variants: [] };
+                           });
+                         }}
+                         className="text-[9.5px] text-gray-500 hover:text-red-400 font-bold uppercase tracking-widest transition-colors mr-1 lg:mr-2"
+                     >Reset Session</button>
+                     
+                     {hasResult && !isConfiguring && (
+                         <button onClick={() => setIsConfiguring(true)} className="text-[9.5px] font-bold uppercase tracking-widest text-gray-400 hover:text-white bg-black border border-gray-800 hover:border-gray-600 rounded px-2.5 py-1.5 transition-colors">Config Plan</button>
+                     )}
+                     
+                     <button
+                         onClick={handleGenerateShots}
+                         disabled={!hasResult || isGeneratingFull || isRerenderingFull || (isConfiguring && slots.length === 0)}
+                         className={`text-[9.5px] font-bold uppercase tracking-widest rounded px-3 lg:px-4 py-1.5 transition-all border ${!hasResult || isGeneratingFull || isRerenderingFull ? 'bg-black border-gray-800 text-gray-600 cursor-not-allowed' : 'bg-green-600/10 border-green-500/30 text-green-500 hover:bg-green-600/20 hover:border-green-400/50 shadow-[0_0_15px_rgba(34,197,94,0.1)]'}`}
+                     >
+                         {isGeneratingFull ? 'Generating...' : 'Generate Shots'}
+                     </button>
+                     
+                     <button
+                         onClick={handleRender4K}
+                         disabled={!hasSelectedVariants || isGeneratingFull || isRerenderingFull}
+                         className={`text-[9.5px] font-bold uppercase tracking-widest rounded px-3 lg:px-4 py-1.5 transition-all border ${!hasSelectedVariants || isGeneratingFull || isRerenderingFull ? 'bg-black border-gray-800 text-gray-600 cursor-not-allowed' : 'bg-blue-600/10 border-blue-500/30 text-blue-400 hover:bg-blue-600/20 hover:border-blue-400/50 shadow-[0_0_15px_rgba(59,130,246,0.15)]'}`}
+                     >
+                         {isRerenderingFull ? 'Rendering...' : 'Render In 4K'}
+                     </button>
+                 </div>
+             </div>
+         )}
       </div>
 
-      <div className="px-4 py-2 bg-gray-900 border-b border-gray-800 text-xs text-gray-400">
+      <div className="px-4 py-1.5 bg-black/40 border-b border-[#27272a] text-[9px] text-gray-500 font-mono tracking-wider truncate shrink-0">
         Generate cinematic angle variations from the current staged result.
       </div>
 

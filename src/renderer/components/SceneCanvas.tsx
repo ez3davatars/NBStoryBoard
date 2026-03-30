@@ -20,7 +20,11 @@ import {
     Pencil,
     Target,
     MoveUpRight,
-    MonitorPlay
+    Download,
+    ArrowLeft,
+    ArrowRight,
+    ArrowUp,
+    ArrowDown
 } from 'lucide-react';
 import { NumericInput } from './ui/NumericInput';
 import { SidebarPanel } from './ui/SidebarPanel';
@@ -82,8 +86,10 @@ const SceneCanvas = () => {
     const { state, dispatch } = useAppContext();
     const stageRef = useRef<HTMLDivElement>(null);
     const viewportRef = useRef<HTMLDivElement>(null);
+    const centerPaneRef = useRef<HTMLDivElement>(null);
 
     // Camera Gate: an inner viewport that always matches the selected aspect ratio.
+    const [centerPaneWidth, setCenterPaneWidth] = useState(0);
     // All staging (tokens, notes, masks) must live inside this gate to guarantee WYSIWYG export.
     const [viewportBox, setViewportBox] = useState<{ x: number; y: number; w: number; h: number }>({
         x: 0,
@@ -149,7 +155,48 @@ const SceneCanvas = () => {
     // Tracks processing status by `${tokenId}-${sourceUrl}` to allow retries if image changes
     const [cutoutStatuses, setCutoutStatuses] = useState<Record<string, 'processing' | 'failed'>>({});
 
+    const [isCompactCommandHeader, setIsCompactCommandHeader] = useState(false);
+    const [isCompactStageToolbar, setIsCompactStageToolbar] = useState(false);
+
+    useEffect(() => {
+        // COMMAND HEADER
+        // Enter compact earlier, exit only when clearly wider again
+        if (!isCompactCommandHeader && centerPaneWidth < 1120) {
+            setIsCompactCommandHeader(true);
+        } else if (isCompactCommandHeader && centerPaneWidth > 1180) {
+            setIsCompactCommandHeader(false);
+        }
+
+        // BOTTOM TOOLBAR
+        // Enter compact when center pane gets meaningfully tight
+        if (!isCompactStageToolbar && centerPaneWidth < 900) {
+            setIsCompactStageToolbar(true);
+        } else if (isCompactStageToolbar && centerPaneWidth > 960) {
+            setIsCompactStageToolbar(false);
+        }
+    }, [centerPaneWidth, isCompactCommandHeader, isCompactStageToolbar]);
+
     // Auto-Cutout Effect
+    useEffect(() => {
+        const el = centerPaneRef.current;
+        if (!el) return;
+
+        const update = () => {
+            if (!centerPaneRef.current) return;
+            setCenterPaneWidth(centerPaneRef.current.clientWidth || 0);
+        };
+
+        update();
+
+        const obs = new ResizeObserver(() => {
+            requestAnimationFrame(update);
+        });
+
+        obs.observe(el);
+
+        return () => obs.disconnect();
+    }, []);
+
     useEffect(() => {
         if (!state.tokens || state.tokens.length === 0) return;
 
@@ -336,7 +383,8 @@ const SceneCanvas = () => {
             replaceAnchorSubjects: state.director.replaceAnchorSubjects,
             globalReplaceTarget: state.director.globalReplaceTarget,
             hasDepthMap: !!state.depthMapUrl,
-            activeRefs: activeReferences
+            activeRefs: activeReferences,
+            tokens: state.tokens
         });
     }, [strictMode, bgPrompt, state.director, state.depthMapUrl, activeReferences, state.tokens]);
 
@@ -422,12 +470,7 @@ const SceneCanvas = () => {
         }
     }, [state.backgroundUrl, state.apiKey, state.model, state.isDepthProcessing, dispatch]);
 
-    useEffect(() => {
-        if (state.backgroundUrl !== lastBgRef.current) {
-            lastBgRef.current = state.backgroundUrl;
-            refreshSpatialData();
-        }
-    }, [state.backgroundUrl, refreshSpatialData]);
+
 
     // Style Transfer Pipeline: Phase 1 Logic
     const handleAutoStyleEnvironment = async () => {
@@ -747,37 +790,62 @@ const SceneCanvas = () => {
 
     // Keep the camera gate centered and sized correctly even when the stage container changes.
     useEffect(() => {
-        const stage = stageRef.current;
-        if (!stage) return;
+        if (viewMode === 'shots') return;
 
-        const update = () => {
-            const cw = Math.max(1, stage.clientWidth);
-            const ch = Math.max(1, stage.clientHeight);
-            const ratio = parseAspectRatioToNumber(state.director.aspectRatio);
+        // Ensure we catch the layout after the current render cycle using a short timeout or RAF
+        // especially important if new elements (like the command header) shifted the layout just before mount
+        let reqId: number;
+        let obs: ResizeObserver;
 
-            let w = cw;
-            let h = w / ratio;
+        const attachAndMeasure = () => {
+            const stage = stageRef.current;
+            if (!stage) return;
 
-            if (h > ch) {
-                h = ch;
-                w = h * ratio;
-            }
+            const update = () => {
+                if (!stageRef.current) return;
+                const cw = Math.max(1, stageRef.current.clientWidth);
+                const ch = Math.max(1, stageRef.current.clientHeight);
+                // If the container has zero height (e.g. display none or flex collapsed), do not commit tiny box
+                if (cw <= 1 || ch <= 1) return;
 
-            const x = (cw - w) / 2;
-            const y = (ch - h) / 2;
+                const ratio = parseAspectRatioToNumber(state.director.aspectRatio);
 
-            setViewportBox((prev) => {
-                const changed =
-                    prev.x !== x || prev.y !== y || prev.w !== w || prev.h !== h;
-                return changed ? { x, y, w, h } : prev;
+                let w = cw;
+                let h = w / ratio;
+
+                if (h > ch) {
+                    h = ch;
+                    w = h * ratio;
+                }
+
+                const x = (cw - w) / 2;
+                const y = (ch - h) / 2;
+
+                setViewportBox((prev) => {
+                    const changed =
+                        prev.x !== x || prev.y !== y || prev.w !== w || prev.h !== h;
+                    return changed ? { x, y, w, h } : prev;
+                });
+            };
+
+            update();
+            obs = new ResizeObserver(() => {
+                cancelAnimationFrame(reqId);
+                reqId = requestAnimationFrame(update);
             });
+            obs.observe(stage);
         };
 
-        update();
-        const obs = new ResizeObserver(update);
-        obs.observe(stage);
-        return () => obs.disconnect();
-    }, [state.director.aspectRatio]);
+        // Wait a frame to let flex containers calculate `flex-1` bounds before attaching observer
+        reqId = requestAnimationFrame(() => {
+            attachAndMeasure();
+        });
+
+        return () => {
+            cancelAnimationFrame(reqId);
+            if (obs) obs.disconnect();
+        };
+    }, [state.director.aspectRatio, viewMode]);
 
     // analyzeWhitelistProfile was moved to useAdvancedRender
     const buildRegionPlan = (overrides?: { token?: Map<string, WhitelistProfile>; cast?: Map<string, WhitelistProfile> }) => {
@@ -1667,17 +1735,30 @@ const SceneCanvas = () => {
         });
     };
 
-    const analyzeRefSlot = async (index: number, imageUrl: string) => {
+
+
+    const handleManualAnalyze = async () => {
+        if (inspectRefIndex === null) return;
+        const slot = state.referenceSlots.find(s => s.index === inspectRefIndex);
+        if (!slot || !slot.url) return;
+        
         if (!state.apiKey) {
-            updateRefSlot(index, { analysis: 'Analysis unavailable (Manual Mode)', status: 'ready' });
+            dispatch({ type: 'ADD_LOG', payload: { message: 'API key required for AI Analysis.', type: 'error' } } as any);
             return;
         }
 
+        setAnalyzingTokenId('ref');
+        setInspectAnalysis('Analyzing DNA...');
+        
         try {
-            const text = await GeminiService.analyzeImage(refAnalysisPrompt, state.apiKey, state.model, imageUrl);
-            updateRefSlot(index, { analysis: text, status: 'ready' });
+            const text = await GeminiService.analyzeImage(refAnalysisPrompt, state.apiKey, state.model, slot.url);
+            setInspectAnalysis(text);
+            dispatch({ type: 'ADD_LOG', payload: { message: 'DNA analysis complete.', type: 'success' } } as any);
         } catch (e: any) {
-            updateRefSlot(index, { analysis: `Analysis unavailable (${e.message || 'error'})`, status: 'ready' });
+            setInspectAnalysis('');
+            dispatch({ type: 'ADD_LOG', payload: { message: `Analysis failed: ${e.message}`, type: 'error' } } as any);
+        } finally {
+            setAnalyzingTokenId(null);
         }
     };
 
@@ -1687,10 +1768,9 @@ const SceneCanvas = () => {
             name: name || `Ref ${index}`,
             castId,
             active: true,
-            status: 'analyzing',
-            analysis: 'Analyzing…'
+            status: 'ready',
+            analysis: ''
         });
-        await analyzeRefSlot(index, url);
     };
 
     const handleRefSlotFile = async (index: number, file: File) => {
@@ -1956,8 +2036,8 @@ const SceneCanvas = () => {
             const ax = (resizeItem as any).anchorX ?? 0.5;
             const ay = (resizeItem as any).anchorY ?? 0.8;
 
-            let oldLeft = resizeItem.initialX - (resizeItem.initialW * ax);
-            let oldTop = resizeItem.initialY - (resizeItem.initialH * ay);
+            const oldLeft = resizeItem.initialX - (resizeItem.initialW * ax);
+            const oldTop = resizeItem.initialY - (resizeItem.initialH * ay);
 
             let newLeft = oldLeft;
             let newTop = oldTop;
@@ -2368,7 +2448,414 @@ const SceneCanvas = () => {
     };
 
 
-    const processingCutoutsCount = Object.values(cutoutStatuses).filter(v => v === 'processing').length;
+    const renderCommandHeader = () => {
+        const warnings = collectDepthAssistWarnings();
+        const topWarnings = warnings.filter((w: any) => w.severity === 'high' || w.severity === 'medium').slice(0, 2);
+        const hasDepth = !!state.depthMapUrl && !state.isDepthProcessing;
+
+        let depthStatusText = "Unavailable";
+        let depthStatusColor = "text-gray-500";
+        if (hasDepth) {
+            if (topWarnings.length > 0) {
+                depthStatusText = "Warnings";
+                depthStatusColor = "text-yellow-500";
+            } else {
+                depthStatusText = "Ready";
+                depthStatusColor = "text-green-500";
+            }
+        }
+
+        const showUseAsStage = viewMode === 'result' && (state.resultImage || (activeShot && activeShot.latestCompositeResultUrl));
+
+        const renderSegmentedControl = () => (
+            <div className="flex bg-black rounded p-1 border border-gray-800 relative shadow-inner shrink-0">
+                <button
+                    onClick={() => setViewMode('stage')}
+                    className={`px-3 py-1 text-[9px] lg:text-[10px] whitespace-nowrap font-bold tracking-widest uppercase rounded transition-colors z-10 ${
+                        viewMode === 'stage' ? 'text-white' : 'text-gray-500 hover:text-gray-300'
+                    }`}
+                >
+                    Stage
+                </button>
+                <button
+                    onClick={() => {
+                        if (state.resultImage || (activeShot && activeShot.latestCompositeResultUrl)) {
+                            setViewMode('result');
+                        } else {
+                            dispatch({ type: 'ADD_LOG', payload: { message: "No result generated yet.", type: 'error' } });
+                        }
+                    }}
+                    className={`px-3 py-1 text-[9px] lg:text-[10px] whitespace-nowrap font-bold tracking-widest uppercase rounded transition-colors z-10 ${
+                        viewMode === 'result' ? 'text-green-400' : 'text-gray-500 hover:text-gray-300'
+                    } ${!(state.resultImage || (activeShot && activeShot.latestCompositeResultUrl)) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                    Result
+                </button>
+                <button
+                    onClick={() => {
+                        if (getEffectiveResultAnchorForScene(state, state.activeShotId || 'default')) {
+                            setViewMode('shots');
+                        } else {
+                            dispatch({ type: 'ADD_LOG', payload: { message: "Choose or generate a result first.", type: 'error' } });
+                        }
+                    }}
+                    className={`px-3 py-1 text-[9px] lg:text-[10px] whitespace-nowrap font-bold tracking-widest uppercase rounded transition-colors z-10 ${
+                        viewMode === 'shots' ? 'text-blue-400' : 'text-gray-500 hover:text-gray-300'
+                    } ${!getEffectiveResultAnchorForScene(state, state.activeShotId || 'default') ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                    Shots
+                </button>
+                <div
+                    className="absolute top-1 bottom-1 w-1/3 bg-gray-800 rounded transition-transform duration-300 ease-in-out border border-gray-700/50 -z-0"
+                    style={{ transform: `translateX(${viewMode === 'stage' ? '0%' : viewMode === 'result' ? '100%' : '200%'})` }}
+                />
+            </div>
+        );
+
+        const renderStatusPills = () => (
+            <div className="flex items-center gap-1.5 flex-wrap">
+                <span
+                    className="text-[8px] lg:text-[9px] font-bold text-blue-400 bg-blue-500/10 border border-blue-500/30 px-2 py-0.5 rounded tracking-widest uppercase whitespace-nowrap cursor-help"
+                    title="Scene composition evolving."
+                >
+                    Preview
+                </span>
+
+                <div
+                    className="flex items-center gap-1 px-1.5 py-0.5 bg-black/40 border border-white/5 rounded whitespace-nowrap"
+                    title={topWarnings.map((w: any) => w.message).join(' | ')}
+                >
+                    <span className="text-[8px] lg:text-[9px] font-bold text-gray-500 tracking-wider uppercase">Depth:</span>
+                    <span className={`text-[8px] lg:text-[9px] font-bold uppercase tracking-wider ${depthStatusColor}`}>{depthStatusText}</span>
+                </div>
+
+                <div
+                    className="flex items-center gap-1 px-1.5 py-0.5 bg-black/40 border border-white/5 rounded whitespace-nowrap"
+                    title={activeReferences.length > 0 ? activeReferences.map((r: any) => r.name || `Ref ${r.index}`).join(', ') : ''}
+                >
+                    <span className="text-[8px] lg:text-[9px] font-bold text-gray-500 tracking-wider uppercase">Refs:</span>
+                    <span className="text-[8px] lg:text-[9px] text-purple-400 font-mono font-bold">{activeReferences.length}</span>
+                </div>
+            </div>
+        );
+
+        const renderGenerateButtons = (isCompact: boolean = false) => (
+            <div className={`flex items-center gap-1.5 ${isCompact ? 'shrink min-w-0' : 'shrink-0'}`}>
+                {showUseAsStage && (
+                    <button
+                        onClick={() => {
+                            const url = state.resultImage || activeShot?.latestCompositeResultUrl;
+                            if (url) {
+                                dispatch({ type: 'SET_BG', payload: url });
+                                setViewMode('stage');
+                                dispatch({ type: 'ADD_LOG', payload: { message: "Result promoted to Stage Background.", type: 'success' } });
+                            }
+                        }}
+                        className="px-3 py-1.5 h-full bg-[#09090b] hover:bg-green-950/40 border border-green-500/30 hover:border-green-500/80 rounded flex items-center justify-center text-[8px] lg:text-[9px] whitespace-nowrap font-bold tracking-widest text-green-400 uppercase transition-colors"
+                    >
+                        <span className="hidden lg:inline">Use as Stage Scene</span>
+                        <span className="lg:hidden">Use Scene</span>
+                    </button>
+                )}
+
+                <button
+                    onClick={generateBg}
+                    disabled={state.isProcessing}
+                    className="relative group px-4 py-1.5 h-full bg-[#09090b] hover:bg-black border border-white/10 hover:border-purple-500/50 rounded flex items-center justify-center text-[8px] lg:text-[9px] whitespace-nowrap font-bold tracking-widest uppercase transition-all disabled:opacity-50 overflow-hidden shrink-0"
+                >
+                    <div className="absolute inset-0 bg-gradient-to-r from-blue-500/10 via-purple-500/10 to-pink-500/10 opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                    <span className={`relative transition-colors duration-300 ${
+                        state.isProcessing
+                            ? 'text-gray-400'
+                            : 'text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-purple-400 to-pink-400 group-hover:from-cyan-300 group-hover:via-purple-300 group-hover:to-pink-300'
+                    }`}>
+                        {state.isProcessing ? 'Processing...' : (isCompact ? 'Generate' : 'Generate Composite')}
+                    </span>
+                </button>
+            </div>
+        );
+
+        if (isCompactCommandHeader) {
+            return (
+                <div className="flex flex-col w-full bg-[#18181b] border border-[#27272a] rounded-lg shrink-0 mb-1 shadow-xl overflow-hidden">
+                    {/* Row 1 */}
+                    <div className="flex items-center justify-between px-2 py-2 gap-2 min-w-0">
+                        <div className="min-w-0 overflow-hidden shrink border border-transparent">
+                            {renderSegmentedControl()}
+                        </div>
+                        <div className="shrink-0 flex items-center overflow-hidden min-w-0">
+                            {renderGenerateButtons(true)}
+                        </div>
+                    </div>
+
+                    {/* Row 2 */}
+                    <div className="flex items-center justify-start px-3 py-1.5 border-t border-[#27272a]">
+                        {renderStatusPills()}
+                    </div>
+
+                    {/* Row 3 */}
+                    <div className="flex items-center justify-between px-3 py-1 bg-black/40 border-t border-[#27272a] rounded-b-lg overflow-hidden">
+                        <span className="text-[9px] text-gray-500 uppercase tracking-widest font-bold whitespace-nowrap shrink-0 pr-4">
+                            Advanced Scene Composition
+                        </span>
+
+                        {activeShot && (
+                            <div className="flex items-center gap-3 hidden sm:flex shrink w-full justify-center overflow-hidden">
+                                <span className="text-[9.5px] font-bold text-gray-400 uppercase tracking-widest whitespace-nowrap truncate">
+                                    Shot State: <span className="text-gray-200 ml-1.5">{activeShot.latestCompositeStage === 'generate' ? 'Generated' : activeShot.latestCompositeStage === 'refine' ? 'Refined' : 'None'}</span>
+                                </span>
+                                {(activeShot.latestCompositeTimestamp || activeShot.latestCompositeTemplateId) && (
+                                    <div className="flex gap-2.5 text-[8.5px] text-gray-600 font-mono tracking-wider hidden md:flex shrink-0">
+                                        {activeShot.latestCompositeTemplateId && <span className="text-gray-500">TPL: {activeShot.latestCompositeTemplateId}</span>}
+                                        {activeShot.latestCompositeTimestamp && <span>{new Date(activeShot.latestCompositeTimestamp).toLocaleTimeString()}</span>}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        <span className="text-[8.5px] lg:text-[9.5px] text-cyan-400 font-mono font-bold tracking-widest drop-shadow-[0_0_5px_rgba(34,211,238,0.4)] whitespace-nowrap shrink-0 overflow-hidden text-ellipsis ml-auto pl-4">
+                            VB: {Math.round(viewportBox.w)}x{Math.round(viewportBox.h)} @ {Math.round(viewportBox.x)},{Math.round(viewportBox.y)} | Img: {state.backgroundUrl ? 'YES' : 'NO'} | Depth: {state.depthMapUrl ? 'YES' : 'NO'}
+                        </span>
+                    </div>
+                </div>
+            );
+        }
+
+        return (
+            <div className="flex flex-col w-full bg-[#18181b] border border-[#27272a] rounded-lg shrink-0 mb-1 shadow-xl overflow-hidden">
+                {/* Wide Main Row */}
+                <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center px-2 lg:px-3 py-2 gap-2 min-w-0">
+                    <div className="shrink-0">
+                        {renderSegmentedControl()}
+                    </div>
+
+                    <div className="flex items-center justify-center px-2 min-w-0 overflow-hidden">
+                        {renderStatusPills()}
+                    </div>
+
+                    <div className="shrink-0">
+                        {renderGenerateButtons(false)}
+                    </div>
+                </div>
+
+                {/* Secondary Micro Line */}
+                <div className="flex items-center justify-between px-3 py-1 bg-black/40 border-t border-[#27272a] rounded-b-lg overflow-hidden">
+                    <span className="text-[9px] text-gray-500 uppercase tracking-widest font-bold whitespace-nowrap shrink-0 pr-4">
+                        Advanced Scene Composition
+                    </span>
+
+                    {activeShot && (
+                        <div className="flex items-center gap-3 hidden sm:flex shrink w-full justify-center overflow-hidden">
+                            <span className="text-[9.5px] font-bold text-gray-400 uppercase tracking-widest whitespace-nowrap truncate">
+                                Shot State: <span className="text-gray-200 ml-1.5">{activeShot.latestCompositeStage === 'generate' ? 'Generated' : activeShot.latestCompositeStage === 'refine' ? 'Refined' : 'None'}</span>
+                            </span>
+                            {(activeShot.latestCompositeTimestamp || activeShot.latestCompositeTemplateId) && (
+                                <div className="flex gap-2.5 text-[8.5px] text-gray-600 font-mono tracking-wider hidden md:flex shrink-0">
+                                    {activeShot.latestCompositeTemplateId && <span className="text-gray-500">TPL: {activeShot.latestCompositeTemplateId}</span>}
+                                    {activeShot.latestCompositeTimestamp && <span>{new Date(activeShot.latestCompositeTimestamp).toLocaleTimeString()}</span>}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    <span className="text-[8.5px] lg:text-[9.5px] text-cyan-400 font-mono font-bold tracking-widest drop-shadow-[0_0_5px_rgba(34,211,238,0.4)] whitespace-nowrap shrink-0 overflow-hidden text-ellipsis ml-auto pl-4">
+                        VB: {Math.round(viewportBox.w)}x{Math.round(viewportBox.h)} @ {Math.round(viewportBox.x)},{Math.round(viewportBox.y)} | Img: {state.backgroundUrl ? 'YES' : 'NO'} | Depth: {state.depthMapUrl ? 'YES' : 'NO'}
+                    </span>
+                </div>
+            </div>
+        );
+    };
+
+    const renderBottomToolbar = () => {
+        const renderLeftControls = () => (
+            <div className="flex items-center gap-1 bg-black/50 p-1 rounded-lg border border-white/5">
+                <button
+                    onClick={() => dispatch({ type: 'UNDO' })}
+                    className="p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded transition-colors"
+                    title="Undo (Ctrl+Z)"
+                >
+                    <Undo className="w-4 h-4" />
+                </button>
+                <button
+                    onClick={() => dispatch({ type: 'REDO' })}
+                    className="p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded transition-colors"
+                    title="Redo (Ctrl+Y)"
+                >
+                    <Redo className="w-4 h-4" />
+                </button>
+            </div>
+        );
+
+        const renderCenterActions = () => (
+            <div className="flex items-center justify-center gap-1 md:gap-2 flex-wrap">
+                <button
+                    onClick={duplicateSelection}
+                    disabled={!state.selection}
+                    className={`flex flex-col items-center gap-0.5 group bg-black/80 p-0.5 md:p-1 rounded-xl border border-white/5 backdrop-blur-md transition-colors ${
+                        !state.selection ? 'opacity-50 pointer-events-none' : 'hover:bg-black'
+                    }`}
+                    title="Duplicate Selection"
+                >
+                    <div className="p-1.5 bg-purple-500/10 rounded-lg group-hover:bg-purple-500/20 transition-colors">
+                        <Copy className={`w-4 h-4 ${!state.selection ? 'text-gray-600' : 'text-purple-400'}`} />
+                    </div>
+                    <span className="text-[7.5px] font-bold text-gray-500 uppercase group-hover:text-purple-400">Copy</span>
+                </button>
+
+                <button
+                    onClick={() => setShowClearConfirm(true)}
+                    className="flex flex-col items-center gap-0.5 group bg-black/80 p-0.5 md:p-1 rounded-xl border border-white/5 backdrop-blur-md hover:bg-black transition-colors"
+                    title="Clear Everything"
+                >
+                    <div className="p-1.5 bg-red-500/10 rounded-lg group-hover:bg-red-500/20 transition-colors">
+                        <TrashIcon className="w-4 h-4 text-red-500" />
+                    </div>
+                    <span className="text-[7.5px] font-bold text-gray-500 uppercase group-hover:text-red-400">Clear</span>
+                </button>
+
+                <div className="hidden sm:block w-px h-8 md:h-10 bg-white/10 mx-0.5 md:mx-1" />
+
+                <button
+                    draggable
+                    onDragStart={(e) => e.dataTransfer.setData('application/json', JSON.stringify({ templateType: 'annotation', annotationType: 'note' }))}
+                    onClick={() => {
+                        const id = `ann-${Date.now()}`;
+                        dispatch({
+                            type: 'ADD_ANNOTATION',
+                            payload: { id, type: 'note', x: 50, y: 50, width: 150, height: 100, rotation: 0, scaleX: 1, scaleY: 1, zIndex: 10, text: '' }
+                        });
+                        dispatch({ type: 'SELECT_ITEM', payload: { id, type: 'annotation' } });
+                    }}
+                    className="flex flex-col items-center gap-0.5 group bg-black/80 p-0.5 md:p-1 rounded-xl border border-white/5 backdrop-blur-md hover:bg-black transition-colors"
+                    title="Add Note"
+                >
+                    <div className="p-1.5 bg-blue-500/10 rounded-lg group-hover:bg-blue-500/20 transition-colors">
+                        <StickyNote className="w-4 h-4 text-blue-400" />
+                    </div>
+                    <span className="text-[7.5px] font-bold text-gray-500 uppercase group-hover:text-blue-400">Note</span>
+                </button>
+
+                <button
+                    draggable
+                    onDragStart={(e) => e.dataTransfer.setData('application/json', JSON.stringify({ templateType: 'annotation', annotationType: 'zone' }))}
+                    onClick={() => {
+                        const id = `ann-${Date.now()}`;
+                        dispatch({
+                            type: 'ADD_ANNOTATION',
+                            payload: { id, type: 'zone', x: 100, y: 100, width: 200, height: 150, rotation: 0, scaleX: 1, scaleY: 1, zIndex: 5 }
+                        });
+                        dispatch({ type: 'SELECT_ITEM', payload: { id, type: 'annotation' } });
+                    }}
+                    className="flex flex-col items-center gap-0.5 group bg-black/80 p-0.5 md:p-1 rounded-xl border border-white/5 backdrop-blur-md hover:bg-black transition-colors"
+                    title="Add Zone"
+                >
+                    <div className="p-1.5 bg-emerald-500/10 rounded-lg group-hover:bg-emerald-500/20 transition-colors">
+                        <BoxSelect className="w-4 h-4 text-emerald-400" />
+                    </div>
+                    <span className="text-[7.5px] font-bold text-gray-500 uppercase group-hover:text-emerald-400">Zone</span>
+                </button>
+
+                <button
+                    draggable
+                    onDragStart={(e) => e.dataTransfer.setData('application/json', JSON.stringify({ templateType: 'annotation', annotationType: 'arrow' }))}
+                    onClick={() => {
+                        const id = `ann-${Date.now()}`;
+                        dispatch({
+                            type: 'ADD_ANNOTATION',
+                            payload: { id, type: 'arrow', x: 200, y: 200, width: 60, height: 60, rotation: 0, scaleX: 1, scaleY: 1, zIndex: 11 }
+                        });
+                        dispatch({ type: 'SELECT_ITEM', payload: { id, type: 'annotation' } });
+                    }}
+                    className="flex flex-col items-center gap-0.5 group bg-black/80 p-0.5 md:p-1 rounded-xl border border-white/5 backdrop-blur-md hover:bg-black transition-colors"
+                    title="Add Path"
+                >
+                    <div className="p-1.5 bg-purple-500/10 rounded-lg group-hover:bg-purple-500/20 transition-colors">
+                        <MoveUpRight className="w-4 h-4 text-purple-400" />
+                    </div>
+                    <span className="text-[7.5px] font-bold text-gray-500 uppercase group-hover:text-purple-400">Path</span>
+                </button>
+            </div>
+        );
+
+        const renderRightActions = () => {
+            if (viewMode === 'shots') {
+                const currentSession = state.shotSessionsBySceneId?.[state.activeShotId || 'default'];
+                const selectedShots = currentSession?.variants.filter((v: any) => v.selected && (v.status === 'done' || v.status === 'error')) || [];
+                const isDisabled = selectedShots.length === 0;
+
+                const handleSaveShots = () => {
+                    selectedShots.forEach((variant: any) => {
+                        const url = variant.finalUrl || variant.previewUrl;
+                        if (!url) return;
+                        const link = document.createElement('a');
+                        link.href = url;
+                        link.download = `NB_shot_${variant.presetId}_${Date.now()}.png`;
+                        link.click();
+                    });
+                    dispatch({ type: 'ADD_LOG', payload: { message: `Saved ${selectedShots.length} shot(s).`, type: 'success' } });
+                };
+
+                return (
+                    <button
+                        onClick={handleSaveShots}
+                        disabled={isDisabled}
+                        className={`bg-black/80 hover:bg-black border border-white/10 px-1 py-1 rounded-md flex items-center gap-1 text-[6.5px] font-bold uppercase transition-all whitespace-nowrap shrink-0 ${
+                            !isDisabled ? 'text-blue-500 hover:text-green-500 active:scale-95' : 'text-gray-500 opacity-50 cursor-not-allowed'
+                        }`}
+                        title={isDisabled ? "Select a shot to download" : "Download selected shots"}
+                    >
+                        <Download className="w-3 h-3" />
+                        <span className="hidden sm:inline">Selected</span>
+                    </button>
+                );
+            }
+
+            return (
+                <>
+                    <button
+                        onClick={downloadStageImage}
+                        className="bg-black/80 hover:bg-black border border-white/10 text-blue-500 hover:text-green-500 px-1 py-1 rounded-md flex items-center gap-1 text-[6.5px] font-bold uppercase transition-all active:scale-95 whitespace-nowrap shrink-0"
+                        title="Download composed stage image"
+                    >
+                        <Download className="w-3 h-3" />
+                        <span className="hidden sm:inline">Image</span>
+                    </button>
+                    <button
+                        onClick={downloadDepthMap}
+                        disabled={!state.depthMapUrl}
+                        className={`bg-black/80 hover:bg-black border border-white/10 text-purple-500 px-1 py-1 rounded-md flex items-center gap-1 text-[6.5px] font-bold uppercase transition-all whitespace-nowrap shrink-0 ${
+                            state.depthMapUrl ? 'hover:text-purple-400 active:scale-95' : 'opacity-50 cursor-not-allowed'
+                        }`}
+                        title="Download generated Depth Map"
+                    >
+                        <Download className="w-3 h-3" />
+                        <span className="hidden sm:inline">Depth</span>
+                    </button>
+                </>
+            );
+        };
+
+        return (
+            <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 lg:gap-3 p-2 bg-[#09090b] border border-[#27272a] rounded-xl shrink-0">
+                {/* LEFT ZONE */}
+                <div className="justify-self-start flex items-center gap-1 lg:gap-2 min-w-0">
+                    {renderLeftControls()}
+                </div>
+
+                {/* CENTER ZONE */}
+                <div className="justify-self-center flex items-center justify-center gap-1 md:gap-2 shrink-0 min-w-0">
+                    {renderCenterActions()}
+                </div>
+
+                {/* RIGHT ZONE */}
+                <div className="justify-self-end flex items-center gap-1 md:gap-2 min-w-0">
+                    {renderRightActions()}
+                </div>
+            </div>
+        );
+    };
+
+    const processingCutoutsCount = Object.values(cutoutStatuses).filter((v: any) => v === 'processing').length;
     const isProcessingCutouts = processingCutoutsCount > 0;
 
     return (
@@ -2384,7 +2871,7 @@ const SceneCanvas = () => {
 
             <div className="flex h-full gap-4 p-4 overflow-hidden select-none">
                 {/* 1. LEFT SIDEBAR: ACTIVE ACTOR INTELLIGENCE & PROPERTIES */}
-                <div className="w-96 flex flex-col gap-4 overflow-y-auto pr-2 custom-scrollbar shrink-0">
+                <div className={`${isCompactStageToolbar ? 'w-72' : 'w-96'} flex flex-col gap-4 overflow-y-auto pr-2 custom-scrollbar shrink-0 transition-[width] duration-200`}>
 
 
 
@@ -2547,10 +3034,10 @@ const SceneCanvas = () => {
                                         {/* QUICK NUDGE ROW */}
                                         <span className="text-[10px] text-gray-200 uppercase font-bold">Nudge</span>
                                         <div className="col-span-4 flex items-center gap-1 mt-1">
-                                            <button onClick={() => updateToken(selectedToken.id, { x: selectedToken.x - 5 })} className="flex-1 !p-0 !h-8 bg-[#27272a] hover:bg-[#3f3f46] rounded border border-white/30 !text-[10px] text-white font-bold transition-colors shadow-sm">LEFT</button>
-                                            <button onClick={() => updateToken(selectedToken.id, { x: selectedToken.x + 5 })} className="flex-1 !p-0 !h-8 bg-[#27272a] hover:bg-[#3f3f46] rounded border border-white/30 !text-[10px] text-white font-bold transition-colors shadow-sm">RIGHT</button>
-                                            <button onClick={() => updateToken(selectedToken.id, { y: selectedToken.y - 5 })} className="flex-1 !p-0 !h-8 bg-[#27272a] hover:bg-[#3f3f46] rounded border border-white/30 !text-[10px] text-white font-bold transition-colors shadow-sm">UP</button>
-                                            <button onClick={() => updateToken(selectedToken.id, { y: selectedToken.y + 5 })} className="flex-1 !p-0 !h-8 bg-[#27272a] hover:bg-[#3f3f46] rounded border border-white/30 !text-[10px] text-white font-bold transition-colors shadow-sm">DOWN</button>
+                                            <button onClick={() => updateToken(selectedToken.id, { x: selectedToken.x - 5 })} className="flex-1 !p-0 !h-8 bg-[#27272a] hover:bg-[#3f3f46] flex items-center justify-center rounded border border-white/30 text-gray-300 hover:text-white transition-colors shadow-sm"><ArrowLeft className="w-3.5 h-3.5" /></button>
+                                            <button onClick={() => updateToken(selectedToken.id, { x: selectedToken.x + 5 })} className="flex-1 !p-0 !h-8 bg-[#27272a] hover:bg-[#3f3f46] flex items-center justify-center rounded border border-white/30 text-gray-300 hover:text-white transition-colors shadow-sm"><ArrowRight className="w-3.5 h-3.5" /></button>
+                                            <button onClick={() => updateToken(selectedToken.id, { y: selectedToken.y - 5 })} className="flex-1 !p-0 !h-8 bg-[#27272a] hover:bg-[#3f3f46] flex items-center justify-center rounded border border-white/30 text-gray-300 hover:text-white transition-colors shadow-sm"><ArrowUp className="w-3.5 h-3.5" /></button>
+                                            <button onClick={() => updateToken(selectedToken.id, { y: selectedToken.y + 5 })} className="flex-1 !p-0 !h-8 bg-[#27272a] hover:bg-[#3f3f46] flex items-center justify-center rounded border border-white/30 text-gray-300 hover:text-white transition-colors shadow-sm"><ArrowDown className="w-3.5 h-3.5" /></button>
                                         </div>
 
                                         {/* ZOOM ROW */}
@@ -2707,19 +3194,21 @@ const SceneCanvas = () => {
                                             <div className="flex gap-1.5">
                                                 <button
                                                     onClick={() => updateToken(selectedToken.id, { occlusionMode: 'auto' })}
-                                                    className={`group !p-0 flex-1 h-11 flex items-center justify-center text-[10px] font-bold uppercase rounded border transition-all ${(selectedToken.occlusionMode || 'auto') === 'auto'
+                                                    className={`group !p-0 flex-1 h-9 flex items-center justify-center font-bold uppercase rounded border transition-all ${(selectedToken.occlusionMode || 'auto') === 'auto'
                                                         ? 'bg-purple-600/20 border-purple-500 text-purple-400 shadow-[0_0_12px_rgba(168,85,247,0.2)]'
                                                         : 'bg-[#27272a] border-white/30 text-gray-200 hover:text-white hover:bg-[#3f3f46]'
                                                         }`}
+                                                    style={{ fontSize: '10.5px' }}
                                                 >
                                                     AUTO (DEPTH)
                                                 </button>
                                                 <button
                                                     onClick={() => updateToken(selectedToken.id, { occlusionMode: 'front' })}
-                                                    className={`group !p-0 flex-1 h-11 flex items-center justify-center text-[10px] font-bold uppercase rounded border transition-all ${selectedToken.occlusionMode === 'front'
+                                                    className={`group !p-0 flex-1 h-9 flex items-center justify-center font-bold uppercase rounded border transition-all ${selectedToken.occlusionMode === 'front'
                                                         ? 'bg-purple-600/20 border-purple-500 text-purple-400 shadow-[0_0_12px_rgba(168,85,247,0.2)]'
                                                         : 'bg-[#27272a] border-white/30 text-gray-200 hover:text-white hover:bg-[#3f3f46]'
                                                         }`}
+                                                    style={{ fontSize: '10.5px' }}
                                                 >
                                                     FORCE FRONT
                                                 </button>
@@ -3080,152 +3569,14 @@ const SceneCanvas = () => {
                 {/* End of Left Sidebar */}
 
                 {/* 2. CENTER AREA: THE STAGE */}
-                <div className="flex-1 flex flex-col gap-4 min-w-0">
-                    <div className="flex shrink-0 h-14 w-full bg-[#09090b] border border-[#27272a] rounded-xl items-center px-4 justify-between">
-                        <div className="flex flex-col gap-0.5 justify-center max-w-[60%]">
-                            {/* Depth Assist UI */}
-                            {(() => {
-                                const warnings = collectDepthAssistWarnings();
-                                const topWarnings = warnings.filter(w => w.severity === 'high' || w.severity === 'medium').slice(0, 2);
-                                const hasDepth = !!state.depthMapUrl && !state.isDepthProcessing;
-                                
-                                let depthStatusText = "Unavailable";
-                                let depthStatusColor = "text-gray-500";
-                                if (hasDepth) {
-                                     if (topWarnings.length > 0) {
-                                         depthStatusText = "Available with warnings";
-                                         depthStatusColor = "text-yellow-500";
-                                     } else {
-                                         depthStatusText = "Available";
-                                         depthStatusColor = "text-green-500";
-                                     }
-                                }
+                <div
+                    ref={centerPaneRef}
+                    className="flex-1 flex flex-col gap-2 min-w-0"
+                >
+                    {renderCommandHeader()}
+                    {/* --- END COMMAND HEADER --- */}
 
-                                return (
-                                    <div className="flex items-center gap-2 pl-2 overflow-hidden truncate">
-                                        <span className={`text-[9px] uppercase font-bold tracking-wider ${depthStatusColor}`}>
-                                            Depth Assist: {depthStatusText}
-                                        </span>
-                                        {hasDepth && topWarnings.length > 0 && (
-                                            <span className="text-[9px] text-gray-500 truncate">
-                                                | {topWarnings.map(w => w.message).join(' | ')}
-                                            </span>
-                                        )}
-                                    </div>
-                                );
-                            })()}
-                        </div>
-
-                        {/* Technical Specs Moved to right header space */}
-                        <div className="flex items-center gap-4 text-[10px] text-gray-500 font-mono">
-                            VB: {Math.round(viewportBox.w)}x{Math.round(viewportBox.h)} @ {Math.round(viewportBox.x)},{Math.round(viewportBox.y)} | Img: {state.backgroundUrl ? 'YES' : 'NO'} | Depth: {state.depthMapUrl ? 'YES' : 'NO'}
-                        </div>
-                    </div>
-                    
-                    {/* --- PRIMARY ACTION BAR --- */}
-                    <div className="flex w-full bg-[#18181b] border border-[#27272a] rounded-lg items-center px-4 py-2 justify-between shrink-0 mb-4 shadow-xl">
-                        <div className="flex items-center gap-4">
-                            {/* VIEW MODE TOGGLE */}
-                            <div className="flex bg-black rounded p-1 border border-gray-800 relative shadow-inner">
-                                <button
-                                    onClick={() => setViewMode('stage')}
-                                    className={`px-4 py-1.5 text-[10px] font-bold tracking-widest uppercase rounded transition-colors z-10 ${viewMode === 'stage' ? 'text-white' : 'text-gray-500 hover:text-gray-300'}`}
-                                >
-                                    Stage
-                                </button>
-                                <button
-                                    onClick={() => {
-                                        if (state.resultImage || (activeShot && activeShot.latestCompositeResultUrl)) {
-                                            setViewMode('result');
-                                        } else {
-                                            dispatch({ type: 'ADD_LOG', payload: { message: "No result generated yet.", type: 'error' } });
-                                        }
-                                    }}
-                                    className={`px-4 py-1.5 text-[10px] font-bold tracking-widest uppercase rounded transition-colors z-10 flex items-center gap-2 ${viewMode === 'result' ? 'text-green-400' : 'text-gray-500 hover:text-gray-300'} ${!(state.resultImage || (activeShot && activeShot.latestCompositeResultUrl)) ? 'opacity-50 cursor-not-allowed' : ''}`}
-                                >
-                                    Result
-                                    {viewMode === 'result' && <span className="text-[8px] text-green-500/80 font-mono tracking-tighter uppercase leading-none mt-0.5">(Final Output Monitor)</span>}
-                                </button>
-                                <button
-                                    onClick={() => {
-                                        if (getEffectiveResultAnchorForScene(state, state.activeShotId || 'default')) {
-                                            setViewMode('shots');
-                                        } else {
-                                            dispatch({ type: 'ADD_LOG', payload: { message: "Choose or generate a result first.", type: 'error' } });
-                                        }
-                                    }}
-                                    className={`px-4 py-1.5 text-[10px] font-bold tracking-widest uppercase rounded transition-colors z-10 flex items-center gap-2 ${viewMode === 'shots' ? 'text-blue-400' : 'text-gray-500 hover:text-gray-300'} ${!getEffectiveResultAnchorForScene(state, state.activeShotId || 'default') ? 'opacity-50 cursor-not-allowed' : ''}`}
-                                >
-                                    Shots
-                                </button>
-                                {/* Animated Background Pill */}
-                                <div 
-                                    className="absolute top-1 bottom-1 w-1/3 bg-gray-800 rounded transition-transform duration-300 ease-in-out border border-gray-700/50 -z-0"
-                                    style={{ transform: `translateX(${viewMode === 'stage' ? '0%' : viewMode === 'result' ? '100%' : '200%'})` }}
-                                />
-                            </div>
-
-                            {/* ACTIVE REFERENCES SUMMARY */}
-                            <div className="hidden lg:flex items-center gap-2 px-3 py-1 bg-[#09090b] border border-white/5 rounded">
-                                <span className="text-[9px] font-bold text-gray-500 tracking-wider uppercase">Active Scene References:</span>
-                                <span className="text-[10px] text-purple-400 font-mono">
-                                    {activeReferences.length} Slots
-                                </span>
-                                {activeReferences.length > 0 && (
-                                    <span className="text-[9px] text-gray-500 truncate max-w-[200px]">
-                                        ({activeReferences.map(r => r.name || `Ref ${r.index}`).join(', ')})
-                                    </span>
-                                )}
-                            </div>
-                        </div>
-
-                        {/* RENDER ACTIONS */}
-                        <div className="flex gap-2 items-center">
-                            {viewMode === 'result' && (state.resultImage || (activeShot && activeShot.latestCompositeResultUrl)) && (
-                                <button
-                                    onClick={() => {
-                                        const url = state.resultImage || activeShot?.latestCompositeResultUrl;
-                                        if (url) {
-                                            dispatch({ type: 'SET_BG', payload: url });
-                                            setViewMode('stage');
-                                            dispatch({ type: 'ADD_LOG', payload: { message: "Result promoted to Stage Background.", type: 'success' } });
-                                        }
-                                    }}
-                                    className="px-6 py-2 h-full bg-[#09090b] hover:bg-green-950/40 border border-green-500/30 hover:border-green-500/80 rounded-lg text-[10px] font-bold tracking-widest text-green-400 uppercase transition-all shadow-[0_0_10px_rgba(34,197,94,0.05)] hover:shadow-[0_0_15px_rgba(34,197,94,0.2)]"
-                                >
-                                    Use as Stage Scene
-                                </button>
-                            )}
-                            <button
-                                onClick={generateBg}
-                                disabled={state.isProcessing}
-                                className="relative group px-8 py-2 bg-[#09090b] hover:bg-black border border-white/10 hover:border-purple-500/50 rounded-lg text-[10px] font-bold tracking-widest uppercase transition-all disabled:opacity-50 shadow-lg overflow-hidden"
-                            >
-                                <div className="absolute inset-0 bg-gradient-to-r from-blue-500/10 via-purple-500/10 to-pink-500/10 opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                                <span className={`relative transition-colors duration-300 ${state.isProcessing ? 'text-gray-400' : 'text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-purple-400 to-pink-400 drop-shadow-[0_0_8px_rgba(192,132,252,0.5)] group-hover:from-cyan-300 group-hover:via-purple-300 group-hover:to-pink-300'}`}>
-                                    {state.isProcessing ? 'Processing... ' : 'Generate Composite'}
-                                </span>
-                            </button>
-                        </div>
-                    </div>
-                    {/* --- END ACTION BAR --- */}
-
-                    {/* Compact Director Canvas Shot State Block */}
-                    {activeShot && (
-                        <div className="flex flex-col gap-1 w-full relative">
-                            <div className="flex shrink-0 w-full bg-[#0e0e11] border border-[#27272a]/50 rounded items-center px-4 py-1.5 justify-between">
-                                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-                                    Director Canvas Shot State: <span className="text-white ml-2">{activeShot.latestCompositeStage === 'generate' ? 'Generated' : activeShot.latestCompositeStage === 'refine' ? 'Refined' : 'None'}</span>
-                                </span>
-                                {(activeShot.latestCompositeTimestamp || activeShot.latestCompositeTemplateId) && (
-                                    <div className="flex gap-4 text-[9px] text-gray-500 font-mono">
-                                        {activeShot.latestCompositeTemplateId && <span>TEMPLATE: {activeShot.latestCompositeTemplateId}</span>}
-                                        {activeShot.latestCompositeTimestamp && <span>UPDATED: {new Date(activeShot.latestCompositeTimestamp).toLocaleTimeString()}</span>}
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    )}
+                    {/* Compact Director Canvas Shot State Block (Moved up to Command Header) */}
 
                     {viewMode === 'shots' ? (() => {
                         const effectiveAnchor = getEffectiveResultAnchorForScene(state, state.activeShotId || 'default');
@@ -3741,185 +4092,11 @@ const SceneCanvas = () => {
                 )}
 
                     {/* 2b. CANVAS TOOLBAR (Moved Horizontal Below Stage) */}
-                    <div className="flex items-center justify-between gap-4 p-2 bg-[#09090b] border border-[#27272a] rounded-xl shrink-0">
-
-                        {/* Left Group: History & Edit */}
-                        <div className="flex items-center gap-2 flex-1">
-                            <div className="flex items-center gap-1 bg-black/50 p-1 rounded-lg border border-white/5">
-                                <button
-                                    onClick={() => dispatch({ type: 'UNDO' })}
-                                    className="p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded transition-colors"
-                                    title="Undo (Ctrl+Z)"
-                                >
-                                    <Undo className="w-4 h-4" />
-                                </button>
-                                <button
-                                    onClick={() => dispatch({ type: 'REDO' })}
-                                    className="p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded transition-colors"
-                                    title="Redo (Ctrl+Y)"
-                                >
-                                    <Redo className="w-4 h-4" />
-                                </button>
-                            </div>
-
-                        </div>
-
-                        {/* Center Group: Edit & Add Tools */}
-                        <div className="flex items-center justify-center gap-2 shrink-0">
-                            {/* EDIT TOOLS (Moved here) */}
-                            <button
-                                onClick={duplicateSelection}
-                                disabled={!state.selection}
-                                className={`flex flex-col items-center gap-1 group bg-black/80 p-2 rounded-xl border border-white/5 backdrop-blur-md transition-colors ${!state.selection ? 'opacity-50 pointer-events-none' : 'hover:bg-black'}`}
-                                title="Duplicate Selection"
-                            >
-                                <div className="p-2 bg-purple-500/10 rounded-lg group-hover:bg-purple-500/20 transition-colors">
-                                    <Copy className={`w-4 h-4 ${!state.selection ? 'text-gray-600' : 'text-purple-400'}`} />
-                                </div>
-                                <span className="text-[8px] font-bold text-gray-500 uppercase group-hover:text-purple-400">Copy</span>
-                            </button>
-
-                            <button
-                                onClick={() => setShowClearConfirm(true)}
-                                className="flex flex-col items-center gap-1 group bg-black/80 p-2 rounded-xl border border-white/5 backdrop-blur-md hover:bg-black transition-colors"
-                                title="Clear Everything"
-                            >
-                                <div className="p-2 bg-red-500/10 rounded-lg group-hover:bg-red-500/20 transition-colors">
-                                    <TrashIcon className="w-4 h-4 text-red-500" />
-                                </div>
-                                <span className="text-[8px] font-bold text-gray-500 uppercase group-hover:text-red-400">CLEAR STAGE</span>
-                            </button>
-
-                            <div className="w-px h-10 bg-white/10 mx-2" />
-
-                            {/* ADD TOOLS */}
-                            <button
-                                draggable
-                                onDragStart={(e) => {
-                                    e.dataTransfer.setData('application/json', JSON.stringify({ templateType: 'annotation', annotationType: 'note' }));
-                                }}
-                                onClick={() => {
-                                    const id = `ann-${Date.now()}`;
-                                    dispatch({
-                                        type: 'ADD_ANNOTATION', payload: {
-                                            id, type: 'note', x: 50, y: 50, width: 150, height: 100, rotation: 0, scaleX: 1, scaleY: 1, zIndex: 10, text: ''
-                                        }
-                                    });
-                                    dispatch({ type: 'SELECT_ITEM', payload: { id, type: 'annotation' } });
-                                }}
-                                className="flex flex-col items-center gap-1 group bg-black/80 p-2 rounded-xl border border-white/5 backdrop-blur-md hover:bg-black transition-colors"
-                            >
-                                <div className="p-2 bg-blue-500/10 rounded-lg group-hover:bg-blue-500/20 transition-colors">
-                                    <StickyNote className="w-4 h-4 text-blue-400" />
-                                </div>
-                                <span className="text-[8px] font-bold text-gray-500 uppercase group-hover:text-blue-400">Note</span>
-                            </button>
-
-                            <button
-                                draggable
-                                onDragStart={(e) => {
-                                    e.dataTransfer.setData('application/json', JSON.stringify({ templateType: 'annotation', annotationType: 'zone' }));
-                                }}
-                                onClick={() => {
-                                    const id = `ann-${Date.now()}`;
-                                    dispatch({
-                                        type: 'ADD_ANNOTATION', payload: {
-                                            id, type: 'zone', x: 100, y: 100, width: 200, height: 150, rotation: 0, scaleX: 1, scaleY: 1, zIndex: 5
-                                        }
-                                    });
-                                    dispatch({ type: 'SELECT_ITEM', payload: { id, type: 'annotation' } });
-                                }}
-                                className="flex flex-col items-center gap-1 group bg-black/80 p-2 rounded-xl border border-white/5 backdrop-blur-md hover:bg-black transition-colors"
-                            >
-                                <div className="p-2 bg-emerald-500/10 rounded-lg group-hover:bg-emerald-500/20 transition-colors">
-                                    <BoxSelect className="w-4 h-4 text-emerald-400" />
-                                </div>
-                                <span className="text-[8px] font-bold text-gray-500 uppercase group-hover:text-emerald-400">Zone</span>
-                            </button>
-
-                            <button
-                                draggable
-                                onDragStart={(e) => {
-                                    e.dataTransfer.setData('application/json', JSON.stringify({ templateType: 'annotation', annotationType: 'arrow' }));
-                                }}
-                                onClick={() => {
-                                    const id = `ann-${Date.now()}`;
-                                    dispatch({
-                                        type: 'ADD_ANNOTATION', payload: {
-                                            id, type: 'arrow', x: 200, y: 200, width: 60, height: 60, rotation: 0, scaleX: 1, scaleY: 1, zIndex: 11
-                                        }
-                                    });
-                                    dispatch({ type: 'SELECT_ITEM', payload: { id, type: 'annotation' } });
-                                }}
-                                className="flex flex-col items-center gap-1 group bg-black/80 p-2 rounded-xl border border-white/5 backdrop-blur-md hover:bg-black transition-colors"
-                            >
-                                <div className="p-2 bg-purple-500/10 rounded-lg group-hover:bg-purple-500/20 transition-colors">
-                                    <MoveUpRight className="w-4 h-4 text-purple-400" />
-                                </div>
-                                <span className="text-[8px] font-bold text-gray-500 uppercase group-hover:text-purple-400">Path</span>
-                            </button>
-                        </div>
-
-                        {/* Right Group: Capture */}
-                        <div className="flex items-center gap-2 flex-1 justify-end">
-                            {viewMode === 'shots' ? (
-                                (() => {
-                                    const currentSession = state.shotSessionsBySceneId?.[state.activeShotId || 'default'];
-                                    const selectedShots = currentSession?.variants.filter(v => v.selected && (v.status === 'done' || v.status === 'error')) || [];
-                                    const isDisabled = selectedShots.length === 0;
-                                    const label = selectedShots.length > 1 ? 'DOWNLOAD SELECTED SHOTS' : 'SAVE SELECTED SHOT';
-
-                                    const handleSaveShots = () => {
-                                        selectedShots.forEach(variant => {
-                                            const url = variant.finalUrl || variant.previewUrl;
-                                            if (!url) return;
-                                            const link = document.createElement('a');
-                                            link.href = url;
-                                            link.download = `NB_shot_${variant.presetId}_${Date.now()}.png`;
-                                            link.click();
-                                        });
-                                        dispatch({ type: 'ADD_LOG', payload: { message: `Saved ${selectedShots.length} shot(s).`, type: 'success' } });
-                                    };
-
-                                    return (
-                                        <button
-                                            onClick={handleSaveShots}
-                                            disabled={isDisabled}
-                                            className={`bg-black/80 hover:bg-black border border-white/10 px-4 py-1.5 rounded-md flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-widest transition-all ${!isDisabled ? 'text-blue-500 hover:text-green-500 active:scale-95' : 'text-gray-500 opacity-50 cursor-not-allowed'}`}
-                                            title={isDisabled ? "Select a shot to download" : "Download selected SHOTS"}
-                                        >
-                                            <MonitorPlay className="w-3 h-3" />
-                                            {label}
-                                        </button>
-                                    );
-                                })()
-                            ) : (
-                                <>
-                                    <button
-                                        onClick={downloadStageImage}
-                                        className="bg-black/80 hover:bg-black border border-white/10 text-blue-500 hover:text-green-500 px-4 py-1.5 rounded-md flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-widest transition-all active:scale-95"
-                                        title="Download composed stage image"
-                                    >
-                                        <MonitorPlay className="w-3 h-3" />
-                                        Save Image
-                                    </button>
-                                    <button
-                                        onClick={downloadDepthMap}
-                                        disabled={!state.depthMapUrl}
-                                        className={`bg-black/80 hover:bg-black border border-white/10 text-purple-500 px-4 py-1.5 rounded-md flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-widest transition-all ${state.depthMapUrl ? 'hover:text-purple-400 active:scale-95' : 'opacity-50 cursor-not-allowed'}`}
-                                        title="Download generated Depth Map"
-                                    >
-                                        <MonitorPlay className="w-3 h-3" />
-                                        Save Depth
-                                    </button>
-                                </>
-                            )}
-                        </div>
-                    </div>
+                    {renderBottomToolbar()}
                 </div>
 
                 {/* 3. RIGHT SIDEBAR: GLOBAL SPECS, ANCHOR, & REFERENCES */}
-                <div className="w-[400px] flex flex-col gap-4 h-full overflow-hidden">
+                <div className={`${isCompactStageToolbar ? 'w-[320px]' : 'w-[400px]'} flex flex-col gap-4 h-full overflow-hidden shrink-0 transition-[width] duration-200`}>
                     {/* DYNAMIC SIDEBAR PANELS */}
                     <div className="flex-1 overflow-y-auto pl-2 custom-scrollbar flex flex-col gap-3 pb-4">
                         {
@@ -4114,7 +4291,7 @@ const SceneCanvas = () => {
 
 
                     {/* v3 Prompt Terminal (Fixed at Bottom) */}
-                    <div className="pl-2 shrink-0 pt-2 border-t border-white/5 bg-[#09090b]">
+                    <div className="shrink-0 p-2 border-t border-white/5">
                         <PromptTerminalPanel
                             v3DirectorPrompt={v3DirectorPrompt}
                             handleCopyDirectorPrompt={handleCopyDirectorPrompt}
@@ -4142,6 +4319,8 @@ const SceneCanvas = () => {
                             replaceAnchorSubjects={state.director.replaceAnchorSubjects}
                             toggleReplaceMode={toggleReplaceMode}
                             onSave={(updates) => updateRefSlot(inspectRefIndex!, updates)}
+                            onAnalyze={handleManualAnalyze}
+                            isAnalyzing={analyzingTokenId === 'ref'}
                         />
                     )}
                 </div>

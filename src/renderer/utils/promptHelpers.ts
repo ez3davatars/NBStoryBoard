@@ -5,6 +5,7 @@ import type { ExtractedStyle, SceneIntent } from '../services/GeminiService';
 import type { ShotPackId, ShotPresetId, ShotLocks, DirectedShotSlot } from '../types/shots';
 import type { ActorIdentityReferenceSet, ShotsActorOption } from '../context/AppContext';
 import { SHOT_PRESETS } from './shotsPresets';
+import { buildSceneTruthSnapshotBlock } from './sceneTruthHelpers';
 
 export const SCENE_LOCK_NEGATIVE_TOKENS = "scene alteration, background change, lighting shift, camera angle change, style deviation, new composition, structural change, reimagined scene, time of day shift, seasonal change, architectural alteration, furniture movement, lens flares, color grading shift, original studio background, white backgrounds showing through gaps";
 
@@ -158,19 +159,46 @@ export const compileV3DirectorPrompt = (director: DirectorSettings, slots: Refer
     if (layoutPrompt) segments.push(layoutPrompt);
   } else if (director.replaceAnchorSubjects) {
     const specificMaps: string[] = [];
+    
+    // 1. Explicit UI Target Overrides
     activeRefs.forEach(ref => {
       const targetVal = (ref.target || '').trim();
+      let dnaMandate = '';
+      if (ref.analysis && ref.analysis.trim()) {
+          dnaMandate = ` CRITICAL BIOMETRIC OVERRIDE: Specifically alter the generated subject's physical body, height, weight, and traits to perfectly match this DNA profile: "${ref.analysis.trim()}".`;
+      }
+      
       if (targetVal) {
-        specificMaps.push(`Specific Map: Replace "${targetVal}" with subject from Reference ${ref.index}`);
+        specificMaps.push(`- Identify the subject physically located at/described as "${targetVal}" in the anchor image. ERADICATE their original identity and REPLACE THEM ENTIRELY with the subject shown in Reference ${ref.index} (${ref.name || 'Subject'}).${dnaMandate}`);
       }
     });
 
+    // 2. Spatial Token Inference Fallback (if they didn't manually assign text targets)
+    if (specificMaps.length === 0 && tokens.length > 0) {
+      tokens.forEach(token => {
+        const ref = activeRefs.find(r => r.castId === token.castId);
+        if (ref) {
+          const center = token.x + token.width / 2;
+          const relX = center / STAGE_W;
+          let posH = "center";
+          if (relX < 0.38) posH = "left side";
+          else if (relX > 0.62) posH = "right side";
+          
+          let dnaMandate = '';
+          if (ref.analysis && ref.analysis.trim()) {
+              dnaMandate = ` CRITICAL BIOMETRIC OVERRIDE: Specifically alter the generated subject's physical body, height, weight, and traits to perfectly match this DNA profile: "${ref.analysis.trim()}".`;
+          }
+          specificMaps.push(`- The character physically positioned on the ${posH} of the frame MUST be replaced by the subject in Reference ${ref.index} (${ref.name || 'Subject'}).${dnaMandate}`);
+        }
+      });
+    }
+
     if (specificMaps.length > 0) {
-      segments.push(`CRITICAL REPLACEMENT MAP: ${specificMaps.join('. ')}. Maintain details.`);
+      segments.push(`CRITICAL REPLACEMENT MAP (MANDATORY IDENTITY TARGETING):\n${specificMaps.join('\n')}\nWARNING: You MUST enforce this exact positioning. DO NOT rely on visual similarity between the reference faces and the original anchor bodies to decide who goes where. You MUST strictly swap the identities into the physical locations defined above. Randomly swapping these characters is a FAILURE.\nOMNIPOTENT OBLITERATION DIRECTIVE: When replacing subjects, you are FORBIDDEN from preserving the anchor's original facial structure, hair, or head shape. You MUST completely overwrite their biological traits to match the Reference Subject and their Biometric Profile, EVEN IF it breaks the original silhouette.\nWARDROBE CONTINUITY (CRITICAL): Unless the Biometric Override explicitly requests a different outfit, you MUST perfectly preserve the EXACT original clothing, suits, and attire worn by the humans in the anchor image. Re-dress your generated subjects in those exact anchor outfits. Do NOT use the casual clothing from the Reference images. Maintain exact environment details.`);
     } else {
       const t = director.globalReplaceTarget ? `"${director.globalReplaceTarget.trim()}"` : 'any characters/subjects';
       segments.push(
-        `CRITICAL DIRECTIVE: Identify ${t} present in the Anchor Scene/Environment. Replace them with the characters defined in the Reference Images. Maintain the exact level of detail, texture, and style from the Reference Images.`
+        `CRITICAL DIRECTIVE: Identify ${t} present in the Anchor Scene/Environment. Replace them with the characters defined in the Reference Images.`
       );
     }
   }
@@ -179,7 +207,7 @@ export const compileV3DirectorPrompt = (director: DirectorSettings, slots: Refer
   const resolvedLighting = LIGHTING_PRESETS.find((p: any) => p.key === director.lighting)?.prompt || director.lighting?.trim() || '';
   const resolvedCamera = CAMERA_PRESETS.find((p: any) => p.key === director.camera)?.prompt || director.camera?.trim() || '';
 
-  // 2.5) Actor Intelligence (Pose, Lighting interaction per actor)
+  // 2.5) Actor Intelligence (Pose, Lighting interaction per actor & Spatial Enforcement)
   tokens.forEach(token => {
     let intelligence = token.intelligence || '';
     if (token.spatialDescriptor) {
@@ -205,15 +233,18 @@ export const compileV3DirectorPrompt = (director: DirectorSettings, slots: Refer
       intelligence += ` (OCCLUSION BIAS: ${direction} relative to anchor depth).`;
     }
 
-    if (intelligence) {
-      // Resolve name if it looks like a ref slot
-      let name = token.tag;
-      if (token.castId?.startsWith('refslot-') || token.tag.toLowerCase().startsWith('ref_')) {
-        const match = activeRefs.find(r => r.castId === token.castId);
-        if (match) name = match.name || `Ref ${match.index}`;
-      }
-      segments.push(`[Actor Intelligence for ${name}: ${intelligence.trim()}]`);
-    }
+    // Always push position + intelligence for layout strictness
+    const match = activeRefs.find(r => r.castId === token.castId);
+    let name = token.tag;
+    if (match) name = match.name || `Ref ${match.index}`;
+
+    const center = token.x + token.width / 2;
+    const relX = center / STAGE_W;
+    let posH = "center";
+    if (relX < 0.38) posH = "left";
+    else if (relX > 0.62) posH = "right";
+
+    segments.push(`[Actor Positioning & Intelligence for ${name}]: Placed on the ${posH}. ${intelligence.trim()}`);
   });
 
   // 3) Subject + Environment
@@ -625,7 +656,8 @@ export const buildStrictAnchorReplacementPrompt = (p: {
     replaceAnchorSubjects: boolean,
     globalReplaceTarget: string,
     hasDepthMap: boolean,
-    activeRefs: ReferenceSlot[]
+    activeRefs: ReferenceSlot[],
+    tokens?: StageToken[]
 }): string => {
 
     const refLines = p.activeRefs.map(r => `[REFERENCE: ${r.name || `Ref ${r.index}`}]: Use this exact image to define the identity, clothing, and traits of the target subject.`);
@@ -646,7 +678,45 @@ CRITICAL DIRECTIVES:
     }
 
     if (p.replaceAnchorSubjects) {
-        prompt += `\n6. REPLACE ANCHOR SUBJECTS: Disregard the original subjects defined in the anchor plate. Completely overwrite them with the new Reference/Subject identities.`;
+        const specificMaps: string[] = [];
+        
+        // Explicit UI Target Overrides
+        p.activeRefs.forEach(ref => {
+            const targetVal = (ref.target || '').trim();
+            let dnaMandate = '';
+            if (ref.analysis && ref.analysis.trim()) {
+                dnaMandate = ` CRITICAL BIOMETRIC OVERRIDE: Specifically alter the generated subject's physical body, height, weight, and traits to perfectly match this DNA profile: "${ref.analysis.trim()}".`;
+            }
+            if (targetVal) {
+                specificMaps.push(`- Identify the subject physically located at/described as "${targetVal}" in the anchor image. ERADICATE their original identity and REPLACE THEM ENTIRELY with the subject shown in Reference ${ref.index} (${ref.name || 'Subject'}).${dnaMandate}`);
+            }
+        });
+
+        // Spatial Token Inference Fallback
+        if (specificMaps.length === 0 && p.tokens && p.tokens.length > 0) {
+            p.tokens.forEach(token => {
+                const ref = p.activeRefs.find(r => r.castId === token.castId);
+                if (ref) {
+                    const center = token.x + token.width / 2;
+                    const relX = center / STAGE_W;
+                    let posH = "center";
+                    if (relX < 0.38) posH = "left side";
+                    else if (relX > 0.62) posH = "right side";
+                    
+                    let dnaMandate = '';
+                    if (ref.analysis && ref.analysis.trim()) {
+                        dnaMandate = ` CRITICAL BIOMETRIC OVERRIDE: Specifically alter the generated subject's physical body, height, weight, and traits to perfectly match this DNA profile: "${ref.analysis.trim()}".`;
+                    }
+                    specificMaps.push(`- The character physically positioned on the ${posH} of the frame MUST be replaced by the subject in Reference ${ref.index} (${ref.name || 'Subject'}).${dnaMandate}`);
+                }
+            });
+        }
+
+        if (specificMaps.length > 0) {
+            prompt += `\n6. CRITICAL REPLACEMENT MAP (MANDATORY IDENTITY TARGETING):\n${specificMaps.join('\n')}\nWARNING: You MUST enforce this exact positioning. DO NOT rely on visual similarity between the reference faces and the original anchor bodies to decide who goes where. You MUST strictly swap the identities into the physical locations defined above. Randomly swapping these characters is a FAILURE.\nOMNIPOTENT OBLITERATION DIRECTIVE: When replacing subjects, you are FORBIDDEN from preserving the anchor's original facial structure, hair, or head shape. You MUST completely overwrite their biological traits to match the Reference Subject and their Biometric Profile, EVEN IF it breaks the original silhouette.\nWARDROBE CONTINUITY (CRITICAL): Unless the Biometric Override explicitly requests a different outfit, you MUST perfectly preserve the EXACT original clothing, suits, and attire worn by the humans in the anchor image. Re-dress your generated subjects in those exact anchor outfits. Do NOT use the casual clothing from the Reference images.`;
+        } else {
+            prompt += `\n6. REPLACE ANCHOR SUBJECTS: Disregard the original subjects defined in the anchor plate. Completely overwrite them with the new Reference/Subject identities.`;
+        }
     }
 
     prompt += `\n\n=== REFERENCES ===\n${refLines.length > 0 ? refLines.join('\n') : "No direct image references provided. Rely on text description."}`;
@@ -680,7 +750,7 @@ export function buildIdentityPrecedenceBlock(args: BuildIdentityPrecedenceBlockA
     lines.push("Subject/style analysis may help with scene mood, wardrobe tone, or environment styling only, and may not redefine the actor's face.");
   }
 
-  return lines.join('\\n');
+  return lines.join('\n');
 }
 
 export type BuildStrictFaceIdentityLockBlockArgs = {
@@ -692,6 +762,15 @@ export type BuildStrictFaceIdentityLockBlockArgs = {
 export function buildStrictFaceIdentityLockBlock(args: BuildStrictFaceIdentityLockBlockArgs): string {
   const { actorIdentitySets = [], allowWardrobeChange = false, multiActor = false } = args;
 
+  const biometricOverrides = actorIdentitySets.map(set => {
+    const analysis = set.biometricProfile;
+    if (analysis && analysis.trim()) {
+        const actorName = set.actorLabel || 'the subject';
+        return `CRITICAL BIOMETRIC OVERRIDE for ${actorName}: Specifically alter this subject's physical body, height, weight, and traits to perfectly match this DNA profile: "${analysis.trim()}".`;
+    }
+    return null;
+  }).filter(Boolean) as string[];
+
   const base = [
     "Facial identity is non-negotiable and must remain locked to the provided actor reference images.",
     "Preserve the actor's exact facial geometry and feature relationships.",
@@ -701,7 +780,7 @@ export function buildStrictFaceIdentityLockBlock(args: BuildStrictFaceIdentityLo
     "Do not let costume, scene styling, or cinematic treatment alter facial identity.",
     allowWardrobeChange
       ? "Wardrobe and styling may adapt only where requested, but the face must remain the same person."
-      : "Wardrobe continuity is mandatory unless an explicit wardrobe change has been requested.",
+      : "WARDROBE LOCK: You MUST preserve the exact same clothing, colors, and styling for all subjects. Do NOT change their outfits into casual wear or different suits. Retain the exact anchor wardrobe.",
   ];
 
   const actorSpecific = actorIdentitySets.length
@@ -728,7 +807,7 @@ export function buildStrictFaceIdentityLockBlock(args: BuildStrictFaceIdentityLo
     "No face changes caused by wardrobe changes.",
   ];
 
-  return [...base, ...actorSpecific, ...multi, ...negatives].join('\n');
+  return [...base, ...biometricOverrides, ...actorSpecific, ...multi, ...negatives].join('\n');
 }
 
 export type BuildEnvironmentConsistencyLockBlockArgs = {
@@ -742,10 +821,11 @@ export function buildEnvironmentConsistencyLockBlock(_args: BuildEnvironmentCons
   return [
     "Preserve the exact same room, architecture, layout, and set dressing as shown in the scene anchor.",
     "Maintain the same wall positions, window arrangement, ceiling lines, lighting fixture placement, glass partition layout, furniture placement, and overall spatial proportions.",
+    "CRITICAL FURNITURE ENFORCEMENT: DO NOT add, generate, or invent any new furniture (desks, tables, chairs, benches) that was not present in the anchor image.",
+    "CRITICAL ARCHITECTURE ENFORCEMENT: Do not alter room architecture or move walls, windows, or glass partitions. Keep the wall paneling exactly the same width and material.",
     "Reframe the camera within the same room.",
     "Do not redesign, reinterpret, or substitute the environment.",
     "If the shot is wider, reveal more of the same room rather than inventing a new version of it.",
-    "Do not alter room architecture or move walls/windows.",
     "Do not invent new ceiling layouts or substitute a similar-looking room.",
     "Do not remove or relocate major fixtures or furniture geography unless explicitly directed."
   ].join('\n');
@@ -762,13 +842,15 @@ export type BuildSceneLayoutLockBlockArgs = {
 export function buildSceneLayoutLockBlock(args: BuildSceneLayoutLockBlockArgs): string {
   const base = [
     "Preserve the exact same scene layout and blocking shown in the source anchor.",
-    "Keep the same people in the same relative positions.",
+    "Keep the same people in the same absolute geographical positions.",
+    "CAMERA PIVOT RULE: To change a camera angle, you must physically move the camera around the subjects, revealing the appropriate new background area. DO NOT rotate the subjects in place to face the camera. The subjects' physical orientation relative to the room MUST remain permanently locked.",
+    "CRITICAL HEIGHT & SCALE LOCK: Maintain the exact relative height differences, body scale, and physical build between all subjects. Taller actors must remain strictly taller, shorter actors must remain strictly shorter.",
     "Maintain the same left-to-right ordering, seating/standing roles, spacing, and subject-to-room relationships.",
     "Only change the camera framing and viewpoint.",
     "Do not add, remove, duplicate, merge, or invent any additional people.",
-    "No extra people, no background bystanders unless already present.",
+    "BACKGROUND CHARACTER LOCK: You MUST preserve the exact physical appearance, hair color, and clothing of any background characters (e.g., judges, extras). Do not alter their outfits, hair, or ethnicity.",
     "No shifting actor positions, no swapping left/right ordering.",
-    "No changing seated subject into standing subject.",
+    "CRITICAL POSTURE LOCK: Do NOT change a standing subject into a seated subject. Do NOT change a seated subject into a standing subject. They MUST retain their original anchor posture.",
     "No moving subjects closer or farther unless caused only by camera reframing."
   ];
   if (args.expectedActorCount !== undefined) {
@@ -779,6 +861,7 @@ export function buildSceneLayoutLockBlock(args: BuildSceneLayoutLockBlockArgs): 
 
 export type BuildShotVariantPromptArgs = {
   sourceResultUrl: string;
+  sceneTruth: import('../types/shots').SceneTruthSnapshot;
   actorIdentitySets?: ActorIdentityReferenceSet[];
   shotsActorOptions?: ShotsActorOption[];
   packId: ShotPackId;
@@ -792,6 +875,7 @@ export type BuildShotVariantPromptArgs = {
   targetRole?: string;
   sceneType?: string;
   directedSlot?: DirectedShotSlot;
+  hasSubjectStyleAnalysis?: boolean;
 };
 
 export function buildShotVariantPrompt(args: BuildShotVariantPromptArgs): string {
@@ -837,7 +921,7 @@ export function buildShotVariantPrompt(args: BuildShotVariantPromptArgs): string
     p += `${buildIdentityPrecedenceBlock({
         hasFaceAnchors,
         hasActorReferences,
-        hasSubjectStyleAnalysis: true // Safety fallback since Shots presets apply styles
+        hasSubjectStyleAnalysis: !!args.hasSubjectStyleAnalysis
     })}\n`;
 
     const identityArgs: BuildStrictFaceIdentityLockBlockArgs = {
@@ -846,9 +930,12 @@ export function buildShotVariantPrompt(args: BuildShotVariantPromptArgs): string
         multiActor: (args.actorIdentitySets?.length || 0) > 1
     };
     p += `\n### FACE IDENTITY LOCK\n${buildStrictFaceIdentityLockBlock(identityArgs)}\n`;
-    p += `\n### ENVIRONMENT & LAYOUT LOCK\n`;
+    
+    p += `\n${buildSceneTruthSnapshotBlock(args.sceneTruth)}\n`;
+    
+    p += `\n### ENVIRONMENT & LAYOUT GUARDRAILS (REINFORCEMENTS)\n`;
     p += `${buildEnvironmentConsistencyLockBlock({})}\n`;
-    p += `${buildSceneLayoutLockBlock({ expectedActorCount: args.expectedActorCount })}\n`;
+    p += `${buildSceneLayoutLockBlock({ expectedActorCount: args.sceneTruth.expectedActorCount })}\n`;
     
     p += buildDirectedSlotBlock(args.directedSlot, args.shotsActorOptions, false);
 
@@ -894,6 +981,7 @@ export function buildDirectedSlotBlock(slot?: DirectedShotSlot, actorOptions?: S
 
 export type BuildShotFinalRerenderPromptArgs = {
   sourceResultUrl: string;
+  sceneTruth: import('../types/shots').SceneTruthSnapshot;
   selectedShotPreviewUrl: string;
   actorIdentitySets?: ActorIdentityReferenceSet[];
   shotsActorOptions?: ShotsActorOption[];
@@ -907,6 +995,7 @@ export type BuildShotFinalRerenderPromptArgs = {
   targetRole?: string;
   sceneType?: string;
   directedSlot?: DirectedShotSlot;
+  hasSubjectStyleAnalysis?: boolean;
 };
 
 export function buildShotFinalRerenderPrompt(args: BuildShotFinalRerenderPromptArgs): string {
@@ -942,7 +1031,7 @@ export function buildShotFinalRerenderPrompt(args: BuildShotFinalRerenderPromptA
   p += `${buildIdentityPrecedenceBlock({
       hasFaceAnchors,
       hasActorReferences,
-      hasSubjectStyleAnalysis: true
+      hasSubjectStyleAnalysis: !!args.hasSubjectStyleAnalysis
   })}\n`;
 
   const identityArgs: BuildStrictFaceIdentityLockBlockArgs = {
@@ -951,9 +1040,12 @@ export function buildShotFinalRerenderPrompt(args: BuildShotFinalRerenderPromptA
       multiActor: (args.actorIdentitySets?.length || 0) > 1
   };
   p += `\n### FACE IDENTITY LOCK\n${buildStrictFaceIdentityLockBlock(identityArgs)}\n`;
-  p += `\n### ENVIRONMENT & LAYOUT LOCK\n`;
+  
+  p += `\n${buildSceneTruthSnapshotBlock(args.sceneTruth)}\n`;
+    
+  p += `\n### ENVIRONMENT & LAYOUT GUARDRAILS (REINFORCEMENTS)\n`;
   p += `${buildEnvironmentConsistencyLockBlock({})}\n`;
-  p += `${buildSceneLayoutLockBlock({ expectedActorCount: args.expectedActorCount })}\n`;
+  p += `${buildSceneLayoutLockBlock({ expectedActorCount: args.sceneTruth.expectedActorCount })}\n`;
 
   p += buildDirectedSlotBlock(args.directedSlot, args.shotsActorOptions, true);
 
