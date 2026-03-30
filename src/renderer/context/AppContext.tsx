@@ -871,21 +871,21 @@ export const initialState: AppState = {
     shotSessionsBySceneId: {},
     isStoryboardEnabled: loadJson<boolean>('nano_storyboard_enabled', false), // Persistent setting
     showHelpHints: loadJson<boolean>('nano_help_hints', true),
-    stagePanelState: {
-        'anchor': true,
-        'actor_intel': false,
-        'token_props': true,
-        'cast_palette': true,
+    stagePanelState: loadJson<Record<string, boolean>>('nano_stage_panel_state', {
+        'anchor': false,       // Scene Generator (Open = false)
+        'cast_palette': true,  // Available Cast (Collapsed = true)
+        'actor_intel': true,   // Actor Intelligence (Collapsed = true)
+        'token_props': true,   // Token Properties (Collapsed = true)
         'annotation_props': true,
         'shots': true,
-        'advanced_render': false,
+        'advanced_render': true,
         'region_edit': true,
         'layers': true,
-        'specs': true,
+        'specs': false,        // Context Specs (Open = false)
         'ref_stacks': true,
         'scene_director': true,
         'v3_terminal': false,
-    },
+    }),
 
     // WARDROBE PERSISTENCE
     wardrobeState: loadJson<WardrobeState>('nano_wardrobe_state', DEFAULT_WARDROBE_STATE),
@@ -1343,14 +1343,17 @@ export const reducer = (state: AppState, action: Action): AppState => {
             console.log(`[AppContext] SET_CUSTOM_COVERS dispatched. Keys: ${Object.keys(action.payload).join(', ')}`);
             return { ...state, customCovers: action.payload };
 
-        case 'SET_STAGE_PANEL_STATE':
+        case 'SET_STAGE_PANEL_STATE': {
+            const nextPanelState = {
+                ...state.stagePanelState,
+                [action.payload.id]: action.payload.isOpen
+            };
+            localStorage.setItem('nano_stage_panel_state', JSON.stringify(nextPanelState));
             return {
                 ...state,
-                stagePanelState: {
-                    ...state.stagePanelState,
-                    [action.payload.id]: action.payload.isOpen
-                }
-            }
+                stagePanelState: nextPanelState
+            };
+        }
 
         case 'SET_WARDROBE_STATE':
             return { ...state, wardrobeState: { ...state.wardrobeState, ...action.payload } };

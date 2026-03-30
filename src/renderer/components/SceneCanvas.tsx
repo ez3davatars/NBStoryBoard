@@ -1186,8 +1186,29 @@ const SceneCanvas = () => {
     }, [state.selection, state.selectionType, dispatch]);
 
     // --- SIDEBAR STATE ---
-    const [panelOrder, setPanelOrder] = useState<string[]>(['specs', 'layers', 'shots', 'advanced_render', 'ref_stacks', 'region_edit', 'scene_director']);
-    const [leftPanelOrder, setLeftPanelOrder] = useState<string[]>(['anchor', 'actor_intel', 'token_props', 'cast_palette', 'annotation_props']);
+    const [panelOrder, setPanelOrder] = useState<string[]>(() => {
+        const saved = localStorage.getItem('nano_panel_order');
+        if (saved) {
+            try { return JSON.parse(saved); } catch (e) {}
+        }
+        return ['specs', 'layers', 'advanced_render', 'ref_stacks', 'region_edit', 'scene_director', 'shots'];
+    });
+
+    const [leftPanelOrder, setLeftPanelOrder] = useState<string[]>(() => {
+        const saved = localStorage.getItem('nano_left_panel_order');
+        if (saved) {
+            try { return JSON.parse(saved); } catch (e) {}
+        }
+        return ['anchor', 'cast_palette', 'actor_intel', 'token_props', 'annotation_props'];
+    });
+
+    useEffect(() => {
+        localStorage.setItem('nano_panel_order', JSON.stringify(panelOrder));
+    }, [panelOrder]);
+
+    useEffect(() => {
+        localStorage.setItem('nano_left_panel_order', JSON.stringify(leftPanelOrder));
+    }, [leftPanelOrder]);
 
     // Use global panel state from AppContext to persist during navigation
     const collapsedPanels = (state as any).stagePanelState || {
