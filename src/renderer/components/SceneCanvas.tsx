@@ -1187,6 +1187,7 @@ const SceneCanvas = () => {
 
     // --- SIDEBAR STATE ---
     const [panelOrder, setPanelOrder] = useState<string[]>(['specs', 'layers', 'shots', 'advanced_render', 'ref_stacks', 'region_edit', 'scene_director']);
+    const [leftPanelOrder, setLeftPanelOrder] = useState<string[]>(['anchor', 'actor_intel', 'token_props', 'cast_palette', 'annotation_props']);
 
     // Use global panel state from AppContext to persist during navigation
     const collapsedPanels = (state as any).stagePanelState || {
@@ -1212,14 +1213,30 @@ const SceneCanvas = () => {
 
     const handlePanelDrop = (targetId: string) => {
         if (!draggedPanelId || draggedPanelId === targetId) return;
+        
+        // Right Side Check
         const newOrder = [...panelOrder];
         const fromIndex = newOrder.indexOf(draggedPanelId);
         const toIndex = newOrder.indexOf(targetId);
-        if (fromIndex === -1 || toIndex === -1) return;
-        newOrder.splice(fromIndex, 1);
-        newOrder.splice(toIndex, 0, draggedPanelId);
-        setPanelOrder(newOrder);
-        setDraggedPanelId(null);
+        if (fromIndex !== -1 && toIndex !== -1) {
+            newOrder.splice(fromIndex, 1);
+            newOrder.splice(toIndex, 0, draggedPanelId);
+            setPanelOrder(newOrder);
+            setDraggedPanelId(null);
+            return;
+        }
+
+        // Left Side Check
+        const newLeftOrder = [...leftPanelOrder];
+        const fromLeft = newLeftOrder.indexOf(draggedPanelId);
+        const toLeft = newLeftOrder.indexOf(targetId);
+        if (fromLeft !== -1 && toLeft !== -1) {
+            newLeftOrder.splice(fromLeft, 1);
+            newLeftOrder.splice(toLeft, 0, draggedPanelId);
+            setLeftPanelOrder(newLeftOrder);
+            setDraggedPanelId(null);
+            return;
+        }
     };
 
 
@@ -2876,6 +2893,7 @@ const SceneCanvas = () => {
 
 
                     <AnchorRefPanel
+                        style={{ order: leftPanelOrder.indexOf('anchor') }}
                         state={state}
                         dispatch={dispatch}
                         bgPrompt={bgPrompt}
@@ -2903,6 +2921,7 @@ const SceneCanvas = () => {
                     />
 
                     <ActorIntelligencePanel
+                        style={{ order: leftPanelOrder.indexOf('actor_intel') }}
                         state={state}
                         dispatch={dispatch}
                         authorityStatus={authorityStatus}
@@ -2927,6 +2946,7 @@ const SceneCanvas = () => {
 
                     {/* Token Properties (Selection Context) */}
                     <SidebarPanel
+                        style={{ order: leftPanelOrder.indexOf('token_props') }}
                         id="token_props"
                         title="Token Properties"
                         icon={SettingsIcon}
@@ -3247,6 +3267,7 @@ const SceneCanvas = () => {
 
                     {/* CAST PALETTE */}
                     <SidebarPanel
+                        style={{ order: leftPanelOrder.indexOf('cast_palette') }}
                         id="cast_palette"
                         title="Available Cast"
                         icon={UserPlus}
@@ -3290,6 +3311,7 @@ const SceneCanvas = () => {
                     {/* ANNOTATION PROPERTIES (NEW) */}
                     {selectedAnnotation && (
                         <SidebarPanel
+                            style={{ order: leftPanelOrder.indexOf('annotation_props') }}
                             id="annotation_props"
                             title="Annotation"
                             icon={StickyNote}

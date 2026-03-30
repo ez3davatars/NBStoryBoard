@@ -25,6 +25,7 @@ interface ActorIntelligencePanelProps {
     onDragStart: (id: string) => void;
     onDrop: (targetId: string) => void;
     onRefreshSpatialData: () => void;
+    style?: React.CSSProperties;
 }
 
 export const ActorIntelligencePanel = ({
@@ -47,7 +48,8 @@ export const ActorIntelligencePanel = ({
     onToggle,
     onDragStart,
     onDrop,
-    onRefreshSpatialData
+    onRefreshSpatialData,
+    style
 }: ActorIntelligencePanelProps) => {
     return (
         <SidebarPanel
@@ -59,6 +61,7 @@ export const ActorIntelligencePanel = ({
             onDragStart={onDragStart}
             onDrop={onDrop}
             draggable={false}
+            style={style}
             headerColor={authorityStatus === 'AUTHORITATIVE' ? 'text-green-400' : authorityStatus === 'DEGRADED' ? 'text-amber-400' : 'text-red-500'}
             rightElement={
                 <div className={`px-2 py-0.5 rounded-[4px] text-[8px] font-black tracking-tight uppercase border transition-colors ${authorityStatus === 'AUTHORITATIVE' ? 'bg-green-500/10 text-green-400 border-green-500/30' :

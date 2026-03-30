@@ -14,6 +14,7 @@ interface SidebarPanelProps {
  headerColor?: string;
  rightElement?: React.ReactNode;
  draggable?: boolean;
+ style?: React.CSSProperties;
 }
 
 export const SidebarPanel = ({
@@ -28,7 +29,8 @@ export const SidebarPanel = ({
  isMaskMode,
  headerColor = "text-gray-500",
  rightElement,
- draggable = true
+ draggable = true,
+ style
 }: SidebarPanelProps) => {
  const isRegionActive = title === 'Region Edit' && isMaskMode;
  const activeBg = isRegionActive ? 'bg-green-500 text-black hover:bg-green-400' : '';
@@ -51,6 +53,7 @@ export const SidebarPanel = ({
  }
  }}
  className={`border border-[#27272a] rounded-xl overflow-hidden transition-all duration-300 shrink-0 ${collapsed ? 'h-[42px]' : 'bg-[#09090b]/80 backdrop-blur-md'}`}
+ style={style}
  >
  <div
  draggable={draggable}

@@ -26,6 +26,7 @@ interface AnchorRefPanelProps {
  sceneIntent?: any;
  previousBackgroundUrl?: string | null;
  onRestoreBackground?: () => void;
+ style?: React.CSSProperties;
 }
 
 export const AnchorRefPanel = ({
@@ -47,7 +48,8 @@ export const AnchorRefPanel = ({
  handleAutoStyleEnvironment,
  sceneIntent,
  previousBackgroundUrl,
- onRestoreBackground
+ onRestoreBackground,
+ style
 }: AnchorRefPanelProps) => {
   const activeShotId = state.activeShotId || 'default';
   const currentAnchor = getEffectiveResultAnchorForScene(state, activeShotId);
@@ -82,6 +84,7 @@ export const AnchorRefPanel = ({
  onToggle={onToggle}
  onDragStart={onDragStart}
  onDrop={onDrop}
+ style={style}
  >
  <div className="space-y-3">
  <div className="aspect-video bg-black/40 rounded border border-[#27272a] overflow-hidden relative group cursor-pointer"
