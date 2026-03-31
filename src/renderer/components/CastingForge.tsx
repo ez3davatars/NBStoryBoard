@@ -68,7 +68,7 @@ ABSOLUTE RULES:
 - Head Close-ups: Front, Left 3/4, Right 3/4, Side Profile
 
 6. COMPOSITION
-- Clean neutral background.
+- Solid black studio background.
 - Empty negative space.
 - No floating heads.
 - No disembodied parts.
@@ -109,6 +109,16 @@ const CastingForge = () => {
         .map(s => normalizeStyle(s))
     );
   }, []);
+
+  const PRESETS = [
+    { label: "Cyberpunk Hero", prompt: "A futuristic cyberpunk bounty hunter in high-tech carbon fiber armor, orange neon accents, cinematic street lighting, 8k resolution, stylized realism" },
+    { label: "Fantasy Mage", prompt: "An ancient elven sorcerer in ornate silk robes, glowing arcane runes, ethereal magic aura, soft cinematic lighting, high-fantasy 3D animation style" },
+    { label: "Street Samurai", prompt: "A modern urban samurai in a techwear kimono, mechanical katana, rain-slicked city background, teal and magenta lighting, graphic noir style" },
+    { label: "Hyper-Real Portrait", prompt: "A hyper-realistic studio portrait of a weathered starship captain, extreme facial detail, 85mm lens, neutral studio lighting, photorealistic CG" }
+  ];
+
+  const mainUploadRef = useRef<HTMLInputElement>(null);
+  const promptRef = useRef<HTMLTextAreaElement>(null);
 
   // ... (existing state) ...
 
@@ -424,7 +434,7 @@ const CastingForge = () => {
           styleDirectives = "Shot on Sony A7R IV, 50mm lens. Harsh realistic lighting, flash photography, visible pores, dermatological details, authentic skin texture, imperfect, grainy, sharp focus. Backlight separation, perfect white balance on subject, no color contamination. DO NOT crop off the top of the head.";
 
           // BACKGROUND RE-PHRASING (To avoid 'digital green' bias)
-          effectivePrompt += " Standing in front of a solid soft white studio background.";
+          effectivePrompt += " Standing in front of a solid black studio background.";
 
           // STRICT ANTI-CG CONSTRAINTS
           negativePrompt = "Do not use: digital art, illustration, painting, drawing, cartoon, anime, 3d render, cgi, unreal engine, smooth skin, airbrushed, beauty filter, perfect lighting, symmetry, plastic, doll-like, artistic adaptation, stylized.";
@@ -481,7 +491,7 @@ SUBJECT LOCK
 STYLE AUTHORITY
 - Apply this character description exactly: ${effectivePrompt}
 - Apply this style direction exactly: ${styleDirectives}
-- Keep the output as one clean isolated character on a solid soft white studio background.
+- Keep the output as one clean isolated character on a solid black studio background.
 
 COMPOSITION
 - Single subject only.
@@ -506,7 +516,7 @@ SUBJECT DEFINITION
 
 COMPOSITION
 - One subject only.
-- Solid soft white studio background.
+- Solid black studio background.
 - No text, no labels, no HUD, no overlays.
 
 NEGATIVE CONSTRAINTS:
@@ -1876,6 +1886,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
             </button>
           </div>
           <textarea
+            ref={promptRef}
             className="w-full bg-[#09090b] border border-[#27272a] p-3 rounded-lg text-sm text-gray-200 focus:border-yellow-500 focus:outline-none transition-colors h-24 resize-none mb-4"
             placeholder="Describe your character..."
             value={state.lastCastedPrompt}
@@ -1924,7 +1935,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
             <label className="flex items-center justify-center gap-2 bg-[#27272a] hover:bg-[#3f3f46] text-white py-2.5 rounded-lg text-xs font-bold transition-all border border-[#3f3f46] hover:border-gray-500 cursor-pointer">
               <Upload className="w-4 h-4" />
               Upload
-              <input type="file" className="hidden" accept="image/*" onChange={handleUpload} />
+              <input ref={mainUploadRef} type="file" className="hidden" accept="image/*" onChange={handleUpload} />
             </label>
           </div>
         </div>
@@ -2286,31 +2297,100 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
                   )}
                 </>
               ) : (
-                <div className="flex flex-col items-center justify-center h-full select-none pointer-events-none group">
-                  <div className="text-center bg-zinc-900/50 p-8 rounded-3xl backdrop-blur-sm transition-all duration-300 group-hover:bg-zinc-900/70">
-                    {/* Ambient Actor Outline */}
-                    <div className="relative w-32 h-32 mx-auto mb-4 opacity-40 transition-opacity duration-300 group-hover:opacity-70">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-full h-full text-zinc-500" strokeWidth="0.5">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                      </svg>
-                      {/* Subtle glow/tech accents */}
-                      <div className="absolute inset-0 bg-blue-500/5 blur-2xl rounded-full" />
+                <div className="flex flex-col items-center justify-center h-full w-full max-w-4xl mx-auto p-8 animate-in fade-in duration-700">
+                  {/* Premium Launchpad Container */}
+                  <div className="w-full bg-[#18181b]/40 border border-white/5 rounded-[2.5rem] p-12 backdrop-blur-md relative overflow-hidden group/launch">
+                    
+                    {/* Ambient Visual Background */}
+                    <div className="absolute inset-0 opacity-20 group-hover/launch:opacity-30 transition-opacity duration-700 pointer-events-none">
+                      <div className="absolute top-0 left-0 w-full h-full bg-gradient-to-br from-blue-600/10 via-transparent to-purple-600/10" />
+                      <img src={coverRealism} className="absolute -top-1/4 -right-1/4 w-1/2 opacity-40 blur-3xl animate-pulse" />
+                      <img src={coverScifi} className="absolute -bottom-1/4 -left-1/4 w-1/2 opacity-40 blur-3xl animate-pulse" style={{ animationDelay: '2s' }} />
                     </div>
 
-                    <div className="space-y-4 flex flex-col items-center">
-                      <div className="w-fit">
-                        {/* Brand Highlight Line (matches scrollbar) */}
-                        <div className="w-full h-0.5 mb-3 bg-[#eab308] opacity-80 rounded-full" />
-
-                        <h3 className="text-3xl font-black text-zinc-500 uppercase tracking-[0.2em] text-center whitespace-nowrap">ADD OR GENERATE AN ACTOR</h3>
+                    <div className="relative z-10 flex flex-col items-center text-center">
+                      {/* Brand Header */}
+                      <div className="mb-10">
+                        <div className="flex items-center justify-center gap-4 mb-4">
+                          <div className="h-[1px] w-12 bg-gradient-to-r from-transparent to-yellow-500/50" />
+                          <Sparkles className="w-6 h-6 text-yellow-500 animate-pulse" />
+                          <div className="h-[1px] w-12 bg-gradient-to-l from-transparent to-yellow-500/50" />
+                        </div>
+                        <h2 className="text-5xl font-black text-white italic tracking-tighter uppercase mb-4 leading-none">
+                          Forge Your <span className="text-transparent bg-clip-text bg-gradient-to-b from-white to-gray-500">Cast</span>
+                        </h2>
+                        <p className="text-sm font-bold text-zinc-400 uppercase tracking-[0.3em] max-w-lg mx-auto">
+                          The production begins here. Generate, refine, and catalog your leading actors.
+                        </p>
                       </div>
-                      <div className="space-y-1">
-                        <p className="text-xs font-bold text-zinc-300 uppercase tracking-widest animate-stage-breathe max-w-lg mx-auto leading-relaxed">
-                          Generate a new character or place an existing one<br /> to prepare it for directing.
-                        </p>
-                        <p className="text-[10px] text-zinc-400 font-mono">
-                          Background removal and slicing happen here before staging.
-                        </p>
+
+                      {/* Inspiring Preview Imagery Grid */}
+                      <div className="grid grid-cols-4 gap-4 w-full mb-12 opacity-80 group-hover/launch:opacity-100 transition-opacity duration-500">
+                        {[coverRealism, coverAnim, coverIllustration, coverScifi].map((img, i) => (
+                          <div key={i} className="aspect-[3/4] rounded-2xl border border-white/10 overflow-hidden bg-black/40 group/img shadow-2xl transition-all duration-300 hover:scale-105 hover:border-yellow-500/30">
+                            <img src={img} className="w-full h-full object-cover opacity-60 group-hover/img:opacity-100 transition-all duration-500" />
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Quick Start Presets */}
+                      <div className="w-full mb-10">
+                        <h3 className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-4 flex items-center justify-center gap-3">
+                          <div className="h-[1px] flex-grow max-w-[40px] bg-white/5" />
+                          Quick Start Presets
+                          <div className="h-[1px] flex-grow max-w-[40px] bg-white/5" />
+                        </h3>
+                        <div className="flex flex-wrap justify-center gap-3">
+                          {PRESETS.map((preset, idx) => (
+                            <button
+                              key={idx}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                dispatch({ type: 'SET_LAST_CASTED_PROMPT', payload: preset.prompt });
+                                // Visual feedback: focus prompt box or show toast
+                                showToast(`${preset.label} pre-filled`);
+                                if (promptRef.current) promptRef.current.focus();
+                              }}
+                              className="pointer-events-auto px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-yellow-500/30 rounded-full text-[10px] font-bold text-gray-400 hover:text-white transition-all uppercase tracking-wider active:scale-95"
+                            >
+                              {preset.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Primary CTAs */}
+                      <div className="flex items-center gap-4 w-full justify-center pointer-events-auto">
+                        <button 
+                          onClick={() => {
+                            const scrollable = document.querySelector('.min-h-0.overflow-y-auto');
+                            if (scrollable) scrollable.scrollTo({ top: 0, behavior: 'smooth' });
+                            setTimeout(() => {
+                              promptRef.current?.focus();
+                            }, 500);
+                          }}
+                          className="flex-1 max-w-[200px] py-4 rounded-2xl bg-white text-black font-black uppercase text-xs tracking-widest transition-all hover:bg-yellow-400 hover:shadow-[0_0_30px_rgba(234,179,8,0.2)] active:scale-95 flex items-center justify-center gap-2"
+                        >
+                          <MonitorPlay className="w-4 h-4" />
+                          Generate
+                        </button>
+                        <button 
+                          onClick={() => mainUploadRef.current?.click()}
+                          className="flex-1 max-w-[200px] py-4 rounded-2xl bg-[#27272a] text-white font-black uppercase text-xs tracking-widest transition-all hover:bg-[#3f3f46] border border-white/10 active:scale-95 flex items-center justify-center gap-2"
+                        >
+                          <Upload className="w-4 h-4" />
+                          Upload Ref
+                        </button>
+                        <button 
+                          onClick={() => {
+                            const library = document.querySelector('.overflow-y-scroll');
+                            library?.scrollIntoView({ behavior: 'smooth' });
+                          }}
+                          className="flex-1 max-w-[200px] py-4 rounded-2xl bg-black/40 text-gray-400 font-black uppercase text-xs tracking-widest transition-all hover:text-white border border-white/5 hover:border-white/20 active:scale-95 flex items-center justify-center gap-2"
+                        >
+                          <Folder className="w-4 h-4" />
+                          Library
+                        </button>
                       </div>
                     </div>
                   </div>

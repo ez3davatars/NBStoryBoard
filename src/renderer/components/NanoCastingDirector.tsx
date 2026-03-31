@@ -184,6 +184,7 @@ const NanoCastingDirector = () => {
     // --- WARDROBE LIBRARY HANDLERS ---
     const [confirmDelete, setConfirmDelete] = useState<any | null>(null);
     const [showCoverDeleteConfirm, setShowCoverDeleteConfirm] = useState<string | null>(null);
+    const [localBiometricSheetUrl, setLocalBiometricSheetUrl] = useState<string | null>(null);
 
     const scanWardrobe = async () => {
         // 1. Native Mode
@@ -696,7 +697,7 @@ const NanoCastingDirector = () => {
         }
     }, [selectedStyle]);
 
-    const [identitySource, setIdentitySource] = useState<'biometric' | 'generated'>('biometric');
+    const [identitySource, setIdentitySource] = useState<'hybrid' | 'biometric' | 'generated'>('hybrid');
     // sheetContent is now derived from refLayout (face_focus = head, others = full)
     // Numeric body controls (more precise than categorical presets)
     const [weightLbs, setWeightLbs] = useState<number>(170); // 90–300
@@ -1395,7 +1396,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
  VISUAL KEYWORDS: ${styleObj.keywords}
  LIGHTING: ${styleObj.lighting}
  
- BODY MORPHOLOGY: ${archetypeObj.name} (${archetypeObj.desc}).
+ BODY MORPHOLOGY: A subject with a ${archetypeObj.desc}.
  
  DIRECTOR OVERRIDES:
  ${applyAge ? `- Age Appearance: Approx ${directorControls.age} years old.` : ''}
@@ -1709,6 +1710,228 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
         }
     }, [finalCharacterUrl, dispatch]);
 
+    const generateLocalBiometricSheet = async () => {
+        dispatch({ type: 'SET_PROCESSING', payload: true });
+        dispatch({ type: 'ADD_LOG', payload: { message: `Compositing Fast Local Biometric Sheet...`, type: 'info' } });
+        try {
+            const canvas = document.createElement('canvas');
+            canvas.width = 1920;
+            canvas.height = 1080;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) throw new Error("Could not initialize canvas context");
+
+            // Base Background & Blueprint Grid
+            ctx.fillStyle = '#1D2430'; 
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Subtle Technical Grid
+            ctx.strokeStyle = '#2A3546';
+            ctx.lineWidth = 1;
+            for (let i = 0; i < canvas.width; i += 40) {
+                ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, canvas.height); ctx.stroke();
+            }
+            for (let i = 0; i < canvas.height; i += 40) {
+                ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(canvas.width, i); ctx.stroke();
+            }
+
+            // Top Header
+            const dateStr = new Date().toLocaleDateString('en-US');
+            const subjectIdText = `SUBJECT ID: NANO-${Math.floor(100000 + Math.random() * 900000)}, DATE: ${dateStr}`;
+            ctx.fillStyle = '#E2E8F0';
+            ctx.font = '500 24px "Inter", sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(subjectIdText, canvas.width / 2, 40);
+
+            // Tight Mathematical Layout logic (Perfect 3x2 Grid)
+            const w = 610;
+            const h = 460;
+            const gap = 20;
+            const startX = Math.floor((canvas.width - ((w * 3) + (gap * 2))) / 2); 
+            
+            const col1 = startX;
+            const col2 = startX + w + gap;
+            const col3 = startX + (w * 2) + (gap * 2);
+            
+            const row1Y = 70;
+            const row2Y = 70 + h + gap;
+
+            const boxes = [
+                { key: 'left', label: 'LEFT PROFILE', x: col1, y: row1Y },
+                { key: 'center', label: 'CENTER FRONT', x: col2, y: row1Y },
+                { key: 'right', label: 'RIGHT PROFILE', x: col3, y: row1Y },
+                { key: 'up', label: 'TOP DOWN', x: col1, y: row2Y },
+                { key: 'center', label: 'CENTER FRONT (ALT)', x: col2, y: row2Y },
+                { key: 'down', label: 'BOTTOM UP', x: col3, y: row2Y }
+            ];
+
+            // Render watermark at the bottom right
+            ctx.fillStyle = '#64748B';
+            ctx.font = '400 14px "Inter", sans-serif';
+            ctx.textAlign = 'right';
+            ctx.fillText('NanoCast Biometric Scanner', canvas.width - startX, canvas.height - 20);
+
+            const loadImage = (src: string): Promise<HTMLImageElement> => new Promise((resolve, reject) => {
+                const img = new Image();
+                img.crossOrigin = "anonymous";
+                img.onload = () => resolve(img);
+                img.onerror = reject;
+                img.src = src;
+            });
+
+            for (const box of boxes) {
+                // Ensure no grid overlaps by rendering an opaque background first
+                ctx.fillStyle = '#1D2430'; 
+                ctx.fillRect(box.x, box.y, w, h);
+
+                const blobUrl = capturedAngles[box.key as keyof typeof capturedAngles];
+                if (blobUrl) {
+                    try {
+                        const img = await loadImage(blobUrl);
+                        let sW = img.width;
+                        let sH = img.height;
+                        let tW = w;
+                        let tH = h;
+
+                        let cW = sW;
+                        let cH = sW * (tH/tW);
+                        if (cH > sH) {
+                            cH = sH;
+                            cW = sH * (tW/tH);
+                        }
+                        let cX = (sW - cW) / 2;
+                        let cY = (sH - cH) / 2;
+
+                        ctx.drawImage(img, cX, cY, cW, cH, box.x, box.y, tW, tH);
+                    } catch (e) {
+                        console.error(`Failed to draw biometric image ${box.key}`, e);
+                        ctx.fillStyle = '#1E293B';
+                        ctx.fillRect(box.x, box.y, w, h);
+                    }
+                }
+                
+                // Thin border overlay around the box (exactly match reference)
+                ctx.strokeStyle = '#64748B';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(box.x - 1, box.y - 1, w + 2, h + 2);
+            }
+
+            const finalDataUrl = canvas.toDataURL('image/png');
+            setLocalBiometricSheetUrl(finalDataUrl);
+        } catch (error) {
+            console.error(error);
+            showToast("Failed to composite fast sheet.");
+        } finally {
+            dispatch({ type: 'SET_PROCESSING', payload: false });
+        }
+    };
+
+    const handleGeneratePremiumBiometricSheet = async () => {
+        if (!state.apiKey) {
+            showToast("API Key Required for Premium Synthesis");
+            return;
+        }
+
+        const hasBiometrics = Boolean(capturedAngles.center && capturedAngles.left && capturedAngles.right);
+        if (!hasBiometrics) {
+            showToast("Requires: Center + Left + Right Scans");
+            return;
+        }
+
+        dispatch({ type: 'SET_PROCESSING', payload: true });
+        dispatch({ type: 'ADD_LOG', payload: { message: "Generating Premium Forensic Biometric Sheet...", type: 'info' } });
+
+        try {
+            // Validate Credits Here (assuming logic exists elsewhere, or warn)
+            const imageRefs: { url: string; label: string }[] = [];
+            const angles: (keyof typeof capturedAngles)[] = ['center', 'left', 'right', 'up', 'down'];
+            
+            for (const angle of angles) {
+                const blobUrl = capturedAngles[angle];
+                if (blobUrl) {
+                    const b64 = await getBase64FromBlobUrl(blobUrl);
+                    imageRefs.push({ url: b64, label: `Forensic Source: ${angle}` });
+                }
+            }
+
+            const identityRefLimit = imageRefs.length;
+            const biometricRangeText = identityRefLimit === 1 ? "[IMAGE 1]" : `[IMAGE 1] to [IMAGE ${identityRefLimit}]`;
+
+            const prompt = `
+Create a single image.
+
+FORENSIC BIOMETRIC BOARD (PHASE 1)
+This is a raw identity capture meant for neutral observation. It is NOT a stylized character reference.
+
+SOURCE MATERIALS: Use ${biometricRangeText} as the ONLY source for the subject's face, skin tone, hair texture, and skull geometry.
+
+STYLE PROTOCOL: High-end Premium Biometric Database. Premium cybersecurity identity capture overlay.
+LIGHTING: Cinematic studio lighting, sharp edge lights, rich dark atmosphere, moody lighting.
+CLOTHING: Tactical dark grey/black collared polo or utility undershirt.
+BACKGROUND: SOLID BLACK STUDIO BACKGROUND. SOLID COLOR. DO NOT under any circumstances draw any grids, lines, blueprint markings, or graph paper patterns anywhere on the character portraits.
+
+LAYOUT PROTOCOL:
+- MULTI-ANGLE IDENTITY GRID. Perfect 3 columns by 2 rows.
+- NO GRIDS ANYWHERE INSIDE BOXES: DO NOT draw grids or lines inside the portrait boxes or on the subjects.
+- NO TEXT INSIDE BOXES: DO NOT write "LENS 1" or any other labels inside the portrait panels.
+- PANEL BORDERS: Thin sharp rectangular outlines separating each of the 6 panels.
+- UPPER HALF: 3 Headshots/Busts. Left Profile, Center Frontal face, Right Profile.
+- LOWER HALF: 3 Alternate Headshots/Busts. Elevated/Top-down, Looking slightly off-center, Lower/Bottom-up angle.
+- TOP TEXT: Centered exactly at the very top of the image (above the image grid): "SUBJECT ID: NANO-${Math.floor(100000 + Math.random() * 900000)}, DATE: ${new Date().toLocaleDateString('en-US')}"
+- BOTTOM RIGHT TEXT: Flush right at the very bottom edge of the image: "NanoCast Biometric Scanner".
+
+CRITICAL DIRECTIVES:
+1. BIOMETRIC IDENTITY LOCK: MAXIMAL LIKENESS. This is for identity preservation. The face, nose shape, eyes, lips, and jaw structure must match the source scans perfectly.
+2. NO RECASTING: Scans must be the ONLY identity authority. Do not average them into a generic or new person.
+3. NO BEAUTIFICATION: Preserve all flaws, asymmetries, and exact age markers. Do not smooth skin or idealize features.
+4. LEFT/RIGHT PROFILE PRESERVATION: Exactly preserve the side profiles provided in the inputs.
+5. ALL PANELS SAME PERSON: Ensure strict continuity of identity across every single angle.
+6. NO THEMES: Ignore any "Cyberpunk", "Fantasy", or "Sci-Fi" settings. This is a scientific output only.
+
+NEGATIVE CONSTRAINTS:
+stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, dramatic shadows, costumes, logos, text, watermarks, deformed, asymmetrical, duplicate angles.
+`;
+
+            dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: 10, text: "Forensic Synthesis Initiated" } });
+            
+            let res = null;
+            let currentPercent = 10;
+            const etaMs = 25000;
+            const updateMs = 1000;
+            const increment = (updateMs / etaMs) * 100;
+            const progressInterval = setInterval(() => {
+                currentPercent = Math.min(95, currentPercent + increment);
+                dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text: "Reconstructing Biometric Mesh..." } });
+            }, updateMs);
+
+            try {
+                res = await GeminiService.generateImage(prompt, state.apiKey, state.model, imageRefs, { imageSize: '4K', thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true });
+            } finally {
+                clearInterval(progressInterval);
+            }
+
+            if (res) {
+                dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: 100, text: "Forensic Matrix Complete" } });
+                const finalUrl = res;
+                setFinalCharacterUrl(finalUrl);
+                
+                // Show in the reference sheet viewer with special title
+                setRefSheetUrl(finalUrl);
+                setShowRefSheet(true);
+                
+                dispatch({ type: 'ADD_LOG', payload: { message: "Premium Biometric Board Generated Successfully.", type: 'success' } });
+            } else {
+                throw new Error("No image data returned from Nano-Engine.");
+            }
+
+        } catch (err: any) {
+            console.error(err);
+            showToast("Forensic Generation Failed.");
+            dispatch({ type: 'ADD_LOG', payload: { message: `Generation failed: ${err.message}`, type: 'error' } });
+        } finally {
+            dispatch({ type: 'SET_PROCESSING', payload: false });
+        }
+    };
+
     const handleGenerateRefSheet = async () => {
         if (!state.apiKey) return;
 
@@ -1800,8 +2023,8 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                 return safe;
             };
 
-            const targetStyleKey = refStyle || selectedStyle || 'family_3d';
-            const styleConfig = styleMatrix[targetStyleKey as keyof typeof styleMatrix] || styleMatrix.pixar;
+            const targetStyleKey = refStyle || 'family_3d';
+            const styleConfig = REF_SHEET_STYLES[targetStyleKey as keyof typeof REF_SHEET_STYLES] || REF_SHEET_STYLES.family_3d;
             const safeKeywords = getSafeKeywords(targetStyleKey, styleConfig.keywords);
 
             // 3. PROMPT CONSTRUCTION
@@ -1819,7 +2042,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
 
             // 0. GLOBAL LAYOUT (MUST BE FIRST)
             finalPrompt += `REFERENCE SHEET BACKGROUND PROTOCOL:\n`;
-            finalPrompt += `Background must be a SOLID, NEUTRAL GREY STUDIO BACKDROP. No maps, no text, no scenery, no patterns.\n\n`;
+            finalPrompt += "Background must be a SOLID BLACK STUDIO BACKDROP. No maps, no text, no scenery, no patterns.\n\n";
 
             finalPrompt += `LAYOUT & COMPOSITION PROTOCOL (AGGRESSIVE ENFORCEMENT):\n`;
             finalPrompt += `1. VARIATION LOCK: Every panel MUST show a unique viewpoint. NO DUPLICATE ANGLES.\n`;
@@ -1830,7 +2053,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                 // BODY FOCUS -> Vertical Split (Image 3)
                 finalPrompt += " [LAYOUT A]: Vertical Split.\n";
                 finalPrompt += " LEFT PANEL (50%): 3 Full Standing Figures. LENS 1: Frontal, LENS 2: Left 3/4, LENS 3: Back View.\n";
-                finalPrompt += " RIGHT PANEL (50%): 2x2 Grid of 4 HEADSHOTS. LENS 4: Extreme Close-Up Front, LENS 5: EXTREME LEFT PROFILE (Character looking far left), LENS 6: EXTREME RIGHT PROFILE (Character looking far right), LENS 7: Looking Up.\n";
+                finalPrompt += " RIGHT PANEL (50%): 2x2 Grid of 4 HEAD PANELS. LENS 4: Frontal Close-Up Face (0-degree yaw). LENS 5: True Left Profile Face (90-degree left yaw). LENS 6: True Right Profile Face (90-degree right yaw). LENS 7: Upward Tilt Face (near-frontal yaw, chin raised).\n";
             } else if (refLayout === 'face_focus') {
                 finalPrompt += " [LAYOUT B]: 8 Distinct Expression Panels. ALL views must show the costume collar.\n";
                 finalPrompt += " MANDATORY UNIQUE LENS ANGLES: [LENS 1: Frontal], [LENS 2: 45-degree Left], [LENS 3: 45-degree Right], [LENS 4: Extreme 90-degree Left Profile], [LENS 5: Extreme 90-degree Right Profile], [LENS 6: Tilted Up], [LENS 7: Tilted Down], [LENS 8: High Angle Bird's Eye].\n";
@@ -1838,9 +2061,27 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                 // HYBRID -> Horizontal Split (Image 4)
                 finalPrompt += " [LAYOUT C]: Horizontal Split.\n";
                 finalPrompt += " UPPER SECTION (60%): 3 Full Standing Figures. LENS 1: Frontal, LENS 2: Right 3/4, LENS 3: Back View.\n";
-                finalPrompt += " LOWER SECTION (40%): Row of 5 Headshots. LENS 4: Frontal, LENS 5: EXTREME LEFT PROFILE (Looking far left), LENS 6: EXTREME RIGHT PROFILE (Looking far right), LENS 7: 45-degree Left, LENS 8: High Detail Hero Shot.\n";
+                finalPrompt += " LOWER SECTION (40%): Row of 5 HEAD PANELS. LENS 4: Frontal Close-Up Face (0-degree yaw). LENS 5: True Left Profile Face (90-degree left yaw). LENS 6: True Right Profile Face (90-degree right yaw). LENS 7: Upward Tilt Face (near-frontal yaw, chin raised). LENS 8: Downward Tilt Face (near-frontal yaw, chin lowered).\n";
             }
-            finalPrompt += " EXCLUSION RULE: NEVER put two identical profile views next to each other. LENS 5 and LENS 6 MUST face opposite directions.\n\n";
+            finalPrompt += " EXCLUSION RULE: NEVER duplicate any angle. No two panels may share the same rotation. Every single lens angle MUST be unique.\n\n";
+
+            finalPrompt += `ANGLE LOCK (MAXIMUM PRIORITY):\n`;
+            finalPrompt += `- The head panels are a technical angle set, not expressive variations.\n`;
+            finalPrompt += `- Each head panel must occupy a distinct mandatory angle bucket.\n`;
+            finalPrompt += `- Frontal close-up = 0-degree yaw, both eyes equally visible, symmetrical face presentation.\n`;
+            finalPrompt += `- True left profile = 90-degree left yaw, one eye visible, true left-side silhouette.\n`;
+            finalPrompt += `- True right profile = 90-degree right yaw, one eye visible, true right-side silhouette.\n`;
+            finalPrompt += `- Upward tilt = near-frontal yaw, chin elevated, nostril and under-chin visibility.\n`;
+            finalPrompt += `- Downward tilt = near-frontal yaw, chin lowered, forehead and top-plane emphasis.\n`;
+            finalPrompt += `- Do not substitute 3/4 views for profile views.\n`;
+            finalPrompt += `- Do not generate two panels in the same yaw family.\n`;
+            finalPrompt += `- If two panels read as near-identical angle variants, the render is invalid.\n\n`;
+
+            finalPrompt += `PROFILE DISTINCTNESS RULE:\n`;
+            finalPrompt += `- Left profile and right profile must be mirror-opposed true side views.\n`;
+            finalPrompt += `- Frontal close-up must not drift into 3/4.\n`;
+            finalPrompt += `- Upward tilt and downward tilt must remain near-frontal in yaw.\n`;
+            finalPrompt += `- Do not produce a second left-leaning 3/4 view when a true right profile is required.\n\n`;
 
             if (identitySource !== 'biometric') {
                 // GENERATED IDENTITY
@@ -1886,9 +2127,9 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
 
             // --- C. BODY & STYLE ---
             // --- C. BODY & STYLE ---
-            const isRealisticMode = ['hyper_real', 'exact_studio', 'cyberpunk', 'premium_cg'].includes(targetStyleKey as any);
+            const isRealisticMode = ['premium_cg', 'exact_studio'].includes(targetStyleKey as any);
             const isPhotoMode = targetStyleKey === 'exact_studio'; // Strict Photography
-            const isCGMode = (targetStyleKey as any) === 'hyper_real' || (targetStyleKey as any) === 'premium_cg' || (targetStyleKey as any) === 'cyberpunk'; // High-End 3D
+            const isCGMode = targetStyleKey === 'premium_cg'; // High-End 3D
 
             // OVERRIDE LABEL: Differentiate Photo vs CG
             let promptStyleLabel = styleConfig.label;
@@ -1963,7 +2204,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                 // --- A. IDENTITY LOCK (MOVED TO END FOR PRIORITY) ---
                 finalPrompt += `FINAL IMAGE MASTERY: IDENTITY OVERRIDE (MAXIMUM PRIORITY):\n`;
 
-                const isRealistic = ['hyper_real', 'exact_studio', 'cyberpunk', 'premium_cg'].includes(targetStyleKey);
+                const isRealistic = ['premium_cg', 'exact_studio'].includes(targetStyleKey);
                 if (isRealistic) {
                     finalPrompt += `FINAL INSTRUCTION: The face in ALL views must be a PIXEL-PERFECT IDENTITY LIKENESS to [IMAGE 1]. PRESERVE FACIAL GEOMETRY ABOVE ALL ELSE.\n`;
                     finalPrompt += `CRITICAL ROTATION OVERRIDE: While the identity must match, YOU MUST NOT COPY THE CAMERA ANGLE OF [IMAGE 1]. You MUST dynamically rotate the character's head and body in 3D space to precisely match the required LENS angle (Profile, 3/4, Back, etc) for each individual panel.\n`;
@@ -1995,14 +2236,14 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
 
             // --- E. NEGATIVES ---
             finalPrompt += `\nNEGATIVE CONSTRAINTS:\n`;
-            finalPrompt += `different person, face swap, generic face, altered skull, incorrect facial hair, added beard, different grooming, altered hairline, extra people, text, watermarks, maps, cartography, vintage map, scenery, landscape, complex background.\n`;
+            finalPrompt += `different person, face swap, identity replacement, recast identity, portrait mismatch, approved portrait ignored, generic face, younger face, idealized face, video game protagonist hallucination, generic action hero, muscular replacing overweight, slenderized body, idealized 3D template, stylized-hero hallucination, generic cartoon structure, altered skull, incorrect profile, inconsistent nose projection, inconsistent jawline, inconsistent ear placement, inconsistent beard silhouette, inconsistent hairline, off-model panels, panel-to-panel face drift, restyled face that changes identity, generic profile, beautified profile, style-averaged face, new character per panel, duplicate angle, repeated yaw bucket, near-identical head panel, second left profile, second near-left 3/4, profile replaced by 3/4, frontal drifting to 3/4, upward tilt with side yaw, downward tilt with side yaw, costume reinterpretation, branding loss, missing logo when visible, relocated logo, replaced logo, incorrect logo placement, stylized logo hallucination, shader inconsistency, mismatched stylization, unintended realism increase, realistic turnaround drift, photographic drift, raw DSLR look in premium CG, studio headshot photography in premium CG, documentary photo realism in premium CG, flattened CGI treatment, missing CGI shader response, missing subsurface scattering, missing rendered-digital-double look, technical identity-sheet realism, right-panel realism drift, closeup realism drift, flattened stylization, weak cyberpunk treatment, generic neutral studio lighting, missing neon rim light, missing teal/magenta separation, loss of futuristic render mood, inconsistent cyberpunk intensity across panels, dramatic hero panel with neutral supporting panels, neutral turnaround row, flat profile panels, uneven theatrical treatment, loss of animated eye language, loss of softened facial planes, loss of stylized nose treatment, mismatch between body-panel style and headshot-panel style, squeezed torso, narrow 3/4 body, narrow back view, stretched body, compressed body, body mass ignored, inconsistent shoulder width, inconsistent pelvis width, inconsistent limb thickness, different body mass across turnaround panels, mismatched full-body silhouette, unnatural neck twist, owl turn, over-rotated head, visible face in true back view, cheating face visibility in rear panel, head misaligned with torso, extra people, text, watermarks, scenery, maps, landscape, background graphics.\n`;
             finalPrompt += `cropped legs, cut off feet, cowboy shot, 3/4 shot, knees up, waist up, torso only, close up body, cropped head.\n`;
             if (directorControls.outfit) {
                 finalPrompt += `EXTREMELY IMPORTANT: DO NOT COPY THE CLOTHING FROM THE SOURCE IMAGES. DO NOT RENDER THE ORIGINAL ATTIRE.\n`;
             }
             if (identitySource === 'biometric') {
                 finalPrompt += `generic face, random person, default avatar, face swap, extra people, text, watermarks, maps.\n`;
-                if (['hyper_real', 'exact_studio', 'cyberpunk', 'premium_cg'].includes(targetStyleKey)) {
+                if (['premium_cg', 'exact_studio'].includes(targetStyleKey)) {
                     // REALISTIC: Ban caricature
                     finalPrompt += `caricature, cartoon face, distorted proportions, big eyes, small nose, altered skull shape.\n`;
                 } else {
@@ -2815,23 +3056,42 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                                             {capturedAngles[label] && <CheckCircle2 className="w-4 h-4 text-success" />}
                                         </div>
                                     ))}
-                                    <div className="mt-auto">
+                                    <div className="mt-auto flex flex-col gap-2">
                                         <button
-                                            onClick={resetScan}
-                                            className="w-full py-4 mb-2 bg-danger hover:bg-red-600 text-accent font-black uppercase tracking-widest transition-all text-xs rounded-lg flex items-center justify-center gap-2"
+                                            disabled={!capturedAngles.center || !capturedAngles.left || !capturedAngles.right}
+                                            onClick={generateLocalBiometricSheet}
+                                            className="w-full py-4 bg-surface-2 hover:bg-surface-3 text-white border border-border text-[10px] font-black uppercase tracking-widest rounded-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                                         >
-                                            <RotateCcw className="w-4 h-4 text-accent" /> RESET SCAN
+                                            <Scan className="w-4 h-4" /> FAST BIOMETRIC SHEET
                                         </button>
+                                        
                                         <button
-                                            disabled={isPhaseLocked(2)}
-                                            onClick={() => setPhase(2)}
-                                            className={`w-full py-4 font-black uppercase tracking-widest transition-all text-xs rounded-lg flex items-center justify-center gap-2 ${isPhaseLocked(2)
-                                                ? 'bg-surface-2 text-muted cursor-not-allowed'
-                                                : 'bg-accent hover:bg-cyan-400 text-blue-600'
-                                                }`}
+                                            disabled={!capturedAngles.center || !capturedAngles.left || !capturedAngles.right || isProcessing}
+                                            onClick={handleGeneratePremiumBiometricSheet}
+                                            className="w-full py-4 bg-[#1a1a24] hover:bg-[#252538] text-indigo-400 border border-indigo-500/30 hover:border-indigo-400 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                            title="Uses 1 API Credit"
                                         >
-                                            Processing Matrix <ChevronRight className="w-4 h-4" />
+                                            <Cpu className="w-4 h-4" /> PREMIUM FORENSIC BOARD
                                         </button>
+
+                                        <div className="flex gap-2">
+                                            <button
+                                                onClick={resetScan}
+                                                className="flex-1 py-4 bg-danger/10 hover:bg-danger/20 text-danger border border-danger/20 font-black uppercase tracking-widest transition-all text-[10px] rounded-lg flex items-center justify-center gap-2"
+                                            >
+                                                <RotateCcw className="w-3 h-3" /> RETAKE
+                                            </button>
+                                            <button
+                                                disabled={isPhaseLocked(2)}
+                                                onClick={() => setPhase(2)}
+                                                className={`flex-[2] py-4 font-black uppercase tracking-widest transition-all text-xs rounded-lg flex items-center justify-center gap-2 ${isPhaseLocked(2)
+                                                    ? 'bg-surface-2 text-muted cursor-not-allowed'
+                                                    : 'bg-accent hover:bg-cyan-400 text-blue-900 shadow-[0_0_15px_rgba(34,211,238,0.4)]'
+                                                    }`}
+                                            >
+                                                Proceed <ChevronRight className="w-4 h-4" />
+                                            </button>
+                                        </div>
                                     </div>
                                 </div>
                             </motion.div>
@@ -3334,8 +3594,17 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                                                         <label className="text-[8px] text-muted/70 uppercase tracking-widest font-bold">Identity Source</label>
                                                         <div className="flex bg-bg rounded-lg p-1 border border-border">
                                                             <button
+                                                                onClick={() => setIdentitySource('hybrid')}
+                                                                className={`flex-1 py-1 px-0.5 rounded text-[7px] font-bold uppercase tracking-tighter truncate transition-all ${identitySource === 'hybrid'
+                                                                    ? 'bg-accent/15 text-accent border border-accent/30'
+                                                                    : 'text-muted hover:text-white'
+                                                                    }`}
+                                                            >
+                                                                Hybrid
+                                                            </button>
+                                                            <button
                                                                 onClick={() => setIdentitySource('biometric')}
-                                                                className={`flex-1 py-1 rounded text-[8px] font-bold uppercase transition-all ${identitySource === 'biometric'
+                                                                className={`flex-1 py-1 px-0.5 rounded text-[7px] font-bold uppercase tracking-tighter truncate transition-all ${identitySource === 'biometric'
                                                                     ? 'bg-accent/15 text-accent border border-accent/30'
                                                                     : 'text-muted hover:text-white'
                                                                     }`}
@@ -3344,7 +3613,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                                                             </button>
                                                             <button
                                                                 onClick={() => setIdentitySource('generated')}
-                                                                className={`flex-1 py-1 rounded text-[8px] font-bold uppercase transition-all ${identitySource === 'generated'
+                                                                className={`flex-1 py-1 px-0.5 rounded text-[7px] font-bold uppercase tracking-tighter truncate transition-all ${identitySource === 'generated'
                                                                     ? 'bg-accent/15 text-accent border border-accent/30'
                                                                     : 'text-muted hover:text-white'
                                                                     }`}
@@ -3353,7 +3622,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                                                             </button>
                                                         </div>
                                                         <div className="text-[9px] text-muted/70 normal-case">
-                                                            Biometric uses LEFT/CENTER/RIGHT/UP/DOWN for the most accurate likeness.
+                                                            Hybrid blends your scan with the portrait style. Biometric forces strict raw likeness. Portrait uses only text prompting.
                                                         </div>
                                                     </div>
 
@@ -3440,64 +3709,103 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
 
                         {/* REFERENCE SHEET MODAL */}
                         {showRefSheet && refSheetUrl && (
-                            <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-xl flex items-center justify-center p-8 animate-in fade-in duration-200">
-                                <div className="relative w-full max-w-6xl h-[90vh] flex flex-col items-center bg-[#18181b] rounded-2xl border border-white/10 overflow-hidden">
-                                    <div className="flex justify-between items-center w-full p-6 border-b border-white/10 bg-[#09090b] flex-shrink-0">
-                                        <h3 className="text-xl font-black text-white uppercase tracking-widest flex items-center gap-3">
-                                            <LayoutTemplate className="w-6 h-6 text-accent" /> Character Reference Sheet
+                            <div className="fixed inset-0 z-[100] bg-black/90 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+                                <div className="relative w-full max-w-7xl h-full max-h-[90vh] flex flex-col bg-[#0a0a0c] rounded-xl border border-white/10 overflow-hidden shadow-2xl">
+                                    <div className="flex justify-between items-center w-full px-4 py-3 border-b border-white/10 bg-[#121216] flex-shrink-0">
+                                        <h3 className="text-sm font-black text-white uppercase tracking-widest flex items-center gap-2">
+                                            <LayoutTemplate className="w-4 h-4 text-accent" /> Character Reference Sheet
                                         </h3>
-                                        <div className="flex gap-3">
-                                            <button
-                                                onClick={() => {
-                                                    const newMember = {
-                                                        id: `nano_ref_${Date.now()}`,
-                                                        url: refSheetUrl,
-                                                        name: `Ref_Sheet_${new Date().toLocaleTimeString()}`,
-                                                        tag: 'front' as const,
-                                                        profile: {
-                                                            identity: "Reference Sheet",
-                                                            wardrobe: "N/A",
-                                                            accessories: "N/A",
-                                                            style: "Technical"
-                                                        }
-                                                    };
-                                                    // @ts-ignore
-                                                    dispatch({ type: 'ADD_CAST', payload: newMember });
-                                                    showToast("Added to Cast Assets");
-                                                }}
-                                                className="bg-surface hover:bg-surface-2 text-white px-4 py-2 rounded-lg font-bold uppercase tracking-widest text-[10px] transition-all border border-white/10 flex items-center gap-2"
-                                            >
-                                                <UserPlus className="w-4 h-4" /> Cast
-                                            </button>
-                                            <button
-                                                onClick={() => {
-                                                    const a = document.createElement('a');
-                                                    a.href = refSheetUrl;
-                                                    a.download = `RefSheet-${Date.now()}.png`;
-                                                    a.click();
-                                                    showToast("Download Started");
-                                                }}
-                                                className="bg-surface hover:bg-surface-2 text-white px-4 py-2 rounded-lg font-bold uppercase tracking-widest text-[10px] transition-all border border-white/10 flex items-center gap-2"
-                                            >
-                                                <Download className="w-4 h-4" /> Download
-                                            </button>
-                                            <button
-                                                onClick={() => handleOpenSaveModal('ref_sheet')}
-                                                className="bg-accent hover:bg-white text-green-900 px-6 py-2 rounded-lg font-bold uppercase tracking-widest text-[10px] transition-all flex items-center gap-2"
-                                            >
-                                                <Share2 className="w-4 h-4" /> Save
-                                            </button>
-                                            <button
-                                                onClick={() => { setShowRefSheet(false); setRefSheetUrl(null); }}
-                                                className="bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white px-4 py-2 rounded-lg font-bold uppercase tracking-widest text-[10px] transition-all border border-red-500/20 flex items-center gap-2"
-                                            >
-                                                <X className="w-4 h-4" /> Close
-                                            </button>
-                                        </div>
                                     </div>
 
-                                    <div className="flex-1 w-full bg-black/50 overflow-hidden flex items-center justify-center relative p-4 min-h-0">
-                                        <img src={refSheetUrl} className="max-w-full max-h-full object-contain " />
+                                    <div className="flex-1 w-full min-h-0 overflow-auto flex items-center justify-center bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] bg-repeat bg-[length:50px] p-2 custom-scrollbar">
+                                        <img src={refSheetUrl} className="max-w-full h-auto object-contain rounded shadow-lg" />
+                                    </div>
+
+                                    <div className="w-full p-3 border-t border-white/10 bg-[#18181b] flex-shrink-0 sticky bottom-0 flex justify-end gap-3 z-10">
+                                        <button
+                                            onClick={() => {
+                                                const newMember = {
+                                                    id: `nano_ref_${Date.now()}`,
+                                                    url: refSheetUrl,
+                                                    name: `Ref_Sheet_${new Date().toLocaleTimeString()}`,
+                                                    tag: 'front' as const,
+                                                    profile: {
+                                                        identity: "Reference Sheet",
+                                                        wardrobe: "N/A",
+                                                        accessories: "N/A",
+                                                        style: "Technical"
+                                                    }
+                                                };
+                                                // @ts-ignore
+                                                dispatch({ type: 'ADD_CAST', payload: newMember });
+                                                showToast("Added to Cast Assets");
+                                            }}
+                                            className="bg-surface hover:bg-surface-2 text-white px-6 py-2 rounded-lg font-bold uppercase tracking-widest text-xs transition-all border border-white/10 flex items-center gap-2"
+                                        >
+                                            <UserPlus className="w-4 h-4" /> Cast
+                                        </button>
+                                        <button
+                                            onClick={() => {
+                                                const a = document.createElement('a');
+                                                a.href = refSheetUrl;
+                                                a.download = `RefSheet-${Date.now()}.png`;
+                                                a.click();
+                                                showToast("Download Started");
+                                            }}
+                                            className="bg-surface hover:bg-surface-2 text-white px-6 py-2 rounded-lg font-bold uppercase tracking-widest text-xs transition-all border border-white/10 flex items-center gap-2"
+                                        >
+                                            <Download className="w-4 h-4" /> Download
+                                        </button>
+                                        <button
+                                            onClick={() => handleOpenSaveModal('ref_sheet')}
+                                            className="bg-accent hover:bg-white text-green-900 px-6 py-2 rounded-lg font-bold uppercase tracking-widest text-xs transition-all flex items-center gap-2"
+                                        >
+                                            <Share2 className="w-4 h-4" /> Save
+                                        </button>
+                                        <button
+                                            onClick={() => { setShowRefSheet(false); setRefSheetUrl(null); }}
+                                            className="bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white px-6 py-2 rounded-lg font-bold uppercase tracking-widest text-xs transition-all border border-red-500/20 flex items-center gap-2"
+                                        >
+                                            <X className="w-4 h-4" /> Close
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* LOCAL BIOMETRIC SHEET MODAL */}
+                        {localBiometricSheetUrl && (
+                            <div className="fixed inset-0 z-[100] bg-black/90 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+                                <div className="relative w-full max-w-7xl h-full max-h-[90vh] flex flex-col bg-[#0a0a0c] rounded-xl border border-indigo-500/30 overflow-hidden shadow-[0_0_50px_rgba(79,70,229,0.15)]">
+                                    <div className="flex justify-between items-center w-full px-4 py-3 border-b border-indigo-500/20 bg-[#121216] flex-shrink-0">
+                                        <h3 className="text-sm font-black text-indigo-400 uppercase tracking-widest flex items-center gap-2">
+                                            <Cpu className="w-4 h-4" /> FAST BIOMETRIC BOARD
+                                        </h3>
+                                    </div>
+                                    
+                                    <div className="flex-1 w-full min-h-0 overflow-auto flex items-center justify-center p-2 custom-scrollbar bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] bg-repeat bg-[length:50px]">
+                                        <img src={localBiometricSheetUrl} className="max-w-full h-auto object-contain rounded drop-shadow-[0_0_20px_rgba(79,70,229,0.2)]" />
+                                    </div>
+
+                                    <div className="w-full p-3 border-t border-indigo-500/20 bg-[#121216] flex-shrink-0 sticky bottom-0 flex justify-end gap-3 z-10">
+                                        <button
+                                            onClick={() => {
+                                                const a = document.createElement('a');
+                                                a.href = localBiometricSheetUrl;
+                                                a.download = `FastBiometric-${Date.now()}.png`;
+                                                a.click();
+                                                showToast("Download Started");
+                                            }}
+                                            className="bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 px-6 py-2 rounded-lg font-bold uppercase tracking-widest text-xs transition-all border border-indigo-500/30 flex items-center gap-2"
+                                        >
+                                            <Download className="w-4 h-4" /> Save to Drive
+                                        </button>
+                                        <button
+                                            onClick={() => setLocalBiometricSheetUrl(null)}
+                                            className="bg-red-500/10 hover:bg-red-500/20 text-red-400 px-6 py-2 rounded-lg font-bold uppercase tracking-widest text-xs transition-all border border-red-500/20 flex items-center gap-2"
+                                        >
+                                            <X className="w-4 h-4" /> Close
+                                        </button>
                                     </div>
                                 </div>
                             </div>
