@@ -436,7 +436,8 @@ const SceneCanvas = () => {
                 depthPrompt,
                 state.apiKey,
                 state.model,
-                [{ url: state.backgroundUrl, label: "Scene Context" }]
+                [{ url: state.backgroundUrl, label: "Scene Context" }],
+                { billingMode: state.billingMode }
             );
 
             if (depthUrl) {
@@ -529,7 +530,7 @@ const SceneCanvas = () => {
                     state.apiKey!,
                     state.model,
                     [], 
-                    { aspectRatio: state.director.aspectRatio || '16:9', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, strictMode: true }
+                    { aspectRatio: state.director.aspectRatio || '16:9', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, strictMode: true, billingMode: state.billingMode }
                 );
 
                 setPreviousBackgroundUrl(state.backgroundUrl || null);
@@ -1071,7 +1072,7 @@ const SceneCanvas = () => {
                     state.apiKey!,
                     state.model,
                     limitedRefs,
-                    { aspectRatio: '16:9', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, strictMode: true }
+                    { aspectRatio: '16:9', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, strictMode: true, billingMode: state.billingMode }
                 );
 
                 dispatch({ type: 'SET_RESULT_IMAGE', payload: img });
@@ -1130,7 +1131,7 @@ const SceneCanvas = () => {
                     state.apiKey!,
                     state.model,
                     references.slice(0, 14),
-                    { aspectRatio: state.director.aspectRatio, imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding }
+                    { aspectRatio: state.director.aspectRatio, imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, billingMode: state.billingMode }
                 );
 
                 dispatch({ type: 'SET_RESULT_IMAGE', payload: img });
@@ -1437,7 +1438,7 @@ const SceneCanvas = () => {
                 state.apiKey,
                 maskModel as any,
                 [{ url: captured, label: 'Base Frame' }],
-                { aspectRatio: state.director.aspectRatio }
+                { aspectRatio: state.director.aspectRatio, billingMode: state.billingMode }
             );
 
             setRawProtectMaskUrl(res);

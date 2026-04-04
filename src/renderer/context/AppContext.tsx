@@ -2,6 +2,7 @@
 import { createContext, useContext, useReducer, useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { StorageService } from '../services/StorageService';
+import { safeFetchBlob, isNativeParams, nativeJoinPath } from '../utils/NativeFileAssets';
 import { computeDepthScore } from '../utils/spatialHelpers';
 
 import type { VeoFivePartDraft, VeoAudioBlock, VeoTimestampBeat } from '../promptEngine/veoFivePart';
@@ -49,6 +50,8 @@ export interface WhitelistProfile {
 export interface CastMember {
     id: string;
     url: string;
+    previewUrl?: string;
+    sourceUrl?: string;
     tag: 'front' | 'side' | 'back' | '3/4' | 'detail';
     name: string;
     filename?: string;
@@ -464,6 +467,10 @@ export interface AppState {
 
     // GLOBAL VEO DRAFT (Fallback when no shot is selected)
     veoPromptDraft?: VeoFivePartDraft & { audio?: VeoAudioBlock, concept?: string, negativePrompt?: string };
+
+    // BILLING & AUTH
+    billingMode: 'hosted' | 'byok';
+    hostedSession: any | null;
 }
 
 export interface WardrobeState {
@@ -648,7 +655,9 @@ export type Action =
     | { type: 'DUPLICATE_TOKEN'; payload: { id: string } }
     | { type: 'SET_GLOBAL_VEO_DRAFT'; payload: VeoFivePartDraft & { audio?: VeoAudioBlock, concept?: string, negativePrompt?: string } | undefined }
     | { type: 'SET_SCENE_RESULT_ANCHOR'; payload: { sceneId: string; anchor?: SceneResultAnchor } }
-    | { type: 'SET_TEMPLATE_NOTES'; payload: { activeTemplateId?: string; templateNotes?: string } };
+    | { type: 'SET_TEMPLATE_NOTES'; payload: { activeTemplateId?: string; templateNotes?: string } }
+    | { type: 'SET_BILLING_MODE'; payload: 'hosted' | 'byok' }
+    | { type: 'SET_HOSTED_SESSION'; payload: any | null };
 
 // --- HELPERS ---
 
@@ -911,6 +920,9 @@ export const initialState: AppState = {
 
     sessionName: null,
     sessionFilePath: null,
+
+    billingMode: loadJson<'hosted' | 'byok'>('nano_billing_mode', 'byok'),
+    hostedSession: null,
 };
 
 // --- DATA SANITIZATION ---
@@ -968,6 +980,10 @@ export const reducer = (state: AppState, action: Action): AppState => {
             return { ...state, apiKey: action.payload };
         case 'SET_MODEL':
             return { ...state, model: action.payload };
+        case 'SET_BILLING_MODE':
+            return { ...state, billingMode: action.payload };
+        case 'SET_HOSTED_SESSION':
+            return { ...state, hostedSession: action.payload };
 
         case 'ADD_CAST':
             return { ...state, cast: [...state.cast, action.payload] };
@@ -1903,7 +1919,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
         const restore = async () => {
             try {
-                const [_tokens, _annotations, actors, wardrobe, props, shots] = await Promise.all([
+                const [_tokens, _annotations, rawActors, wardrobe, props, shots] = await Promise.all([
                     migrateOrLoad<StageToken[]>('nano_tokens', sanitizeTokens),
                     migrateOrLoad<StageAnnotation[]>('nano_annotations', sanitizeAnnotations),
                     StorageService.load<CastMember[]>('nano_actors', []),
@@ -1913,6 +1929,30 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                 ]);
 
                 if (cancelled) return;
+
+                const actors = await Promise.all(rawActors.map(async (actor) => {
+                    try {
+                        let durablePath = actor.url;
+                        const savePath = localStorage.getItem('nano_save_path');
+                        
+                        if (actor.filename && isNativeParams() && savePath) {
+                            const fullPath = await nativeJoinPath(savePath, 'Actors', actor.filename);
+                            durablePath = `file:///${fullPath.replace(/\\/g, '/')}`;
+                        }
+
+                        if (!durablePath || durablePath.startsWith('blob:')) {
+                            // If we literally have no valid disk path to resolve, keep raw state
+                            return actor;
+                        }
+
+                        const blob = await safeFetchBlob(durablePath);
+                        const previewUrl = URL.createObjectURL(blob);
+                        return { ...actor, previewUrl }; // Hydrate successful preview
+                    } catch (e) {
+                        console.warn(`[AppContext] Failed to hydrate previewUrl for actor ${actor.id}`, e);
+                        return actor;
+                    }
+                }));
 
                 // CLEAR TRANSIENT STAGE (USER REQUEST)
                 // We no longer restore nano_tokens or nano_annotations on cold start to ensure a clean stage.
@@ -1983,6 +2023,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             localStorage.setItem('nano_image_resolution', JSON.stringify(state.imageResolution));
             localStorage.setItem('nano_enable_image_thinking', JSON.stringify(state.enableImageThinking));
             localStorage.setItem('nano_enable_google_grounding', JSON.stringify(state.enableGoogleGrounding));
+            localStorage.setItem('nano_billing_mode', JSON.stringify(state.billingMode));
         } catch (e) {
             console.warn('Config persistence failed', e);
         }
@@ -2000,7 +2041,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         state.showHelpHints,
         state.imageResolution,
         state.enableImageThinking,
-        state.enableGoogleGrounding
+        state.enableGoogleGrounding,
+        state.billingMode
     ]);
 
     // --- EFFECT 4: Persistence (Large Collections / StorageService) ---
@@ -2025,6 +2067,54 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
         return () => clearTimeout(timer);
     }, [state.wardrobeItems, state.actorLibrary, state.propItems, state.shots]);
+
+    // --- EFFECT 5: Blob URL Garbage Collection ---
+    const activeBlobsRef = useRef<Set<string>>(new Set());
+
+    useEffect(() => {
+        const extractBlobs = (obj: any, blobs: Set<string>) => {
+            if (!obj) return;
+            if (typeof obj === 'string') {
+                if (obj.startsWith('blob:')) blobs.add(obj);
+            } else if (Array.isArray(obj)) {
+                obj.forEach(item => extractBlobs(item, blobs));
+            } else if (typeof obj === 'object') {
+                Object.values(obj).forEach(val => extractBlobs(val, blobs));
+            }
+        };
+
+        const currentBlobs = new Set<string>();
+        extractBlobs(state.cast, currentBlobs);
+        extractBlobs(state.actorLibrary, currentBlobs);
+        extractBlobs(state.wardrobeItems, currentBlobs);
+        extractBlobs(state.propItems, currentBlobs);
+        extractBlobs(state.lastCastedImage, currentBlobs);
+        extractBlobs(state.lastCastedMask, currentBlobs);
+        extractBlobs(state.inspectImage, currentBlobs);
+        extractBlobs(state.inspectMask, currentBlobs);
+        extractBlobs(state.wardrobeState, currentBlobs);
+        extractBlobs(state.propStudioState, currentBlobs);
+        extractBlobs(state.resultImage, currentBlobs);
+        extractBlobs(state.tokens, currentBlobs);
+
+        activeBlobsRef.current.forEach(blobUrl => {
+            if (!currentBlobs.has(blobUrl)) {
+                URL.revokeObjectURL(blobUrl);
+            }
+        });
+
+        activeBlobsRef.current = currentBlobs;
+    }, [
+        state.cast, state.actorLibrary, state.wardrobeItems, state.propItems,
+        state.lastCastedImage, state.lastCastedMask, state.inspectImage, state.inspectMask,
+        state.wardrobeState, state.propStudioState, state.resultImage, state.tokens
+    ]);
+
+    useEffect(() => {
+        return () => {
+            activeBlobsRef.current.forEach(blobUrl => URL.revokeObjectURL(blobUrl));
+        };
+    }, []);
 
     return <AppContext.Provider value={{ state, dispatch }}>{children}</AppContext.Provider>;
 };

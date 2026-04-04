@@ -217,10 +217,10 @@ export const GeminiService = {
     apiKey: string,
     model: string,
     referenceImages: { url: string; label: string }[] = [],
-    options: { aspectRatio?: string, imageSize?: '1K' | '2K' | '4K', thinkingLevel?: boolean | 'minimal' | 'low' | 'medium' | 'high', googleGrounding?: boolean, strictMode?: boolean } = {}
+    options: { aspectRatio?: string, imageSize?: '1K' | '2K' | '4K', thinkingLevel?: boolean | 'minimal' | 'low' | 'medium' | 'high', googleGrounding?: boolean, strictMode?: boolean, billingMode?: 'hosted' | 'byok' } = {}
   ): Promise<string> {
 
-    if (!apiKey) {
+    if (!apiKey && options.billingMode !== 'hosted') {
       console.warn("No API Key. Running in simulation mode.");
       await new Promise(r => setTimeout(r, 1500));
       return `https://placehold.co/1024x576/1a1a1a/FFF?text=Demo+Mode:+${encodeURIComponent(prompt.substring(0, 20))}`;
@@ -245,7 +245,12 @@ export const GeminiService = {
         }
 
         contentsParts.push({ text: `[IMAGE ${imgIndex}] ${ref.label}` });
-        const inline = await GeminiService._resolveImageData(ref.url);
+        
+        // CRITICAL BUGFIX: The API Gateway/WAF silently drops Edge Function TCP streams 
+        // exceeding ~580KB with a 504 timeout. Compressing heavily for hosted.
+        const enforceLimit = options.billingMode === 'hosted' ? 1024 : 3072;
+        const inline = await GeminiService._resolveImageData(ref.url, enforceLimit);
+        
         contentsParts.push({
           inlineData: { mimeType: inline.mimeType, data: inline.data }
         });
@@ -320,6 +325,113 @@ export const GeminiService = {
       if (thinkingConfig) {
         requestBody.generationConfig.thinkingConfig = thinkingConfig;
       }
+
+      // ===== PHASE 2B: HOSTED BILLING PIPELINE =====
+      if (options.billingMode === 'hosted') {
+        const { SupabaseAuth, supabase } = await import('./SupabaseClient');
+
+        const token = await SupabaseAuth.getValidJwt();
+        const idempotencyKey = crypto.randomUUID();
+
+        const payloadBodyForEdge = {
+          model,
+          requestBody
+        };
+
+        const hashBuffer = await crypto.subtle.digest(
+          'SHA-256',
+          new TextEncoder().encode(JSON.stringify(payloadBodyForEdge))
+        );
+        const executionFingerprint = Array.from(new Uint8Array(hashBuffer))
+          .map(b => b.toString(16).padStart(2, '0'))
+          .join('');
+
+        if (!supabase) throw new Error('Supabase is not configured for hosted generation.');
+
+        if (!token || token.split('.').length !== 3) {
+          throw new Error('Hosted Generation Error: Missing or malformed user JWT');
+        }
+
+        const edgeUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-image`;
+
+        const rawResponse = await fetch(edgeUrl, {
+          method: 'POST',
+          cache: 'no-store',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+            'Content-Type': 'application/json',
+            'X-Idempotency-Key': idempotencyKey,
+            Accept: 'application/json'
+          },
+          body: JSON.stringify({
+            payload: payloadBodyForEdge,
+            options,
+            executionFingerprint
+          })
+        });
+
+        const responseText = await rawResponse.text();
+
+        if (rawResponse.status === 202) {
+          const data = JSON.parse(responseText);
+          const genId = data.generationId;
+          if (!genId) throw new Error('Hosted Generation Error: Received 202 but no generationId.');
+
+          // Polling loop logic: Max 90 seconds (45 attempts * 2s)
+          let attempts = 0;
+          const MAX_ATTEMPTS = 45;
+          
+          while (attempts < MAX_ATTEMPTS) {
+            await new Promise(r => setTimeout(r, 2000));
+            attempts++;
+            
+            const { data: pollData, error: pollErr } = await supabase
+              .from('generations')
+              .select('status, asset_url, error_message, failure_code')
+              .eq('id', genId)
+              .single();
+              
+            if (pollErr) {
+              console.warn(`[Hosted Polling] db fetch error:`, pollErr.message);
+              continue; // Soft retry
+            }
+            
+            if (pollData) {
+              if (pollData.status === 'COMPLETED') {
+                if (!pollData.asset_url) throw new Error("Hosted Generation Error: COMPLETED but missing asset_url.");
+                return pollData.asset_url;
+              }
+              if (pollData.status === 'FAILED') {
+                throw new Error(`Hosted Generation Error [${pollData.failure_code || 'PROVIDER_ERROR'}]: ${pollData.error_message}`);
+              }
+              if (pollData.status === 'CANCELED') {
+                throw new Error('Hosted Generation Error: Job was canceled manually.');
+              }
+            }
+          }
+          
+          throw new Error('Hosted Generation Error: Generation exceeded maximum timeout (90s).');
+        }
+
+        if (!rawResponse.ok) {
+          let errMsg = responseText;
+          try {
+            const parsed = JSON.parse(responseText);
+            errMsg = parsed.message || parsed.error || errMsg;
+          } catch {}
+          throw new Error(`Hosted Generation Error [${rawResponse.status}]: ${errMsg}`);
+        }
+
+        const data = JSON.parse(responseText);
+        // Fallback for exact cache hit scenarios returning 200
+        if (!data?.imageUrl) {
+          throw new Error('Hosted Generation Error: No image returned from orchestrator.');
+        }
+
+        return data.imageUrl;
+      }
+      // ===============================================
 
       let response = await fetch(`${baseUrl}?key=${apiKey}`, {
         method: 'POST',

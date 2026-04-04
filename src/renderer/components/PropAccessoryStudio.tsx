@@ -460,7 +460,7 @@ extra objects, duplicate prop, altered proportions, floating parts, text, label,
                 state.apiKey,
                 state.model,
                 [],
-                { aspectRatio: '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true }
+                { aspectRatio: '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingMode }
             );
             setDesignerImage(res);
             dispatch({ type: 'ADD_LOG', payload: { message: "Prop generated on black studio background.", type: 'success' } });
@@ -579,7 +579,7 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                     { url: selectedCharacter.url, label: "Subject Reference" },
                     { url: selectedProp.url, label: "Prop Reference" }
                 ],
-                { aspectRatio: '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true }
+                { aspectRatio: '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingMode }
             );
             setAppliedImage(res);
             dispatch({ type: 'ADD_LOG', payload: { message: "Prop integrated. Creating character edge mask...", type: 'info' } });
@@ -591,7 +591,7 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                     state.apiKey,
                     state.model,
                     [{ url: res, label: "Reference" }],
-                    { aspectRatio: '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true }
+                    { aspectRatio: '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingMode }
                 );
                 setApplyMask(maskRes);
             } catch { }

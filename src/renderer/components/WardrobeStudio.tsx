@@ -1236,7 +1236,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                 state.apiKey,
                 state.model,
                 refs,
-                { aspectRatio: '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding }
+                { aspectRatio: '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, billingMode: state.billingMode }
             );
 
             setDesignerImage(res);
@@ -1536,7 +1536,8 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                         aspectRatio: '1:1',
                         imageSize: state.imageResolution,
                         thinkingLevel: state.enableImageThinking,
-                        googleGrounding: state.enableGoogleGrounding
+                        googleGrounding: state.enableGoogleGrounding,
+                        billingMode: state.billingMode
                     }
                 );
 
@@ -1617,7 +1618,8 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                     aspectRatio: '1:1',
                     imageSize: state.imageResolution,
                     thinkingLevel: state.enableImageThinking,
-                    googleGrounding: state.enableGoogleGrounding
+                    googleGrounding: state.enableGoogleGrounding,
+                    billingMode: state.billingMode
                 }
             );
 
@@ -1695,7 +1697,8 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                     aspectRatio: '1:1',
                     imageSize: state.imageResolution,
                     thinkingLevel: state.enableImageThinking,
-                    googleGrounding: state.enableGoogleGrounding
+                    googleGrounding: state.enableGoogleGrounding,
+                    billingMode: state.billingMode
                 }
             );
 

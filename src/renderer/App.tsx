@@ -10,6 +10,7 @@ import PortraitStudio from './components/PortraitStudio';
 import VeoPromptStudio from './components/VeoPromptStudio';
 import { StorageService } from './services/StorageService';
 import { LOGO_BASE64 } from './assets/logo';
+import { SupabaseAuth } from './services/SupabaseClient';
 
 import type {
   ViewMode,
@@ -268,6 +269,43 @@ const App = () => {
     console.log('[NBStoryBoard] VITE_APP_ENV =', import.meta.env.VITE_APP_ENV ?? '(undefined)');
   }, []);
 
+  // Sync Supabase Hosted Auth Session
+  useEffect(() => {
+    const checkJwtDebug = async (session: any) => {
+      if (session) {
+        try {
+          const jwt = await SupabaseAuth.getValidJwt();
+          console.group('🔐 [Phase 2A] JWT Retrieval Debug');
+          console.log('Token Exists:', !!jwt);
+          console.log('Token Prefix:', jwt.substring(0, 20) + '...');
+          console.log('Token Length:', jwt.length);
+          console.groupEnd();
+        } catch (e) {
+          console.error('[Phase 2A] JWT Retrieval failed:', e);
+        }
+      }
+    };
+
+    SupabaseAuth.getSession()
+      .then((res) => {
+        const session = res?.data?.session || null;
+        dispatch({ type: 'SET_HOSTED_SESSION', payload: session });
+        checkJwtDebug(session);
+      })
+      .catch((err) => console.error("getSession unhandled error:", err));
+
+    const authRes = SupabaseAuth.onAuthStateChange((_event, session) => {
+      dispatch({ type: 'SET_HOSTED_SESSION', payload: session });
+      checkJwtDebug(session);
+    });
+
+    return () => {
+      if (authRes?.data?.subscription?.unsubscribe) {
+        authRes.data.subscription.unsubscribe();
+      }
+    };
+  }, [dispatch]);
+
   // Master Storyboard Toggle Redirect
   useEffect(() => {
     if (!state.isStoryboardEnabled && state.view === 'veo') {
@@ -360,6 +398,12 @@ const App = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [tempKey, setTempKey] = useState(state.apiKey);
   const [tempModel, setTempModel] = useState<AppState['model']>(state.model);
+  const [tempBillingMode, setTempBillingMode] = useState<'hosted' | 'byok'>(state.billingMode);
+  
+  // Auth UI State
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPass, setAuthPass] = useState('');
+  const [isAuthLoading, setIsAuthLoading] = useState(false);
 
   const closeSettings = () => {
     setShowSettings(false);
@@ -371,8 +415,34 @@ const App = () => {
   const saveSettings = () => {
     dispatch({ type: 'SET_API_KEY', payload: tempKey });
     dispatch({ type: 'SET_MODEL', payload: tempModel });
+    dispatch({ type: 'SET_BILLING_MODE', payload: tempBillingMode });
     closeSettings();
     dispatch({ type: 'ADD_LOG', payload: { message: "Settings saved", type: 'success' } });
+  };
+
+  const handleSignIn = async () => {
+    setIsAuthLoading(true);
+    try {
+      const { error } = await SupabaseAuth.signIn(authEmail, authPass);
+      if (error) throw error;
+      dispatch({ type: 'ADD_LOG', payload: { message: "Signed in successfully", type: 'success' } });
+    } catch (e: any) {
+      dispatch({ type: 'ADD_LOG', payload: { message: `Sign In Failed: ${e.message}`, type: 'error' } });
+    } finally {
+      setIsAuthLoading(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    setIsAuthLoading(true);
+    try {
+      await SupabaseAuth.signOut();
+      dispatch({ type: 'ADD_LOG', payload: { message: "Signed out successfully", type: 'info' } });
+    } catch (e: any) {
+      dispatch({ type: 'ADD_LOG', payload: { message: `Sign Out Failed: ${e.message}`, type: 'error' } });
+    } finally {
+      setIsAuthLoading(false);
+    }
   };
 
 
@@ -807,19 +877,67 @@ const App = () => {
                   <div className="bg-[#18181b] border border-gray-700 p-4 sm:p-6 rounded-xl w-full max-w-2xl max-h-[90dvh] overflow-y-auto animate-in fade-in zoom-in duration-200">
                     <h2 className="text-lg font-bold text-white mb-4">Configuration</h2>
                     <div className="space-y-4">
+                      {/* BILLING MODE TOGGLE */}
                       <div>
-                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Gemini API Key</label>
-                        <input
-                          type="password"
-                          className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-yellow-500 focus:outline-none"
-                          placeholder="AIzaSy..."
-                          value={tempKey}
-                          onChange={(e) => setTempKey(e.target.value)}
-                        />
-                        <p className="text-[10px] text-gray-500 mt-2">
-                          Required for the Service Layer to connect to Google Cloud. If empty, the app runs in Simulation Mode.
-                        </p>
+                        <label className="block text-xs font-bold text-gray-400 uppercase mb-2 tracking-wider">Billing & Generation Mode</label>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            onClick={() => setTempBillingMode('hosted')}
+                            className={`p-3 rounded-lg border transition-all text-left ${tempBillingMode === 'hosted' ? 'bg-blue-500/10 border-blue-500 ' : 'bg-[#09090b] border-[#27272a] hover:border-gray-600'}`}
+                          >
+                            <span className={`text-xs font-bold ${tempBillingMode === 'hosted' ? 'text-blue-500' : 'text-gray-200'}`}>Hosted Cloud</span>
+                            <p className="text-[10px] text-gray-500 mt-1">Uses secure Edge proxy and shared quota.</p>
+                          </button>
+                          <button
+                            onClick={() => setTempBillingMode('byok')}
+                            className={`p-3 rounded-lg border transition-all text-left ${tempBillingMode === 'byok' ? 'bg-yellow-500/10 border-yellow-500 ' : 'bg-[#09090b] border-[#27272a] hover:border-gray-600'}`}
+                          >
+                            <span className={`text-xs font-bold ${tempBillingMode === 'byok' ? 'text-yellow-500' : 'text-gray-200'}`}>Bring Your Own Key</span>
+                            <p className="text-[10px] text-gray-500 mt-1">Direct API requests using your local key.</p>
+                          </button>
+                        </div>
                       </div>
+
+                      {tempBillingMode === 'byok' && (
+                        <div>
+                          <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Gemini API Key</label>
+                          <input
+                            type="password"
+                            className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-yellow-500 focus:outline-none"
+                            placeholder="AIzaSy..."
+                            value={tempKey}
+                            onChange={(e) => setTempKey(e.target.value)}
+                          />
+                          <p className="text-[10px] text-gray-500 mt-2">
+                            Required for BYOK Service Layer to connect directly to Google Cloud. 
+                          </p>
+                        </div>
+                      )}
+
+                      {tempBillingMode === 'hosted' && (
+                        <div className="p-4 bg-black/40 border border-[#27272a] rounded-lg">
+                          <label className="block text-xs font-bold text-blue-500 uppercase mb-2">Hosted Cloud Authentication</label>
+                          {state.hostedSession ? (
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <p className="text-sm text-white">{state.hostedSession.user?.email}</p>
+                                <p className="text-[10px] text-emerald-500 font-mono">Authenticated ✓</p>
+                              </div>
+                              <button onClick={handleSignOut} disabled={isAuthLoading} className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white rounded text-xs font-bold transition-colors">
+                                {isAuthLoading ? 'Signing out...' : 'Sign Out'}
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="space-y-3">
+                               <input type="email" value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} placeholder="Email account" className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-blue-500 focus:outline-none" />
+                               <input type="password" value={authPass} onChange={(e) => setAuthPass(e.target.value)} placeholder="Password" className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-blue-500 focus:outline-none" />
+                               <button onClick={handleSignIn} disabled={isAuthLoading || !authEmail || !authPass} className="w-full py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded text-sm font-bold transition-colors">
+                                 {isAuthLoading ? 'Authenticating...' : 'Sign In'}
+                               </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
                       <div>
                         <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Render Save Folder</label>
                         <div className="flex flex-col sm:flex-row gap-2">

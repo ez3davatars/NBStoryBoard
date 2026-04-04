@@ -1223,7 +1223,7 @@ extra garments, mannequin person, text, watermark, props, cropped garment, alter
                         state.apiKey,
                         state.model,
                         [],
-                        { aspectRatio: '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true }
+                        { aspectRatio: '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingMode }
                     ),
                     timeoutPromise(getTimeoutMs())
                 ]);
@@ -1257,7 +1257,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                             { url: finalCharacterUrl, label: "Subject" },
                             { url: garment, label: "New Outfit" }
                         ],
-                        { aspectRatio: '2:3', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true } // Portrait
+                        { aspectRatio: '2:3', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingMode } // Portrait
                     ),
                     timeoutPromise(getTimeoutMs())
                 ]);
@@ -1465,7 +1465,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
             let resultUrl: string;
             try {
                 resultUrl = await Promise.race([
-                    GeminiService.generateImage(prompt, state.apiKey, state.model, referenceImages, { imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true }),
+                    GeminiService.generateImage(prompt, state.apiKey, state.model, referenceImages, { imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingMode }),
                     timeoutPromise(getTimeoutMs())
                 ]);
             } finally {
@@ -1904,7 +1904,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
             }, updateMs);
 
             try {
-                res = await GeminiService.generateImage(prompt, state.apiKey, state.model, imageRefs, { imageSize: '4K', thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true });
+                res = await GeminiService.generateImage(prompt, state.apiKey, state.model, imageRefs, { imageSize: '4K', thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingMode });
             } finally {
                 clearInterval(progressInterval);
             }
@@ -2296,7 +2296,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                             state.apiKey,
                             state.model,
                             imageRefs,
-                            { aspectRatio: '16:9', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true }
+                            { aspectRatio: '16:9', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingMode }
                         ),
                         timeoutPromise(timeoutMs) // Dynamic Timeout
                     ]);

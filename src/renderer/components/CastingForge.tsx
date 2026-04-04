@@ -96,6 +96,37 @@ const STUDIO_FOLDERS = [
 // Aggressive normalization: "Family 3D" == "family_3d" == "family-3d"
 const normalizeStyle = (s: string | undefined | null) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
+const isHttpUrl = (value?: string | null) => !!value && /^https?:\/\//i.test(value);
+
+const dataUrlToBlob = (dataUrl: string): Blob => {
+  const [meta, data] = dataUrl.split(',');
+  const mimeMatch = meta.match(/data:(.*?);base64/);
+  const mime = mimeMatch?.[1] || 'image/png';
+  const bytes = atob(data);
+  const arr = new Uint8Array(bytes.length);
+  for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+  return new Blob([arr], { type: mime });
+};
+
+
+
+const resolveImageBlob = async (src: string): Promise<Blob> => {
+  if (!src) throw new Error('Missing image source');
+
+  if (src.startsWith('data:image/')) {
+    return dataUrlToBlob(src);
+  }
+
+  if (isHttpUrl(src)) {
+    const response = await fetch(src, { mode: 'cors' });
+    if (!response.ok) {
+      throw new Error(`Remote image fetch failed: ${response.status}`);
+    }
+    return await response.blob();
+  }
+
+  throw new Error('Unsupported image source format');
+};
 
 const CastingForge = () => {
   const { state, dispatch } = useAppContext();
@@ -314,37 +345,43 @@ const CastingForge = () => {
     composite();
   }, [state.lastCastedImage, restorationLayer, state.lastCastedMask, removeBg]);
 
-  const handleAddToCast = () => {
-    if (!state.lastCastedImage) return;
-    const finalUrl = processedPreviewUrl || state.lastCastedImage;
-    const newCast: CastMember = {
-      id: `cast-${Date.now()}`,
-      url: finalUrl,
-      tag: 'front',
-      name: `Cast ${state.cast.length + 1}`,
-      profile: {
-        identity: state.lastCastedPrompt || "Unknown Identity",
-        wardrobe: "",
-        accessories: "",
-        style: "External Asset"
-      }
-    };
-    dispatch({ type: 'ADD_CAST', payload: newCast });
-    dispatch({ type: 'ADD_LOG', payload: { message: "Added to Cast Assets", type: 'success' } });
+  const handleAddToCast = async () => {
+    const source = pendingRefSheet || processedPreviewUrl || state.lastCastedImage;
+    if (!source) return;
+
+    try {
+      const blob = await resolveImageBlob(source);
+      const localPreviewUrl = URL.createObjectURL(blob);
+
+      const newCast: CastMember = {
+        id: `cast-${Date.now()}`,
+        url: localPreviewUrl,
+        sourceUrl: source,
+        tag: 'front',
+        name: `Cast ${state.cast.length + 1}`,
+        profile: {
+          identity: state.lastCastedPrompt || "Unknown Identity",
+          wardrobe: "",
+          accessories: "",
+          style: "External Asset"
+        }
+      };
+      dispatch({ type: 'ADD_CAST', payload: newCast });
+      dispatch({ type: 'ADD_LOG', payload: { message: "Added to Cast Assets", type: 'success' } });
+    } catch (err: any) {
+      console.error("Add to Cast Failed:", err);
+      dispatch({ type: 'ADD_LOG', payload: { message: `Add to Cast Failed: ${err.message}`, type: 'error' } });
+    }
   };
 
   const [pendingRefSheet, setPendingRefSheet] = useState<string | null>(null);
 
   const handleSaveToActorLibrary = async (targetFolderOverride?: string) => {
-    // 1. Determine Content (Ref Sheet vs standard Casted Image)
     const isRefSheet = !!pendingRefSheet;
     const finalUrl = pendingRefSheet || processedPreviewUrl || state.lastCastedImage;
-
     if (!finalUrl) return;
 
-    // 2. Prepare Metadata
     const targetFolderId = targetFolderOverride || activeFolder || 'uncategorized';
-    // Find style from folder, or default
     const targetFolder = STUDIO_FOLDERS.find(f => f.id === targetFolderId);
     const assignedStyle = targetFolder ? (targetFolder.styles[0] || 'External Asset') : 'External Asset';
 
@@ -352,56 +389,50 @@ const CastingForge = () => {
     const newActorId = isRefSheet ? `ref-${timestamp}` : `actor-${timestamp}`;
     const filename = isRefSheet ? `RefSheet_${timestamp}.png` : `Actor_${timestamp}.png`;
     const name = isRefSheet ? `Ref Sheet ${new Date().toLocaleTimeString()}` : `Actor ${state.actorLibrary.length + 1}`;
-    const identity = isRefSheet ? "Reference Sheet" : (state.lastCastedPrompt || "Unknown Identity");
-
+    const identity = isRefSheet ? 'Reference Sheet' : (state.lastCastedPrompt || 'Unknown Identity');
     const targetCategoryLabel = targetFolderId === 'uncategorized' ? '' : (targetFolder?.label || '');
 
-    const newActor: CastMember = {
-      id: newActorId,
-      url: finalUrl,
-      tag: 'front', // Default
-      name: name,
-      filename: targetCategoryLabel ? `${targetCategoryLabel}/${filename}` : filename, // Important for disk sync
-      profile: {
-        identity: identity,
-        wardrobe: "",
-        accessories: "",
-        style: assignedStyle
-      }
-    };
-
     try {
-      // 3. Convert DataURL to Blob for saving
-      const res = await fetch(finalUrl);
-      const blob = await res.blob();
-      const file = new File([blob], filename, { type: 'image/png' });
+      const blob = await resolveImageBlob(finalUrl);
+      const file = new File([blob], filename, { type: blob.type || 'image/png' });
 
-      // 4. Save to Disk (if configured)
-      // NATIVE
+      const finalFilename = targetCategoryLabel ? `${targetCategoryLabel}/${filename}` : filename;
+
       if (isNativeParams() && state.saveDirectoryPath) {
         const actorsDir = await nativeJoinPath(state.saveDirectoryPath, 'Actors');
-        // Ensure subfolder exists by joining it; nativeWriteFile handles recursive mkdir
         const targetDir = targetCategoryLabel ? await nativeJoinPath(actorsDir, targetCategoryLabel) : actorsDir;
         const fullPath = await nativeJoinPath(targetDir, filename);
         await nativeWriteFile(fullPath, file);
-      }
-      // WEB
-      else if (state.saveDirectoryHandle) {
+      } else if (state.saveDirectoryHandle) {
         const webPath = targetCategoryLabel ? `Actors/${targetCategoryLabel}/${filename}` : `Actors/${filename}`;
         await saveAssetToDisk(state.saveDirectoryHandle, webPath, file);
       }
 
-      // 5. Update State
+      const stablePreviewUrl = URL.createObjectURL(blob);
+
+      const newActor: CastMember = {
+        id: newActorId,
+        url: finalFilename, // Use the durable filename path instead of blob/object URL
+        previewUrl: stablePreviewUrl,
+        sourceUrl: finalUrl,
+        tag: 'front',
+        name,
+        filename: finalFilename,
+        profile: {
+          identity,
+          wardrobe: '',
+          accessories: '',
+          style: assignedStyle
+        }
+      };
+
       dispatch({ type: 'ADD_ACTOR_LIBRARY', payload: newActor });
       dispatch({ type: 'ADD_LOG', payload: { message: `Saved to Library (${targetFolderId})`, type: 'success' } });
-      setShowSaveModal(false); // Close modal if open
-      setPendingRefSheet(null); // Clear pending state
-
+      setShowSaveModal(false);
+      setPendingRefSheet(null);
     } catch (e: any) {
-      console.error("Save Actor Failed", e);
+      console.error('Save Actor Failed', e);
       dispatch({ type: 'ADD_LOG', payload: { message: `Save Failed: ${e.message}`, type: 'error' } });
-      // Fallback: Add to memory anyway so user doesn't lose work
-      dispatch({ type: 'ADD_ACTOR_LIBRARY', payload: newActor });
     }
   };
 
@@ -478,7 +509,8 @@ const CastingForge = () => {
     generationIdRef.current = currentGenId;
 
     try {
-      let res;
+      type HostedGenerationResult = string | { asset_url?: string | null };
+      let res: HostedGenerationResult;
       if (state.lastCastedImage && state.apiKey) {
         dispatch({ type: 'ADD_LOG', payload: { message: "Applying stylization to character...", type: 'info' } });
         const stylizePrompt = `Create a single character portrait.
@@ -505,8 +537,8 @@ text, labels, HUD, overlays, duplicate subjects, identity drift, extra limbs, fu
           state.apiKey,
           state.model,
           [{ url: state.lastCastedImage, label: 'Subject Reference' }],
-          { imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true }
-        );
+          { imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingMode }
+        ) as HostedGenerationResult;
       } else {
         const createPrompt = `Create a single character portrait.
 
@@ -526,12 +558,18 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
           state.apiKey,
           state.model,
           [],
-          { imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true }
-        );
+          { imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingMode }
+        ) as HostedGenerationResult;
       }
 
+      const resolvedUrl =
+        typeof res === 'string'
+          ? res
+          : (res && typeof res === 'object' ? res.asset_url || '' : '');
+
       if (generationIdRef.current === currentGenId) {
-        dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: res });
+        dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: resolvedUrl });
+        setProcessedPreviewUrl(null);
       } else {
         return;
       }
@@ -542,7 +580,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
         dispatch({ type: 'ADD_LOG', payload: { message: "Running local AI isolation...", type: 'info' } });
 
         // Fetch the generated image as a blob (safeFetchBlob supports local paths)
-        const blob = await safeFetchBlob(res);
+        const blob = await safeFetchBlob(resolvedUrl);
 
         // Run @imgly/background-removal
         // Note: The first run will download model assets (approx 40MB)
@@ -1287,15 +1325,28 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
 
 
 
-  const handleDownload = () => {
-    if (!state.lastCastedImage) return;
-    const link = document.createElement('a');
-    link.href = processedPreviewUrl || state.lastCastedImage;
-    link.download = `nano_banana_export_${Date.now()}.png`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    dispatch({ type: 'ADD_LOG', payload: { message: "Image downloaded.", type: 'info' } });
+  const handleDownload = async () => {
+    const source = processedPreviewUrl || state.lastCastedImage;
+    if (!source) return;
+
+    try {
+      const blob = await resolveImageBlob(source);
+      const objectUrl = URL.createObjectURL(blob);
+
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = `nano_banana_export_${Date.now()}.png`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+
+      dispatch({ type: 'ADD_LOG', payload: { message: 'Image downloaded.', type: 'info' } });
+    } catch (e: any) {
+      console.error('Download failed', e);
+      dispatch({ type: 'ADD_LOG', payload: { message: `Download failed: ${e.message}`, type: 'error' } });
+    }
   };
 
   const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1430,7 +1481,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
         state.apiKey,
         state.model, // Use the user's selected model (consistent with main generator)
         inputImages,
-        { aspectRatio: refLayout === 'split_focus' ? '16:9' : '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true }
+        { aspectRatio: refLayout === 'split_focus' ? '16:9' : '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingMode }
       );
       setRefSheetUrl(res);
       setShowRefSheet(true);
@@ -2835,7 +2886,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
               <div className="grid grid-cols-2 gap-4 pb-20">
                 {filteredLibrary.map(actor => (
                   <div key={actor.id} className="group relative aspect-square rounded-xl overflow-hidden bg-black/40 border border-[#27272a] hover:border-yellow-500/50 transition-all hover:">
-                    <img src={actor.url} className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-500" />
+                    <img src={actor.previewUrl || actor.url} className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-500" />
                     {/* Overlay Actions */}
                     <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 transition-all duration-300 flex flex-col items-center justify-center gap-2 backdrop-blur-md">
                       {/* Top Row: 3 Actions */}
@@ -2843,7 +2894,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
                         <HelpTooltip zone="cast" id="sendToDirectorButton">
                           <button
                             onClick={() => {
-                              dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: actor.url });
+                              dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: actor.previewUrl || actor.url });
                               dispatch({ type: 'SET_LAST_CASTED_PROMPT', payload: actor.profile?.identity || "" });
                               dispatch({ type: 'SET_LAST_CASTED_MASK', payload: null });
                               setProcessedPreviewUrl(null);
@@ -2857,7 +2908,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
                         </HelpTooltip>
                         <InlineHint zone="cast" id="sendToDirectorButton" className="hidden" />
                         <button
-                          onClick={() => dispatch({ type: 'SET_INSPECT_IMAGE', payload: actor.url })}
+                          onClick={() => dispatch({ type: 'SET_INSPECT_IMAGE', payload: actor.previewUrl || actor.url })}
                           className="bg-[#27272a] hover:bg-blue-600 w-8 h-8 rounded-lg border border-white/10 hover:border-blue-400/50 transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
                           title="Inspect Large"
                         >
