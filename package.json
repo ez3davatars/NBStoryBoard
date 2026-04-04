@@ -4,7 +4,7 @@
   "description": "Professional Cinematic Staging and Character Design Studio",
   "author": "Nanobanana Studios",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev --config src/electron.vite.config.ts",
