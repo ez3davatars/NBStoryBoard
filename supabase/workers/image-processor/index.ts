@@ -188,6 +188,7 @@ async function pollForJobs() {
 // JOB EXECUTION
 // ==========================================
 async function executeJob(job: JobRecord) {
+  const worker_claimed_at = Date.now();
   console.log(`[Worker ${WORKER_ID}] Claimed job: ${job.id}`);
 
   let failCode: GenerationFailureCode = 'INTERNAL_ERROR';
@@ -208,12 +209,23 @@ async function executeJob(job: JobRecord) {
     const payload = normalizeGeminiPayload(job.request_payload);
     const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${job.provider_model}:generateContent`;
 
+    // Try to count references or inline images in payload
+    let reference_count = 0;
+    if (Array.isArray(payload?.contents)) {
+       for (const part of payload.contents[0]?.parts || []) {
+           if (part.inlineData) reference_count++;
+           if (part.fileData) reference_count++;
+       }
+    }
+
     console.log(`[Worker ${WORKER_ID}] Executing Gemini API call...`);
+    const provider_started_at = Date.now();
     const providerResponse = await fetch(`${baseUrl}?key=${GEMINI_API_KEY}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
+    const provider_finished_at = Date.now();
 
     if (!providerResponse.ok) {
       const errText = await providerResponse.text();
@@ -234,6 +246,7 @@ async function executeJob(job: JobRecord) {
     console.log(`[Worker ${WORKER_ID}] Uploading image to Cloudflare R2...`);
     let fileKey = '';
     let publicUrl: string | null = null;
+    const r2_started_at = Date.now();
 
     try {
       const upload = await uploadToR2(job.id, imgData);
@@ -243,8 +256,28 @@ async function executeJob(job: JobRecord) {
       failCode = 'STORAGE_ERROR';
       throw new Error(`STORAGE_ERROR: R2 upload failed: ${uploadErr?.message || String(uploadErr)}`);
     }
+    const r2_finished_at = Date.now();
 
-    console.log(`[Worker ${WORKER_ID}] R2 upload complete. Finalizing generation...`);
+    console.log(`[Worker ${WORKER_ID}] R2 upload complete. Writing metrics and finalizing generation...`);
+
+    const db_start_attempt = Date.now();
+    try {
+        await supabase.from('generations').update({
+            timing_metrics: {
+                worker_claimed_at,
+                provider_started_at,
+                provider_finished_at,
+                r2_started_at,
+                r2_finished_at,
+                db_completed_at: db_start_attempt, // approx db commit time
+                job_id: job.id,
+                provider_model: job.provider_model,
+                reference_count
+            }
+        }).eq('id', job.id);
+    } catch (metricErr) {
+        console.error(`[Worker ${WORKER_ID}] Non-fatal: failed to write timing_metrics for ${job.id}`, metricErr);
+    }
 
     const { error: completeErr } = await supabase.rpc('complete_generation', {
       p_generation_id: job.id,

@@ -455,7 +455,7 @@ export default function PortraitStudio() {
                 ? [{ url: dna.referenceImageUrl, label: "Identity Reference" }]
                 : [];
 
-            const url = await GeminiService.generateImage(compiledPrompt, state.apiKey, state.model, referenceImages, { imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, billingMode: state.billingMode });
+            const url = await GeminiService.generateImage(compiledPrompt, state.apiKey, state.model, referenceImages, { imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements });
             setGeneratedImage(url); // Set local state for preview
             dispatch({ type: "SET_LAST_CASTED_IMAGE", payload: url });
             dispatch({ type: "SET_LAST_CASTED_PROMPT", payload: compiledPrompt });

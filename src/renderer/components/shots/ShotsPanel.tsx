@@ -5,6 +5,7 @@ import { SHOT_PRESETS, buildShotPresetIdsForPack } from '../../utils/shotsPreset
 import { buildShotVariantPrompt, buildShotFinalRerenderPrompt } from '../../utils/promptHelpers';
 import { GeminiService } from '../../services/GeminiService';
 import { stripIdentityOverridingAnalysis } from '../../utils/analysisSanitizers';
+import { LocalAssetService } from '../../services/LocalAssetService';
 import { hasStrongFaceAnchor } from '../../utils/identityReferenceHelpers';
 import { inferCoverageSceneType, extractRoleHints } from '../../utils/sceneTypeInference';
 import { COVERAGE_TEMPLATES } from '../../utils/coverageTemplates';
@@ -243,11 +244,25 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
           hasSubjectStyleAnalysis: !!safeSubjectActionText 
         });
 
+        const materialized = await LocalAssetService.materializeImageAsset({
+          sourceUrl: previewUrl,
+          sceneId: sceneId,
+          variantId: variant.id,
+          kind: 'preview',
+          saveDirectoryPath: state.saveDirectoryPath
+        });
+
         onUpdateSession(sceneId, prev => {
           if (!prev) return prev;
           return {
             ...prev,
-            variants: prev.variants.map(v => v.id === variant.id ? { ...v, status: 'done', previewUrl } : v)
+            variants: prev.variants.map(v => v.id === variant.id ? { 
+              ...v, 
+              status: 'done', 
+              previewUrl: materialized.displayUrl,
+              localPreviewPath: materialized.localPath || undefined,
+              sourcePreviewUrl: previewUrl
+            } : v)
           };
         });
       } catch (err: any) {
@@ -321,11 +336,25 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
           presetId: variant.presetId
         });
 
+        const materialized = await LocalAssetService.materializeImageAsset({
+          sourceUrl: finalUrl,
+          sceneId: sceneId,
+          variantId: variant.id,
+          kind: 'final',
+          saveDirectoryPath: state.saveDirectoryPath
+        });
+
         onUpdateSession(sceneId, prev => {
           if (!prev) return prev;
           return {
             ...prev,
-            variants: prev.variants.map(v => v.id === variant.id ? { ...v, status: 'done', finalUrl } : v)
+            variants: prev.variants.map(v => v.id === variant.id ? { 
+              ...v, 
+              status: 'done', 
+              finalUrl: materialized.displayUrl,
+              localFinalPath: materialized.localPath || undefined,
+              sourceFinalUrl: finalUrl
+            } : v)
           };
         });
       } catch (err: any) {
@@ -380,11 +409,25 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
         model
       });
 
+      const materialized = await LocalAssetService.materializeImageAsset({
+        sourceUrl: previewUrl,
+        sceneId: sceneId,
+        variantId: variant.id,
+        kind: 'preview',
+        saveDirectoryPath: state.saveDirectoryPath
+      });
+
       onUpdateSession(sceneId, prev => {
         if (!prev) return prev;
         return {
           ...prev,
-          variants: prev.variants.map(v => v.id === variantId ? { ...v, status: 'done', previewUrl } : v)
+          variants: prev.variants.map(v => v.id === variantId ? { 
+            ...v, 
+            status: 'done', 
+            previewUrl: materialized.displayUrl,
+            localPreviewPath: materialized.localPath || undefined,
+            sourcePreviewUrl: previewUrl
+          } : v)
         };
       });
     } catch (err: any) {

@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import type { ShotVariant } from '../../types/shots';
+import { resolveDisplayUrl } from '../../utils/assetUrlResolver';
 
 interface ShotTileProps {
   variant: ShotVariant;
@@ -12,7 +13,28 @@ export const ShotTile: React.FC<ShotTileProps> = ({ variant, onToggleSelected, o
   const isGenerating = variant.status === 'queued' || variant.status === 'generating';
   const isRerendering = variant.status === 'rerendering';
   const hasImage = !!variant.previewUrl || !!variant.finalUrl;
-  const displayUrl = variant.finalUrl || variant.previewUrl;
+  const rawUrl = variant.finalUrl || variant.previewUrl;
+  const [displayUrl, setDisplayUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!rawUrl) {
+      setDisplayUrl(null);
+      return;
+    }
+    let isMounted = true;
+    resolveDisplayUrl({
+      finalUrl: variant.finalUrl,
+      previewUrl: variant.previewUrl
+    }).then(resolved => {
+      if (isMounted && resolved) {
+        setDisplayUrl(resolved);
+      }
+    });
+
+    return () => { isMounted = false; };
+  }, [variant.finalUrl, variant.previewUrl, rawUrl]);
+
+  const effectiveUrl = displayUrl || rawUrl;
 
   return (
     <div 
@@ -33,9 +55,9 @@ export const ShotTile: React.FC<ShotTileProps> = ({ variant, onToggleSelected, o
           }
         }}
       >
-        {displayUrl ? (
+        {effectiveUrl ? (
           <img 
-            src={displayUrl} 
+            src={effectiveUrl} 
             alt={variant.label}
             className="w-full h-full object-contain"
           />

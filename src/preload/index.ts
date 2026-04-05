@@ -22,5 +22,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     showSaveDialog: (options: any) => ipcRenderer.invoke('dialog:showSaveDialog', options),
     showOpenDialog: (options: any) => ipcRenderer.invoke('dialog:showOpenDialog', options),
     deleteFile: (path: string) => ipcRenderer.invoke('file:delete', path),
-    renameFile: (oldPath: string, newPath: string) => ipcRenderer.invoke('file:rename', oldPath, newPath)
+    renameFile: (oldPath: string, newPath: string) => ipcRenderer.invoke('file:rename', oldPath, newPath),
+    getWorkerStatus: () => ipcRenderer.invoke('worker:getStatus'),
+    restartWorker: () => ipcRenderer.invoke('worker:restart')
 });

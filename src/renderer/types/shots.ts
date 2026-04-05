@@ -92,6 +92,10 @@ export type ShotVariant = {
   prompt: string;
   previewUrl?: string;
   finalUrl?: string;
+  localPreviewPath?: string;
+  localFinalPath?: string;
+  sourcePreviewUrl?: string;
+  sourceFinalUrl?: string;
   coveragePurpose?: string;
   targetRole?: string;
   targetType?: ShotTargetType;

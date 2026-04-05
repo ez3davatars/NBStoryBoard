@@ -8,7 +8,7 @@ import {
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
 import type { WardrobeItem, CastMember, WardrobeState } from '../context/AppContext';
-import { nativeJoinPath, nativeListFiles, nativeReadFile, nativeWriteFile, safeFetchBlob } from '../utils/NativeFileAssets';
+import { nativeJoinPath, nativeListFiles, nativeWriteFile, safeFetchBlob } from '../utils/NativeFileAssets';
 import { removeBackground } from "@imgly/background-removal";
 import { CutoutService } from "../services/CutoutService";
 // Style Imports for Save Modal
@@ -20,6 +20,8 @@ import ActorSaveModal from './ActorSaveModal';
 import HelpTooltip from './ui/HelpTooltip';
 import InlineHint from './ui/InlineHint';
 import ConfirmDialog from './ui/ConfirmDialog';
+import { LibraryAssetMaterializer } from '../services/LibraryAssetMaterializer';
+import { resolveDisplayUrl } from '../utils/assetUrlResolver';
 
 // --- WARDROBE STUDIO COMPONENT ---
 const WardrobeStudio = () => {
@@ -241,127 +243,49 @@ const WardrobeStudio = () => {
         // FIX: Use Processed URL (BG Removed) if available, otherwise fallback to Original
         const sourceImage = processedTryOnUrl || fittedImage;
 
-        // NATIVE MODE SUPPORT
-        if (state.saveDirectoryPath) {
-            try {
-                const root = state.saveDirectoryPath;
-                const actorsDir = await nativeJoinPath(root, 'Actors');
-                const catDir = await nativeJoinPath(actorsDir, targetCategory);
+        // Map Category to a valid Style for Library Filtering
+        const catToStyle: Record<string, string> = {
+            "realism": "exact_studio",
+            "anim": "family_3d",
+            "illustration": "retro_anime",
+            "scifi": "cyberpunk_neon",
+            "uncategorized": "exact_studio"
+        };
+        const activeStyle = catToStyle[targetCategory] || "exact_studio";
 
-                // Ensure Category Directory exists (not actor subfolder)
-                // nativeWriteFile handles directory creation recursively
+        try {
+            const mat = await LibraryAssetMaterializer.materializeCastAsset({
+                sourceUrl: sourceImage,
+                saveDirectoryPath: state.saveDirectoryPath,
+                actorName: targetName,
+                category: targetCategory
+            });
 
-                // REVERT TO GENERIC NAMING (User Request: "Original generic ACTOR #")
-                // We ignore the input name for the FILE, but keep it in metadata.
-                const timestamp = Date.now();
-                const safeName = `Actor-${timestamp}`;
+            // INSTANT UI UPDATE
+            const newActor: CastMember = {
+                id: crypto.randomUUID(),
+                name: targetName || `Actor-${Date.now()}`,
+                url: mat.previewUrl,
+                localPath: mat.localPath || undefined,
+                previewUrl: mat.previewUrl,
+                sourceUrl: mat.sourceUrl,
+                tag: 'front',
+                filename: mat.filename,
+                profile: {
+                    identity: targetName || `Actor-${Date.now()}`,
+                    style: activeStyle,
+                    wardrobe: "Fitted",
+                    accessories: ""
+                }
+            };
+            dispatch({ type: 'ADD_ACTOR_LIBRARY', payload: newActor });
 
-                // FLAT STRUCTURE: Write directly to .../Category/Name.png
-                const portraitPath = await nativeJoinPath(catDir, `${safeName}.png`);
-                const res = await fetch(sourceImage);
-                const blob = await res.blob();
-                const saveImg = await nativeWriteFile(portraitPath, blob);
+            setShowSaveModal(false);
+            dispatch({ type: 'ADD_LOG', payload: { message: `Saved Actor: ${mat.filename || "Storage"}`, type: 'success' } });
 
-                if (!saveImg) throw new Error("Failed to write image file");
-
-                // Map Category to a valid Style for Library Filtering
-                const catToStyle: Record<string, string> = {
-                    "realism": "exact_studio",
-                    "anim": "family_3d",
-                    "illustration": "retro_anime",
-                    "scifi": "cyberpunk_neon",
-                    "uncategorized": "exact_studio"
-                };
-                const activeStyle = catToStyle[targetCategory] || "exact_studio";
-
-                // Save Metadata
-                const metaPath = await nativeJoinPath(catDir, `${safeName}.json`);
-                const metadata = {
-                    id: crypto.randomUUID(),
-                    name: targetName || safeName, // Keep their typed name in metadata
-                    category: targetCategory,
-                    created: timestamp,
-                    tags: ["wardrobe_fit"],
-                    baseImage: `${safeName}.png`,
-                    style: activeStyle
-                };
-                const metaBlob = new Blob([JSON.stringify(metadata, null, 2)], { type: 'application/json' });
-                const saveMeta = await nativeWriteFile(metaPath, metaBlob);
-
-                if (!saveMeta) throw new Error("Failed to write metadata file");
-
-                // INSTANT UI UPDATE
-                const newActor: any = {
-                    id: metadata.id,
-                    name: metadata.name,
-                    url: sourceImage, // Use Blob URL for immediate render!
-                    tag: 'front',
-                    profile: {
-                        identity: metadata.name,
-                        style: activeStyle,
-                        wardrobe: "Fitted",
-                        accessories: ""
-                    }
-                };
-                dispatch({ type: 'ADD_ACTOR_LIBRARY', payload: newActor });
-
-                setShowSaveModal(false);
-                // Alert removed after verification
-                dispatch({ type: 'ADD_LOG', payload: { message: `Saved Actor (Native): ${safeName}`, type: 'success' } });
-                return;
-
-            } catch (err: any) {
-                console.error("Native Save Failed:", err);
-                dispatch({ type: 'ADD_LOG', payload: { message: `Native Save Failed: ${err.message}`, type: 'error' } });
-                return;
-            }
-        }
-
-        if (state.saveDirectoryHandle) {
-            try {
-                // 1. Get/Create "Actors" folder
-                const root = state.saveDirectoryHandle;
-                const actorsDir = await root.getDirectoryHandle('Actors', { create: true });
-
-                // 2. Get/Create Category folder
-                const catDir = await actorsDir.getDirectoryHandle(targetCategory, { create: true });
-
-                // 3. Create Actor Folder
-                const safeName = targetName.replace(/[^a-z0-9\s-_]/gi, '').trim() || `Actor-${Date.now()}`;
-                const actorDir = await catDir.getDirectoryHandle(safeName, { create: true });
-
-                // 4. Save Portrait
-                const fileHandle = await actorDir.getFileHandle('portrait.png', { create: true });
-                const writable = await fileHandle.createWritable();
-
-                const res = await fetch(sourceImage);
-                const blob = await res.blob();
-
-                await writable.write(blob);
-                await writable.close();
-
-                // 5. Save Metadata (actor.json)
-                const metaHandle = await actorDir.getFileHandle('actor.json', { create: true });
-                const metaWritable = await metaHandle.createWritable();
-                const metadata = {
-                    id: crypto.randomUUID(),
-                    name: safeName,
-                    category: targetCategory,
-                    created: Date.now(),
-                    tags: ["wardrobe_fit"],
-                    baseImage: "portrait.png"
-                };
-                await metaWritable.write(JSON.stringify(metadata, null, 2));
-                await metaWritable.close();
-
-                setShowSaveModal(false);
-                // alert("Actor Saved to Library!"); 
-                dispatch({ type: 'ADD_LOG', payload: { message: `Saved Actor: ${safeName}`, type: 'success' } });
-
-            } catch (err) {
-                console.error("Failed to save to library:", err);
-                dispatch({ type: 'ADD_LOG', payload: { message: `Save Failed: ${err}`, type: 'error' } });
-            }
+        } catch (err: any) {
+            console.error("Save Failed:", err);
+            dispatch({ type: 'ADD_LOG', payload: { message: `Save Failed: ${err.message}`, type: 'error' } });
         }
     };
     const uiCanvasRef = useRef<HTMLCanvasElement>(null); // For Brush Cursor
@@ -1039,11 +963,13 @@ const WardrobeStudio = () => {
                         if (file.toLowerCase().includes('_designer_')) continue;
 
                         const fullPath = await nativeJoinPath(wardrobePath, file);
-                        const dataUrl = await nativeReadFile(fullPath);
-                        if (dataUrl) {
+                        const displayUrl = await resolveDisplayUrl({ localPath: fullPath });
+                        if (displayUrl) {
                             items.push({
                                 id: file,
-                                url: dataUrl,
+                                url: displayUrl,
+                                localPath: fullPath,
+                                filename: file,
                                 name: file.replace(/\.[^/.]+$/, "").split('-').slice(1).join(' '),
                                 prompt: "Saved costume asset",
                                 category: "General",
@@ -1106,33 +1032,18 @@ const WardrobeStudio = () => {
         if (!hasStorage) return;
 
         try {
-            const filename = `WARDROBE-${Date.now()}.png`;
-
-            // 1. Native Mode
-            if (state.saveDirectoryPath) {
-                const wardrobePath = await nativeJoinPath(state.saveDirectoryPath, 'wardrobe');
-                const fullPath = await nativeJoinPath(wardrobePath, filename);
-
-                const res = await fetch(imageUrl);
-                const blob = await res.blob();
-                const success = await nativeWriteFile(fullPath, blob);
-
-                if (!success) throw new Error("Failed to write image file natively");
-            }
-            // 2. Web API Mode
-            else if (state.saveDirectoryHandle) {
-                const wardrobeHandle = await state.saveDirectoryHandle.getDirectoryHandle('wardrobe', { create: true });
-                const fileHandle = await wardrobeHandle.getFileHandle(filename, { create: true });
-                const writable = await fileHandle.createWritable();
-                const res = await fetch(imageUrl);
-                const blob = await res.blob();
-                await writable.write(blob);
-                await writable.close();
-            }
+            const mat = await LibraryAssetMaterializer.materializeWardrobeAsset({
+                sourceUrl: imageUrl,
+                saveDirectoryPath: state.saveDirectoryPath,
+                prompt: prompt
+            });
 
             const newItem: WardrobeItem = {
-                id: filename,
-                url: imageUrl,
+                id: mat.filename || `WARDROBE-${Date.now()}.png`,
+                url: mat.url,
+                localPath: mat.localPath || undefined,
+                sourceUrl: mat.sourceUrl,
+                filename: mat.filename,
                 name: prompt.substring(0, 20),
                 prompt: prompt,
                 category: "Designer",
@@ -1140,7 +1051,7 @@ const WardrobeStudio = () => {
             };
 
             dispatch({ type: 'ADD_WARDROBE_ITEM', payload: newItem });
-            dispatch({ type: 'ADD_LOG', payload: { message: `Costume saved to wardrobe: ${filename}`, type: 'success' } });
+            dispatch({ type: 'ADD_LOG', payload: { message: `Costume saved to wardrobe: ${mat.filename || 'local storage'}`, type: 'success' } });
         } catch (e: any) {
             dispatch({ type: 'ADD_LOG', payload: { message: `Failed to save wardrobe item: ${e.message}`, type: 'error' } });
         }
@@ -1231,18 +1142,33 @@ NEGATIVE:
 text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy backgrounds.
 `;
 
+            let actualGenId = '';
             const res = await GeminiService.generateImage(
                 prompt.trim(),
                 state.apiKey,
                 state.model,
                 refs,
-                { aspectRatio: '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, billingMode: state.billingMode }
+                { 
+                    aspectRatio: '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements,
+                    onJobAccepted: (id) => {
+                        actualGenId = id;
+                        dispatch({ type: 'ADD_BACKGROUND_JOB', payload: { id, status: 'polling_foreground', context: 'wardrobe_designer', startedAt: Date.now() } });
+                    }
+                }
             );
+
+            if (actualGenId) dispatch({ type: 'REMOVE_BACKGROUND_JOB', payload: actualGenId });
 
             setDesignerImage(res);
             dispatch({ type: 'ADD_LOG', payload: { message: "Costume generated (Costume Designer).", type: 'success' } });
         } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });
+            const isTimeout = e.name === 'TimeoutError' || e.message?.includes('Pending');
+            if (isTimeout && e.generationId) {
+                dispatch({ type: 'UPDATE_BACKGROUND_JOB', payload: { id: e.generationId, updates: { status: 'pending_background' } } });
+                dispatch({ type: 'ADD_LOG', payload: { message: "Job shifted to background due to long queue.", type: 'info' } });
+            } else {
+                dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });
+            }
         } finally {
             clearInterval(progressInterval);
             dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
@@ -1537,7 +1463,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                         imageSize: state.imageResolution,
                         thinkingLevel: state.enableImageThinking,
                         googleGrounding: state.enableGoogleGrounding,
-                        billingMode: state.billingMode
+                        billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements
                     }
                 );
 
@@ -1619,7 +1545,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                     imageSize: state.imageResolution,
                     thinkingLevel: state.enableImageThinking,
                     googleGrounding: state.enableGoogleGrounding,
-                    billingMode: state.billingMode
+                    billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements
                 }
             );
 
@@ -1698,7 +1624,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                     imageSize: state.imageResolution,
                     thinkingLevel: state.enableImageThinking,
                     googleGrounding: state.enableGoogleGrounding,
-                    billingMode: state.billingMode
+                    billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements
                 }
             );
 
@@ -1748,7 +1674,8 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
             dispatch({ type: 'ADD_LOG', payload: { message: "Turnaround complete (2 sheets generated: FB + LR).", type: 'success' } });
         } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });
+            const isTimeout = e.name === 'TimeoutError' || e.message?.includes('Pending');
+            dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: isTimeout ? 'info' : 'error' } });
         } finally {
             clearInterval(progressInterval);
             dispatch({ type: 'SET_PROCESSING', payload: false });
@@ -1807,11 +1734,11 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                 <div className="p-4 border-b border-gray-800 flex justify-between items-center">
                     <h2 className="text-sm font-black text-white tracking-widest uppercase">Wardrobe Library</h2>
                     <div className="flex gap-1.5">
-                        <label className="p-1.5 hover:bg-gray-700 rounded transition-colors text-gray-400 cursor-pointer" title="Upload Costume">
+                        <label className="flex items-center justify-center w-7 h-7 hover:bg-gray-700 rounded transition-colors text-gray-400 cursor-pointer" title="Upload Costume">
                             <Upload className="w-3.5 h-3.5" />
                             <input type="file" className="hidden" accept="image/*" onChange={handleUploadCostume} />
                         </label>
-                        <button onClick={scanWardrobe} className="p-1.5 hover:bg-gray-700 rounded transition-colors text-gray-400" title="Scan Folder">
+                        <button onClick={scanWardrobe} className="flex items-center justify-center w-7 h-7 hover:bg-gray-700 rounded transition-colors text-gray-400" title="Scan Folder">
                             <RefreshCcw className="w-3.5 h-3.5" />
                         </button>
                     </div>

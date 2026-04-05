@@ -1,6 +1,8 @@
+import { useState, useEffect } from 'react';
 import { X, Link2 } from 'lucide-react';
 import { PropertyField } from '../ui/PropertyField';
 import type { ReferenceSlot } from '../../context/AppContext';
+import { resolveDisplayUrl } from '../../utils/assetUrlResolver';
 
 interface RefInspectorModalProps {
  inspectRefIndex: number;
@@ -36,7 +38,33 @@ export const RefInspectorModal = ({
  isAnalyzing
 }: RefInspectorModalProps) => {
  const slot = referenceSlots.find(s => s.index === inspectRefIndex);
+ const [displayUrl, setDisplayUrl] = useState<string | null>(null);
+
+ useEffect(() => {
+   if (!slot?.url) {
+     setDisplayUrl(null);
+     return;
+   }
+   
+   let isMounted = true;
+   const isLocalSafe = slot.url.startsWith('blob:') || slot.url.startsWith('data:');
+   
+   resolveDisplayUrl({
+     localPath: slot.localPath,
+     sourceUrl: slot.sourceUrl,
+     localUrl: isLocalSafe ? slot.url : null,
+     remoteUrl: !isLocalSafe && slot.url && slot.url.startsWith('http') ? slot.url : null
+   }).then(resolved => {
+     if (isMounted && resolved) {
+       setDisplayUrl(resolved);
+     }
+   });
+
+   return () => { isMounted = false; };
+ }, [slot?.url]);
+
  if (!slot || !slot.url) return null;
+ const effectiveUrl = displayUrl || slot.url;
 
  return (
  <div className="fixed inset-0 z-[100] flex items-center justify-center p-8 bg-black/95 backdrop-blur-md">
@@ -44,7 +72,7 @@ export const RefInspectorModal = ({
  {/* Image Preview */}
  <div className="flex-1 bg-black flex items-center justify-center p-8 relative">
  <img
- src={slot.url}
+ src={effectiveUrl}
  alt="Inspector Preview"
  className="max-w-full max-h-full object-contain rounded-lg"
  />

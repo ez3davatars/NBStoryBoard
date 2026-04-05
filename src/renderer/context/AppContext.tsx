@@ -4,9 +4,11 @@ import type { ReactNode } from 'react';
 import { StorageService } from '../services/StorageService';
 import { safeFetchBlob, isNativeParams, nativeJoinPath } from '../utils/NativeFileAssets';
 import { computeDepthScore } from '../utils/spatialHelpers';
+import { resolveDisplayUrl } from '../utils/assetUrlResolver';
 
 import type { VeoFivePartDraft, VeoAudioBlock, VeoTimestampBeat } from '../promptEngine/veoFivePart';
 import type { ShotSession, ShotActorReferenceInput } from '../types/shots';
+import { EntitlementResolver, type Entitlements } from '../utils/EntitlementResolver';
 
 export const APP_SCHEMA_VERSION = 5; // bump when persisted state shape changes
 // --- SHARED TYPES ---
@@ -26,6 +28,9 @@ export type ViewMode =
 export interface WardrobeItem {
     id: string;
     url: string;
+    localPath?: string;
+    sourceUrl?: string;
+    filename?: string;
     name: string;
     prompt: string;
     category?: string;
@@ -35,6 +40,9 @@ export interface WardrobeItem {
 export interface PropItem {
     id: string;
     url: string;
+    localPath?: string;
+    sourceUrl?: string;
+    filename?: string;
     name: string;
     prompt: string;
     category?: string;
@@ -50,8 +58,9 @@ export interface WhitelistProfile {
 export interface CastMember {
     id: string;
     url: string;
-    previewUrl?: string;
+    previewUrl?: string; // hydrating preview
     sourceUrl?: string;
+    localPath?: string;
     tag: 'front' | 'side' | 'back' | '3/4' | 'detail';
     name: string;
     filename?: string;
@@ -212,6 +221,8 @@ export type RefSlotStatus = 'empty' | 'loading' | 'analyzed' | 'error' | 'ready'
 export interface ReferenceSlot {
     index: number;
     url?: string;
+    sourceUrl?: string;
+    localPath?: string;
     name?: string;
     analysis?: string;
     target?: string;
@@ -386,6 +397,23 @@ export interface LogEntry {
     type: 'info' | 'success' | 'error';
 }
 
+export type BackgroundJobSurface = 'casting' | 'wardrobe_designer' | 'prop_designer' | 'prop_applied' | 'scene_render';
+
+export interface BackgroundJob {
+    id: string;
+    status: 'polling_foreground' | 'pending_background' | 'completed' | 'failed';
+    context: BackgroundJobSurface;
+    startedAt: number;
+    timing?: {
+        submittedAt: number;
+        edgeAcceptedAt?: number;
+        clientTimeoutAt?: number;
+        observedCompletedAt?: number;
+    };
+    assetUrl?: string;
+    errorMessage?: string | null;
+}
+
 export interface AppState {
     apiKey: string;
     model: 'imagen-4.0-generate-001' | 'gemini-2.5-flash-image' | 'gemini-3.1-flash-image-preview';
@@ -416,6 +444,8 @@ export interface AppState {
     lastCastedPrompt: string;
     lastCastedMask: string | null;
     inspectImage: string | null;
+    inspectImageLocalPath?: string;
+    inspectImageSourceUrl?: string;
     inspectMask: string | null;
     actorLibrary: CastMember[];
     propItems: PropItem[];
@@ -470,7 +500,10 @@ export interface AppState {
 
     // BILLING & AUTH
     billingMode: 'hosted' | 'byok';
+    billingEntitlements: Entitlements;
     hostedSession: any | null;
+
+    backgroundJobs: BackgroundJob[];
 }
 
 export interface WardrobeState {
@@ -495,6 +528,7 @@ export interface WardrobeState {
     tryOnSheetFB: string | null;
     tryOnSheetLR: string | null;
     activeTryOnView: 'front' | 'back' | 'left' | 'right' | 'sheetFB' | 'sheetLR';
+    designerImage?: string | null;
 }
 
 export interface PropAccessoryState {
@@ -536,7 +570,8 @@ const DEFAULT_WARDROBE_STATE: WardrobeState = {
     tryOnViews: null,
     tryOnSheetFB: null,
     tryOnSheetLR: null,
-    activeTryOnView: 'front'
+    activeTryOnView: 'front',
+    designerImage: null
 };
 
 const DEFAULT_PROP_STUDIO_STATE: PropAccessoryState = {
@@ -657,7 +692,13 @@ export type Action =
     | { type: 'SET_SCENE_RESULT_ANCHOR'; payload: { sceneId: string; anchor?: SceneResultAnchor } }
     | { type: 'SET_TEMPLATE_NOTES'; payload: { activeTemplateId?: string; templateNotes?: string } }
     | { type: 'SET_BILLING_MODE'; payload: 'hosted' | 'byok' }
-    | { type: 'SET_HOSTED_SESSION'; payload: any | null };
+    | { type: 'SET_BILLING_ENTITLEMENTS'; payload: Entitlements }
+    | { type: 'SET_HOSTED_SESSION'; payload: any | null }
+    | { type: 'ADD_BACKGROUND_JOB'; payload: BackgroundJob }
+    | { type: 'UPDATE_BACKGROUND_JOB'; payload: { id: string; updates: Partial<BackgroundJob> } }
+    | { type: 'REMOVE_BACKGROUND_JOB'; payload: string }
+    | { type: 'COMPLETE_BACKGROUND_JOB'; payload: { id: string; assetUrl: string } }
+    | { type: 'FAIL_BACKGROUND_JOB'; payload: { id: string; errorMessage?: string } };
 
 // --- HELPERS ---
 
@@ -881,7 +922,7 @@ export const initialState: AppState = {
     isDepthProcessing: false,
 
     regionEdit: smartClone(DEFAULT_REGION_EDIT),
-
+    backgroundJobs: [],
 
     historyPast: [],
     historyFuture: [],
@@ -922,6 +963,7 @@ export const initialState: AppState = {
     sessionFilePath: null,
 
     billingMode: loadJson<'hosted' | 'byok'>('nano_billing_mode', 'byok'),
+    billingEntitlements: { hasHostedAccess: false, hasByokAccess: false, effectiveBillingMode: 'none' }, // Resolved on auth change
     hostedSession: null,
 };
 
@@ -941,11 +983,22 @@ function sanitizeAnnotations(ann: StageAnnotation[]): StageAnnotation[] {
     }));
 }
 
+function sanitizeReferenceSlots(slots: ReferenceSlot[]): ReferenceSlot[] {
+    return slots.map(s => {
+        let url = s.url;
+        if (s.localPath && url && url.startsWith('data:')) {
+            url = undefined; // Strip large base64 if canonical local metadata exists
+        }
+        return { ...s, url };
+    });
+}
+
 function sanitizeShots(shots: Shot[]): Shot[] {
     return shots.map(s => ({
         ...s,
         tokens: sanitizeTokens(s.tokens),
         annotations: sanitizeAnnotations(s.annotations),
+        referenceSlots: sanitizeReferenceSlots(s.referenceSlots || []),
     }));
 }
 
@@ -976,14 +1029,34 @@ export const reducer = (state: AppState, action: Action): AppState => {
         }
         case 'SET_VIEW':
             return { ...state, view: action.payload };
-        case 'SET_API_KEY':
-            return { ...state, apiKey: action.payload };
+        case 'SET_API_KEY': {
+            const nextKey = action.payload;
+            return { 
+                ...state, 
+                apiKey: nextKey,
+                billingEntitlements: EntitlementResolver.resolveEntitlements(state.hostedSession, nextKey, import.meta.env.DEV, state.billingMode)
+            };
+        }
         case 'SET_MODEL':
             return { ...state, model: action.payload };
-        case 'SET_BILLING_MODE':
-            return { ...state, billingMode: action.payload };
-        case 'SET_HOSTED_SESSION':
-            return { ...state, hostedSession: action.payload };
+        case 'SET_BILLING_MODE': {
+            const overrideMode = action.payload;
+            return { 
+                ...state, 
+                billingMode: overrideMode,
+                billingEntitlements: EntitlementResolver.resolveEntitlements(state.hostedSession, state.apiKey, import.meta.env.DEV, overrideMode)
+            };
+        }
+        case 'SET_BILLING_ENTITLEMENTS':
+            return { ...state, billingEntitlements: action.payload };
+        case 'SET_HOSTED_SESSION': {
+            const nextSession = action.payload;
+            return { 
+                ...state, 
+                hostedSession: nextSession,
+                billingEntitlements: EntitlementResolver.resolveEntitlements(nextSession, state.apiKey, import.meta.env.DEV, state.billingMode)
+            };
+        }
 
         case 'ADD_CAST':
             return { ...state, cast: [...state.cast, action.payload] };
@@ -1363,6 +1436,61 @@ export const reducer = (state: AppState, action: Action): AppState => {
                 tokens: nextTokens
             };
         }
+        // --- BACKGROUND JOBS ---
+        case 'ADD_BACKGROUND_JOB':
+            return {
+                ...state,
+                backgroundJobs: [...(state.backgroundJobs || []), action.payload]
+            };
+        case 'UPDATE_BACKGROUND_JOB':
+            return {
+                ...state,
+                backgroundJobs: (state.backgroundJobs || []).map(job =>
+                    job.id === action.payload.id ? { ...job, ...action.payload.updates } : job
+                )
+            };
+        case 'REMOVE_BACKGROUND_JOB':
+            return {
+                ...state,
+                backgroundJobs: (state.backgroundJobs || []).filter(job => job.id !== action.payload)
+            };
+
+        case 'COMPLETE_BACKGROUND_JOB': {
+            const job = (state.backgroundJobs || []).find(j => j.id === action.payload.id);
+            if (!job) return state;
+
+            const newState = { ...state };
+            
+            // Route asset based on STRICT context
+            if (job.context === 'casting') {
+                newState.lastCastedImage = action.payload.assetUrl;
+            } else if (job.context === 'wardrobe_designer') {
+                newState.wardrobeState = { ...newState.wardrobeState, designerImage: action.payload.assetUrl };
+            } else if (job.context === 'prop_designer') {
+                newState.propStudioState = { ...newState.propStudioState, designerImage: action.payload.assetUrl };
+            } else if (job.context === 'prop_applied') {
+                newState.propStudioState = { ...newState.propStudioState, appliedImage: action.payload.assetUrl };
+            } else if (job.context === 'scene_render') {
+                newState.resultImage = action.payload.assetUrl;
+                newState.latestCompositeSource = 'directorCanvas';
+                newState.latestCompositeResultUrl = action.payload.assetUrl;
+            }
+
+            // Remove the completed job
+            newState.backgroundJobs = (newState.backgroundJobs || []).filter(j => j.id !== action.payload.id);
+            return newState;
+        }
+
+        case 'FAIL_BACKGROUND_JOB':
+            return {
+                ...state,
+                backgroundJobs: (state.backgroundJobs || []).map(j =>
+                    j.id === action.payload.id
+                        ? { ...j, status: 'failed', errorMessage: action.payload.errorMessage }
+                        : j
+                )
+            };
+
         case 'SET_ACTOR_LIBRARY':
             return { ...state, actorLibrary: action.payload };
 
@@ -1919,35 +2047,46 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
         const restore = async () => {
             try {
-                const [_tokens, _annotations, rawActors, wardrobe, props, shots] = await Promise.all([
+                const [_tokens, _annotations, rawActors, wardrobe, props, shots, shotSessions] = await Promise.all([
                     migrateOrLoad<StageToken[]>('nano_tokens', sanitizeTokens),
                     migrateOrLoad<StageAnnotation[]>('nano_annotations', sanitizeAnnotations),
                     StorageService.load<CastMember[]>('nano_actors', []),
                     StorageService.load<WardrobeItem[]>('nano_wardrobe', []),
                     StorageService.load<PropItem[]>('nano_props', []),
                     StorageService.load<Shot[]>('nano_shots', []),
+                    StorageService.load<Record<string, ShotSession>>('nano_shot_sessions', {}),
                 ]);
 
                 if (cancelled) return;
 
                 const actors = await Promise.all(rawActors.map(async (actor) => {
                     try {
-                        let durablePath = actor.url;
+                        let resolvedPath = actor.localPath;
                         const savePath = localStorage.getItem('nano_save_path');
                         
-                        if (actor.filename && isNativeParams() && savePath) {
+                        if (!resolvedPath && actor.filename && isNativeParams() && savePath) {
                             const fullPath = await nativeJoinPath(savePath, 'Actors', actor.filename);
-                            durablePath = `file:///${fullPath.replace(/\\/g, '/')}`;
+                            resolvedPath = `file:///${fullPath.replace(/\\/g, '/')}`;
                         }
 
-                        if (!durablePath || durablePath.startsWith('blob:')) {
-                            // If we literally have no valid disk path to resolve, keep raw state
-                            return actor;
+                        let hydratedPreview = actor.previewUrl;
+                        const finalDisplayUrl = await resolveDisplayUrl({
+                            localPath: resolvedPath,
+                            sourcePreviewUrl: actor.sourceUrl,
+                            previewUrl: actor.previewUrl || actor.url
+                        });
+                        
+                        hydratedPreview = finalDisplayUrl || actor.previewUrl || actor.sourceUrl || actor.url;
+
+                        // Last resort blob reconstruction if lost
+                        if (!finalDisplayUrl && actor.url && actor.url.startsWith('blob:')) {
+                            try {
+                                const blob = await safeFetchBlob(actor.url);
+                                hydratedPreview = URL.createObjectURL(blob);
+                            } catch { }
                         }
 
-                        const blob = await safeFetchBlob(durablePath);
-                        const previewUrl = URL.createObjectURL(blob);
-                        return { ...actor, previewUrl }; // Hydrate successful preview
+                        return { ...actor, previewUrl: hydratedPreview, url: hydratedPreview || actor.url };
                     } catch (e) {
                         console.warn(`[AppContext] Failed to hydrate previewUrl for actor ${actor.id}`, e);
                         return actor;
@@ -1962,15 +2101,96 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                 if (annotations) dispatch({ type: 'SET_ANNOTATIONS', payload: annotations });
                 */
                 if (actors.length > 0) dispatch({ type: 'SET_ACTOR_LIBRARY', payload: actors });
-                if (wardrobe.length > 0) dispatch({ type: 'SET_WARDROBE_ITEMS', payload: wardrobe });
-                if (props.length > 0) dispatch({ type: 'SET_PROP_ITEMS', payload: props });
+
+                const hydratedWardrobe = await Promise.all(wardrobe.map(async (item) => {
+                    try {
+                        let resolvedPath = item.localPath;
+                        const savePath = localStorage.getItem('nano_save_path');
+                        if (!resolvedPath && item.filename && isNativeParams() && savePath) {
+                            const fullPath = await nativeJoinPath(savePath, 'wardrobe', item.filename);
+                            resolvedPath = `file:///${fullPath.replace(/\\/g, '/')}`;
+                        }
+                        const finalDisplayUrl = await resolveDisplayUrl({
+                            localPath: resolvedPath,
+                            sourcePreviewUrl: item.sourceUrl,
+                            previewUrl: item.url
+                        });
+                        return { ...item, url: finalDisplayUrl || item.url };
+                    } catch (e) {
+                        return item;
+                    }
+                }));
+
+                const hydratedProps = await Promise.all(props.map(async (item) => {
+                    try {
+                        let resolvedPath = item.localPath;
+                        const savePath = localStorage.getItem('nano_save_path');
+                        if (!resolvedPath && item.filename && isNativeParams() && savePath) {
+                            const fullPath = await nativeJoinPath(savePath, 'props', item.filename);
+                            resolvedPath = `file:///${fullPath.replace(/\\/g, '/')}`;
+                        }
+                        const finalDisplayUrl = await resolveDisplayUrl({
+                            localPath: resolvedPath,
+                            sourcePreviewUrl: item.sourceUrl,
+                            previewUrl: item.url
+                        });
+                        return { ...item, url: finalDisplayUrl || item.url };
+                    } catch (e) {
+                        return item;
+                    }
+                }));
+
+                if (hydratedWardrobe.length > 0) dispatch({ type: 'SET_WARDROBE_ITEMS', payload: hydratedWardrobe });
+                if (hydratedProps.length > 0) dispatch({ type: 'SET_PROP_ITEMS', payload: hydratedProps });
 
                 if (shots.length > 0) {
-                    dispatch({ type: 'SET_SHOTS', payload: shots });
+                    const hydratedShots = await Promise.all(shots.map(async s => {
+                        const hydratedRefSlots = await Promise.all((s.referenceSlots || []).map(async slot => {
+                            let hydratedUrl = slot.url;
+                            const resolved = await resolveDisplayUrl({
+                                localPath: slot.localPath,
+                                sourcePreviewUrl: slot.sourceUrl,
+                                previewUrl: slot.url
+                            });
+                            if (resolved) hydratedUrl = resolved;
+                            return { ...slot, url: hydratedUrl };
+                        }));
+                        return { ...s, referenceSlots: hydratedRefSlots };
+                    }));
+
+                    dispatch({ type: 'SET_SHOTS', payload: hydratedShots });
                     const savedActive = localStorage.getItem('nano_active_shot_id');
-                    const preferred = savedActive ? shots.find(s => s.id === savedActive) : null;
-                    const fallback = shots[shots.length - 1];
+                    const preferred = savedActive ? hydratedShots.find((s: any) => s.id === savedActive) : null;
+                    const fallback = hydratedShots[hydratedShots.length - 1];
                     dispatch({ type: 'SET_ACTIVE_SHOT', payload: { id: (preferred || fallback).id } });
+                }
+
+                if (shotSessions && Object.keys(shotSessions).length > 0) {
+                    const restoredShotSessions: Record<string, ShotSession> = {};
+                    for (const [sceneId, session] of Object.entries(shotSessions)) {
+                        const variants = await Promise.all(session.variants.map(async (v) => {
+                            let finalUrl = v.finalUrl;
+                            let previewUrl = v.previewUrl;
+
+                            const resolvedFinal = await resolveDisplayUrl({
+                                localFinalPath: v.localFinalPath,
+                                sourceFinalUrl: v.sourceFinalUrl,
+                                finalUrl: v.finalUrl
+                            });
+                            if (resolvedFinal) finalUrl = resolvedFinal;
+
+                            const resolvedPreview = await resolveDisplayUrl({
+                                localPreviewPath: v.localPreviewPath,
+                                sourcePreviewUrl: v.sourcePreviewUrl,
+                                previewUrl: v.previewUrl
+                            });
+                            if (resolvedPreview) previewUrl = resolvedPreview;
+
+                            return { ...v, finalUrl, previewUrl };
+                        }));
+                        restoredShotSessions[sceneId] = { ...session, variants };
+                    }
+                    dispatch({ type: 'LOAD_SESSION_STATE', payload: { shotSessionsBySceneId: restoredShotSessions } });
                 }
 
                 hydratedRef.current = true;
@@ -2052,21 +2272,64 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         const timer = setTimeout(() => {
             const persistCollections = async () => {
                 try {
+                    // Sanitize shot sessions to drop heavy base64 strings if native path exists
+                    const sanitizedShotSessions: Record<string, ShotSession> = {};
+                    for (const [sceneId, session] of Object.entries(state.shotSessionsBySceneId)) {
+                        const variants = session.variants.map((v) => {
+                            let { previewUrl, finalUrl } = v;
+                            if (v.localPreviewPath && previewUrl && previewUrl.startsWith('data:')) {
+                                previewUrl = undefined;
+                            }
+                            if (v.localFinalPath && finalUrl && finalUrl.startsWith('data:')) {
+                                finalUrl = undefined;
+                            }
+                            return { ...v, previewUrl, finalUrl };
+                        });
+                        sanitizedShotSessions[sceneId] = { ...session, variants };
+                    }
+
+                    // Sanitize Actors array
+                    const sanitizedActors = state.actorLibrary.map(actor => {
+                        let { url, previewUrl } = actor;
+                        if (actor.localPath || actor.filename) {
+                            if (url && url.startsWith('data:')) url = '';
+                            if (previewUrl && previewUrl.startsWith('data:')) previewUrl = undefined;
+                        }
+                        return { ...actor, url, previewUrl };
+                    });
+
+                    const sanitizedWardrobe = state.wardrobeItems.map(item => {
+                        let { url } = item;
+                        if (item.localPath || item.filename) {
+                            if (url && url.startsWith('data:')) url = '';
+                        }
+                        return { ...item, url };
+                    });
+
+                    const sanitizedProps = state.propItems.map(item => {
+                        let { url } = item;
+                        if (item.localPath || item.filename) {
+                            if (url && url.startsWith('data:')) url = '';
+                        }
+                        return { ...item, url };
+                    });
+
                     await Promise.all([
-                        StorageService.save('nano_wardrobe', state.wardrobeItems),
-                        StorageService.save('nano_actors', state.actorLibrary),
-                        StorageService.save('nano_props', state.propItems),
+                        StorageService.save('nano_wardrobe', sanitizedWardrobe),
+                        StorageService.save('nano_actors', sanitizedActors),
+                        StorageService.save('nano_props', sanitizedProps),
                         StorageService.save('nano_shots', sanitizeShots(state.shots)),
+                        StorageService.save('nano_shot_sessions', sanitizedShotSessions),
                     ]);
                 } catch (e) {
                     console.error('Collections persistence failed', e);
                 }
             };
             persistCollections();
-        }, 5000); // 5-second debounce to prevent V8 OOM crashes from heavy IDB cloning
+        }, 5000); // 5-second debounce
 
         return () => clearTimeout(timer);
-    }, [state.wardrobeItems, state.actorLibrary, state.propItems, state.shots]);
+    }, [state.wardrobeItems, state.actorLibrary, state.propItems, state.shots, state.shotSessionsBySceneId]);
 
     // --- EFFECT 5: Blob URL Garbage Collection ---
     const activeBlobsRef = useRef<Set<string>>(new Set());

@@ -217,13 +217,32 @@ export const GeminiService = {
     apiKey: string,
     model: string,
     referenceImages: { url: string; label: string }[] = [],
-    options: { aspectRatio?: string, imageSize?: '1K' | '2K' | '4K', thinkingLevel?: boolean | 'minimal' | 'low' | 'medium' | 'high', googleGrounding?: boolean, strictMode?: boolean, billingMode?: 'hosted' | 'byok' } = {}
+    options: { aspectRatio?: string, imageSize?: '1K' | '2K' | '4K', thinkingLevel?: boolean | 'minimal' | 'low' | 'medium' | 'high', googleGrounding?: boolean, strictMode?: boolean, billingMode?: 'hosted' | 'byok', entitlements?: { hasHostedAccess: boolean, hasByokAccess: boolean, effectiveBillingMode: string }, onJobAccepted?: (generationId: string, acceptedAt?: number) => void } = {}
   ): Promise<string> {
 
-    if (!apiKey && options.billingMode !== 'hosted') {
-      console.warn("No API Key. Running in simulation mode.");
-      await new Promise(r => setTimeout(r, 1500));
-      return `https://placehold.co/1024x576/1a1a1a/FFF?text=Demo+Mode:+${encodeURIComponent(prompt.substring(0, 20))}`;
+    // --- ENFORCEMENT LAYER ---
+    const entitlements = options.entitlements;
+    
+    // If passing entitlements down, enforcement is strict.
+    if (entitlements) {
+      if (options.billingMode === 'hosted' && !entitlements.hasHostedAccess) {
+        throw new Error("Generation blocked: You do not have an active Hosted Cloud entitlement. Please check your subscription or use BYOK if enabled.");
+      }
+
+      if (options.billingMode === 'byok' && !entitlements.hasByokAccess) {
+        throw new Error("Generation blocked: You do not have Bring Your Own Key access.");
+      }
+      
+      if (options.billingMode === 'byok' && !apiKey) {
+        throw new Error("Setup Required: BYOK access is active, but a Gemini API key is required in Settings before generation can begin.");
+      }
+    } else {
+      // Legacy fallback if call-site not yet updated (though all should be)
+      if (!apiKey && options.billingMode !== 'hosted') {
+         console.warn("No API Key. Running in simulation mode.");
+         await new Promise(r => setTimeout(r, 1500));
+         return `https://placehold.co/1024x576/1a1a1a/FFF?text=Demo+Mode:+${encodeURIComponent(prompt.substring(0, 20))}`;
+      }
     }
 
     // MULTIMODAL PIPELINE (Gemini)
@@ -326,8 +345,14 @@ export const GeminiService = {
         requestBody.generationConfig.thinkingConfig = thinkingConfig;
       }
 
-      // ===== PHASE 2B: HOSTED BILLING PIPELINE =====
       if (options.billingMode === 'hosted') {
+        if ((window as any).electronAPI && typeof (window as any).electronAPI.getWorkerStatus === 'function') {
+            const workerState = await (window as any).electronAPI.getWorkerStatus();
+            if (workerState.status !== 'online') {
+                throw new Error(`Hosted Generation is unavailable because the required background worker is not currently online. Status: ${workerState.status}. Reason: ${workerState.lastError || 'None'}`);
+            }
+        }
+
         const { SupabaseAuth, supabase } = await import('./SupabaseClient');
 
         const token = await SupabaseAuth.getValidJwt();
@@ -378,9 +403,13 @@ export const GeminiService = {
           const genId = data.generationId;
           if (!genId) throw new Error('Hosted Generation Error: Received 202 but no generationId.');
 
-          // Polling loop logic: Max 90 seconds (45 attempts * 2s)
+          if (options.onJobAccepted) options.onJobAccepted(genId, data.acceptedAt);
+
+          // Polling loop logic: Max 90-180 seconds based on image size
           let attempts = 0;
-          const MAX_ATTEMPTS = 45;
+          let MAX_ATTEMPTS = 45; // 1K default (90s)
+          if (options.imageSize === '2K') MAX_ATTEMPTS = 60; // 120s
+          if (options.imageSize === '4K') MAX_ATTEMPTS = 90; // 180s
           
           while (attempts < MAX_ATTEMPTS) {
             await new Promise(r => setTimeout(r, 2000));
@@ -411,7 +440,10 @@ export const GeminiService = {
             }
           }
           
-          throw new Error('Hosted Generation Error: Generation exceeded maximum timeout (90s).');
+          const timeoutErr = new Error('Hosted Generation Pending: Generation exceeded the current UI wait window and may still complete in the background.');
+          timeoutErr.name = 'TimeoutError';
+          (timeoutErr as any).generationId = genId;
+          throw timeoutErr;
         }
 
         if (!rawResponse.ok) {

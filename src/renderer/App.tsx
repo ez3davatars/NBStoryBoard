@@ -1,11 +1,10 @@
 import { useEffect, useState, Component, useCallback } from 'react';
 import type { ReactNode, ErrorInfo } from 'react';
-// ... existing imports ...
-
-
 import SceneCanvas from './components/SceneCanvas';
 import WardrobeStudio from './components/WardrobeStudio';
 import PropAccessoryStudio from './components/PropAccessoryStudio';
+import { LibraryAssetMaterializer } from './services/LibraryAssetMaterializer';
+import { resolveDisplayUrl } from './utils/assetUrlResolver';
 import PortraitStudio from './components/PortraitStudio';
 import VeoPromptStudio from './components/VeoPromptStudio';
 import { StorageService } from './services/StorageService';
@@ -46,6 +45,26 @@ import { NanobananaThinking } from './components/ui/NanobananaThinking';
 const ImageInspector = () => {
   const { state, dispatch } = useAppContext();
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
+  const [resolvedDisplay, setResolvedDisplay] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!state.inspectImage) {
+      setResolvedDisplay(null);
+      return;
+    }
+    
+    let isMounted = true;
+    resolveDisplayUrl({
+      localPath: state.inspectImageLocalPath,
+      sourceUrl: state.inspectImageSourceUrl,
+      localUrl: state.inspectImage,
+      remoteUrl: state.inspectImage.startsWith('http') ? state.inspectImage : null
+    }).then(resolved => {
+      if (isMounted) setResolvedDisplay(resolved || state.inspectImage!);
+    });
+
+    return () => { isMounted = false; };
+  }, [state.inspectImage, state.inspectImageLocalPath, state.inspectImageSourceUrl]);
 
   if (!state.inspectImage) return null;
 
@@ -71,7 +90,7 @@ const ImageInspector = () => {
           <div className="w-full md:flex-1 flex flex-col items-center min-w-0">
             <span className="text-[10px] items-center gap-2 mb-2 font-black uppercase tracking-[0.3em] text-white/50 bg-white/5 px-3 py-1 rounded-full border border-white/10 backdrop-blur-md">Original Content</span>
             <img
-              src={state.inspectImage}
+              src={resolvedDisplay || state.inspectImage}
               className="max-w-full max-h-[calc(100dvh-16rem)] sm:max-h-[70vh] object-contain rounded-xl -[0_0_150px_rgba(0,0,0,1)] animate-in zoom-in duration-500 cursor-default ring-1 ring-white/10"
               onClick={(e) => e.stopPropagation()}
             />
@@ -105,13 +124,27 @@ const ImageInspector = () => {
 
         <div className="fixed bottom-4 sm:bottom-12 left-1/2 -translate-x-1/2 flex flex-wrap justify-center gap-2 sm:gap-4 z-[2001] max-w-[calc(100vw-1.5rem)] bg-black/40 backdrop-blur-2xl border border-white/10 p-2 rounded-2xl ">
           <button
-            onClick={(e) => {
+            onClick={async (e) => {
               e.stopPropagation();
+              const sourceFallback = state.inspectImageSourceUrl || state.inspectImage!;
+
+              // Materialize
+              const mat = await LibraryAssetMaterializer.materializeCastAsset({
+                sourceUrl: sourceFallback,
+                saveDirectoryPath: state.saveDirectoryPath,
+                actorName: 'New Cast Member',
+                category: 'Uncategorized'
+              });
+
               const newCast: CastMember = {
                 id: `cast-insp-${Date.now()}`,
-                url: state.inspectImage!,
+                url: mat.previewUrl,
+                localPath: mat.localPath || undefined,
+                previewUrl: mat.previewUrl,
+                sourceUrl: mat.sourceUrl,
                 tag: 'front',
                 name: 'New Cast Member',
+                filename: mat.filename,
                 profile: { identity: 'Unknown', wardrobe: '', accessories: '', style: '' }
               };
               dispatch({ type: 'ADD_CAST', payload: newCast });
@@ -152,7 +185,9 @@ const ImageInspector = () => {
                   const filename = `Inspect-Actor-${timestamp}.png`;
                   const fileHandle = await actorsDir.getFileHandle(filename, { create: true });
                   const writable = await fileHandle.createWritable();
-                  const response = await fetch(state.inspectImage!);
+                  const fetchTarget = state.inspectImageLocalPath && state.inspectImageLocalPath.startsWith('file://') 
+                                        ? state.inspectImageLocalPath : state.inspectImage!;
+                  const response = await fetch(fetchTarget);
                   const blob = await response.blob();
                   await writable.write(blob);
                   await writable.close();
@@ -268,6 +303,53 @@ const App = () => {
   useEffect(() => {
     console.log('[NBStoryBoard] VITE_APP_ENV =', import.meta.env.VITE_APP_ENV ?? '(undefined)');
   }, []);
+
+  // Hosted Mode Background Poller
+  useEffect(() => {
+    const pendingJobs = state.backgroundJobs.filter(j => j.status === 'pending_background');
+    if (pendingJobs.length === 0) return;
+
+    const poller = setInterval(async () => {
+      const { supabase } = await import('./services/SupabaseClient');
+      if (!supabase) return;
+
+      for (const job of pendingJobs) {
+        const { data, error } = await supabase.from('generations').select('status, asset_url, timing_metrics').eq('id', job.id).single();
+        if (error) {
+           console.error('[BackgroundPoller] Supabase error:', error);
+        }
+        if (data) {
+          if (data.status === 'COMPLETED') {
+            const observedCompletedAt = Date.now();
+            const t = job.timing || {} as any;
+            const db = data.timing_metrics || {};
+
+            dispatch({ type: 'COMPLETE_BACKGROUND_JOB', payload: { id: job.id, assetUrl: data.asset_url } });
+            dispatch({ type: 'ADD_LOG', payload: { message: `Background job finished: ${job.context}`, type: 'success' } });
+
+            // Pipeline Diagnostics
+            const d = {
+                 '1. Edge Queue Delay (ms)': (db.worker_claimed_at && t.edgeAcceptedAt) ? db.worker_claimed_at - t.edgeAcceptedAt : 'N/A',
+                 '2. Gemini Provider Latency (ms)': (db.provider_finished_at && db.provider_started_at) ? db.provider_finished_at - db.provider_started_at : 'N/A',
+                 '3. Upload Overhead (ms)': (db.r2_finished_at && db.r2_started_at) ? db.r2_finished_at - db.r2_started_at : 'N/A',
+                 '4. Poller Observation Lag (ms)': (db.db_completed_at) ? observedCompletedAt - db.db_completed_at : 'N/A',
+                 'Total End-to-End Time (ms)': t.submittedAt ? observedCompletedAt - t.submittedAt : 'N/A',
+                 'Post-Timeout Overrun (ms)': t.clientTimeoutAt ? observedCompletedAt - t.clientTimeoutAt : 'N/A'
+            };
+            console.groupCollapsed(`🚀 [HOSTED AUDIT] Generation ${job.id} Timings`);
+            console.table(d);
+            console.log("Raw Metric Dump:", { client: t, edge: { accepted: t.edgeAcceptedAt }, worker: db, observationTime: observedCompletedAt });
+            console.groupEnd();
+          } else if (data.status === 'FAILED' || data.status === 'CANCELED') {
+            dispatch({ type: 'FAIL_BACKGROUND_JOB', payload: { id: job.id, errorMessage: 'Provider rejected or failed' } });
+            dispatch({ type: 'ADD_LOG', payload: { message: `Background job failed: ${job.context}`, type: 'error' } });
+          }
+        }
+      }
+    }, 5000);
+
+    return () => clearInterval(poller);
+  }, [state.backgroundJobs, dispatch]);
 
   // Sync Supabase Hosted Auth Session
   useEffect(() => {
@@ -858,6 +940,12 @@ const App = () => {
                   )}
                 </div>
                 <div className="min-w-0 flex items-center gap-2 sm:justify-end">
+                  {state.backgroundJobs.filter(j => j.status === 'pending_background').length > 0 && (
+                      <div className="flex items-center gap-2 px-3 py-1 rounded bg-blue-500/10 text-blue-400 font-bold border border-blue-500/20 mr-2 shrink-0">
+                        <Clapperboard className="w-3 h-3 animate-pulse" />
+                        {state.backgroundJobs.filter(j => j.status === 'pending_background').length} hosted render still processing
+                      </div>
+                  )}
                   {state.logs.length > 0 && (
                     <span
                       className={`block max-w-full truncate ${state.logs[state.logs.length - 1].type === 'error' ? 'text-red-500' : 'text-green-500'}`}
@@ -877,65 +965,145 @@ const App = () => {
                   <div className="bg-[#18181b] border border-gray-700 p-4 sm:p-6 rounded-xl w-full max-w-2xl max-h-[90dvh] overflow-y-auto animate-in fade-in zoom-in duration-200">
                     <h2 className="text-lg font-bold text-white mb-4">Configuration</h2>
                     <div className="space-y-4">
-                      {/* BILLING MODE TOGGLE */}
-                      <div>
-                        <label className="block text-xs font-bold text-gray-400 uppercase mb-2 tracking-wider">Billing & Generation Mode</label>
-                        <div className="grid grid-cols-2 gap-2">
-                          <button
-                            onClick={() => setTempBillingMode('hosted')}
-                            className={`p-3 rounded-lg border transition-all text-left ${tempBillingMode === 'hosted' ? 'bg-blue-500/10 border-blue-500 ' : 'bg-[#09090b] border-[#27272a] hover:border-gray-600'}`}
-                          >
-                            <span className={`text-xs font-bold ${tempBillingMode === 'hosted' ? 'text-blue-500' : 'text-gray-200'}`}>Hosted Cloud</span>
-                            <p className="text-[10px] text-gray-500 mt-1">Uses secure Edge proxy and shared quota.</p>
-                          </button>
-                          <button
-                            onClick={() => setTempBillingMode('byok')}
-                            className={`p-3 rounded-lg border transition-all text-left ${tempBillingMode === 'byok' ? 'bg-yellow-500/10 border-yellow-500 ' : 'bg-[#09090b] border-[#27272a] hover:border-gray-600'}`}
-                          >
-                            <span className={`text-xs font-bold ${tempBillingMode === 'byok' ? 'text-yellow-500' : 'text-gray-200'}`}>Bring Your Own Key</span>
-                            <p className="text-[10px] text-gray-500 mt-1">Direct API requests using your local key.</p>
-                          </button>
-                        </div>
-                      </div>
-
-                      {tempBillingMode === 'byok' && (
-                        <div>
-                          <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Gemini API Key</label>
-                          <input
-                            type="password"
-                            className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-yellow-500 focus:outline-none"
-                            placeholder="AIzaSy..."
-                            value={tempKey}
-                            onChange={(e) => setTempKey(e.target.value)}
-                          />
-                          <p className="text-[10px] text-gray-500 mt-2">
-                            Required for BYOK Service Layer to connect directly to Google Cloud. 
-                          </p>
-                        </div>
-                      )}
-
-                      {tempBillingMode === 'hosted' && (
-                        <div className="p-4 bg-black/40 border border-[#27272a] rounded-lg">
-                          <label className="block text-xs font-bold text-blue-500 uppercase mb-2">Hosted Cloud Authentication</label>
-                          {state.hostedSession ? (
-                            <div className="flex items-center justify-between">
-                              <div>
-                                <p className="text-sm text-white">{state.hostedSession.user?.email}</p>
-                                <p className="text-[10px] text-emerald-500 font-mono">Authenticated ✓</p>
-                              </div>
-                              <button onClick={handleSignOut} disabled={isAuthLoading} className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white rounded text-xs font-bold transition-colors">
-                                {isAuthLoading ? 'Signing out...' : 'Sign Out'}
+                      {/* BILLING MODE & ENTITLEMENTS */}
+                      {import.meta.env.DEV ? (
+                        <>
+                          <div>
+                            <label className="block text-xs font-bold text-gray-400 uppercase mb-2 tracking-wider">Billing & Generation Mode (DEV OVERRIDE)</label>
+                            <div className="grid grid-cols-2 gap-2">
+                              <button
+                                onClick={() => setTempBillingMode('hosted')}
+                                className={`p-3 rounded-lg border transition-all text-left ${tempBillingMode === 'hosted' ? 'bg-blue-500/10 border-blue-500 ' : 'bg-[#09090b] border-[#27272a] hover:border-gray-600'}`}
+                              >
+                                <span className={`text-xs font-bold ${tempBillingMode === 'hosted' ? 'text-blue-500' : 'text-gray-200'}`}>Hosted Cloud</span>
+                                <p className="text-[10px] text-gray-500 mt-1">Uses secure Edge proxy and shared quota.</p>
+                              </button>
+                              <button
+                                onClick={() => setTempBillingMode('byok')}
+                                className={`p-3 rounded-lg border transition-all text-left ${tempBillingMode === 'byok' ? 'bg-yellow-500/10 border-yellow-500 ' : 'bg-[#09090b] border-[#27272a] hover:border-gray-600'}`}
+                              >
+                                <span className={`text-xs font-bold ${tempBillingMode === 'byok' ? 'text-yellow-500' : 'text-gray-200'}`}>Bring Your Own Key</span>
+                                <p className="text-[10px] text-gray-500 mt-1">Direct API requests using your local key.</p>
                               </button>
                             </div>
-                          ) : (
-                            <div className="space-y-3">
-                               <input type="email" value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} placeholder="Email account" className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-blue-500 focus:outline-none" />
-                               <input type="password" value={authPass} onChange={(e) => setAuthPass(e.target.value)} placeholder="Password" className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-blue-500 focus:outline-none" />
-                               <button onClick={handleSignIn} disabled={isAuthLoading || !authEmail || !authPass} className="w-full py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded text-sm font-bold transition-colors">
-                                 {isAuthLoading ? 'Authenticating...' : 'Sign In'}
-                               </button>
+                          </div>
+
+                          {tempBillingMode === 'byok' && (
+                            <div>
+                              <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Gemini API Key</label>
+                              <input
+                                type="password"
+                                className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-yellow-500 focus:outline-none"
+                                placeholder="AIzaSy..."
+                                value={tempKey}
+                                onChange={(e) => setTempKey(e.target.value)}
+                              />
+                              <p className="text-[10px] text-gray-500 mt-2">
+                                Required for BYOK Service Layer to connect directly to Google Cloud. 
+                              </p>
                             </div>
                           )}
+
+                          {tempBillingMode === 'hosted' && (
+                            <div className="p-4 bg-black/40 border border-[#27272a] rounded-lg">
+                              <label className="block text-xs font-bold text-blue-500 uppercase mb-2">Hosted Cloud Authentication</label>
+                              {state.hostedSession ? (
+                                <div className="flex items-center justify-between">
+                                  <div>
+                                    <p className="text-sm text-white">{state.hostedSession.user?.email}</p>
+                                    <p className="text-[10px] text-emerald-500 font-mono">Authenticated ✓</p>
+                                  </div>
+                                  <button onClick={handleSignOut} disabled={isAuthLoading} className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white rounded text-xs font-bold transition-colors">
+                                    {isAuthLoading ? 'Signing out...' : 'Sign Out'}
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="space-y-3">
+                                   <input type="email" value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} placeholder="Email account" className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-blue-500 focus:outline-none" />
+                                   <input type="password" value={authPass} onChange={(e) => setAuthPass(e.target.value)} placeholder="Password" className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-blue-500 focus:outline-none" />
+                                   <button onClick={handleSignIn} disabled={isAuthLoading || !authEmail || !authPass} className="w-full py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded text-sm font-bold transition-colors">
+                                     {isAuthLoading ? 'Authenticating...' : 'Sign In'}
+                                   </button>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <div className="space-y-4">
+                           <div>
+                             <label className="block text-xs font-bold text-gray-400 uppercase mb-2 tracking-wider">Active Entitlement</label>
+                             {state.billingEntitlements.effectiveBillingMode === 'hosted' ? (
+                               <div className="p-4 rounded-lg border border-blue-500/50 bg-blue-500/10 text-blue-400">
+                                  <span className="font-bold text-sm block mb-1">Hosted Cloud</span>
+                                  <span className="text-xs">Your generation requests are routed securely through our Edge cloud using your active subscription.</span>
+                               </div>
+                             ) : state.billingEntitlements.effectiveBillingMode === 'byok' ? (
+                               <div className="p-4 rounded-lg border border-yellow-500/50 bg-yellow-500/10 text-yellow-500">
+                                  <span className="font-bold text-sm block mb-1">Bring Your Own Key</span>
+                                  <span className="text-xs">You are using your own local Gemini API credentials for generation.</span>
+                               </div>
+                             ) : (
+                               <div className="p-4 rounded-lg border border-red-500/50 bg-red-500/10 text-red-500">
+                                  <span className="font-bold text-sm block mb-1">No Active Entitlement</span>
+                                  <span className="text-xs">No active generation entitlement found. Please sign in to a Hosted account or activate a BYOK license.</span>
+                               </div>
+                             )}
+                           </div>
+                           
+                           {state.billingEntitlements.hasByokAccess && (
+                             <div>
+                               <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Gemini API Key</label>
+                               <input
+                                 type="password"
+                                 className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-yellow-500 focus:outline-none"
+                                 placeholder="AIzaSy..."
+                                 value={tempKey}
+                                 onChange={(e) => setTempKey(e.target.value)}
+                               />
+                               <p className="text-[10px] text-gray-500 mt-2">
+                                 Required for BYOK Service Layer to connect directly to Google Cloud. 
+                               </p>
+                             </div>
+                           )}
+
+                           {!state.billingEntitlements.hasHostedAccess && state.billingEntitlements.hasByokAccess ? (
+                             <div className="p-4 bg-[#09090b] border border-[#27272a] rounded-lg">
+                               <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Hosted Cloud</label>
+                               <p className="text-[10px] text-gray-400">
+                                 Your current entitlement is Bring Your Own Key. Hosted Cloud access is not active on this account.<br/><br/>
+                                 Sign in with a Hosted-enabled account or upgrade to use cloud generation.
+                               </p>
+                             </div>
+                           ) : (
+                             <div className="p-4 bg-black/40 border border-[#27272a] rounded-lg">
+                               <label className="block text-xs font-bold text-blue-500 uppercase mb-2">
+                                 {!state.billingEntitlements.hasHostedAccess && !state.billingEntitlements.hasByokAccess ? 'Hosted Cloud Access' : 'Hosted Cloud Authentication'}
+                               </label>
+                               {!state.billingEntitlements.hasHostedAccess && !state.billingEntitlements.hasByokAccess && (
+                                 <p className="text-[10px] text-gray-400 mb-3">Sign in with a Hosted-enabled account to use cloud generation.</p>
+                               )}
+                               {state.hostedSession ? (
+                                 <div className="flex items-center justify-between">
+                                   <div>
+                                     <p className="text-sm text-white">{state.hostedSession.user?.email}</p>
+                                     <p className="text-[10px] text-emerald-500 font-mono">Authenticated ✓</p>
+                                   </div>
+                                   <button onClick={handleSignOut} disabled={isAuthLoading} className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white rounded text-xs font-bold transition-colors">
+                                     {isAuthLoading ? 'Signing out...' : 'Sign Out'}
+                                   </button>
+                                 </div>
+                               ) : (
+                                 <div className="space-y-3">
+                                    <input type="email" value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} placeholder="Email account" className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-blue-500 focus:outline-none" />
+                                    <input type="password" value={authPass} onChange={(e) => setAuthPass(e.target.value)} placeholder="Password" className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-blue-500 focus:outline-none" />
+                                    <button onClick={handleSignIn} disabled={isAuthLoading || !authEmail || !authPass} className="w-full py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded text-sm font-bold transition-colors">
+                                      {isAuthLoading ? 'Authenticating...' : 'Sign In'}
+                                    </button>
+                                 </div>
+                               )}
+                             </div>
+                           )}
                         </div>
                       )}
                       <div>

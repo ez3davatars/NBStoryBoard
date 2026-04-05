@@ -126,7 +126,7 @@ serve(async (req) => {
     if (payloadErr) throw new Error(`Could not enqueue generation payload data: ${payloadErr.message}`);
 
     // 4. Return instant HTTP 202 
-    return new Response(JSON.stringify({ generationId: job.id, status: 'PENDING' }), {
+    return new Response(JSON.stringify({ generationId: job.id, status: 'PENDING', acceptedAt: Date.now() }), {
         status: 202,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     });

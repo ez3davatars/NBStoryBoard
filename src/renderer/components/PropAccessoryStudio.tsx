@@ -7,9 +7,11 @@ import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
 import { removeBackground } from "@imgly/background-removal";
 import { CutoutService } from "../services/CutoutService";
-import { nativeJoinPath, nativeListFiles, nativeReadFile, nativeWriteFile, isNativeParams, safeFetchBlob } from '../utils/NativeFileAssets';
+import { nativeJoinPath, nativeListFiles, nativeWriteFile, isNativeParams, safeFetchBlob } from '../utils/NativeFileAssets';
 import type { PropItem, CastMember } from '../context/AppContext';
 import ConfirmDialog from './ui/ConfirmDialog';
+import { LibraryAssetMaterializer } from '../services/LibraryAssetMaterializer';
+import { resolveDisplayUrl } from '../utils/assetUrlResolver';
 
 const PropAccessoryStudio = () => {
     const { state, dispatch } = useAppContext();
@@ -191,11 +193,13 @@ const PropAccessoryStudio = () => {
                 for (const filename of files) {
                     if (/\.(png|jpg|jpeg|webp)$/i.test(filename)) {
                         const fullPath = await nativeJoinPath(propsPath, filename);
-                        const dataUrl = await nativeReadFile(fullPath);
-                        if (dataUrl) {
+                        const displayUrl = await resolveDisplayUrl({ localPath: fullPath });
+                        if (displayUrl) {
                             items.push({
                                 id: filename,
-                                url: dataUrl,
+                                url: displayUrl,
+                                localPath: fullPath,
+                                filename: filename,
                                 name: filename.replace('.png', '').split('-').slice(1).join(' '),
                                 prompt: "Saved prop asset",
                                 timestamp: Date.now() // Native list doesn't give timestamp easily yet, using Now serves sort-of-ok or we can stat
@@ -317,11 +321,20 @@ const PropAccessoryStudio = () => {
 
             // Read for immediate display
             const reader = new FileReader();
-            reader.onload = () => {
+            reader.onload = async () => {
                 const dataUrl = reader.result as string;
+
+                let localPath: string | undefined;
+                if (isNativeParams() && state.saveDirectoryPath) {
+                    const propsPath = await nativeJoinPath(state.saveDirectoryPath, 'props');
+                    localPath = await nativeJoinPath(propsPath, safeName);
+                }
+
                 const newItem: PropItem = {
                     id: safeName,
                     url: dataUrl,
+                    localPath: localPath,
+                    filename: safeName,
                     name: file.name.split('.')[0].substring(0, 20),
                     prompt: "User Upload",
                     timestamp: Date.now()
@@ -380,39 +393,23 @@ const PropAccessoryStudio = () => {
     const saveToProps = async (imageUrl: string, prompt: string) => {
         if (!state.saveDirectoryHandle && !state.saveDirectoryPath) return; // Need at least one
         try {
-            const filename = `PROP-${Date.now()}.png`;
-
-            // 1. NATIVE MODE
-            if (isNativeParams() && state.saveDirectoryPath) {
-                const propsPath = await nativeJoinPath(state.saveDirectoryPath, 'props');
-                const fullPath = await nativeJoinPath(propsPath, filename);
-
-                // Fetch blob to write
-                const res = await fetch(imageUrl);
-                const blob = await res.blob();
-
-                await nativeWriteFile(fullPath, blob);
-            }
-            // 2. WEB MODE
-            else if (state.saveDirectoryHandle) {
-                const propsHandle = await state.saveDirectoryHandle.getDirectoryHandle('props', { create: true });
-                const fileHandle = await propsHandle.getFileHandle(filename, { create: true });
-                const writable = await fileHandle.createWritable();
-                const res = await fetch(imageUrl);
-                const blob = await res.blob();
-                await writable.write(blob);
-                await writable.close();
-            }
+            const mat = await LibraryAssetMaterializer.materializePropAsset({
+                sourceUrl: imageUrl,
+                saveDirectoryPath: state.saveDirectoryPath
+            });
 
             const newItem: PropItem = {
-                id: filename,
-                url: imageUrl,
+                id: mat.filename || `PROP-${Date.now()}.png`,
+                url: mat.url,
+                localPath: mat.localPath || undefined,
+                sourceUrl: mat.sourceUrl,
+                filename: mat.filename,
                 name: prompt.substring(0, 20),
                 prompt: prompt,
                 timestamp: Date.now()
             };
             dispatch({ type: 'ADD_PROP_ITEM', payload: newItem });
-            dispatch({ type: 'ADD_LOG', payload: { message: `Prop saved to library: ${filename}`, type: 'success' } });
+            dispatch({ type: 'ADD_LOG', payload: { message: `Prop saved to library: ${mat.filename || "Storage"}`, type: 'success' } });
         } catch (e: any) {
             dispatch({ type: 'ADD_LOG', payload: { message: `Failed to save prop: ${e.message}`, type: 'error' } });
         }
@@ -439,7 +436,11 @@ const PropAccessoryStudio = () => {
             dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text } });
         }, 1000);
 
+        const submittedAt = Date.now();
+        let actualAcceptedAt = 0;
+
         try {
+            let actualGenId = '';
             const res = await GeminiService.generateImage(
                 `Create a single image.
 
@@ -460,12 +461,27 @@ extra objects, duplicate prop, altered proportions, floating parts, text, label,
                 state.apiKey,
                 state.model,
                 [],
-                { aspectRatio: '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingMode }
+                { 
+                    aspectRatio: '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted'|'byok', entitlements: state.billingEntitlements,
+                    onJobAccepted: (id, acceptedAt) => {
+                        actualGenId = id;
+                        actualAcceptedAt = acceptedAt || Date.now();
+                        dispatch({ type: 'ADD_BACKGROUND_JOB', payload: { id, status: 'polling_foreground', context: 'prop_designer', startedAt: Date.now(), timing: { submittedAt, edgeAcceptedAt: actualAcceptedAt } } });
+                    }
+                }
             );
+
+            if (actualGenId) dispatch({ type: 'REMOVE_BACKGROUND_JOB', payload: actualGenId });
             setDesignerImage(res);
             dispatch({ type: 'ADD_LOG', payload: { message: "Prop generated on black studio background.", type: 'success' } });
         } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });
+            const isTimeout = e.name === 'TimeoutError' || e.message?.includes('Pending');
+            if (isTimeout && e.generationId) {
+                dispatch({ type: 'UPDATE_BACKGROUND_JOB', payload: { id: e.generationId, updates: { status: 'pending_background', timing: { submittedAt, edgeAcceptedAt: actualAcceptedAt, clientTimeoutAt: Date.now() } } } });
+                dispatch({ type: 'ADD_LOG', payload: { message: "Job shifted to background due to long queue.", type: 'info' } });
+            } else {
+                dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });
+            }
         } finally {
             clearInterval(progressInterval);
             dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
@@ -546,7 +562,11 @@ extra objects, duplicate prop, altered proportions, floating parts, text, label,
             dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text } });
         }, 1000);
 
+        const submittedAt = Date.now();
+        let actualAcceptedAt = 0;
+
         try {
+            let actualGenId = '';
             const res = await GeminiService.generateImage(
                 `Create a single image.
 
@@ -579,8 +599,17 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                     { url: selectedCharacter.url, label: "Subject Reference" },
                     { url: selectedProp.url, label: "Prop Reference" }
                 ],
-                { aspectRatio: '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingMode }
+                { 
+                    aspectRatio: '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted'|'byok', entitlements: state.billingEntitlements,
+                    onJobAccepted: (id, acceptedAt) => {
+                        actualGenId = id;
+                        actualAcceptedAt = acceptedAt || Date.now();
+                        dispatch({ type: 'ADD_BACKGROUND_JOB', payload: { id, status: 'polling_foreground', context: 'prop_applied', startedAt: Date.now(), timing: { submittedAt, edgeAcceptedAt: actualAcceptedAt } } });
+                    }
+                }
             );
+            if (actualGenId) dispatch({ type: 'REMOVE_BACKGROUND_JOB', payload: actualGenId });
+
             setAppliedImage(res);
             dispatch({ type: 'ADD_LOG', payload: { message: "Prop integrated. Creating character edge mask...", type: 'info' } });
 
@@ -591,12 +620,18 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                     state.apiKey,
                     state.model,
                     [{ url: res, label: "Reference" }],
-                    { aspectRatio: '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingMode }
+                    { aspectRatio: '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted'|'byok', entitlements: state.billingEntitlements }
                 );
                 setApplyMask(maskRes);
             } catch { }
         } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });
+            const isTimeout = e.name === 'TimeoutError' || e.message?.includes('Pending');
+            if (isTimeout && e.generationId) {
+                dispatch({ type: 'UPDATE_BACKGROUND_JOB', payload: { id: e.generationId, updates: { status: 'pending_background', timing: { submittedAt, edgeAcceptedAt: actualAcceptedAt, clientTimeoutAt: Date.now() } } } });
+                dispatch({ type: 'ADD_LOG', payload: { message: "Job shifted to background due to long queue.", type: 'info' } });
+            } else {
+                dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });
+            }
         } finally {
             clearInterval(progressInterval);
             dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });

@@ -8,7 +8,7 @@ import {
   Search, Calendar, Type, Layers, Folder, HelpCircle,
   Maximize, LayoutTemplate, Share2, Info, CheckCircle2,
   ArrowDownUp, Edit2, FolderInput, Hammer, Lock,
-  Undo2, Redo2, Zap
+  Undo2, Redo2, Zap, Sliders, Clapperboard
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { removeBackground } from "@imgly/background-removal";
@@ -117,7 +117,7 @@ const resolveImageBlob = async (src: string): Promise<Blob> => {
     return dataUrlToBlob(src);
   }
 
-  if (isHttpUrl(src)) {
+  if (src.startsWith('blob:') || isHttpUrl(src)) {
     const response = await fetch(src, { mode: 'cors' });
     if (!response.ok) {
       throw new Error(`Remote image fetch failed: ${response.status}`);
@@ -125,7 +125,7 @@ const resolveImageBlob = async (src: string): Promise<Blob> => {
     return await response.blob();
   }
 
-  throw new Error('Unsupported image source format');
+  throw new Error('Unsupported image source format: ' + src);
 };
 
 const CastingForge = () => {
@@ -140,13 +140,6 @@ const CastingForge = () => {
         .map(s => normalizeStyle(s))
     );
   }, []);
-
-  const PRESETS = [
-    { label: "Cyberpunk Hero", prompt: "A futuristic cyberpunk bounty hunter in high-tech carbon fiber armor, orange neon accents, cinematic street lighting, 8k resolution, stylized realism" },
-    { label: "Fantasy Mage", prompt: "An ancient elven sorcerer in ornate silk robes, glowing arcane runes, ethereal magic aura, soft cinematic lighting, high-fantasy 3D animation style" },
-    { label: "Street Samurai", prompt: "A modern urban samurai in a techwear kimono, mechanical katana, rain-slicked city background, teal and magenta lighting, graphic noir style" },
-    { label: "Hyper-Real Portrait", prompt: "A hyper-realistic studio portrait of a weathered starship captain, extreme facial detail, 85mm lens, neutral studio lighting, photorealistic CG" }
-  ];
 
   const mainUploadRef = useRef<HTMLInputElement>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
@@ -440,6 +433,16 @@ const CastingForge = () => {
 
 
   const [selectedStyleId, setSelectedStyleId] = useState<string | null>(null);
+  const selectedStyleMeta = React.useMemo(() => {
+    const styleMap: Record<string, { helper: string }> = {
+      realism: { helper: 'Best for lifelike actors, cinematic portraits, and grounded characters.' },
+      anim: { helper: 'Best for family-friendly animation, charm, and soft stylized personality.' },
+      illustration: { helper: 'Best for anime, graphic novel, and expressive illustrated characters.' },
+      scifi: { helper: 'Best for futuristic heroes, cyberpunk agents, and high-tech worlds.' }
+    };
+
+    return selectedStyleId ? styleMap[selectedStyleId] : null;
+  }, [selectedStyleId]);
 
   const handleGenerate = async () => {
     // CHANGE: "Character design sheet" triggers text layouts. Use "Full body character portrait" instead.
@@ -511,6 +514,13 @@ const CastingForge = () => {
     try {
       type HostedGenerationResult = string | { asset_url?: string | null };
       let res: HostedGenerationResult;
+
+      let actualGenId = '';
+      const onJobAccepted = (id: string) => {
+        actualGenId = id;
+        dispatch({ type: 'ADD_BACKGROUND_JOB', payload: { id, status: 'polling_foreground', context: 'casting', startedAt: Date.now() } });
+      };
+
       if (state.lastCastedImage && state.apiKey) {
         dispatch({ type: 'ADD_LOG', payload: { message: "Applying stylization to character...", type: 'info' } });
         const stylizePrompt = `Create a single character portrait.
@@ -537,7 +547,7 @@ text, labels, HUD, overlays, duplicate subjects, identity drift, extra limbs, fu
           state.apiKey,
           state.model,
           [{ url: state.lastCastedImage, label: 'Subject Reference' }],
-          { imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingMode }
+          { imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, onJobAccepted }
         ) as HostedGenerationResult;
       } else {
         const createPrompt = `Create a single character portrait.
@@ -558,8 +568,12 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
           state.apiKey,
           state.model,
           [],
-          { imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingMode }
+          { imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, onJobAccepted }
         ) as HostedGenerationResult;
+      }
+
+      if (actualGenId) {
+        dispatch({ type: 'REMOVE_BACKGROUND_JOB', payload: actualGenId });
       }
 
       const resolvedUrl =
@@ -570,6 +584,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
       if (generationIdRef.current === currentGenId) {
         dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: resolvedUrl });
         setProcessedPreviewUrl(null);
+        setShowAdjustments(false);
       } else {
         return;
       }
@@ -602,7 +617,13 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
       dispatch({ type: 'ADD_LOG', payload: { message: logMessage, type: 'success' } });
       dispatch({ type: 'SET_LAST_CASTED_PROMPT', payload: '' }); // Clear input as requested
     } catch (e: any) {
-      dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });
+      const isTimeout = e.name === 'TimeoutError' || e.message?.includes('Pending');
+      if (isTimeout && e.generationId) {
+        dispatch({ type: 'UPDATE_BACKGROUND_JOB', payload: { id: e.generationId, updates: { status: 'pending_background' } } });
+        dispatch({ type: 'ADD_LOG', payload: { message: "Job shifted to background due to long queue.", type: 'info' } });
+      } else {
+        dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });
+      }
     } finally {
       clearInterval(progressInterval);
       dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
@@ -828,6 +849,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
   const [showSortMenu, setShowSortMenu] = useState(false);
   const [activeFolder, setActiveFolder] = useState<string | null>(null);
   const [refSheetUrl, setRefSheetUrl] = useState<string | null>(null);
+  const [showAdjustments, setShowAdjustments] = useState(false);
 
   // Custom Covers moved to AppContext for persistence
   // const [customCovers, setCustomCovers] = useState<Record<string, string>>({});
@@ -1388,6 +1410,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
           dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: standardizedUrl });
           dispatch({ type: 'SET_LAST_CASTED_MASK', payload: null });
           setProcessedPreviewUrl(null);
+          setShowAdjustments(false);
 
           const currentGenId = Date.now();
           generationIdRef.current = currentGenId;
@@ -1481,9 +1504,20 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
         state.apiKey,
         state.model, // Use the user's selected model (consistent with main generator)
         inputImages,
-        { aspectRatio: refLayout === 'split_focus' ? '16:9' : '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingMode }
+        { aspectRatio: refLayout === 'split_focus' ? '16:9' : '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements }
       );
-      setRefSheetUrl(res);
+      
+      let safeRefSheetUrl = res as string;
+      if (typeof safeRefSheetUrl === 'string' && safeRefSheetUrl.startsWith('http')) {
+        try {
+          const blob = await resolveImageBlob(safeRefSheetUrl);
+          safeRefSheetUrl = URL.createObjectURL(blob);
+        } catch (fetchErr) {
+          console.warn("Failed to materialize remote ref sheet:", fetchErr);
+        }
+      }
+
+      setRefSheetUrl(safeRefSheetUrl);
       setShowRefSheet(true);
       dispatch({ type: 'ADD_LOG', payload: { message: "Reference Sheet Generated.", type: 'success' } });
     } catch (e: any) {
@@ -1945,46 +1979,61 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
           />
 
           {/* STYLE SELECTOR */}
-          <div className="mb-4">
-            <label className="text-[10px] text-gray-500 block mb-2 uppercase font-bold flex items-center gap-2">
+          <div className="mb-6 mt-1">
+            <label className="text-[10px] text-yellow-500 block mb-3.5 uppercase font-black flex items-center gap-2 tracking-[0.15em]">
               <Sparkles className="w-3 h-3 text-yellow-500" /> Target Studio Style
             </label>
-            <div className="grid grid-cols-2 gap-2">
-              {STUDIO_FOLDERS.filter(f => f.id !== 'uncategorized').map(folder => (
-                <HelpTooltip key={folder.id} zone="cast" id="studioStyleSelector">
+            <div className="grid grid-cols-2 gap-y-4 gap-x-2 px-1">
+              {[
+                { id: 'realism', label: 'Realism' },
+                { id: 'anim', label: 'Stylized Cartoon' },
+                { id: 'illustration', label: 'Illustration' },
+                { id: 'scifi', label: 'Sci-Fi' }
+              ].map(style => {
+                const active = selectedStyleId === style.id;
+                return (
                   <button
-                    onClick={() => setSelectedStyleId(selectedStyleId === folder.id ? null : folder.id)}
-                    className={`flex items-center gap-2 p-2 rounded-lg border transition-all ${selectedStyleId === folder.id
-                      ? 'bg-yellow-500/10 border-yellow-500 text-yellow-500 -[0_0_10px_rgba(234,179,8,0.2)]'
-                      : 'bg-[#09090b] border-gray-800 text-gray-500 hover:border-gray-600 hover:text-gray-300'
-                      }`}
+                    key={style.id}
+                    onClick={() => setSelectedStyleId(style.id)}
+                    className="flex items-center gap-2 group text-left"
                   >
-                    <div className={`w-2 h-2 rounded-full ${selectedStyleId === folder.id ? 'bg-yellow-500' : 'bg-gray-700'}`} />
-                    <div className="text-left overflow-hidden">
-                      <span className="text-[10px] font-bold uppercase block truncate">{folder.label}</span>
-                    </div>
+                    <div className={`w-2 h-2 rounded-full transition-colors flex-shrink-0 ${
+                      active ? 'bg-yellow-500 shadow-[0_0_8px_rgba(234,179,8,0.5)]' : 'bg-[#27272a] group-hover:bg-[#3f3f46]'
+                    }`} />
+                    <span className={`text-[11.5px] font-black uppercase tracking-[0.06em] transition-colors ${
+                      active ? 'text-gray-300' : 'text-gray-500 group-hover:text-gray-300'
+                    }`}>
+                      {style.label}
+                    </span>
                   </button>
-                </HelpTooltip>
-              ))}
+                );
+              })}
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 gap-3 mb-2">
             <HelpTooltip zone="cast" id="generateActorButton">
               <button
                 onClick={handleGenerate}
                 disabled={state.isProcessing}
-                className={`flex items-center justify-center gap-2 py-3 rounded-lg text-[10px] font-black transition-all border uppercase tracking-wider active:scale-95 ${state.lastCastedImage
-                  ? 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white border-blue-400/50 -[0_0_15px_rgba(59,130,246,0.3)] hover:-[0_0_25px_rgba(59,130,246,0.5)]'
-                  : 'bg-gradient-to-r from-[#27272a] to-[#18181b] hover:from-[#3f3f46] hover:to-[#27272a] text-white border-[#3f3f46] hover:border-gray-500 '
-                  }`}
+                className={`flex items-center justify-center gap-2 py-3 rounded-xl text-[10px] font-black transition-all border uppercase tracking-[0.08em] active:scale-95 ${
+                  state.isProcessing
+                    ? 'bg-[#27272a] text-gray-500 border-[#3f3f46] cursor-not-allowed'
+                    : 'bg-[#18181b] text-white border-white/10 hover:bg-[#27272a] hover:border-white/20'
+                }`}
               >
-                {state.isProcessing ? <RotateCw className="animate-spin w-4 h-4" /> : state.lastCastedImage ? <RefreshCw className="w-4 h-4" /> : <MonitorPlay className="w-4 h-4" />}
+                {state.isProcessing ? (
+                  <RotateCw className="animate-spin w-4 h-4" />
+                ) : state.lastCastedImage ? (
+                  <RefreshCw className="w-4 h-4 opacity-70" />
+                ) : (
+                  <MonitorPlay className="w-4 h-4 opacity-70" />
+                )}
                 {state.lastCastedImage ? 'Stylize' : 'Generate'}
               </button>
             </HelpTooltip>
-            <label className="flex items-center justify-center gap-2 bg-[#27272a] hover:bg-[#3f3f46] text-white py-2.5 rounded-lg text-xs font-bold transition-all border border-[#3f3f46] hover:border-gray-500 cursor-pointer">
-              <Upload className="w-4 h-4" />
+            <label className="flex items-center justify-center gap-2 bg-[#18181b] hover:bg-[#27272a] text-white py-3 rounded-xl text-[10px] font-black transition-all border border-white/10 hover:border-white/20 cursor-pointer uppercase tracking-[0.08em]">
+              <Upload className="w-4 h-4 opacity-70" />
               Upload
               <input ref={mainUploadRef} type="file" className="hidden" accept="image/*" onChange={handleUpload} />
             </label>
@@ -2280,6 +2329,16 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
                 <Scissors className="w-3.5 h-3.5" />
                 Slicer {isCropping ? 'Active' : 'Idle'}
               </button>
+              <button
+                onClick={() => setShowAdjustments(!showAdjustments)}
+                className={`text-[9px] px-4 py-1.5 rounded-full font-black flex items-center gap-2 transition-all uppercase tracking-widest active:scale-95 border ${showAdjustments
+                  ? 'bg-purple-600 text-white border-purple-400 '
+                  : 'bg-black/40 text-gray-500 border-white/5 hover:border-white/20 hover:text-gray-200'
+                  }`}
+              >
+                <Sliders className="w-3.5 h-3.5" />
+                Adjustments
+              </button>
             </div>
           </div>
 
@@ -2328,13 +2387,13 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
                     ref={imgRef}
                     src={state.lastCastedImage}
                     crossOrigin="anonymous"
-                    className={processedPreviewUrl ? 'invisible absolute pointer-events-none' : 'max-w-full max-h-full object-contain pointer-events-none'}
+                    className={processedPreviewUrl ? 'invisible absolute pointer-events-none' : 'absolute inset-0 w-full h-full object-contain pointer-events-none p-1 sm:p-2'}
                   />
                   {processedPreviewUrl && (
                     <img
                       ref={previewImgRef}
                       src={processedPreviewUrl}
-                      className="max-w-full max-h-full object-contain pointer-events-none"
+                      className="absolute inset-0 w-full h-full object-contain pointer-events-none p-1 sm:p-2"
                     />
                   )}
                   {state.lastCastedMask && (
@@ -2348,99 +2407,144 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
                   )}
                 </>
               ) : (
-                <div className="flex flex-col items-center justify-center h-full w-full max-w-4xl mx-auto p-8 animate-in fade-in duration-700">
-                  {/* Premium Launchpad Container */}
-                  <div className="w-full bg-[#18181b]/40 border border-white/5 rounded-[2.5rem] p-12 backdrop-blur-md relative overflow-hidden group/launch">
-                    
-                    {/* Ambient Visual Background */}
-                    <div className="absolute inset-0 opacity-20 group-hover/launch:opacity-30 transition-opacity duration-700 pointer-events-none">
-                      <div className="absolute top-0 left-0 w-full h-full bg-gradient-to-br from-blue-600/10 via-transparent to-purple-600/10" />
-                      <img src={coverRealism} className="absolute -top-1/4 -right-1/4 w-1/2 opacity-40 blur-3xl animate-pulse" />
-                      <img src={coverScifi} className="absolute -bottom-1/4 -left-1/4 w-1/2 opacity-40 blur-3xl animate-pulse" style={{ animationDelay: '2s' }} />
+                <div className="flex flex-col items-center justify-center p-2 w-full h-full max-w-4xl mx-auto animate-in fade-in duration-700 font-sans">
+                  <div className="w-full max-w-[760px] bg-[#18181b]/45 border border-white/6 rounded-[32px] px-[clamp(1rem,3vw,2rem)] py-[clamp(1rem,2vh,1.5rem)] backdrop-blur-md relative overflow-hidden shadow-2xl min-h-0 flex flex-col justify-center">
+                    {/* ambient */}
+                    <div className="absolute inset-0 opacity-25 pointer-events-none">
+                      <div className="absolute inset-0 bg-gradient-to-br from-blue-600/8 via-transparent to-purple-600/10" />
+                      <img src={coverRealism} className="absolute -top-1/4 -right-1/4 w-1/2 opacity-30 blur-3xl" />
+                      <img src={coverScifi} className="absolute -bottom-1/4 -left-1/4 w-1/2 opacity-30 blur-3xl" />
                     </div>
 
-                    <div className="relative z-10 flex flex-col items-center text-center">
-                      {/* Brand Header */}
-                      <div className="mb-10">
-                        <div className="flex items-center justify-center gap-4 mb-4">
-                          <div className="h-[1px] w-12 bg-gradient-to-r from-transparent to-yellow-500/50" />
-                          <Sparkles className="w-6 h-6 text-yellow-500 animate-pulse" />
-                          <div className="h-[1px] w-12 bg-gradient-to-l from-transparent to-yellow-500/50" />
+                    <div className="relative z-10 flex flex-col min-h-0">
+                      {/* header */}
+                      <div className="mb-[clamp(0.5rem,1.5vh,1rem)] shrink-0 flex flex-col items-center text-center">
+                        <div className="text-[10px] font-black text-yellow-500 uppercase tracking-[0.28em] mb-1.5 flex items-center justify-center gap-1.5 w-full">
+                          <Clapperboard className="w-3.5 h-3.5" />
+                          <span>STYLE LAUNCH</span>
+                          <Clapperboard className="w-3.5 h-3.5 invisible" />
                         </div>
-                        <h2 className="text-5xl font-black text-white italic tracking-tighter uppercase mb-4 leading-none">
-                          Forge Your <span className="text-transparent bg-clip-text bg-gradient-to-b from-white to-gray-500">Cast</span>
-                        </h2>
-                        <p className="text-sm font-bold text-zinc-400 uppercase tracking-[0.3em] max-w-lg mx-auto">
-                          The production begins here. Generate, refine, and catalog your leading actors.
+                        <div className="flex items-center justify-center w-full max-w-lg mx-auto gap-3 sm:gap-5">
+                          <div className="h-[2px] shrink w-8 sm:w-20 bg-gradient-to-r from-transparent to-white/30 rounded-full" />
+                          <h2 className="text-[clamp(1.75rem,5vh,2.25rem)] font-black italic tracking-[-0.06em] uppercase leading-[0.9] text-white shrink-0">
+                            FORGE YOUR <span className="text-transparent bg-clip-text bg-gradient-to-b from-white to-gray-500">CAST</span>
+                          </h2>
+                          <div className="h-[2px] shrink w-8 sm:w-20 bg-gradient-to-l from-transparent to-white/30 rounded-full" />
+                        </div>
+                        <p className="mt-2 text-[10px] sm:text-xs font-black text-gray-400 uppercase tracking-[0.16em]">
+                          Choose a visual language, then define the character.
                         </p>
                       </div>
 
-                      {/* Inspiring Preview Imagery Grid */}
-                      <div className="grid grid-cols-4 gap-4 w-full mb-12 opacity-80 group-hover/launch:opacity-100 transition-opacity duration-500">
-                        {[coverRealism, coverAnim, coverIllustration, coverScifi].map((img, i) => (
-                          <div key={i} className="aspect-[3/4] rounded-2xl border border-white/10 overflow-hidden bg-black/40 group/img shadow-2xl transition-all duration-300 hover:scale-105 hover:border-yellow-500/30">
-                            <img src={img} className="w-full h-full object-cover opacity-60 group-hover/img:opacity-100 transition-all duration-500" />
-                          </div>
-                        ))}
+                      {/* cards */}
+                      <div className="grid grid-cols-2 gap-[clamp(0.5rem,1.5vh,1rem)] mb-[clamp(0.5rem,1.5vh,1rem)] shrink-0">
+                        {[
+                          { id: 'realism', label: 'Realism', desc: 'Photorealistic portraits & grounded detail', img: coverRealism },
+                          { id: 'anim', label: 'Stylized Cartoon', desc: 'Modern 3D animation & soft cinematic appeal', img: coverAnim },
+                          { id: 'illustration', label: 'Illustration', desc: 'Anime, noir, graphic art & expressive rendering', img: coverIllustration },
+                          { id: 'scifi', label: 'Sci-Fi', desc: 'Cyberpunk, futuristic identities & high-tech worlds', img: coverScifi }
+                        ].map((style) => {
+                          const active = selectedStyleId === style.id;
+                          return (
+                            <button
+                              key={style.id}
+                              type="button"
+                              onClick={() => setSelectedStyleId(style.id)}
+                              className={`relative h-[clamp(4.5rem,12vh,8.5rem)] rounded-2xl overflow-hidden border transition-all duration-300 text-left group/card ${
+                                active
+                                  ? 'border-yellow-400 scale-[1.02] shadow-[0_0_30px_rgba(234,179,8,0.32)]'
+                                  : 'border-white/8 opacity-70 hover:opacity-100 hover:border-white/20'
+                              }`}
+                            >
+                              <img
+                                src={style.img}
+                                className={`absolute inset-0 w-full h-full object-cover transition-all duration-500 group-hover/card:scale-105 ${
+                                  active ? 'opacity-100' : 'opacity-78'
+                                }`}
+                              />
+                              <div className={`absolute inset-0 transition-all duration-300 ${
+                                active
+                                  ? 'bg-gradient-to-t from-black/70 via-black/15 to-transparent'
+                                  : 'bg-gradient-to-t from-black/82 via-black/38 to-black/12'
+                              }`} />
+
+                              <div className="absolute inset-x-0 bottom-0 p-[clamp(0.5rem,1.5vh,1rem)]">
+                                <div className={`text-[clamp(10px,2vh,14px)] font-black uppercase tracking-[0.08em] leading-none ${
+                                  active ? 'text-yellow-400' : 'text-white'
+                                }`}>
+                                  {style.label}
+                                </div>
+                                <div className="mt-1 text-[8px] font-bold uppercase tracking-[0.08em] text-gray-300 leading-tight opacity-90 hidden sm:block">
+                                  {style.desc}
+                                </div>
+                              </div>
+
+                              {active && (
+                                <div className="absolute top-2 right-2 bg-yellow-400 text-black px-2 py-0.5 rounded-md text-[8px] sm:text-[9px] font-black uppercase tracking-[0.18em] shadow-[0_0_14px_rgba(234,179,8,0.45)]">
+                                  Active
+                                </div>
+                              )}
+                            </button>
+                          );
+                        })}
                       </div>
 
-                      {/* Quick Start Presets */}
-                      <div className="w-full mb-10">
-                        <h3 className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-4 flex items-center justify-center gap-3">
-                          <div className="h-[1px] flex-grow max-w-[40px] bg-white/5" />
-                          Quick Start Presets
-                          <div className="h-[1px] flex-grow max-w-[40px] bg-white/5" />
-                        </h3>
-                        <div className="flex flex-wrap justify-center gap-3">
-                          {PRESETS.map((preset, idx) => (
-                            <button
-                              key={idx}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                dispatch({ type: 'SET_LAST_CASTED_PROMPT', payload: preset.prompt });
-                                // Visual feedback: focus prompt box or show toast
-                                showToast(`${preset.label} pre-filled`);
-                                if (promptRef.current) promptRef.current.focus();
-                              }}
-                              className="pointer-events-auto px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-yellow-500/30 rounded-full text-[10px] font-bold text-gray-400 hover:text-white transition-all uppercase tracking-wider active:scale-95"
-                            >
-                              {preset.label}
-                            </button>
-                          ))}
+                      {/* prompt */}
+                      <div className="mb-[clamp(0.5rem,1.5vh,1rem)] shrink min-h-0 flex flex-col">
+                        <div className="flex items-center gap-2 mb-1.5">
+                          <Type className="w-4 h-4 text-blue-400" />
+                          <label className="text-[10px] sm:text-xs font-black text-white uppercase tracking-[0.2em]">
+                            CHARACTER VISION
+                          </label>
+                        </div>
+
+                        <div className="text-[8px] sm:text-[9px] text-gray-400 font-bold uppercase tracking-[0.08em] mb-2 min-h-[14px]">
+                          {selectedStyleMeta?.helper || 'Select a style to see specific prompt guidance.'}
+                        </div>
+
+                        <div className="relative group/prompt">
+                          <div className="absolute -inset-0.5 bg-gradient-to-r from-blue-500/30 to-purple-500/30 rounded-2xl blur opacity-25 group-focus-within/prompt:opacity-50 transition-opacity duration-300" />
+                          <textarea
+                            className="relative w-full bg-[#09090b]/92 border border-white/10 rounded-2xl p-[clamp(0.75rem,1.5vh,1rem)] text-sm text-gray-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 focus:outline-none transition-all duration-300 h-[clamp(3.5rem,10vh,5.5rem)] resize-none shadow-inner pointer-events-auto"
+                            placeholder="Describe the character you want to create... appearance, mood, wardrobe, world, or role."
+                            value={state.lastCastedPrompt}
+                            onChange={(e) => dispatch({ type: 'SET_LAST_CASTED_PROMPT', payload: e.target.value })}
+                          />
                         </div>
                       </div>
 
-                      {/* Primary CTAs */}
-                      <div className="flex items-center gap-4 w-full justify-center pointer-events-auto">
-                        <button 
-                          onClick={() => {
-                            const scrollable = document.querySelector('.min-h-0.overflow-y-auto');
-                            if (scrollable) scrollable.scrollTo({ top: 0, behavior: 'smooth' });
-                            setTimeout(() => {
-                              promptRef.current?.focus();
-                            }, 500);
-                          }}
-                          className="flex-1 max-w-[200px] py-4 rounded-2xl bg-white text-black font-black uppercase text-xs tracking-widest transition-all hover:bg-yellow-400 hover:shadow-[0_0_30px_rgba(234,179,8,0.2)] active:scale-95 flex items-center justify-center gap-2"
+                      {/* ctas */}
+                      <div className="flex items-center gap-3 w-full shrink-0">
+                        <button
+                          onClick={handleGenerate}
+                          disabled={state.isProcessing}
+                          className={`relative group flex-[2] py-3 rounded-2xl font-black uppercase text-[10px] tracking-[0.16em] transition-all flex items-center justify-center gap-2 border overflow-hidden shrink-0 active:scale-[0.98] ${
+                            state.isProcessing
+                              ? 'bg-[#27272a] text-gray-500 border-[#3f3f46] cursor-not-allowed'
+                              : 'bg-[#09090b] hover:bg-black border-white/10 hover:border-purple-500/50'
+                          }`}
                         >
-                          <MonitorPlay className="w-4 h-4" />
-                          Generate
+                          {!state.isProcessing && <div className="absolute inset-0 bg-gradient-to-r from-blue-500/10 via-purple-500/10 to-pink-500/10 opacity-0 group-hover:opacity-100 transition-opacity"></div>}
+                          {state.isProcessing ? (
+                            <RotateCw className="w-3.5 h-3.5 animate-spin relative text-gray-400" />
+                          ) : (
+                            <MonitorPlay className="w-3.5 h-3.5 text-cyan-400 group-hover:text-cyan-300 relative" />
+                          )}
+                          <span className={`relative transition-colors duration-300 ${
+                            state.isProcessing
+                              ? 'text-gray-400'
+                              : 'text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-purple-400 to-pink-400 group-hover:from-cyan-300 group-hover:via-purple-300 group-hover:to-pink-300'
+                          }`}>
+                            GENERATE CHARACTER
+                          </span>
                         </button>
-                        <button 
+
+                        <button
                           onClick={() => mainUploadRef.current?.click()}
-                          className="flex-1 max-w-[200px] py-4 rounded-2xl bg-[#27272a] text-white font-black uppercase text-xs tracking-widest transition-all hover:bg-[#3f3f46] border border-white/10 active:scale-95 flex items-center justify-center gap-2"
+                          className="flex-1 py-3 rounded-2xl bg-[#18181b] text-white font-black uppercase text-[10px] tracking-[0.16em] transition-all hover:bg-[#27272a] border border-white/10 hover:border-white/20 active:scale-[0.98] flex items-center justify-center gap-2 shrink-0"
                         >
-                          <Upload className="w-4 h-4" />
+                          <Upload className="w-3.5 h-3.5" />
                           Upload Ref
-                        </button>
-                        <button 
-                          onClick={() => {
-                            const library = document.querySelector('.overflow-y-scroll');
-                            library?.scrollIntoView({ behavior: 'smooth' });
-                          }}
-                          className="flex-1 max-w-[200px] py-4 rounded-2xl bg-black/40 text-gray-400 font-black uppercase text-xs tracking-widest transition-all hover:text-white border border-white/5 hover:border-white/20 active:scale-95 flex items-center justify-center gap-2"
-                        >
-                          <Folder className="w-4 h-4" />
-                          Library
                         </button>
                       </div>
                     </div>
@@ -2473,7 +2577,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
               )}
             </div>
 
-            {state.lastCastedImage && (
+            {state.lastCastedImage && showAdjustments && (
               <div className="w-80 shrink-0 border-l border-white/10 bg-[#18181b]/50 h-full flex flex-col animate-in slide-in-from-right-10 duration-300">
                 <div className="p-4 border-b border-white/10 flex items-center justify-between shrink-0">
                   <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-400">Image Adjustments</h3>

@@ -46,6 +46,7 @@ import type {
 import { GeminiService, type ExtractedStyle, type SceneIntent } from '../services/GeminiService';
 import { DepthService } from '../services/DepthService';
 import { compileV3DirectorPrompt, buildPlacementPrompt, getActiveReferenceSlots, buildStrictAnchorReplacementPrompt } from '../utils/promptHelpers';
+import { LibraryAssetMaterializer } from '../services/LibraryAssetMaterializer';
 import { useProductionExports } from '../hooks/useProductionExports';
 import { useAdvancedRender } from '../hooks/useAdvancedRender';
 import { buildPlacementIntentsFromAnnotations, buildAnchorSurfaceFromZone, buildAllowanceMaskFromAnchor, buildForegroundProtectMaskFromDepth } from '../utils/spatialHelpers';
@@ -437,7 +438,7 @@ const SceneCanvas = () => {
                 state.apiKey,
                 state.model,
                 [{ url: state.backgroundUrl, label: "Scene Context" }],
-                { billingMode: state.billingMode }
+                { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements }
             );
 
             if (depthUrl) {
@@ -530,7 +531,7 @@ const SceneCanvas = () => {
                     state.apiKey!,
                     state.model,
                     [], 
-                    { aspectRatio: state.director.aspectRatio || '16:9', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, strictMode: true, billingMode: state.billingMode }
+                    { aspectRatio: state.director.aspectRatio || '16:9', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements }
                 );
 
                 setPreviousBackgroundUrl(state.backgroundUrl || null);
@@ -1067,13 +1068,22 @@ const SceneCanvas = () => {
 
                 const limitedRefs = refs.slice(0, 14);
 
+                let actualGenId = '';
                 const img = await GeminiService.generateImage(
                     strictPromptText,
                     state.apiKey!,
                     state.model,
                     limitedRefs,
-                    { aspectRatio: '16:9', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, strictMode: true, billingMode: state.billingMode }
+                    { 
+                        aspectRatio: '16:9', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements,
+                        onJobAccepted: (id) => {
+                            actualGenId = id;
+                            dispatch({ type: 'ADD_BACKGROUND_JOB', payload: { id, status: 'polling_foreground', context: 'scene_render', startedAt: Date.now() } });
+                        }
+                    }
                 );
+
+                if (actualGenId) dispatch({ type: 'REMOVE_BACKGROUND_JOB', payload: actualGenId });
 
                 dispatch({ type: 'SET_RESULT_IMAGE', payload: img });
                 dispatch({ type: 'SET_COMPOSITE_METADATA', payload: { latestCompositeSource: 'directorCanvas', latestCompositeResultUrl: img } });
@@ -1126,13 +1136,22 @@ const SceneCanvas = () => {
                     bgPrompt
                 );
 
+                let actualGenId = '';
                 const img = await GeminiService.generateImage(
                     loosePromptText,
                     state.apiKey!,
                     state.model,
                     references.slice(0, 14),
-                    { aspectRatio: state.director.aspectRatio, imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, billingMode: state.billingMode }
+                    { 
+                        aspectRatio: state.director.aspectRatio, imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements,
+                        onJobAccepted: (id) => {
+                            actualGenId = id;
+                            dispatch({ type: 'ADD_BACKGROUND_JOB', payload: { id, status: 'polling_foreground', context: 'scene_render', startedAt: Date.now() } });
+                        }
+                    }
                 );
+
+                if (actualGenId) dispatch({ type: 'REMOVE_BACKGROUND_JOB', payload: actualGenId });
 
                 dispatch({ type: 'SET_RESULT_IMAGE', payload: img });
                 dispatch({ type: 'SET_COMPOSITE_METADATA', payload: { latestCompositeSource: 'directorCanvas', latestCompositeResultUrl: img } });
@@ -1140,8 +1159,14 @@ const SceneCanvas = () => {
                 dispatch({ type: 'ADD_LOG', payload: { message: "Staging (loose) rendered.", type: 'success' } });
             }
         } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });
-            setViewMode('stage');
+            const isTimeout = e.name === 'TimeoutError' || e.message?.includes('Pending');
+            if (isTimeout && e.generationId) {
+                dispatch({ type: 'UPDATE_BACKGROUND_JOB', payload: { id: e.generationId, updates: { status: 'pending_background' } } });
+                dispatch({ type: 'ADD_LOG', payload: { message: "Job shifted to background due to long queue.", type: 'info' } });
+            } else {
+                dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });
+                setViewMode('stage');
+            }
         } finally {
             clearInterval(progressInterval);
             dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
@@ -1438,7 +1463,7 @@ const SceneCanvas = () => {
                 state.apiKey,
                 maskModel as any,
                 [{ url: captured, label: 'Base Frame' }],
-                { aspectRatio: state.director.aspectRatio, billingMode: state.billingMode }
+                { aspectRatio: state.director.aspectRatio, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements }
             );
 
             setRawProtectMaskUrl(res);
@@ -1803,9 +1828,11 @@ const SceneCanvas = () => {
         }
     };
 
-    const setSlotFromUrl = async (index: number, url: string, name?: string, castId?: string) => {
+    const setSlotFromUrl = async (index: number, url: string, name?: string, castId?: string, localPath?: string, sourceUrl?: string) => {
         updateRefSlot(index, {
             url,
+            localPath,
+            sourceUrl,
             name: name || `Ref ${index}`,
             castId,
             active: true,
@@ -1815,8 +1842,20 @@ const SceneCanvas = () => {
     };
 
     const handleRefSlotFile = async (index: number, file: File) => {
-        const url = await fileToDataUrl(file);
-        await setSlotFromUrl(index, url, file.name, undefined);
+        try {
+            const tempUrl = await fileToDataUrl(file);
+            const mat = await LibraryAssetMaterializer.materializeReferenceAsset({
+                sourceUrl: tempUrl,
+                saveDirectoryPath: state.saveDirectoryPath,
+                slotIndex: index
+            });
+            await setSlotFromUrl(index, mat.url, file.name, undefined, mat.localPath || undefined, mat.sourceUrl);
+        } catch (e: any) {
+            console.error("Failed to materialize reference", e);
+            dispatch({ type: 'ADD_LOG', payload: { message: `Reference Materialization Failed: ${e.message}`, type: 'error' } } as any);
+            const url = await fileToDataUrl(file);
+            await setSlotFromUrl(index, url, file.name, undefined);
+        }
     };
 
     const handleRefSlotDrop = async (index: number, e: React.DragEvent) => {
@@ -1847,7 +1886,7 @@ const SceneCanvas = () => {
 
                 if (cast && cast.url) {
                     console.log('[handleRefSlotDrop] Calling setSlotFromUrl for ID:', cast.id);
-                    await setSlotFromUrl(index, cast.url, cast.name || (cast as any).tag, cast.id);
+                    await setSlotFromUrl(index, cast.previewUrl || cast.url, cast.name || (cast as any).tag, cast.id, cast.localPath, cast.sourceUrl || cast.url);
                 } else {
                     console.error('[handleRefSlotDrop] Cast or cast.url missing!', cast);
                 }

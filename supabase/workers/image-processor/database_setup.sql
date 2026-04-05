@@ -3,6 +3,7 @@
 -- 1. Extend the generations table to safely serialize required executor schema constraints
 ALTER TABLE public.generations ADD COLUMN IF NOT EXISTS request_payload jsonb;
 ALTER TABLE public.generations ADD COLUMN IF NOT EXISTS provider_model text;
+ALTER TABLE public.generations ADD COLUMN IF NOT EXISTS timing_metrics jsonb DEFAULT '{}'::jsonb;
 
 -- 2. Extend the status tracking enum to prevent redundant parallel job execution safely
 ALTER TYPE generation_status ADD VALUE IF NOT EXISTS 'PROCESSING';

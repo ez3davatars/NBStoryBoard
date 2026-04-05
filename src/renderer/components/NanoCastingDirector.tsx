@@ -15,6 +15,8 @@ import { nativeSelectFolder } from '../utils/NativeFileAssets';
 import type { CastMember } from '../context/AppContext';
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
+import { resolveDisplayUrl } from '../utils/assetUrlResolver';
+import { LibraryAssetMaterializer } from '../services/LibraryAssetMaterializer';
 import HelpTooltip from './ui/HelpTooltip';
 import InlineHint from './ui/InlineHint';
 import ConfirmDialog from './ui/ConfirmDialog';
@@ -197,11 +199,13 @@ const NanoCastingDirector = () => {
                 for (const file of files) {
                     if (/\.(png|jpg|jpeg|webp)$/i.test(file)) {
                         const fullPath = await nativeJoinPath(wardrobePath, file);
-                        const dataUrl = await nativeReadFile(fullPath);
-                        if (dataUrl) {
+                        const displayUrl = await resolveDisplayUrl({ localPath: fullPath });
+                        if (displayUrl) {
                             items.push({
                                 id: file,
-                                url: dataUrl,
+                                url: displayUrl,
+                                localPath: fullPath,
+                                filename: file,
                                 name: file.replace(/\.[^/.]+$/, "").split('-').slice(1).join(' '),
                                 prompt: "Saved costume asset",
                                 category: "General",
@@ -344,12 +348,13 @@ const NanoCastingDirector = () => {
         }
     };
 
-    // Auto-Scan on Mount / Path Change
+    // Auto-Scan on Mount / Path Change (Legacy Fallback Only)
     useEffect(() => {
-        if (state.saveDirectoryPath) {
+        // Only trigger legacy disk scan if AppContext loaded zero actors (first launch or reset)
+        if (state.saveDirectoryPath && state.actorLibrary.length === 0) {
             scanActorLibrary();
         }
-    }, [state.saveDirectoryPath]);
+    }, [state.saveDirectoryPath, state.actorLibrary.length]);
 
     const handleUploadCostume = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (!e.target.files || e.target.files.length === 0 || !state.saveDirectoryHandle) return;
@@ -1058,57 +1063,22 @@ const NanoCastingDirector = () => {
         }
 
         try {
-            // NATIVE MODE
-            if (state.saveDirectoryPath) {
-                const root = state.saveDirectoryPath;
-                const actorsDir = await nativeJoinPath(root, 'Actors');
-                // Ensure directory existence is handled by nativeWriteFile or we might need a mkdir equivalent if strictly required, 
-                // but WardrobeStudio says "nativeWriteFile handles directory creation recursively".
+            const mat = await LibraryAssetMaterializer.materializeCastAsset({
+                sourceUrl: finalCharacterUrl,
+                saveDirectoryPath: state.saveDirectoryPath,
+                actorName: "Nano Cast",
+                category: '' // Nano Casts don't have style folders built in right now, they'll go to root or Uncategorized
+            });
 
-                const safeName = "NanoCast_" + Date.now();
-                const filename = `${safeName}.png`;
-                const filePath = await nativeJoinPath(actorsDir, filename);
-
-                const res = await fetch(finalCharacterUrl);
-                const blob = await res.blob();
-
-                await nativeWriteFile(filePath, blob);
-
-                const newActor = {
-                    id: `actor-${Date.now()}`,
-                    url: finalCharacterUrl,
-                    tag: 'front',
-                    name: "Nano Cast",
-                    profile: {
-                        identity: "Generated",
-                        wardrobe: "Standard",
-                        accessories: "",
-                        style: (selectedStyle && styleMatrix[selectedStyle as keyof typeof styleMatrix]?.label) || "Cinematic"
-                    }
-                };
-                // @ts-ignore
-                dispatch({ type: 'ADD_ACTOR_LIBRARY', payload: newActor });
-                dispatch({ type: 'ADD_LOG', payload: { message: `Saved to Actors (Native): ${filename}`, type: 'success' } });
-                return;
-            }
-
-            // WEB MODE
-            if (!state.saveDirectoryHandle) return;
-            const actorsDir = await state.saveDirectoryHandle.getDirectoryHandle('Actors', { create: true });
-            const safeName = "NanoCast_" + Date.now();
-            const filename = `${safeName}.png`;
-            const fileHandle = await actorsDir.getFileHandle(filename, { create: true });
-            const writable = await fileHandle.createWritable();
-            const res = await fetch(finalCharacterUrl);
-            const blob = await res.blob();
-            await writable.write(blob);
-            await writable.close();
-
-            const newActor = {
+            const newActor: CastMember = {
                 id: `actor-${Date.now()}`,
-                url: finalCharacterUrl,
+                url: mat.previewUrl,
+                localPath: mat.localPath || undefined,
+                previewUrl: mat.previewUrl,
+                sourceUrl: mat.sourceUrl,
                 tag: 'front',
                 name: "Nano Cast",
+                filename: mat.filename,
                 profile: {
                     identity: "Generated",
                     wardrobe: "Standard",
@@ -1116,9 +1086,9 @@ const NanoCastingDirector = () => {
                     style: (selectedStyle && styleMatrix[selectedStyle as keyof typeof styleMatrix]?.label) || "Cinematic"
                 }
             };
-            // @ts-ignore
+
             dispatch({ type: 'ADD_ACTOR_LIBRARY', payload: newActor });
-            dispatch({ type: 'ADD_LOG', payload: { message: `Saved to Actors: ${filename}`, type: 'success' } });
+            dispatch({ type: 'ADD_LOG', payload: { message: `Saved to Actors: ${mat.filename || "Storage"}`, type: 'success' } });
         } catch (e: any) {
             dispatch({ type: 'ADD_LOG', payload: { message: `Actor save failed: ${e.message}`, type: 'error' } });
         }
@@ -1130,46 +1100,18 @@ const NanoCastingDirector = () => {
             return;
         }
         try {
-            const filename = `WARDROBE-${Date.now()}.png`;
-
-            // NATIVE MODE
-            if (state.saveDirectoryPath) {
-                const root = state.saveDirectoryPath;
-                const wardrobeDir = await nativeJoinPath(root, 'wardrobe');
-                const filePath = await nativeJoinPath(wardrobeDir, filename);
-
-                const res = await fetch(finalCharacterUrl);
-                const blob = await res.blob();
-                await nativeWriteFile(filePath, blob);
-
-                const newItem = {
-                    id: filename,
-                    url: finalCharacterUrl,
-                    name: "Nano Creation",
-                    prompt: "Generated from NanoCasting",
-                    category: "Nano",
-                    timestamp: Date.now()
-                };
-
-                // @ts-ignore
-                dispatch({ type: 'ADD_WARDROBE_ITEM', payload: newItem });
-                dispatch({ type: 'ADD_LOG', payload: { message: `Saved to Wardrobe (Native): ${filename}`, type: 'success' } });
-                return;
-            }
-
-            // WEB MODE
-            if (!state.saveDirectoryHandle) return;
-            const wardrobeDir = await state.saveDirectoryHandle.getDirectoryHandle('wardrobe', { create: true });
-            const fileHandle = await wardrobeDir.getFileHandle(filename, { create: true });
-            const writable = await fileHandle.createWritable();
-            const res = await fetch(finalCharacterUrl);
-            const blob = await res.blob();
-            await writable.write(blob);
-            await writable.close();
+            const mat = await LibraryAssetMaterializer.materializeWardrobeAsset({
+                sourceUrl: finalCharacterUrl,
+                saveDirectoryPath: state.saveDirectoryPath,
+                prompt: "Generated from NanoCasting"
+            });
 
             const newItem = {
-                id: filename,
-                url: finalCharacterUrl,
+                id: mat.filename || `WARDROBE-${Date.now()}.png`,
+                url: mat.url,
+                localPath: mat.localPath || undefined,
+                sourceUrl: mat.sourceUrl,
+                filename: mat.filename,
                 name: "Nano Creation",
                 prompt: "Generated from NanoCasting",
                 category: "Nano",
@@ -1178,7 +1120,7 @@ const NanoCastingDirector = () => {
 
             // @ts-ignore
             dispatch({ type: 'ADD_WARDROBE_ITEM', payload: newItem });
-            dispatch({ type: 'ADD_LOG', payload: { message: `Saved to Wardrobe: ${filename}`, type: 'success' } });
+            dispatch({ type: 'ADD_LOG', payload: { message: `Saved to Wardrobe: ${mat.filename || "Storage"}`, type: 'success' } });
         } catch (e: any) {
             dispatch({ type: 'ADD_LOG', payload: { message: `Wardrobe save failed: ${e.message}`, type: 'error' } });
         }
@@ -1223,7 +1165,7 @@ extra garments, mannequin person, text, watermark, props, cropped garment, alter
                         state.apiKey,
                         state.model,
                         [],
-                        { aspectRatio: '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingMode }
+                        { aspectRatio: '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements }
                     ),
                     timeoutPromise(getTimeoutMs())
                 ]);
@@ -1257,7 +1199,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                             { url: finalCharacterUrl, label: "Subject" },
                             { url: garment, label: "New Outfit" }
                         ],
-                        { aspectRatio: '2:3', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingMode } // Portrait
+                        { aspectRatio: '2:3', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements } // Portrait
                     ),
                     timeoutPromise(getTimeoutMs())
                 ]);
@@ -1465,7 +1407,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
             let resultUrl: string;
             try {
                 resultUrl = await Promise.race([
-                    GeminiService.generateImage(prompt, state.apiKey, state.model, referenceImages, { imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingMode }),
+                    GeminiService.generateImage(prompt, state.apiKey, state.model, referenceImages, { imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements }),
                     timeoutPromise(getTimeoutMs())
                 ]);
             } finally {
@@ -1904,18 +1846,29 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
             }, updateMs);
 
             try {
-                res = await GeminiService.generateImage(prompt, state.apiKey, state.model, imageRefs, { imageSize: '4K', thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingMode });
+                res = await GeminiService.generateImage(prompt, state.apiKey, state.model, imageRefs, { imageSize: '4K', thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements });
             } finally {
                 clearInterval(progressInterval);
             }
 
             if (res) {
                 dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: 100, text: "Forensic Matrix Complete" } });
-                const finalUrl = res;
+                const finalUrl = res as string;
                 setFinalCharacterUrl(finalUrl);
                 
+                let safeRefSheetUrl = finalUrl;
+                if (typeof safeRefSheetUrl === 'string' && safeRefSheetUrl.startsWith('http')) {
+                    try {
+                        const blobRes = await fetch(safeRefSheetUrl);
+                        const blob = await blobRes.blob();
+                        safeRefSheetUrl = URL.createObjectURL(blob);
+                    } catch (fetchErr) {
+                        console.warn("Failed to materialize remote ref sheet:", fetchErr);
+                    }
+                }
+                
                 // Show in the reference sheet viewer with special title
-                setRefSheetUrl(finalUrl);
+                setRefSheetUrl(safeRefSheetUrl);
                 setShowRefSheet(true);
                 
                 dispatch({ type: 'ADD_LOG', payload: { message: "Premium Biometric Board Generated Successfully.", type: 'success' } });
@@ -2296,7 +2249,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                             state.apiKey,
                             state.model,
                             imageRefs,
-                            { aspectRatio: '16:9', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingMode }
+                            { aspectRatio: '16:9', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements }
                         ),
                         timeoutPromise(timeoutMs) // Dynamic Timeout
                     ]);
@@ -2321,7 +2274,18 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
             dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: 100, text: "Decoding Cast Sheet" } });
             await new Promise(r => setTimeout(r, 500));
 
-            setRefSheetUrl(res as string);
+            let safeRefSheetUrl = res as string;
+            if (typeof safeRefSheetUrl === 'string' && safeRefSheetUrl.startsWith('http')) {
+                try {
+                    const blobRes = await fetch(safeRefSheetUrl);
+                    const blob = await blobRes.blob();
+                    safeRefSheetUrl = URL.createObjectURL(blob);
+                } catch (fetchErr) {
+                    console.warn("Failed to materialize remote ref sheet:", fetchErr);
+                }
+            }
+
+            setRefSheetUrl(safeRefSheetUrl);
             setShowRefSheet(true);
             dispatch({ type: 'ADD_LOG', payload: { message: "Reference Sheet Generated.", type: 'success' } });
         } catch (e: any) {
