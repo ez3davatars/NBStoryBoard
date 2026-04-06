@@ -1957,17 +1957,17 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
 
         {/* Source Material */}
         <div className="bg-[#18181b] p-6 rounded-xl border border-gray-800 shrink-0">
-          <div className="flex justify-between items-center mb-4">
-            <div>
-              <h2 className="text-lg font-black text-white uppercase tracking-wide mb-1">Character Generator</h2>
-              <p className="text-[10px] text-zinc-400 font-bold">Create or refine an actor before staging.</p>
+          <div className="flex justify-between items-start mb-4 gap-2">
+            <div className="min-w-0 flex-[1]">
+              <h2 className="text-[15px] xl:text-base font-black text-white uppercase tracking-wide mb-1 truncate leading-tight">Character Generator</h2>
+              <p className="text-[9px] xl:text-[10px] text-zinc-400 font-bold leading-tight">Create or refine an actor before staging.</p>
             </div>
             <button
               onClick={() => dispatch({ type: 'SET_LAST_CASTED_PROMPT', payload: '' })}
-              className="text-xs text-gray-600 hover:text-white transition-colors flex items-center gap-1 uppercase font-bold"
+              className="text-[9.5px] text-gray-500 hover:text-white transition-colors flex items-center gap-1 uppercase font-bold shrink-0 pt-0.5"
               title="Clear Text"
             >
-              <Eraser className="w-3 h-3" /> Clear
+              <Eraser className="w-2.5 h-2.5" /> Clear
             </button>
           </div>
           <textarea

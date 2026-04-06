@@ -1233,7 +1233,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
 
     const handleOrchestration = async () => {
         // Enforce Minimum Refs
-        if (!uploadMode && (!capturedAngles.center || !capturedAngles.left || !capturedAngles.right)) {
+        if (!uploadMode && identitySource !== 'generated' && (!capturedAngles.center || !capturedAngles.left || !capturedAngles.right)) {
             showToast("Missing required angles (Center, Left, Right)");
             return;
         }
@@ -1251,16 +1251,33 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
 
             // 1. Prepare References (Convert Blobs to Base64)
             const referenceImages: { url: string; label: string }[] = [];
-            const angles: (keyof typeof capturedAngles)[] = ['center', 'left', 'right', 'up', 'down'];
 
-            for (const angle of angles) {
-                const blobUrl = capturedAngles[angle];
-                if (blobUrl) {
-                    try {
-                        const b64 = await getBase64FromBlobUrl(blobUrl);
-                        referenceImages.push({ url: b64, label: `Reference Angle: ${angle}` });
-                    } catch (err) {
-                        console.error(`Failed to process ${angle} angle:`, err);
+            if (identitySource === 'generated') {
+                if (!state.lastCastedImage) {
+                    addLog("CRITICAL: No recent casted image found.");
+                    throw new Error("No recent casted image found. Please generate one in Casting Forge.");
+                }
+                
+                let b64 = state.lastCastedImage;
+                if (b64.startsWith('blob:')) {
+                    b64 = await getBase64FromBlobUrl(b64);
+                } else if (!b64.startsWith('data:')) {
+                    // It's likely a local file or HTTP URL. We can pass it, but GeminiService._resolveImageData handles http/blob/data.
+                    // For safety, let's just push it, GeminiService will handle it!
+                }
+                
+                referenceImages.push({ url: b64, label: `Reference Angle: Generated Cast` });
+            } else {
+                const angles: (keyof typeof capturedAngles)[] = ['center', 'left', 'right', 'up', 'down'];
+                for (const angle of angles) {
+                    const blobUrl = capturedAngles[angle];
+                    if (blobUrl) {
+                        try {
+                            const b64 = await getBase64FromBlobUrl(blobUrl);
+                            referenceImages.push({ url: b64, label: `Reference Angle: ${angle}` });
+                        } catch (err) {
+                            console.error(`Failed to process ${angle} angle:`, err);
+                        }
                     }
                 }
             }
@@ -1406,10 +1423,11 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
             // Note: If GeminiService adds AbortSignal support, pass abortControllerRef.current.signal here
             let resultUrl: string;
             try {
-                resultUrl = await Promise.race([
+                const res = await Promise.race([
                     GeminiService.generateImage(prompt, state.apiKey, state.model, referenceImages, { imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements }),
                     timeoutPromise(getTimeoutMs())
                 ]);
+                resultUrl = typeof res === 'string' ? res : (res && typeof res === 'object' ? (res as any).asset_url || '' : '');
             } finally {
                 clearInterval(synthInterval);
             }
