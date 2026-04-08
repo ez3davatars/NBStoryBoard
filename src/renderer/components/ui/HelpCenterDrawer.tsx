@@ -96,7 +96,13 @@ export const HelpCenterDrawer: React.FC = () => {
             case 'shots':
                 return {
                     title: "SHOTS Help",
-                    desc: "Generate consistent multi-angle cinematic shots.",
+                    desc: (
+                        <>
+                            <span className="block mb-2">Generate multi-angle cinematic shots from your staged scene.</span>
+                            <span className="block mb-2"><strong className="text-yellow-500">Preview Notice:</strong> SHOTS is a powerful preview-stage feature for planning cinematic coverage and exploring multi-angle variations from a staged scene. It already works well for concepting, shot design, and selective production use, but consistency can still vary in more demanding scenes.</span>
+                            <span className="block"><strong className="text-yellow-500">Credit Notice:</strong> SHOTS typically consumes more credits than a standard image generation because multiple images are created in one call. Review your pack and settings before running.</span>
+                        </>
+                    ),
                     actions: [
                         "PREREQUISITE: You must finalize your scene in the STAGE sub-tab and generate at least one composite image to act as your Scene Truth.",
                         "Switch to the SHOTS tab to begin multi-angle generation.",
