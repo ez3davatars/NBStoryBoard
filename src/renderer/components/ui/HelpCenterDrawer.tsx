@@ -38,7 +38,7 @@ export const HelpCenterDrawer: React.FC = () => {
                         "Actor Reference Sheets (Left Panel): Generate your character in multiple angles (Form, Face, Split) to lock down their design for future use.",
                         "Branding & Identity (Left Panel): Upload a logo file to automatically place graphics onto the character's clothing.",
                         "Slicing Tools: After generating, use the 'Slicer' canvas tools to crop out specific parts of the image and save them as Cast Asset tokens.",
-                        "Cast Assets Manager: This panel holds temporary generated tokens. Save any result you want to keep, since unsaved temporary assets expire after 24 hours."
+                        "Cast Assets Manager: This holds your temporary generated previews. Unsaved previews expire from the cloud after 24 hours. When you click Save, the full image is downloaded directly to your local drive and secured permanently!"
                     ]
                 };
             case 'portrait':
