@@ -1,5 +1,5 @@
 # Cast Director Studio User Guide
-**Version 1.0**
+**Version 1.0.1**
 
 ---
 
@@ -18,13 +18,15 @@ Welcome to **Cast Director Studio**, powered by **Nanobanana 2**. Cast Director 
 
 You can use the app in a flexible way. Some users move step-by-step from character creation to scene staging. Others jump directly into a specific tab depending on what they need.
 
+> **Note on Preview Features:** Core creation tools like character generation, portrait refinement, wardrobe, props, and targeted post-production are fully ready. Some advanced scene systems (like Stage preview) are still evolving.
+
 ### Core Tabs at a Glance
 - **CAST** — Generate new characters from scratch.
 - **NANO CAST** — Build from biometric capture, photos, or identity references.
 - **PORTRAIT** — Refine facial identity, age, morphology, and likeness.
 - **WARDROBE** — Design outfits and run virtual try-on.
 - **PROPS** — Create and isolate reusable objects.
-- **STAGE [PREVIEW]** — Arrange actors, props, and scene direction.
+- **STAGE [PREVIEW]** — Arrange actors, props, and scene direction. Includes SHOTS for cinematic sequences.
 - **REGION EDIT / POST-PRODUCTION** — Fix or replace specific parts of a generated image.
 
 ### Where Should I Start?
@@ -60,13 +62,24 @@ When you save an actor, the system uses a native file structure:
 
 The PNG stays generic for safe file handling, while the JSON stores the real actor name, tags, and style data.
 
-### Step 2: Set Your AI Generation Preferences
+### Step 2A: Set Your AI Generation Preferences
 In **Settings**, configure:
 - **Active Engine** — Recommended: **Gemini 3.1 Flash (Image)**
 - **Image Resolution** — 1K, 2K, or 4K
 - **Thinking Mode** — Better prompt adherence, slower generation
 - **Google Image Search Grounding** — Useful for real-world accuracy
 - **Enable Storyboard (Veo 3.1)** — Experimental early-access feature
+
+### Step 2B: Billing Mode and Credits
+The app may support different generation modes depending on your account setup. Always confirm which mode is active in your Settings before generating.
+- **Hosted Mode:** Uses your account entitlements and generation credits. Hosted users should monitor their available credits in the account area or wherever credit visibility exists in the current build.
+- **BYOK Mode:** Bring Your Own Key. Uses your own connected AI provider API workflow to process images.
+
+### Step 2C: Saved Assets vs Temporary Results
+As you generate images across the studio, many results remain temporary until you actively save them.
+- A generated result is often just a temporary preview; it may not persist across clears, screen refreshes, or session changes.
+- If you want to reuse an actor, prop, or outfit result later, **you must explicitly save it** to the proper library using the available save actions.
+- Refreshing or rescanning your library view may be needed after save or delete actions to securely confirm long-term storage updates.
 
 ### Step 3: Complete a First 5-Minute Workflow
 A simple first pass:
@@ -199,6 +212,7 @@ Key controls:
 
 ### Output Actions
 - **Generate DNA Portrait**
+- **Clear Portrait Options** — Clearing a portrait or reference is now intended to fully clear the active portrait state. Once cleared, the workspace should comfortably remain clean instead of repopulating unexpectedly.
 - **Send to Casting**
 - **Send to Ref Sheet**
 
@@ -208,7 +222,9 @@ Use PORTRAIT when facial fidelity and structural control matter more than broad 
 ---
 
 ## NANO CAST
-**Purpose:** Build a character from biometric or photo identity and refine their look.
+**Purpose:** Build a character from biometric or photo identity and refine their look. 
+
+Reference-based builds are best when facial identity needs to stay more consistent. Better source photos generally produce better identity preservation—front-facing, clear, and well-lit inputs are highly recommended.
 
 ### Biometric Acquisition
 1. Enable the webcam or upload local images.
@@ -226,8 +242,11 @@ Use these controls to refine the output:
 - **Branding & Logo Placement**
 - **Save Character**
 
+### Cast Asset Output Control
+- **Delete All** — Explicitly clears temporary cast assets from your current preview layout. The action will safely ask for confirmation before removing them.
+
 ### When to Use NANO CAST
-Use NANO CAST when you need high identity preservation but still want to stylize or brand the result.
+Use NANO CAST when you need high identity preservation but still want to stylize or brand the result. 
 
 ---
 
@@ -274,9 +293,13 @@ Use WARDROBE when the character exists and you now need outfit control, branding
 
 ### Workflow
 1. Generate the object.
-2. Isolate it from the background.
-3. Clean the edges.
-4. Save it to the props library.
+2. Remove the background.
+3. Refine edges if needed.
+4. Save the isolated prop to the library.
+
+### Application Room Behaviors
+- **Prop Removal** — Assigned props can easily be removed from the active slot using the designated remove/clear control.
+- **Reset Behaviors** — The prop selection state is entirely session-clean and should not persist unexpectedly after clearing. If a stale prop does occasionally still appear on load, perform a refresh or re-open the workspace to verify the active slot accurately represents as empty.
 
 ### When to Use PROPS
 Use PROPS before staging if the scene depends on specific objects.
@@ -338,8 +361,25 @@ Use it for:
 ### Reference Stack Workflow
 Use this if you want the AI to place actors based on named references and directional notes rather than canvas positioning alone.
 
-### SHOTS Module [PREVIEW]
-Use this to generate multiple camera-angle variations while preserving scene truth.
+### SHOTS: Multi-Angle Cinematic Generation
+The **SHOTS** tab allows you to generate a consistent "pack" of camera angles from a single staged scene. This is a powerful way to create a cinematic sequence or coverage for a story directly derived from the scene geometry.
+
+#### 1. Requirements
+Before using the SHOTS workflow, you must have:
+- Created a scene in the **STAGE** sub-tab.
+- Generated at least one composite image (**GENERATE COMPOSITE**). This image serves as the "Scene Truth" from which all camera angles are derived.
+
+#### 2. The Directed Shot Plan
+The **Directed Shot Plan** is where you define the specific angles and actions for your shot pack.
+- **Pack Select**: Choose a preset collection of shots (Cinematic, Coverage, etc.).
+- **Shot Cards**: Each card in the list represents one camera angle. You can customize the **Angle** (Close-up, Wide, etc.), the **Target** (Scene or specific Actor), and the **Action / Intent**.
+- **Action / Intent**: Describe what is happening in the shot (e.g., "looking surprised," "running toward camera").
+
+#### 3. Generation Workflow
+1. Click the green **GENERATE** button to render low-resolution previews for the entire pack.
+2. Review the results in the **Shot Grid**.
+3. **Semantic Locks**: Use these to toggle which parts of the scene (Identity, Wardrobe, Background, Lighting) should remain strictly locked to the "Scene Truth" during generation.
+4. **Final Render**: Select your favorite previews and click **RENDER 4K** to generate high-fidelity, production-ready cinematic shots.
 
 ### When to Use STAGE
 Use STAGE when your actors and props already exist and the next step is composition, direction, and final composite generation.
@@ -393,32 +433,12 @@ Use **REGION EDIT / POST-PRODUCTION** to fix local mistakes or make targeted cha
 | Issue | Solution |
 | :--- | :--- |
 | **"Not Linked" Status** | Go to Settings and re-select your Save Folder. |
-| **Green Artifacts** | In Wardrobe Studio, verify the background-removal tools are enabled or refine manually. |
-| **Actor Name looks generic on disk** | The visible actor name is stored in the sidecar JSON even if the PNG filename is generic. |
-| **Library Not Updating** | Use the scan/refresh control to force a folder re-read. |
+| **Credit / Generation Mode Confusion** | Ensure your generation mode (Hosted vs BYOK) in the Settings properly aligns with your intent. |
+| **Library Not Updating / Stuck Views** | After saving or deleting, use the scan/refresh control to force a folder re-read to display changes properly. |
+| **Portrait Details Return After Clearing** | Clearing should permanently erase a portrait from memory. If it returns visually, click the Clear button again to lock it down durably. |
+| **Prop Still Appearing After Removal** | Ensure the selected prop slot appears visually empty. If a ghost prop persists, a fast refresh or workspace re-open will force the interface to acknowledge the clean slate. |
 | **Staging feels inconsistent** | Remember that STAGE is currently a preview-tier system. Use it for concepting, selective production, and shot planning. |
 | **Download or save issues** | Confirm your save folder is linked and that permissions are still granted. |
-
-
-## SHOTS: Multi-Angle Cinematic Generation
-The **SHOTS** tab allows you to generate a consistent "pack" of camera angles from a single staged scene. This is a powerful way to create a cinematic sequence or coverage for a story without losing actor identity or scene geometry.
-
-### 1. Requirements
-Before using the SHOTS tab, you must have:
-- Created a scene in the **STAGE** sub-tab.
-- Generated at least one composite image (**GENERATE COMPOSITE**). This image serves as the "Scene Truth" from which all camera angles are derived.
-
-### 2. The Directed Shot Plan
-The **Directed Shot Plan** is where you define the specific angles and actions for your shot pack.
-- **Pack Select**: Choose a preset collection of shots (Cinematic, Coverage, etc.).
-- **Shot Cards**: Each card in the list represents one camera angle. You can customize the **Angle** (Close-up, Wide, etc.), the **Target** (Scene or specific Actor), and the **Action / Intent**.
-- **Action / Intent**: Describe what is happening in the shot (e.g., "looking surprised," "running toward camera").
-
-### 3. Generation Workflow
-1. Click the green **GENERATE** button to render low-resolution previews for the entire pack.
-2. Review the results in the **Shot Grid**.
-3. **Semantic Locks**: Use these to toggle which parts of the scene (Identity, Wardrobe, Background, Lighting) should remain strictly locked to the "Scene Truth" during generation.
-4. **Final Render**: Select your favorite previews and click **RENDER 4K** to generate high-fidelity, production-ready cinematic shots.
 
 ---
 
@@ -433,4 +453,3 @@ You can:
 - or move through the full pipeline from identity to final composite
 
 Use the workflow that matches your goal.
-

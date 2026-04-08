@@ -332,7 +332,6 @@ export const HelpCenterDrawer: React.FC = () => {
                             <div className="space-y-3">
                                 {[
                                     { issue: "Library Not Updating", fix: "Use the scan/refresh control to force a folder re-read." },
-                                    { issue: "Green Artifacts", fix: "Verify the background removal toggle is enabled in Wardrobe, or use the manual eraser." },
                                     { issue: "Staging feels inconsistent", fix: "STAGE is a preview feature. Focus on Scene Truth locks to fix background drifting between shots." },
                                     { issue: "Actor Name looks generic on disk", fix: "The generic PNG name prevents file conflicts. The real name is safely stored in the JSON sidecar." },
                                     { issue: "Download or save issues", fix: "Confirm your 'Render Save Folder' is actively assigned and Connected in your settings." }
