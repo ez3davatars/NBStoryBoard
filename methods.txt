@@ -1,5 +1,0 @@
-src/renderer/components/NanoCastingDirector.tsx: generateImage, _resolveImageData
-src/renderer/components/PortraitStudio.tsx: generateImage
-src/renderer/components/WardrobeStudio.tsx: generateImage
-src/renderer/components/PropAccessoryStudio.tsx: generateImage
-src/renderer/components/SceneCanvas.tsx: generateImage, analyzeCharacterStyle, analyzeSceneIntent, editImageWithMask, analyzeImage

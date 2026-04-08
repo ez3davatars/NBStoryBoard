@@ -1,6 +1,0 @@
-src/renderer/components/SceneCanvas.tsx(2515,13): error TS17014: JSX fragment has no corresponding closing tag.
-src/renderer/components/SceneCanvas.tsx(2517,14): error TS17008: JSX element 'div' has no corresponding closing tag.
-src/renderer/components/SceneCanvas.tsx(2526,14): error TS17008: JSX element 'div' has no corresponding closing tag.
-src/renderer/components/SceneCanvas.tsx(4100,7): error TS1003: Identifier expected.
-src/renderer/components/SceneCanvas.tsx(4102,1): error TS1381: Unexpected token. Did you mean `{'}'}` or `&rbrace;`?
-src/renderer/components/SceneCanvas.tsx(4105,1): error TS1005: '</' expected.

@@ -1,8 +1,0 @@
-[
-  "CastingForge.tsx:383 dispatch({ type: 'ADD_CAST', payload: newCast });",
-  "CastingForge.tsx:3062 type: 'ADD_CAST',",
-  "NanoCastingDirector.tsx:1505 dispatch({ type: 'ADD_CAST', payload: newMember });",
-  "NanoCastingDirector.tsx:3787 dispatch({ type: 'ADD_CAST', payload: newMember });",
-  "PortraitStudio.tsx:1512 dispatch({ type: 'ADD_CAST', payload: newCast });",
-  "WardrobeStudio.tsx:1815 dispatch({ type: 'ADD_CAST', payload: newMember });"
-]

@@ -1,3 +1,0 @@
-PortraitStudio: handleSavePreset, handleRandomizeDNA, handleUndoRandomize, handleCopySeed, handleGenerate, handleStartNew
-WardrobeStudio: handleUploadDesignerReference, handleDropDesignerReference, handleUploadTryOnCharacterSheet, handleOpenSaveModal, handleUndo, handleRedo, handleDesignerGenerate, handleUploadCostume, handleTryOn, handleAddToCast
-NanoCastingDirector: handleUploadCostume, handleArchetypeCoverUpload, handleArchetypeCoverDelete, handleSaveToActors, handleSaveToWardrobe, handleOrchestration, handleRegenerate, handleOpenSaveModal, handleGeneratePremiumBiometricSheet, handleGenerateRefSheet, handleFileUpload

@@ -28,3 +28,27 @@ out/
 .env
 .env.local
 .env.*.local
+
+# Error / dump text
+err.txt
+lint_output.txt
+temp_log.txt
+tsc_errors*.txt
+
+# Root temp dumps
+*.tmp
+temp_*.txt
+recent-diff.txt
+diff.txt
+depth.txt
+
+# Temporary local JSON/debug artifacts
+out.json
+nano.json
+db_payload.json
+urls.json
+
+# Temp scripts / downloaded artifacts
+tmp-*.js
+tmp-*.ts
+*.tgz
