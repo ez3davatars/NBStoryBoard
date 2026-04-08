@@ -1107,13 +1107,14 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
         return typeA.localeCompare(typeB);
       } else {
         // Date (Default: Newest First)
-        // Heuristic: Extract largest continuous sequence of numbers from ID or Name since format varies
-        const extractTimestamp = (str: string) => {
-          const matches = str.match(/\d{10,14}/);
+        // Heuristic: Extract largest continuous sequence of numbers from ID, Name, URL, or Filename since format varies
+        const extractTimestamp = (actor: any) => {
+          const strToSearch = `${actor.id} ${actor.name} ${actor.url} ${actor.filename || ''}`;
+          const matches = strToSearch.match(/\d{10,14}/);
           return matches ? parseInt(matches[0]) : 0;
         };
-        const timeA = extractTimestamp(a.id);
-        const timeB = extractTimestamp(b.id);
+        const timeA = extractTimestamp(a);
+        const timeB = extractTimestamp(b);
         
         if (timeA === 0 && timeB === 0) {
             // Un-timestamped fallback: sort natively inverted to bubble newer generic IDs up
