@@ -1107,9 +1107,18 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
         return typeA.localeCompare(typeB);
       } else {
         // Date (Default: Newest First)
-        // Heuristic: ID is timestamp-based "actor-123456789"
-        const timeA = parseInt(a.id.split('-')[1] || '0');
-        const timeB = parseInt(b.id.split('-')[1] || '0');
+        // Heuristic: Extract largest continuous sequence of numbers from ID or Name since format varies
+        const extractTimestamp = (str: string) => {
+          const matches = str.match(/\d{10,14}/);
+          return matches ? parseInt(matches[0]) : 0;
+        };
+        const timeA = extractTimestamp(a.id);
+        const timeB = extractTimestamp(b.id);
+        
+        if (timeA === 0 && timeB === 0) {
+            // Un-timestamped fallback: sort natively inverted to bubble newer generic IDs up
+            return b.id.localeCompare(a.id);
+        }
         return timeB - timeA;
       }
     });
