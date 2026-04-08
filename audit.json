@@ -1,0 +1,127 @@
+[
+  {
+    "file": "src/renderer/components/CastingForge.tsx",
+    "lineNum": 1449,
+    "line": "if (state.apiKey) {"
+  },
+  {
+    "file": "src/renderer/components/CastingForge.tsx",
+    "lineNum": 1475,
+    "line": "if (!state.lastCastedImage || !state.apiKey) return;"
+  },
+  {
+    "file": "src/renderer/components/NanoCastingDirector.tsx",
+    "lineNum": 1092,
+    "line": "if (!state.apiKey) return;"
+  },
+  {
+    "file": "src/renderer/components/NanoCastingDirector.tsx",
+    "lineNum": 1635,
+    "line": "if (!state.apiKey) {"
+  },
+  {
+    "file": "src/renderer/components/NanoCastingDirector.tsx",
+    "lineNum": 1816,
+    "line": "if (!state.apiKey) {"
+  },
+  {
+    "file": "src/renderer/components/NanoCastingDirector.tsx",
+    "lineNum": 1946,
+    "line": "if (billingMode === \"byok\" && (!hasByok || !state.apiKey)) {"
+  },
+  {
+    "file": "src/renderer/components/PortraitStudio.tsx",
+    "lineNum": 489,
+    "line": "if (billingMode === \"byok\" && (!hasByok || !state.apiKey)) {"
+  },
+  {
+    "file": "src/renderer/components/WardrobeStudio.tsx",
+    "lineNum": 1085,
+    "line": "if (billingMode === \"byok\" && (!hasByok || !state.apiKey)) {"
+  },
+  {
+    "file": "src/renderer/components/WardrobeStudio.tsx",
+    "lineNum": 1334,
+    "line": "if (billingMode === \"byok\" && (!hasByok || !state.apiKey)) {"
+  },
+  {
+    "file": "src/renderer/components/WardrobeStudio.tsx",
+    "lineNum": 2041,
+    "line": "(state.billingEntitlements.effectiveBillingMode === \"byok\" && (!state.billingEntitlements.hasByokAccess || !state.apiKey)) ||"
+  },
+  {
+    "file": "src/renderer/components/WardrobeStudio.tsx",
+    "lineNum": 2257,
+    "line": "(state.billingEntitlements.effectiveBillingMode === \"byok\" && (!state.billingEntitlements.hasByokAccess || !state.apiKey)) ||"
+  },
+  {
+    "file": "src/renderer/components/PropAccessoryStudio.tsx",
+    "lineNum": 307,
+    "line": "if (billingMode === 'byok' && (!hasByok || !state.apiKey)) {"
+  },
+  {
+    "file": "src/renderer/components/PropAccessoryStudio.tsx",
+    "lineNum": 423,
+    "line": "if (billingMode === 'byok' && (!hasByok || !state.apiKey)) {"
+  },
+  {
+    "file": "src/renderer/components/PropAccessoryStudio.tsx",
+    "lineNum": 667,
+    "line": "(state.billingEntitlements.effectiveBillingMode === 'byok' && (!state.billingEntitlements.hasByokAccess || !state.apiKey))"
+  },
+  {
+    "file": "src/renderer/components/PropAccessoryStudio.tsx",
+    "lineNum": 719,
+    "line": "(state.billingEntitlements.effectiveBillingMode === 'byok' && (!state.billingEntitlements.hasByokAccess || !state.apiKey))"
+  },
+  {
+    "file": "src/renderer/services/GeminiService.ts",
+    "lineNum": 236,
+    "line": "if (options.billingMode === 'byok' && !apiKey) {"
+  },
+  {
+    "file": "src/renderer/services/GeminiService.ts",
+    "lineNum": 241,
+    "line": "if (!apiKey && options.billingMode !== 'hosted') {"
+  },
+  {
+    "file": "src/renderer/services/GeminiService.ts",
+    "lineNum": 608,
+    "line": "if (!apiKey) throw new Error(\"No API Key provided.\");"
+  },
+  {
+    "file": "src/renderer/services/GeminiService.ts",
+    "lineNum": 648,
+    "line": "if (!apiKey) throw new Error(\"No API Key provided.\");"
+  },
+  {
+    "file": "src/renderer/services/GeminiService.ts",
+    "lineNum": 733,
+    "line": "if (!apiKey) throw new Error(\"No API Key provided for style analysis.\");"
+  },
+  {
+    "file": "src/renderer/services/GeminiService.ts",
+    "lineNum": 1136,
+    "line": "if (!apiKey) throw new Error(\"No API Key provided.\");"
+  },
+  {
+    "file": "src/renderer/services/GeminiService.ts",
+    "lineNum": 1188,
+    "line": "if (!apiKey) {"
+  },
+  {
+    "file": "src/renderer/services/GeminiService.ts",
+    "lineNum": 1258,
+    "line": "if (!apiKey) {"
+  },
+  {
+    "file": "src/renderer/services/GeminiService.ts",
+    "lineNum": 1400,
+    "line": "if (!apiKey) throw new Error(\"No API Key provided for shot generation\");"
+  },
+  {
+    "file": "src/renderer/services/GeminiService.ts",
+    "lineNum": 1483,
+    "line": "if (!apiKey) throw new Error(\"No API Key provided for shot generation\");"
+  }
+]

@@ -12,16 +12,30 @@ import { nativeJoinPath, nativeListFiles, nativeWriteFile, safeFetchBlob } from 
 import { removeBackground } from "@imgly/background-removal";
 import { CutoutService } from "../services/CutoutService";
 // Style Imports for Save Modal
-import styleRealism from '../assets/styles/style_exact_studio_masc.png';
-import styleAnimation from '../assets/styles/style_pixar_masc.png';
-import styleIllustration from '../assets/styles/style_retro_anime_masc.png';
-import styleScifi from '../assets/styles/style_cyberpunk_masc.png';
+import styleRealism from '../assets/cover-realism.png';
+import styleAnimation from '../assets/cover-anim.png';
+import styleIllustration from '../assets/cover-illustration.png';
+import styleScifi from '../assets/cover-scifi.png';
 import ActorSaveModal from './ActorSaveModal';
 import HelpTooltip from './ui/HelpTooltip';
 import InlineHint from './ui/InlineHint';
 import ConfirmDialog from './ui/ConfirmDialog';
 import { LibraryAssetMaterializer } from '../services/LibraryAssetMaterializer';
 import { resolveDisplayUrl } from '../utils/assetUrlResolver';
+
+async function materializeDisplayUrl(url: string | null | undefined): Promise<string> {
+    if (!url) return '';
+    if (url.startsWith('blob:') || url.startsWith('data:')) return url;
+
+    if (/^https?:\/\//i.test(url)) {
+        const res = await fetch(url, { mode: 'cors' });
+        if (!res.ok) throw new Error(`Failed to fetch remote display asset: ${res.status}`);
+        const blob = await res.blob();
+        return URL.createObjectURL(blob);
+    }
+
+    return url;
+}
 
 // --- WARDROBE STUDIO COMPONENT ---
 const WardrobeStudio = () => {
@@ -183,7 +197,7 @@ const WardrobeStudio = () => {
     const buildSubjectReferenceImages = (subject: CastMember) => {
         const refs: { url: string; label: string }[] = [];
         if (tryOnCharacterSheet) refs.push({ url: tryOnCharacterSheet, label: "Character Sheet (Identity Anchor)" });
-        refs.push({ url: subject.url, label: "Subject Reference" });
+        refs.push({ url: subject.previewUrl || subject.url, label: "Subject Reference" });
         return refs;
     };
 
@@ -279,6 +293,11 @@ const WardrobeStudio = () => {
                 }
             };
             dispatch({ type: 'ADD_ACTOR_LIBRARY', payload: newActor });
+
+            if (mat.previewUrl) {
+                // Immediately swap Hosted preview URL for durable local loaded URL
+                setFittedImage(mat.previewUrl);
+            }
 
             setShowSaveModal(false);
             dispatch({ type: 'ADD_LOG', payload: { message: `Saved Actor: ${mat.filename || "Storage"}`, type: 'success' } });
@@ -1058,7 +1077,33 @@ const WardrobeStudio = () => {
     };
 
     const handleDesignerGenerate = async () => {
-        if (!designerPrompt || !state.apiKey) return;
+        const billingMode = state.billingEntitlements.effectiveBillingMode;
+        const hasHosted = state.billingEntitlements.hasHostedAccess;
+        const hasByok = state.billingEntitlements.hasByokAccess;
+        
+        if (billingMode === 'hosted' && state.hostedCredits === 0) {
+            dispatch({ type: 'ADD_LOG', payload: { message: "Generation blocked: Insufficient credits", type: 'error' } });
+            dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
+            return;
+        }
+        
+        if (billingMode === "hosted" && !hasHosted) {
+            showToast("Hosted Cloud access required for Costume Designer.");
+            dispatch({ type: 'ADD_LOG', payload: { message: "Hosted Cloud access required for Costume Designer.", type: 'error' } });
+            return;
+        }
+
+        if (billingMode === "byok" && (!hasByok || !state.apiKey)) {
+            showToast("API Key required for BYOK Costume Designer.");
+            dispatch({ type: 'ADD_LOG', payload: { message: "API Key required for BYOK Costume Designer.", type: 'error' } });
+            return;
+        }
+
+        if (!designerPrompt) {
+            showToast("Enter a wardrobe prompt to generate a costume.");
+            dispatch({ type: 'ADD_LOG', payload: { message: "Costume Designer requires a prompt.", type: 'error' } });
+            return;
+        }
 
         setDesignerMask(null);
         dispatch({ type: 'SET_PROCESSING', payload: true });
@@ -1159,7 +1204,19 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
             if (actualGenId) dispatch({ type: 'REMOVE_BACKGROUND_JOB', payload: actualGenId });
 
-            setDesignerImage(res);
+            const rawUrl =
+                typeof res === 'string'
+                    ? res
+                    : (res && typeof res === 'object' ? (res as any).asset_url || '' : '');
+
+            let safeUrl = rawUrl;
+            try {
+                safeUrl = await materializeDisplayUrl(rawUrl);
+            } catch (e) {
+                console.warn("Failed to materialize designer result:", e);
+            }
+
+            setDesignerImage(safeUrl);
             dispatch({ type: 'ADD_LOG', payload: { message: "Costume generated (Costume Designer).", type: 'success' } });
         } catch (e: any) {
             const isTimeout = e.name === 'TimeoutError' || e.message?.includes('Pending');
@@ -1269,7 +1326,41 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
     };
 
     const handleTryOn = async () => {
-        if (!selectedCharacter || !selectedCostume || !state.apiKey) return;
+        const billingMode = state.billingEntitlements.effectiveBillingMode;
+        const hasHosted = state.billingEntitlements.hasHostedAccess;
+        const hasByok = state.billingEntitlements.hasByokAccess;
+
+        if (billingMode === 'hosted' && state.hostedCredits === 0) {
+            dispatch({ type: 'ADD_LOG', payload: { message: "Generation blocked: Insufficient credits", type: 'error' } });
+            dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
+            return;
+        }
+
+        if (!selectedCharacter || !selectedCostume) {
+            showToast("Select both a subject and a wardrobe item.");
+            dispatch({ type: 'ADD_LOG', payload: { message: "Try-On requires a selected subject and wardrobe item.", type: 'error' } });
+            return;
+        }
+
+        if (billingMode === "hosted" && !hasHosted) {
+            showToast("Hosted Cloud access required for Virtual Try-On.");
+            dispatch({ type: 'ADD_LOG', payload: { message: "Hosted Cloud access required for Virtual Try-On.", type: 'error' } });
+            return;
+        }
+
+        if (billingMode === "byok" && (!hasByok || !state.apiKey)) {
+            showToast("API Key required for BYOK Virtual Try-On.");
+            dispatch({ type: 'ADD_LOG', payload: { message: "API Key required for BYOK Virtual Try-On.", type: 'error' } });
+            return;
+        }
+
+        dispatch({
+            type: 'ADD_LOG',
+            payload: {
+                message: `Starting Virtual Try-On (${billingMode.toUpperCase()})...`,
+                type: 'info'
+            }
+        });
 
         console.log('TRY-ON MODE:', tryOnOutputMode);
 
@@ -1467,7 +1558,19 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                     }
                 );
 
-                setFittedImage(res);
+                const rawUrl =
+                    typeof res === 'string'
+                        ? res
+                        : (res && typeof res === 'object' ? (res as any).asset_url || '' : '');
+
+                let safeUrl = rawUrl;
+                try {
+                    safeUrl = await materializeDisplayUrl(rawUrl);
+                } catch (e) {
+                    console.warn("Failed to materialize try-on result:", e);
+                }
+
+                setFittedImage(safeUrl);
                 setActiveTryOnView('front');
                 dispatch({ type: 'ADD_LOG', payload: { message: "Front view fitting complete.", type: 'success' } });
                 return;
@@ -1652,14 +1755,29 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                 });
             };
 
-            const frontExtracted = await extractPanel(fbSheet, false);
-            const backExtracted = await extractPanel(fbSheet, true);
-            const leftExtracted = await extractPanel(lrSheet, false);
-            const rightExtracted = await extractPanel(lrSheet, true);
+            let safeFbSheet = fbSheet;
+            let safeLrSheet = lrSheet;
 
-            // Store sheets
-            setTryOnSheetFB(fbSheet);
-            setTryOnSheetLR(lrSheet);
+            try {
+                safeFbSheet = await materializeDisplayUrl(fbSheet);
+            } catch (e) {
+                console.warn("Failed to materialize FB sheet:", e);
+            }
+
+            try {
+                safeLrSheet = await materializeDisplayUrl(lrSheet);
+            } catch (e) {
+                console.warn("Failed to materialize LR sheet:", e);
+            }
+
+            // Extract panels from the safe/materialized sheets
+            const frontExtracted = await extractPanel(safeFbSheet, false);
+            const backExtracted = await extractPanel(safeFbSheet, true);
+            const leftExtracted = await extractPanel(safeLrSheet, false);
+            const rightExtracted = await extractPanel(safeLrSheet, true);
+
+            setTryOnSheetFB(safeFbSheet);
+            setTryOnSheetLR(safeLrSheet);
 
             setTryOnViews({
                 front: frontExtracted,
@@ -1668,8 +1786,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                 right: rightExtracted
             });
 
-            // Default preview
-            setFittedImage(fbSheet);
+            setFittedImage(safeFbSheet);
             setActiveTryOnView('sheetFB');
 
             dispatch({ type: 'ADD_LOG', payload: { message: "Turnaround complete (2 sheets generated: FB + LR).", type: 'success' } });
@@ -1703,6 +1820,8 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
         const newMember: CastMember = {
             id: `fitted-${Date.now()}`,
             url: finalUrl,
+            previewUrl: finalUrl,
+            sourceUrl: finalUrl,
             tag,
             name: selectedCharacter ? `${selectedCharacter.name} (${label})` : `Fitted Character (${label})`,
             profile: {
@@ -1935,7 +2054,11 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                         <InlineHint zone="wardrobe" id="fabricEditor" className="mb-4" />
                                         <button
                                             onClick={handleDesignerGenerate}
-                                            disabled={state.isProcessing || !designerPrompt}
+                                            disabled={
+                                                state.isProcessing || 
+                                                !designerPrompt ||
+                                                (state.billingEntitlements.effectiveBillingMode === "hosted" && !state.billingEntitlements.hasHostedAccess) || (state.billingEntitlements.effectiveBillingMode === "byok" && (!state.billingEntitlements.hasByokAccess || !state.apiKey))
+                                            }
                                             className="w-full bg-gradient-to-r from-yellow-500 to-yellow-600 hover:from-yellow-400 hover:to-yellow-500 text-black py-3 rounded-xl font-black text-xs uppercase tracking-[0.2em] transition-all active:scale-95 disabled:opacity-50"
                                         >
                                             Generate Costume
@@ -2104,7 +2227,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                                         onClick={() => setSelectedCharacter(c)}
                                                         className={`aspect-square rounded border transition-all overflow-hidden ${selectedCharacter?.id === c.id ? 'border-green-500 ring-1 ring-green-500' : 'border-gray-800 hover:border-gray-600'}`}
                                                     >
-                                                        <img src={c.url} className="w-full h-full object-cover" />
+                                                        <img src={c.previewUrl || c.url} className="w-full h-full object-cover" />
                                                     </button>
                                                 ))}
                                                 {state.cast.length === 0 && (
@@ -2145,7 +2268,12 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                     <div className="mt-4 pt-3 border-t border-gray-800 flex-shrink-0">
                                         <button
                                             onClick={handleTryOn}
-                                            disabled={state.isProcessing || !selectedCharacter || !selectedCostume}
+                                            disabled={
+                                                state.isProcessing || 
+                                                !selectedCharacter || 
+                                                !selectedCostume ||
+                                                (state.billingEntitlements.effectiveBillingMode === "hosted" && !state.billingEntitlements.hasHostedAccess) || (state.billingEntitlements.effectiveBillingMode === "byok" && (!state.billingEntitlements.hasByokAccess || !state.apiKey))
+                                            }
                                             className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white py-3 rounded-xl font-black text-[10px] uppercase tracking-[0.25em] active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
                                         >
                                             Execute Virtual Try-On
@@ -2215,7 +2343,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                                 <button
                                                     onClick={(e) => { e.stopPropagation(); setTryOnDisplay('sheetFB'); }}
                                                     disabled={!tryOnSheetFB}
-                                                    className={`px-2 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border border-white/10 transition-colors ${activeTryOnView === 'sheetFB' ? 'bg-white text-black' : 'bg-white/10 text-white hover:bg-white/20'} disabled:opacity-40 disabled:cursor-not-allowed`}
+                                                    className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border transition-colors ${activeTryOnView === 'sheetFB' ? 'bg-blue-600 text-white border-blue-500 shadow-[0_0_10px_rgba(37,99,235,0.4)]' : 'bg-black/40 text-gray-400 border-white/10 hover:bg-white/10 hover:text-white'} disabled:opacity-40 disabled:cursor-not-allowed`}
                                                     title="Show Front/Back Sheet"
                                                 >
                                                     FB
@@ -2223,7 +2351,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                                 <button
                                                     onClick={(e) => { e.stopPropagation(); setTryOnDisplay('sheetLR'); }}
                                                     disabled={!tryOnSheetLR}
-                                                    className={`px-2 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border border-white/10 transition-colors ${activeTryOnView === 'sheetLR' ? 'bg-white text-black' : 'bg-white/10 text-white hover:bg-white/20'} disabled:opacity-40 disabled:cursor-not-allowed`}
+                                                    className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border transition-colors ${activeTryOnView === 'sheetLR' ? 'bg-blue-600 text-white border-blue-500 shadow-[0_0_10px_rgba(37,99,235,0.4)]' : 'bg-black/40 text-gray-400 border-white/10 hover:bg-white/10 hover:text-white'} disabled:opacity-40 disabled:cursor-not-allowed`}
                                                     title="Show Left/Right Sheet"
                                                 >
                                                     LR

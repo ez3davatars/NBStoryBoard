@@ -192,6 +192,7 @@ async function executeJob(job: JobRecord) {
   console.log(`[Worker ${WORKER_ID}] Claimed job: ${job.id}`);
 
   let failCode: GenerationFailureCode = 'INTERNAL_ERROR';
+  const storagePathsToCleanup: string[] = [];
 
   try {
     if (!job.provider_model || typeof job.provider_model !== 'string') {
@@ -209,15 +210,50 @@ async function executeJob(job: JobRecord) {
     const payload = normalizeGeminiPayload(job.request_payload);
     const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${job.provider_model}:generateContent`;
 
-    // Try to count references or inline images in payload
+    // Try to count references or inline images in payload, and reconstruct hosted references
     let reference_count = 0;
     if (Array.isArray(payload?.contents)) {
-       for (const part of payload.contents[0]?.parts || []) {
-           if (part.inlineData) reference_count++;
-           if (part.fileData) reference_count++;
+       const parts = payload.contents[0]?.parts || [];
+       for (let i = 0; i < parts.length; i++) {
+           const part = parts[i];
+           
+           if (part.hosted_reference_path) {
+               const storagePath = part.hosted_reference_path;
+               
+               console.log(`[Worker ${WORKER_ID}] Downloading high-fidelity reference bypass: ${storagePath}`);
+               const { data, error } = await supabase.storage.from('reference_images').download(storagePath);
+               
+               if (error || !data) {
+                  failCode = 'STORAGE_ERROR';
+                  throw new Error(`Failed to download reference image bypass (path: ${storagePath}): ${error ? error.message : 'No data'}`);
+               }
+               const arrayBuffer = await data.arrayBuffer();
+               
+               if (arrayBuffer.byteLength < 100) {
+                  failCode = 'STORAGE_ERROR';
+                  throw new Error(`Downloaded bypassed reference image is suspiciously small! size: ${arrayBuffer.byteLength} bytes.`);
+               }
+               
+               const base64Data = Buffer.from(arrayBuffer).toString('base64');
+               
+               console.log(`[Worker ${WORKER_ID}] Storage Bypass Success. Translated ${arrayBuffer.byteLength} bytes to base64 length ${base64Data.length}.`);
+               
+               parts[i] = {
+                  inlineData: {
+                     mimeType: part.mimeType || 'image/jpeg',
+                     data: base64Data
+                  }
+               };
+               
+               storagePathsToCleanup.push(storagePath);
+               reference_count++;
+           } else if (part.inlineData || part.fileData) {
+               reference_count++;
+           }
        }
     }
 
+    console.log(`[Worker ${WORKER_ID}] Preflight payload shape:`, JSON.stringify(payload?.contents?.[0]?.parts?.map((p: any) => ({ ...p, inlineData: p.inlineData ? '<base64 omitted>' : undefined }))));
     console.log(`[Worker ${WORKER_ID}] Executing Gemini API call...`);
     const provider_started_at = Date.now();
     const providerResponse = await fetch(`${baseUrl}?key=${GEMINI_API_KEY}`, {
@@ -279,11 +315,14 @@ async function executeJob(job: JobRecord) {
         console.error(`[Worker ${WORKER_ID}] Non-fatal: failed to write timing_metrics for ${job.id}`, metricErr);
     }
 
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
     const { error: completeErr } = await supabase.rpc('complete_generation', {
       p_generation_id: job.id,
       p_asset_url: publicUrl,
       p_asset_storage_path: fileKey,
       p_provider_request_id: null,
+      p_asset_expires_at: expiresAt,
     });
 
     if (completeErr) {
@@ -298,6 +337,14 @@ async function executeJob(job: JobRecord) {
     const message = err?.message || String(err);
     console.error(`[Worker ${WORKER_ID}] Job ${job.id} FAILED: ${message}`);
     await failJob(job.id, failCode, message);
+  } finally {
+    if (storagePathsToCleanup.length > 0) {
+      console.log(`[Worker ${WORKER_ID}] Cleaning up ${storagePathsToCleanup.length} reference images from bucket...`);
+      const { error } = await supabase.storage.from('reference_images').remove(storagePathsToCleanup);
+      if (error) {
+         console.error(`[Worker ${WORKER_ID}] Failed to clean up reference images:`, error);
+      }
+    }
   }
 }
 

@@ -254,6 +254,24 @@ export const GeminiService = {
       // Debug log in dev
       console.log("Multimodal images attached:", referenceImages.length);
 
+      let host_supabase: any = null;
+      let host_uid: string = 'anon';
+      const executionBatchId = crypto.randomUUID();
+      
+      if (options.billingMode === 'hosted') {
+         const clientRef = await import('./SupabaseClient');
+         host_supabase = clientRef.supabase;
+         if (!host_supabase) throw new Error("Supabase is not configured for hosted generation.");
+         
+         // Use strict getUser() specifically to guarantee fresh network validity instead of local session cache
+         const userObj = await host_supabase.auth.getUser();
+         host_uid = userObj.data?.user?.id || 'anon';
+         
+         if (host_uid === 'anon') {
+             throw new Error("Authentication required: You must be logged into a valid Supabase session to use Hosted Mode uploads.");
+         }
+      }
+
       // Inject references first
       let imgIndex = 1;
       for (const ref of referenceImages) {
@@ -264,15 +282,59 @@ export const GeminiService = {
         }
 
         contentsParts.push({ text: `[IMAGE ${imgIndex}] ${ref.label}` });
+
+        if (options.billingMode === 'hosted') {
+            console.log(`[GeminiService] Uploading normalized 3072px reference bypass: ${ref.label}`);
+            
+            // CRITICAL FIX: We MUST use _resolveImageData even before uploading to storage.
+            // Why? Because it uses native DOM <canvas> to enforce sRGB color space, flatten transparent pngs to solid background,
+            // strictly apply EXIF rotation, and limit extreme resolutions to 3072px max.
+            // If we upload the Raw Blob directly, Gemini API silently fails or ignores unoptimized/rotated alpha payloads,
+            // resulting in complete identity hallucinations.
+            const inline = await GeminiService._resolveImageData(ref.url, 3072);
+            
+            // Decode the canvas-normalized base64 back into a binary blob for storage upload
+            // This prevents passing a multi-megabyte string into Edge Function networking.
+            const byteString = atob(inline.data);
+            const ab = new ArrayBuffer(byteString.length);
+            const ia = new Uint8Array(ab);
+            for (let k = 0; k < byteString.length; k++) {
+                ia[k] = byteString.charCodeAt(k);
+            }
+            const blob = new Blob([ab], { type: inline.mimeType });
+            
+            const fileExt = inline.mimeType.split('/')[1] || 'jpeg';
+            const storagePath = `${host_uid}/${executionBatchId}/ref_${imgIndex}.${fileExt}`;
+            
+            console.log(`[Storage Proxy Pre-flight] Attempting high-fidelity bypass upload...`);
+            console.log(`- Authenticated UID: ${host_uid}`);
+            console.log(`- Exact Target Path: ${storagePath}`);
+            console.log(`- Valid Session Detected? ${host_uid !== 'anon'}`);
+            
+            const { error } = await host_supabase.storage.from('reference_images').upload(storagePath, blob, { 
+                contentType: inline.mimeType, 
+                upsert: true 
+            });
+            
+            if (error) {
+                console.error("Storage bypass error:", error);
+                throw new Error(`Failed to upload reference: ${error.message}`);
+            }
+            
+            contentsParts.push({
+                hosted_reference_path: storagePath,
+                mimeType: inline.mimeType,
+                label: ref.label,
+                originalUrl: ref.url.substring(0, 50) + "..."
+            });
+        } else {
+            // BYOK keeps the high fidelity 3072 local base64 pipeline
+            const inline = await GeminiService._resolveImageData(ref.url, 3072);
+            contentsParts.push({
+              inlineData: { mimeType: inline.mimeType, data: inline.data }
+            });
+        }
         
-        // CRITICAL BUGFIX: The API Gateway/WAF silently drops Edge Function TCP streams 
-        // exceeding ~580KB with a 504 timeout. Compressing heavily for hosted.
-        const enforceLimit = options.billingMode === 'hosted' ? 1024 : 3072;
-        const inline = await GeminiService._resolveImageData(ref.url, enforceLimit);
-        
-        contentsParts.push({
-          inlineData: { mimeType: inline.mimeType, data: inline.data }
-        });
         imgIndex++;
       }
 
@@ -356,7 +418,7 @@ export const GeminiService = {
         const { SupabaseAuth, supabase } = await import('./SupabaseClient');
 
         const token = await SupabaseAuth.getValidJwt();
-        const idempotencyKey = crypto.randomUUID();
+        const idempotencyKey = executionBatchId;
 
         const payloadBodyForEdge = {
           model,
@@ -404,6 +466,10 @@ export const GeminiService = {
           if (!genId) throw new Error('Hosted Generation Error: Received 202 but no generationId.');
 
           if (options.onJobAccepted) options.onJobAccepted(genId, data.acceptedAt);
+          
+          if (typeof window !== 'undefined') {
+              window.dispatchEvent(new CustomEvent('refresh-credits'));
+          }
 
           // Polling loop logic: Max 90-180 seconds based on image size
           let attempts = 0;
@@ -428,11 +494,16 @@ export const GeminiService = {
             
             if (pollData) {
               if (pollData.status === 'COMPLETED') {
+                if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('refresh-credits'));
                 if (!pollData.asset_url) throw new Error("Hosted Generation Error: COMPLETED but missing asset_url.");
                 return pollData.asset_url;
               }
               if (pollData.status === 'FAILED') {
+                if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('refresh-credits'));
                 throw new Error(`Hosted Generation Error [${pollData.failure_code || 'PROVIDER_ERROR'}]: ${pollData.error_message}`);
+              }
+              if (pollData.status === 'EXPIRED') {
+                throw new Error("Hosted Generation Error: Asset expired and was cleaned up. Please save locally in time.");
               }
               if (pollData.status === 'CANCELED') {
                 throw new Error('Hosted Generation Error: Job was canceled manually.');
@@ -452,6 +523,10 @@ export const GeminiService = {
             const parsed = JSON.parse(responseText);
             errMsg = parsed.message || parsed.error || errMsg;
           } catch {}
+          
+          if (rawResponse.status === 402 || rawResponse.status === 403) {
+             if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('refresh-credits'));
+          }
           throw new Error(`Hosted Generation Error [${rawResponse.status}]: ${errMsg}`);
         }
 
@@ -670,7 +745,7 @@ export const GeminiService = {
   ): Promise<ExtractedStyle> {
     if (!apiKey) throw new Error("No API Key provided for style analysis.");
 
-    const prompt = `Analyze this character image. Return a JSON object describing their exact artistic medium, color palette, and mood. Do NOT describe the character's physical features or clothing. Only describe the aesthetic style (e.g., 3D animated, Pixar-style, pastel colors, cel-shaded, gritty cinematic, etc.). Return only style descriptors. No full sentences.
+    const prompt = `Analyze this character image. Return a JSON object describing their exact artistic medium, color palette, and mood. Do NOT describe the character's physical features or clothing. Only describe the aesthetic style (e.g., 3D animated, CG animated, pastel colors, cel-shaded, gritty cinematic, etc.). Return only style descriptors. No full sentences.
 
     CRITICAL LIGHTING RULE: Do NOT include character-specific or studio lighting descriptors (e.g., "soft studio lighting", "portrait lighting", "beauty lighting", "rim lighting", "flat"). These will conflict with environment generation later. If you describe lighting, keep it broad and environment-safe (e.g., "volumetric", "cinematic", "moody", or prioritize "mood").
 

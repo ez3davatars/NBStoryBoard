@@ -33,6 +33,13 @@ import coverAnim from '../assets/cover-anim.png';
 import coverIllustration from '../assets/cover-illustration.png';
 import coverScifi from '../assets/cover-scifi.png';
 
+// Import distinct Actor Library covers
+import libRealism from '../assets/library-realism.png';
+import libAnim from '../assets/library-anim.png';
+import libIllustration from '../assets/library-illustration.png';
+import libScifi from '../assets/library-scifi.png';
+import libUnsorted from '../assets/library-unsorted.png';
+
 const REFERENCE_SHEET_PROMPT = `
 Create a professional, 8k resolution character reference sheet
 based strictly on the provided fitted character image.
@@ -86,11 +93,11 @@ floating heads, mannequins, text, watermarks.
 `;
 
 const STUDIO_FOLDERS = [
-  { id: 'realism', label: 'Realism', description: "Photorealistic Portraiture & Raw Detail", image: coverRealism, styles: ['exact_studio', 'photorealism', 'dslr_capture'] },
-  { id: 'anim', label: 'Stylized Cartoon', description: "Modern 3D Animation & Soft Lighting", image: coverAnim, styles: ['family_3d', 'pixar', 'claymation'] },
-  { id: 'illustration', label: 'Illustration', description: "Anime, Noir & Graphic", image: coverIllustration, styles: ['retro_cel', 'graphic_noir', 'retro_anime', 'comic_book'] },
-  { id: 'scifi', label: 'Sci-Fi', description: "Cyberpunk & High Tech", image: coverScifi, styles: ['cyberpunk_neon', 'cyberpunk'] },
-  { id: 'uncategorized', label: 'Unsorted', description: "No Specific Style", image: null, styles: [] as string[] }
+  { id: 'realism', label: 'Realism', description: "Photorealistic Portraiture & Raw Detail", image: libRealism, styles: ['exact_studio', 'photorealism', 'dslr_capture'] },
+  { id: 'anim', label: 'Stylized Cartoon', description: "Modern 3D Animation & Soft Lighting", image: libAnim, styles: ['family_3d', 'pixar', 'claymation'] },
+  { id: 'illustration', label: 'Illustration', description: "Anime, Noir & Graphic", image: libIllustration, styles: ['retro_cel', 'graphic_noir', 'retro_anime', 'comic_book'] },
+  { id: 'scifi', label: 'Sci-Fi', description: "Cyberpunk & High Tech", image: libScifi, styles: ['cyberpunk_neon', 'cyberpunk'] },
+  { id: 'uncategorized', label: 'Unsorted', description: "No Specific Style", image: libUnsorted, styles: [] as string[] }
 ];
 
 // Aggressive normalization: "Family 3D" == "family_3d" == "family-3d"
@@ -127,6 +134,20 @@ const resolveImageBlob = async (src: string): Promise<Blob> => {
 
   throw new Error('Unsupported image source format: ' + src);
 };
+
+async function materializeDisplayUrl(url: string | null | undefined): Promise<string> {
+  if (!url) return '';
+  if (url.startsWith('blob:') || url.startsWith('data:')) return url;
+
+  if (/^https?:\/\//i.test(url)) {
+    const res = await fetch(url, { mode: 'cors' });
+    if (!res.ok) throw new Error(`Failed to fetch remote display asset: ${res.status}`);
+    const blob = await res.blob();
+    return URL.createObjectURL(blob);
+  }
+
+  return url;
+}
 
 const CastingForge = () => {
   const { state, dispatch } = useAppContext();
@@ -349,6 +370,7 @@ const CastingForge = () => {
       const newCast: CastMember = {
         id: `cast-${Date.now()}`,
         url: localPreviewUrl,
+        previewUrl: localPreviewUrl,
         sourceUrl: source,
         tag: 'front',
         name: `Cast ${state.cast.length + 1}`,
@@ -445,6 +467,12 @@ const CastingForge = () => {
   }, [selectedStyleId]);
 
   const handleGenerate = async () => {
+    if (state.billingEntitlements.effectiveBillingMode === 'hosted' && state.hostedCredits === 0) {
+       dispatch({ type: 'ADD_LOG', payload: { message: "Generation blocked: Insufficient credits", type: 'error' } });
+       dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
+       return;
+    }
+
     // CHANGE: "Character design sheet" triggers text layouts. Use "Full body character portrait" instead.
     let effectivePrompt = state.lastCastedPrompt || "A full body character portrait";
     let styleDirectives = "";
@@ -521,7 +549,7 @@ const CastingForge = () => {
         dispatch({ type: 'ADD_BACKGROUND_JOB', payload: { id, status: 'polling_foreground', context: 'casting', startedAt: Date.now() } });
       };
 
-      if (state.lastCastedImage && state.apiKey) {
+      if (state.lastCastedImage) {
         dispatch({ type: 'ADD_LOG', payload: { message: "Applying stylization to character...", type: 'info' } });
         const stylizePrompt = `Create a single character portrait.
 
@@ -576,13 +604,23 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
         dispatch({ type: 'REMOVE_BACKGROUND_JOB', payload: actualGenId });
       }
 
-      const resolvedUrl =
+      const rawResolvedUrl =
         typeof res === 'string'
           ? res
           : (res && typeof res === 'object' ? res.asset_url || '' : '');
 
+      let safeResolvedUrl = rawResolvedUrl;
+      try {
+        safeResolvedUrl = await materializeDisplayUrl(rawResolvedUrl);
+      } catch(e) {
+        console.warn(e);
+      }
+
       if (generationIdRef.current === currentGenId) {
-        dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: resolvedUrl });
+        if (state.lastCastedImage && state.lastCastedImage.startsWith('blob:')) {
+            URL.revokeObjectURL(state.lastCastedImage);
+        }
+        dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: safeResolvedUrl });
         setProcessedPreviewUrl(null);
         setShowAdjustments(false);
       } else {
@@ -595,7 +633,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
         dispatch({ type: 'ADD_LOG', payload: { message: "Running local AI isolation...", type: 'info' } });
 
         // Fetch the generated image as a blob (safeFetchBlob supports local paths)
-        const blob = await safeFetchBlob(resolvedUrl);
+        const blob = await safeFetchBlob(safeResolvedUrl);
 
         // Run @imgly/background-removal
         // Note: The first run will download model assets (approx 40MB)
@@ -1415,22 +1453,20 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
           const currentGenId = Date.now();
           generationIdRef.current = currentGenId;
 
-          if (state.apiKey) {
-            try {
-              dispatch({ type: 'ADD_LOG', payload: { message: "Isolating character silhouette locally...", type: 'info' } });
-              const blob = await safeFetchBlob(standardizedUrl);
-              const config = await CutoutService.getImglyConfig();
-              const maskResBlob = await removeBackground(blob, config);
-              const maskResDataUrl = URL.createObjectURL(maskResBlob);
+          try {
+            dispatch({ type: 'ADD_LOG', payload: { message: "Isolating character silhouette locally...", type: 'info' } });
+            const blob = await safeFetchBlob(standardizedUrl);
+            const config = await CutoutService.getImglyConfig();
+            const maskResBlob = await removeBackground(blob, config);
+            const maskResDataUrl = URL.createObjectURL(maskResBlob);
 
-              if (generationIdRef.current === currentGenId) {
-                dispatch({ type: 'SET_LAST_CASTED_MASK', payload: maskResDataUrl });
-                dispatch({ type: 'ADD_LOG', payload: { message: "Character silhouette isolated successfully", type: 'success' } });
-              }
-            } catch (err: any) {
-              if (generationIdRef.current === currentGenId) {
-                dispatch({ type: 'ADD_LOG', payload: { message: `Mask generation failed: ${err.message}`, type: 'error' } });
-              }
+            if (generationIdRef.current === currentGenId) {
+              dispatch({ type: 'SET_LAST_CASTED_MASK', payload: maskResDataUrl });
+              dispatch({ type: 'ADD_LOG', payload: { message: "Character silhouette isolated successfully", type: 'success' } });
+            }
+          } catch (err: any) {
+            if (generationIdRef.current === currentGenId) {
+              dispatch({ type: 'ADD_LOG', payload: { message: `Mask generation failed: ${err.message}`, type: 'error' } });
             }
           }
         };
@@ -1441,7 +1477,14 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
   };
 
   const handleGenerateRefSheet = async () => {
-    if (!state.lastCastedImage || !state.apiKey) return;
+    if (!state.lastCastedImage) return;
+
+    const billingMode = state.billingEntitlements.effectiveBillingMode;
+    const hasHosted = state.billingEntitlements.hasHostedAccess;
+    const hasByok = state.billingEntitlements.hasByokAccess;
+    
+    if (billingMode === "hosted" && !hasHosted) return;
+    if (billingMode === "byok" && (!hasByok || !state.apiKey)) return;
     dispatch({ type: 'SET_PROCESSING', payload: true });
     dispatch({ type: 'ADD_LOG', payload: { message: "Generating Character Reference Sheet...", type: 'info' } });
 
@@ -2261,10 +2304,10 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
                     e.dataTransfer.setData('application/x-cast-id', c.id);
                   }}
                 >
-                  <img src={c.url} className="w-full h-full object-contain pointer-events-none" draggable={false} />
+                  <img src={c.previewUrl || c.url} className="w-full h-full object-contain pointer-events-none" draggable={false} />
                   <div className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col gap-1">
                     <button
-                      onClick={(e) => { e.stopPropagation(); dispatch({ type: 'SET_INSPECT_IMAGE', payload: c.url }); }}
+                      onClick={(e) => { e.stopPropagation(); dispatch({ type: 'SET_INSPECT_IMAGE', payload: c.previewUrl || c.url }); }}
                       className="bg-blue-500/80 hover:bg-blue-500 text-white p-1 rounded-full "
                       title="Inspect Large"
                     >
@@ -2345,7 +2388,8 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
           <div className="flex flex-row flex-grow overflow-hidden relative">
             <div
               ref={containerRef}
-              className={`flex-grow relative bg-gradient-to-b from-[#18181b] to-black flex items-center justify-center overflow-hidden select-none group border-4 border-blue-500/30 rounded-2xl m-2 -[inset_0_0_0_1px_rgba(255,255,255,0.15),0_0_30px_rgba(59,130,246,0.1)] ${isBrushActive ? 'cursor-none' : ''}`}
+              className={`flex-grow relative bg-[#131313] flex items-center justify-center overflow-hidden select-none group border border-white/5 rounded-2xl m-2 shadow-inner ${isBrushActive ? 'cursor-none' : ''}`}
+              style={{ backgroundImage: 'linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px)', backgroundSize: '32px 32px', backgroundPosition: 'center center' }}
               onMouseDown={(e) => startInteraction(e)}
               onMouseMove={moveInteraction}
               onMouseUp={endInteraction}
@@ -2387,13 +2431,15 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
                     ref={imgRef}
                     src={state.lastCastedImage}
                     crossOrigin="anonymous"
-                    className={processedPreviewUrl ? 'invisible absolute pointer-events-none' : 'absolute inset-0 w-full h-full object-contain pointer-events-none p-1 sm:p-2'}
+                    className={processedPreviewUrl ? 'invisible absolute pointer-events-none' : 'absolute inset-0 w-full h-full object-contain pointer-events-none py-4 sm:py-8 px-1 sm:px-2'}
+                    style={(removeBg && !!state.lastCastedMask) ? undefined : { filter: 'drop-shadow(0 0 2px rgba(255,255,255,0.25)) drop-shadow(0 8px 15px rgba(0,0,0,0.8)) drop-shadow(0 -8px 15px rgba(0,0,0,0.8))' }}
                   />
                   {processedPreviewUrl && (
                     <img
                       ref={previewImgRef}
                       src={processedPreviewUrl}
-                      className="absolute inset-0 w-full h-full object-contain pointer-events-none p-1 sm:p-2"
+                      className="absolute inset-0 w-full h-full object-contain pointer-events-none py-4 sm:py-8 px-1 sm:px-2"
+                      style={(removeBg && !!state.lastCastedMask) ? undefined : { filter: 'drop-shadow(0 0 2px rgba(255,255,255,0.25)) drop-shadow(0 8px 15px rgba(0,0,0,0.8)) drop-shadow(0 -8px 15px rgba(0,0,0,0.8))' }}
                     />
                   )}
                   {state.lastCastedMask && (
@@ -3019,10 +3065,20 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
                           <Maximize className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
                         </button>
                         <button
-                          onClick={() => dispatch({
-                            type: 'ADD_CAST',
-                            payload: { ...actor, id: `ref-${Date.now()}-${Math.random()}`, name: `${actor.name} (Ref)` }
-                          })}
+                          onClick={() => {
+                            const castUrl = actor.previewUrl || actor.url;
+                            dispatch({
+                              type: 'ADD_CAST',
+                              payload: {
+                                ...actor,
+                                id: `ref-${Date.now()}-${Math.random()}`,
+                                name: `${actor.name} (Ref)`,
+                                url: castUrl,
+                                previewUrl: actor.previewUrl || castUrl,
+                                sourceUrl: actor.sourceUrl || actor.url
+                              }
+                            });
+                          }}
                           className="bg-[#27272a] hover:bg-emerald-600 w-8 h-8 rounded-lg border border-white/10 hover:border-emerald-400/50 transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
                           title="Add to Cast"
                         >

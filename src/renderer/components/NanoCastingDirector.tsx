@@ -56,38 +56,13 @@ import {
     verifyPermission
 } from '../utils/FileSystemAssets';
 
-// Import Style Images
-// Import Style Images (Feminine / Default)
-import stylePixarFem from '../assets/styles/style_pixar.png';
-import styleHyperRealFem from '../assets/styles/style_hyper_real.png';
-import styleRetroAnimeFem from '../assets/styles/style_retro_anime.png';
-import styleComicBookFem from '../assets/styles/style_comic_book.png';
-import styleCyberpunkFem from '../assets/styles/style_cyberpunk.png';
-import styleExactStudioFem from '../assets/styles/style_exact_studio.png';
-
-// Import Style Images (Masculine)
-import stylePixarMasc from '../assets/styles/style_pixar_masc.png';
-import styleHyperRealMasc from '../assets/styles/style_hyper_real_masc.png';
-import styleRetroAnimeMasc from '../assets/styles/style_retro_anime_masc.png';
-import styleComicBookMasc from '../assets/styles/style_comic_book_masc.png';
-import styleCyberpunkMasc from '../assets/styles/style_cyberpunk_masc.png';
-import styleExactStudioMasc from '../assets/styles/style_exact_studio_masc.png';
-
-// Import Style Images (Youth - Masc)
-import stylePixarYouth from '../assets/styles/style_pixar_youth.png';
-import styleHyperRealYouth from '../assets/styles/style_hyper_real_youth.png';
-import styleRetroAnimeYouth from '../assets/styles/style_retro_anime_youth.png';
-import styleComicBookYouth from '../assets/styles/style_comic_book_youth.png';
-import styleCyberpunkYouth from '../assets/styles/style_cyberpunk_youth.png';
-import styleExactStudioYouth from '../assets/styles/style_exact_studio_youth.png';
-
-// Import Style Images (Youth - Fem)
-import stylePixarYouthFem from '../assets/styles/style_pixar_youth_fem.png';
-import styleHyperRealYouthFem from '../assets/styles/style_hyper_real_youth_fem.png';
-import styleRetroAnimeYouthFem from '../assets/styles/style_retro_anime_youth_fem.png';
-import styleComicBookYouthFem from '../assets/styles/style_comic_book_youth_fem.png';
-import styleCyberpunkYouthFem from '../assets/styles/style_cyberpunk_youth_fem.png';
-import styleExactStudioYouthFem from '../assets/styles/style_exact_studio_youth_fem.png';
+// Import Unified Master Style Covers (Morph variants unified)
+import coverPixar from '../assets/style-pixar.png';
+import coverHyperReal from '../assets/style-hyper-real.png';
+import coverRetroAnime from '../assets/style-retro-anime.png';
+import coverComicBook from '../assets/style-comic-book.png';
+import coverCyberpunk from '../assets/style-cyberpunk.png';
+import coverExactStudio from '../assets/style-exact-studio.png';
 
 
 
@@ -176,6 +151,20 @@ const formatHeight = (inches: number) => {
     const range = inches % 12;
     return `${ft}'${range}"`;
 };
+
+async function materializeDisplayUrl(url: string | null | undefined): Promise<string> {
+    if (!url) return '';
+    if (url.startsWith('blob:') || url.startsWith('data:')) return url;
+
+    if (/^https?:\/\//i.test(url)) {
+        const res = await fetch(url, { mode: 'cors' });
+        if (!res.ok) throw new Error(`Failed to fetch remote display asset: ${res.status}`);
+        const blob = await res.blob();
+        return URL.createObjectURL(blob);
+    }
+
+    return url;
+}
 
 
 
@@ -603,48 +592,21 @@ const NanoCastingDirector = () => {
     }, [selectedStyle, bodyScope]);
 
     // --- STYLE CONFIGURATION BY CATEGORY ---
-    const getStyleMatrix = (variant: 'masc' | 'fem' | 'youth_masc' | 'youth_fem') => {
-        const images = {
-            masc: {
-                pixar: stylePixarMasc,
-                hyper_real: styleHyperRealMasc,
-                retro_anime: styleRetroAnimeMasc,
-                comic_book: styleComicBookMasc,
-                cyberpunk: styleCyberpunkMasc,
-                exact_studio: styleExactStudioMasc
-            },
-            fem: {
-                pixar: stylePixarFem,
-                hyper_real: styleHyperRealFem,
-                retro_anime: styleRetroAnimeFem,
-                comic_book: styleComicBookFem,
-                cyberpunk: styleCyberpunkFem,
-                exact_studio: styleExactStudioFem
-            },
-            youth_masc: {
-                pixar: stylePixarYouth,
-                hyper_real: styleHyperRealYouth,
-                retro_anime: styleRetroAnimeYouth,
-                comic_book: styleComicBookYouth,
-                cyberpunk: styleCyberpunkYouth,
-                exact_studio: styleExactStudioYouth
-            },
-            youth_fem: {
-                pixar: stylePixarYouthFem,
-                hyper_real: styleHyperRealYouthFem,
-                retro_anime: styleRetroAnimeYouthFem,
-                comic_book: styleComicBookYouthFem,
-                cyberpunk: styleCyberpunkYouthFem,
-                exact_studio: styleExactStudioYouthFem
-            }
+    const getStyleMatrix = (_variant: 'masc' | 'fem' | 'youth_masc' | 'youth_fem') => {
+        // Unified active images mapping
+        const activeImages = {
+            pixar: coverPixar,
+            hyper_real: coverHyperReal,
+            retro_anime: coverRetroAnime,
+            comic_book: coverComicBook,
+            cyberpunk: coverCyberpunk,
+            exact_studio: coverExactStudio
         };
-
-        const activeImages = images[variant] || images.masc; // Fallback
 
         return {
             pixar: {
                 id: 'pixar', label: 'Family 3D Animation',
-                keywords: "3D Disney-Pixar animation style, stylized proportions, big eyes, soft shapes, vibrant colors, exaggerated features, cute, charming, subsurface scattering, rim lighting, soft textures, Octane Render, masterpiece 3D.",
+                keywords: "High-end 3D CG animation studio style, stylized proportions, big eyes, soft shapes, vibrant colors, exaggerated features, cute, charming, subsurface scattering, rim lighting, soft textures, Octane Render, masterpiece 3D.",
                 lighting: "Golden hour, cinematic bounce light",
                 image: activeImages.pixar
             },
@@ -1127,7 +1089,16 @@ const NanoCastingDirector = () => {
     };
 
     const generateWardrobe = async () => {
-        if (!state.apiKey) return;
+        const billingMode = state.billingEntitlements.effectiveBillingMode;
+        if (billingMode === "hosted" && !state.billingEntitlements.hasHostedAccess) { dispatch({ type: 'ADD_LOG', payload: { message: 'Hosted access required', type: 'error' } }); return; }
+        if (billingMode === "byok" && (!state.billingEntitlements.hasByokAccess || !state.apiKey)) { dispatch({ type: 'ADD_LOG', payload: { message: 'API Key required for BYOK', type: 'error' } }); return; }
+        
+        if (billingMode === 'hosted' && state.hostedCredits === 0) {
+            dispatch({ type: 'ADD_LOG', payload: { message: "Generation blocked: Insufficient credits", type: 'error' } });
+            dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
+            return;
+        }
+
         if (!wardrobePrompt && !selectedWardrobeItem) return;
 
         setIsProcessing(true);
@@ -1204,7 +1175,15 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                     timeoutPromise(getTimeoutMs())
                 ]);
 
-                setFinalCharacterUrl(fitted);
+                const rawFittedUrl = typeof fitted === 'string' ? fitted : (fitted && typeof fitted === 'object' ? (fitted as any).asset_url || '' : '');
+                let safeFittedUrl = rawFittedUrl;
+                try {
+                    safeFittedUrl = await materializeDisplayUrl(rawFittedUrl);
+                } catch(e) {}
+                setFinalCharacterUrl(prev => {
+                    if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev);
+                    return safeFittedUrl;
+                });
                 dispatch({ type: 'ADD_LOG', payload: { message: "Virtual fitting complete.", type: 'success' } });
             }
 
@@ -1232,6 +1211,21 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
     };
 
     const handleOrchestration = async () => {
+        if (state.billingEntitlements.effectiveBillingMode === 'hosted' && state.hostedCredits === 0) {
+            dispatch({ type: 'ADD_LOG', payload: { message: "Generation blocked: Insufficient credits", type: 'error' } });
+            dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
+            return;
+        }
+        if (state.billingEntitlements.effectiveBillingMode === "hosted") {
+            dispatch({ type: 'ADD_LOG', payload: { message: "This feature is currently BYOK-only. Please configure an API Key.", type: 'error' } });
+            showToast("Feature requires BYOK settings");
+            return;
+        }
+        if (state.billingEntitlements.effectiveBillingMode === "byok" && (!state.billingEntitlements.hasByokAccess || !state.apiKey)) {
+            dispatch({ type: 'ADD_LOG', payload: { message: "API Key required for BYOK generation.", type: 'error' } });
+            return;
+        }
+
         // Enforce Minimum Refs
         if (!uploadMode && identitySource !== 'generated' && (!capturedAngles.center || !capturedAngles.left || !capturedAngles.right)) {
             showToast("Missing required angles (Center, Left, Right)");
@@ -1440,7 +1434,16 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
             addLog("ASSET GENERATED. DECODING...");
             await new Promise(r => setTimeout(r, 500));
 
-            setFinalCharacterUrl(resultUrl);
+            let safeResultUrl = resultUrl;
+            try {
+                safeResultUrl = await materializeDisplayUrl(resultUrl);
+            } catch(e) {
+                console.warn(e);
+            }
+            setFinalCharacterUrl(prev => {
+                if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev);
+                return safeResultUrl;
+            });
             setPhase(5); // Move to Result Phase
             setIsProcessing(false);
 
@@ -1456,7 +1459,22 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
         }
     };
 
-    const handleRegenerate = () => {
+    const handleRegenerate = async () => {
+        if (state.billingEntitlements.effectiveBillingMode === 'hosted' && state.hostedCredits === 0) {
+            dispatch({ type: 'ADD_LOG', payload: { message: "Generation blocked: Insufficient credits", type: 'error' } });
+            dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
+            return;
+        }
+        if (state.billingEntitlements.effectiveBillingMode === "hosted") {
+            dispatch({ type: 'ADD_LOG', payload: { message: "This feature is currently BYOK-only. Please configure an API Key.", type: 'error' } });
+            showToast("Feature requires BYOK settings");
+            return;
+        }
+        if (state.billingEntitlements.effectiveBillingMode === "byok" && (!state.billingEntitlements.hasByokAccess || !state.apiKey)) {
+            dispatch({ type: 'ADD_LOG', payload: { message: "API Key required for BYOK generation.", type: 'error' } });
+            return;
+        }
+
         // Ensure we don't lose state
         console.log("Regenerating...");
         if (!capturedAngles.center) {
@@ -1490,6 +1508,8 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
         const newMember = {
             id: `nano_${Date.now()}`,
             url: finalCharacterUrl,
+            previewUrl: finalCharacterUrl,
+            sourceUrl: finalCharacterUrl,
             name: `${selectedStyle}_${selectedBody}_${asLead ? 'LEAD' : 'Cast'}`,
             tag: 'front' as const,
             profile: {
@@ -1560,11 +1580,18 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                 const blob = await res.blob();
 
                 await nativeWriteFile(portraitPath, blob); // Handles partial directory creation
+                
+                // Immediately pivot UI from Hosted to Durable Native Local display URL
+                const resolvedPortrait = await resolveDisplayUrl({ localPath: portraitPath });
 
                 // Reference Sheet Backup
                 if (saveMode === 'ref_sheet') {
                     const refPath = await nativeJoinPath(catDir, safeName, 'reference_sheet.png');
                     await nativeWriteFile(refPath, blob);
+                    const resolvedRef = await resolveDisplayUrl({ localPath: refPath });
+                    if (resolvedRef) setRefSheetUrl(resolvedRef);
+                } else {
+                    if (resolvedPortrait) setFinalCharacterUrl(resolvedPortrait);
                 }
 
                 // Metadata
@@ -1613,6 +1640,8 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
 
             await writable.write(blob);
             await writable.close();
+            
+            const activeBlobUrl = URL.createObjectURL(blob);
 
             // 4b. If Reference Sheet, save backup copy with distinct name
             if (saveMode === 'ref_sheet') {
@@ -1620,6 +1649,9 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                 const refWritable = await refHandle.createWritable();
                 await refWritable.write(blob); // Same blob
                 await refWritable.close();
+                setRefSheetUrl(activeBlobUrl);
+            } else {
+                setFinalCharacterUrl(activeBlobUrl);
             }
 
             // 5. Save Metadata (actor.json)
@@ -1669,6 +1701,54 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
             dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: finalCharacterUrl });
         }
     }, [finalCharacterUrl, dispatch]);
+
+    // Consumes handoffs from PortraitStudio Send To Ref Sheet
+    useEffect(() => {
+        const raw = localStorage.getItem("nano_refsheet_handoff");
+        if (!raw) return;
+
+        try {
+            const payload = JSON.parse(raw);
+
+            if (!payload?.imageUrl) return;
+
+            setFinalCharacterUrl(payload.imageUrl);
+            setPhase(5);
+            setShowSettings(true);
+            setSidebarMode("director");
+            setIdentitySource("generated"); // This is the Portrait mode in the advanced panel
+
+            if (typeof payload.weightLbs === "number") {
+                setWeightLbs(payload.weightLbs);
+                setLocalWeight(payload.weightLbs);
+            }
+
+            if (typeof payload.heightIn === "number") {
+                setHeightIn(payload.heightIn);
+            }
+
+            setDirectorControls(prev => ({
+                ...prev,
+                age: typeof payload.age === "number" ? payload.age : prev.age,
+                hairStyle: payload.hairStyle || prev.hairStyle
+            }));
+
+            dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: payload.imageUrl });
+            if (payload.compiledPrompt) {
+                dispatch({ type: 'SET_LAST_CASTED_PROMPT', payload: payload.compiledPrompt });
+            }
+
+            localStorage.removeItem("nano_refsheet_handoff");
+
+            dispatch({
+                type: 'ADD_LOG',
+                payload: { message: "Portrait Ref Sheet handoff loaded into NanoCast", type: 'success' }
+            });
+        } catch (e) {
+            console.error("Failed to load nano_refsheet_handoff", e);
+            localStorage.removeItem("nano_refsheet_handoff");
+        }
+    }, []);
 
     const generateLocalBiometricSheet = async () => {
         dispatch({ type: 'SET_PROCESSING', payload: true });
@@ -1786,10 +1866,9 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
     };
 
     const handleGeneratePremiumBiometricSheet = async () => {
-        if (!state.apiKey) {
-            showToast("API Key Required for Premium Synthesis");
-            return;
-        }
+        const billingMode = state.billingEntitlements.effectiveBillingMode;
+        if (billingMode === "hosted" && !state.billingEntitlements.hasHostedAccess) { dispatch({ type: 'ADD_LOG', payload: { message: 'Hosted access required', type: 'error' } }); showToast("Hosted Access Required"); return; }
+        if (billingMode === "byok" && (!state.billingEntitlements.hasByokAccess || !state.apiKey)) { dispatch({ type: 'ADD_LOG', payload: { message: 'API Key required for Premium Synthesis', type: 'error' } }); showToast("API Key Required"); return; }
 
         const hasBiometrics = Boolean(capturedAngles.center && capturedAngles.left && capturedAngles.right);
         if (!hasBiometrics) {
@@ -1871,22 +1950,24 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
 
             if (res) {
                 dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: 100, text: "Forensic Matrix Complete" } });
-                const finalUrl = res as string;
-                setFinalCharacterUrl(finalUrl);
-                
-                let safeRefSheetUrl = finalUrl;
-                if (typeof safeRefSheetUrl === 'string' && safeRefSheetUrl.startsWith('http')) {
-                    try {
-                        const blobRes = await fetch(safeRefSheetUrl);
-                        const blob = await blobRes.blob();
-                        safeRefSheetUrl = URL.createObjectURL(blob);
-                    } catch (fetchErr) {
-                        console.warn("Failed to materialize remote ref sheet:", fetchErr);
-                    }
+                const rawUrl = typeof res === 'string' ? res : (res && typeof res === 'object' ? (res as any).asset_url || '' : '');
+                let safeUrl = rawUrl;
+                try {
+                    safeUrl = await materializeDisplayUrl(rawUrl);
+                } catch(e) {
+                    console.warn(e);
                 }
                 
+                setFinalCharacterUrl(prev => {
+                    if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev);
+                    return safeUrl;
+                });
+                
                 // Show in the reference sheet viewer with special title
-                setRefSheetUrl(safeRefSheetUrl);
+                setRefSheetUrl(prev => {
+                    if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev);
+                    return safeUrl;
+                });
                 setShowRefSheet(true);
                 
                 dispatch({ type: 'ADD_LOG', payload: { message: "Premium Biometric Board Generated Successfully.", type: 'success' } });
@@ -1904,7 +1985,21 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
     };
 
     const handleGenerateRefSheet = async () => {
-        if (!state.apiKey) return;
+        const billingMode = state.billingEntitlements.effectiveBillingMode;
+        const hasHosted = state.billingEntitlements.hasHostedAccess;
+        const hasByok = state.billingEntitlements.hasByokAccess;
+
+        if (billingMode === "hosted" && !hasHosted) {
+            showToast("Hosted Cloud access required for reference sheet generation.");
+            dispatch({ type: 'ADD_LOG', payload: { message: "Hosted Cloud access required for reference sheet generation.", type: 'error' } });
+            return;
+        }
+
+        if (billingMode === "byok" && (!hasByok || !state.apiKey)) {
+            showToast("API Key required for BYOK reference sheet generation.");
+            dispatch({ type: 'ADD_LOG', payload: { message: "API Key required for BYOK reference sheet generation.", type: 'error' } });
+            return;
+        }
 
         const hasBiometrics = Boolean(capturedAngles.center && capturedAngles.left && capturedAngles.right);
         const hasPortrait = Boolean(finalCharacterUrl);
@@ -2292,18 +2387,18 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
             dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: 100, text: "Decoding Cast Sheet" } });
             await new Promise(r => setTimeout(r, 500));
 
-            let safeRefSheetUrl = res as string;
-            if (typeof safeRefSheetUrl === 'string' && safeRefSheetUrl.startsWith('http')) {
-                try {
-                    const blobRes = await fetch(safeRefSheetUrl);
-                    const blob = await blobRes.blob();
-                    safeRefSheetUrl = URL.createObjectURL(blob);
-                } catch (fetchErr) {
-                    console.warn("Failed to materialize remote ref sheet:", fetchErr);
-                }
+            const rawUrl = typeof res === 'string' ? res : (res && typeof res === 'object' ? (res as any).asset_url || '' : '');
+            let safeRefSheetUrl = rawUrl;
+            try {
+                safeRefSheetUrl = await materializeDisplayUrl(rawUrl);
+            } catch(e) {
+                console.warn(e);
             }
 
-            setRefSheetUrl(safeRefSheetUrl);
+            setRefSheetUrl(prev => {
+                if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev);
+                return safeRefSheetUrl;
+            });
             setShowRefSheet(true);
             dispatch({ type: 'ADD_LOG', payload: { message: "Reference Sheet Generated.", type: 'success' } });
         } catch (e: any) {
@@ -3709,6 +3804,8 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                                 const newMember = {
                                                     id: `nano_ref_${Date.now()}`,
                                                     url: refSheetUrl,
+                                                    previewUrl: refSheetUrl,
+                                                    sourceUrl: refSheetUrl,
                                                     name: `Ref_Sheet_${new Date().toLocaleTimeString()}`,
                                                     tag: 'front' as const,
                                                     profile: {

@@ -1,0 +1,222 @@
+{
+  "WardrobeStudio": [
+    {
+      "line": 1075,
+      "text": "        const billingMode = state.billingEntitlements.effectiveBillingMode;\r"
+    },
+    {
+      "line": 1079,
+      "text": "        if (billingMode === \"hosted\" && !hasHosted) {\r"
+    },
+    {
+      "line": 1085,
+      "text": "        if (billingMode === \"byok\" && (!hasByok || !state.apiKey)) {\r"
+    },
+    {
+      "line": 1182,
+      "text": "                state.apiKey,\r"
+    },
+    {
+      "line": 1318,
+      "text": "        const billingMode = state.billingEntitlements.effectiveBillingMode;\r"
+    },
+    {
+      "line": 1328,
+      "text": "        if (billingMode === \"hosted\" && !hasHosted) {\r"
+    },
+    {
+      "line": 1334,
+      "text": "        if (billingMode === \"byok\" && (!hasByok || !state.apiKey)) {\r"
+    },
+    {
+      "line": 1532,
+      "text": "                    state.apiKey,\r"
+    },
+    {
+      "line": 1626,
+      "text": "                state.apiKey,\r"
+    },
+    {
+      "line": 1705,
+      "text": "                state.apiKey,\r"
+    },
+    {
+      "line": 2041,
+      "text": "                                                (state.billingEntitlements.effectiveBillingMode === \"byok\" && (!state.billingEntitlements.hasByokAccess || !state.apiKey)) ||\r"
+    },
+    {
+      "line": 2257,
+      "text": "                                                (state.billingEntitlements.effectiveBillingMode === \"byok\" && (!state.billingEntitlements.hasByokAccess || !state.apiKey)) ||\r"
+    }
+  ],
+  "PortraitStudio": [
+    {
+      "line": 477,
+      "text": "        const billingMode = state.billingEntitlements.effectiveBillingMode;\r"
+    },
+    {
+      "line": 481,
+      "text": "        if (billingMode === \"hosted\" && !hasHosted) {\r"
+    },
+    {
+      "line": 489,
+      "text": "        if (billingMode === \"byok\" && (!hasByok || !state.apiKey)) {\r"
+    },
+    {
+      "line": 518,
+      "text": "            const url = await GeminiService.generateImage(compiledPrompt, state.apiKey, state.model, referenceImages, { imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements });\r"
+    }
+  ],
+  "PropAccessoryStudio": [
+    {
+      "line": 287,
+      "text": "        const billingMode = state.billingEntitlements.effectiveBillingMode;"
+    },
+    {
+      "line": 299,
+      "text": "        if (billingMode === 'hosted' && !hasHosted) {"
+    },
+    {
+      "line": 307,
+      "text": "        if (billingMode === 'byok' && (!hasByok || !state.apiKey)) {"
+    },
+    {
+      "line": 356,
+      "text": "                state.apiKey,"
+    },
+    {
+      "line": 403,
+      "text": "        const billingMode = state.billingEntitlements.effectiveBillingMode;"
+    },
+    {
+      "line": 415,
+      "text": "        if (billingMode === 'hosted' && !hasHosted) {"
+    },
+    {
+      "line": 423,
+      "text": "        if (billingMode === 'byok' && (!hasByok || !state.apiKey)) {"
+    },
+    {
+      "line": 490,
+      "text": "                state.apiKey,"
+    },
+    {
+      "line": 667,
+      "text": "                                        (state.billingEntitlements.effectiveBillingMode === 'byok' && (!state.billingEntitlements.hasByokAccess || !state.apiKey))"
+    },
+    {
+      "line": 719,
+      "text": "                                        (state.billingEntitlements.effectiveBillingMode === 'byok' && (!state.billingEntitlements.hasByokAccess || !state.apiKey))"
+    }
+  ],
+  "NanoCastingDirector": [
+    {
+      "line": 1092,
+      "text": "        if (!state.apiKey) return;\r"
+    },
+    {
+      "line": 1127,
+      "text": "                        state.apiKey,\r"
+    },
+    {
+      "line": 1158,
+      "text": "                        state.apiKey,\r"
+    },
+    {
+      "line": 1397,
+      "text": "                    GeminiService.generateImage(prompt, state.apiKey, state.model, referenceImages, { imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements }),\r"
+    },
+    {
+      "line": 1635,
+      "text": "        if (!state.apiKey) {\r"
+    },
+    {
+      "line": 1643,
+      "text": "    }, [state.apiKey, state.lastCastedImage, finalCharacterUrl, phase]);\r"
+    },
+    {
+      "line": 1816,
+      "text": "        if (!state.apiKey) {\r"
+    },
+    {
+      "line": 1894,
+      "text": "                res = await GeminiService.generateImage(prompt, state.apiKey, state.model, imageRefs, { imageSize: '4K', thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements });\r"
+    },
+    {
+      "line": 1936,
+      "text": "        const billingMode = state.billingEntitlements.effectiveBillingMode;\r"
+    },
+    {
+      "line": 1940,
+      "text": "        if (billingMode === \"hosted\" && !hasHosted) {\r"
+    },
+    {
+      "line": 1946,
+      "text": "        if (billingMode === \"byok\" && (!hasByok || !state.apiKey)) {\r"
+    },
+    {
+      "line": 2310,
+      "text": "                            state.apiKey,\r"
+    }
+  ],
+  "GeminiService": [
+    {
+      "line": 228,
+      "text": "      if (options.billingMode === 'hosted' && !entitlements.hasHostedAccess) {\r"
+    },
+    {
+      "line": 232,
+      "text": "      if (options.billingMode === 'byok' && !entitlements.hasByokAccess) {\r"
+    },
+    {
+      "line": 236,
+      "text": "      if (options.billingMode === 'byok' && !apiKey) {\r"
+    },
+    {
+      "line": 261,
+      "text": "      if (options.billingMode === 'hosted') {\r"
+    },
+    {
+      "line": 286,
+      "text": "        if (options.billingMode === 'hosted') {\r"
+    },
+    {
+      "line": 410,
+      "text": "      if (options.billingMode === 'hosted') {\r"
+    }
+  ],
+  "useAdvancedRender": [
+    {
+      "line": 32,
+      "text": "        if (!state.apiKey) {"
+    },
+    {
+      "line": 43,
+      "text": "                state.apiKey,"
+    },
+    {
+      "line": 76,
+      "text": "    }, [state.backgroundUrl, state.apiKey, state.model, dispatch]);"
+    },
+    {
+      "line": 80,
+      "text": "        if (!autoAnchorDNA || !state.backgroundUrl || !state.apiKey) return;"
+    },
+    {
+      "line": 85,
+      "text": "    }, [autoAnchorDNA, state.backgroundUrl, state.apiKey, state.director?.environment, state.director?.lighting, state.director?.camera, analyzeBackgroundDNA]);"
+    },
+    {
+      "line": 92,
+      "text": "            state.apiKey!,"
+    },
+    {
+      "line": 118,
+      "text": "        if (!state.apiKey) return overrides;"
+    },
+    {
+      "line": 146,
+      "text": "        if (!state.apiKey || state.tokens.length === 0) return;"
+    }
+  ]
+}

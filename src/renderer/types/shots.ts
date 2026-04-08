@@ -51,7 +51,8 @@ export type ShotVariantStatus =
   | 'generating'
   | 'done'
   | 'error'
-  | 'rerendering';
+  | 'rerendering'
+  | 'expired';
 
 export type ShotActorReferenceInput = {
   actorId: string;

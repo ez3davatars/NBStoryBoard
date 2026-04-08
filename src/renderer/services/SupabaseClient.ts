@@ -51,5 +51,19 @@ export const SupabaseAuth = {
   onAuthStateChange: (callback: (event: string, session: any) => void) => {
     if (!supabase) return { data: { subscription: { unsubscribe: () => {} } } };
     return supabase.auth.onAuthStateChange(callback);
+  },
+
+  fetchHostedCredits: async (userId: string): Promise<number | null> => {
+    if (!supabase) return null;
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('credit_balance')
+      .eq('id', userId)
+      .single();
+    if (error) {
+      console.error("Failed to fetch hosted credits", error);
+      return null;
+    }
+    return data?.credit_balance ?? null;
   }
 };

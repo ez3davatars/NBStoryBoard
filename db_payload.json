@@ -1,0 +1,24 @@
+{
+  "contents": [
+    {
+      "parts": [
+        {
+          "text": "Create a single character portrait.\n\nNON-NEGOTIABLE (DO NOT INCLUDE):\n- text\n- labels\n- HUD\n- overlays\n- duplicate subjects\n- extra limbs\n- fused fingers\n- wrong background\n- stylization drift.\n\nIf any requirement conflicts, follow NON-NEGOTIABLE first.\n\nSUBJECT DEFINITION\n- Generate this character exactly: Stylized Cartoon studio style, Modern 3D Animation & Soft Lighting, A full body character portrait\n- Apply this style direction exactly: \n\nCOMPOSITION\n- One subject only.\n- Solid black studio background.\n- No text, no labels, no HUD, no overlays."
+        }
+      ]
+    }
+  ],
+  "generationConfig": {
+    "imageConfig": {
+      "imageSize": "2K",
+      "aspectRatio": "16:9"
+    },
+    "candidateCount": 1,
+    "thinkingConfig": {
+      "thinkingLevel": "High"
+    },
+    "responseModalities": [
+      "IMAGE"
+    ]
+  }
+}

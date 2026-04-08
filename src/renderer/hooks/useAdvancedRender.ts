@@ -29,7 +29,11 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
             dispatch({ type: 'ADD_LOG', payload: { message: "No background set to analyze.", type: 'error' } });
             return null;
         }
-        if (!state.apiKey) {
+        if (state.billingEntitlements.effectiveBillingMode === 'hosted') {
+            dispatch({ type: 'ADD_LOG', payload: { message: "DNA analysis is currently BYOK-only. Please provide an API key.", type: 'error' } });
+            return null;
+        }
+        if (state.billingEntitlements.effectiveBillingMode === 'byok' && (!state.billingEntitlements.hasByokAccess || !state.apiKey)) {
             dispatch({ type: 'ADD_LOG', payload: { message: "API Key required for DNA analysis.", type: 'error' } });
             return null;
         }
@@ -77,12 +81,14 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
 
     // Auto DNA on background change
     useEffect(() => {
-        if (!autoAnchorDNA || !state.backgroundUrl || !state.apiKey) return;
+        if (!autoAnchorDNA || !state.backgroundUrl) return;
+        if (state.billingEntitlements.effectiveBillingMode === 'hosted') return;
+        if (state.billingEntitlements.effectiveBillingMode === 'byok' && (!state.billingEntitlements.hasByokAccess || !state.apiKey)) return;
         if (state.director?.environment || state.director?.lighting || state.director?.camera) return;
         if (lastDnaBgRef.current === state.backgroundUrl) return;
 
         analyzeBackgroundDNA();
-    }, [autoAnchorDNA, state.backgroundUrl, state.apiKey, state.director?.environment, state.director?.lighting, state.director?.camera, analyzeBackgroundDNA]);
+    }, [autoAnchorDNA, state.backgroundUrl, state.apiKey, state.billingEntitlements, state.director?.environment, state.director?.lighting, state.director?.camera, analyzeBackgroundDNA]);
 
     const analyzeWhitelistProfile = async (imageUrl: string, label: string): Promise<WhitelistProfile> => {
         const raw = await GeminiService.analyzeImage(
@@ -115,7 +121,8 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
         const overrides = new Map<string, WhitelistProfile>();
 
         if (!shouldRun) return overrides;
-        if (!state.apiKey) return overrides;
+        if (state.billingEntitlements.effectiveBillingMode === 'hosted') return overrides;
+        if (state.billingEntitlements.effectiveBillingMode === 'byok' && (!state.billingEntitlements.hasByokAccess || !state.apiKey)) return overrides;
 
         const missing = tokens.filter(t => !t.profile);
         if (missing.length === 0) return overrides;
@@ -143,7 +150,12 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
     };
 
     const handleAnalyzeMissingTokenProfiles = async () => {
-        if (!state.apiKey || state.tokens.length === 0) return;
+        if (state.tokens.length === 0) return;
+        if (state.billingEntitlements.effectiveBillingMode === 'hosted') {
+            dispatch({ type: 'ADD_LOG', payload: { message: "Token Profile Analysis is currently BYOK-only. Please provide an API key.", type: 'error' } });
+            return;
+        }
+        if (state.billingEntitlements.effectiveBillingMode === 'byok' && (!state.billingEntitlements.hasByokAccess || !state.apiKey)) return;
         dispatch({ type: 'SET_PROCESSING', payload: true });
         try {
             await ensureTokenProfiles(state.tokens, { force: true });

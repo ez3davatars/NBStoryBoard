@@ -15,6 +15,8 @@ export const ShotTile: React.FC<ShotTileProps> = ({ variant, onToggleSelected, o
   const hasImage = !!variant.previewUrl || !!variant.finalUrl;
   const rawUrl = variant.finalUrl || variant.previewUrl;
   const [displayUrl, setDisplayUrl] = useState<string | null>(null);
+  const [localExpired, setLocalExpired] = useState(false);
+  const effectiveStatus = localExpired ? 'expired' : variant.status;
 
   useEffect(() => {
     if (!rawUrl) {
@@ -50,16 +52,23 @@ export const ShotTile: React.FC<ShotTileProps> = ({ variant, onToggleSelected, o
         className="w-full relative bg-gray-950 flex items-center justify-center cursor-pointer group"
         style={{ aspectRatio: '16/9' }}
         onClick={() => {
-          if (variant.status === 'done' || variant.status === 'error') {
+          if (effectiveStatus === 'done' || effectiveStatus === 'error') {
             onToggleSelected(variant.id, !variant.selected);
           }
         }}
       >
-        {effectiveUrl ? (
+        {effectiveUrl && effectiveStatus !== 'expired' ? (
           <img 
             src={effectiveUrl} 
             alt={variant.label}
             className="w-full h-full object-contain"
+            onError={(e) => {
+              if (effectiveUrl.includes('r2.dev') || effectiveUrl.includes('cloudflare')) {
+                // If the remote blob 404s, explicitly trap it as an expiration rather than just broken text
+                e.currentTarget.style.display = 'none';
+                setLocalExpired(true);
+              }
+            }}
           />
         ) : (
           <div className="text-gray-600 text-sm flex flex-col items-center">
@@ -70,6 +79,7 @@ export const ShotTile: React.FC<ShotTileProps> = ({ variant, onToggleSelected, o
               </svg>
             )}
             {variant.status === 'error' && <span className="text-red-400 mb-2 text-xl">⚠️</span>}
+            {variant.status === 'expired' && <span className="text-orange-400 mb-2 text-xl">⏳</span>}
             <span>{variant.status.toUpperCase()}</span>
           </div>
         )}
@@ -113,7 +123,7 @@ export const ShotTile: React.FC<ShotTileProps> = ({ variant, onToggleSelected, o
 
         {/* Footer Actions */}
         <div className="flex justify-between items-center mt-3 h-6">
-          {variant.status === 'error' && variant.error && (
+          {(variant.status === 'error' || variant.status === 'expired') && variant.error && (
             <span className="text-red-400 text-[10px] truncate max-w-[70%]" title={variant.error}>
               {variant.error}
             </span>
@@ -135,7 +145,7 @@ export const ShotTile: React.FC<ShotTileProps> = ({ variant, onToggleSelected, o
             </button>
           )}
           
-          {variant.status === 'error' && onRegenerateOne && (
+          {(variant.status === 'error' || variant.status === 'expired') && onRegenerateOne && (
             <button 
               onClick={(e) => { e.stopPropagation(); onRegenerateOne(variant.id); }}
               className="text-gray-400 hover:text-white transition-colors ml-2"

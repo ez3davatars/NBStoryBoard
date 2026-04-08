@@ -427,6 +427,12 @@ const SceneCanvas = () => {
     const refreshSpatialData = useCallback(async () => {
         if (!state.backgroundUrl || !state.apiKey || state.isDepthProcessing) return;
 
+        if (state.billingEntitlements.effectiveBillingMode === 'hosted' && state.hostedCredits === 0) {
+            dispatch({ type: 'ADD_LOG', payload: { message: "Auto-Depth blocked: Insufficient credits", type: 'error' } });
+            dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
+            return;
+        }
+
         dispatch({ type: 'SET_DEPTH_PROCESSING', payload: true });
 
         try {
@@ -478,6 +484,12 @@ const SceneCanvas = () => {
 
     // Style Transfer Pipeline: Phase 1 Logic
     const handleAutoStyleEnvironment = async () => {
+        if (state.billingEntitlements.effectiveBillingMode === 'hosted' && state.hostedCredits === 0) {
+            dispatch({ type: 'ADD_LOG', payload: { message: "Style Environment blocked: Insufficient credits", type: 'error' } });
+            dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
+            return;
+        }
+
         // StageTokens are actors if they have a sourceImage or cutoutUrl in this context
         const activeToken = state.tokens.find((t: StageToken) => t.id === state.selection);
         if (!activeToken) return;
@@ -969,6 +981,12 @@ const SceneCanvas = () => {
 
     // Unified Workflow Generate Button
     const generateBg = async (overrideBgUrl?: string | any) => {
+        if (state.billingEntitlements.effectiveBillingMode === 'hosted' && state.hostedCredits === 0) {
+            dispatch({ type: 'ADD_LOG', payload: { message: "Generation blocked: Insufficient credits", type: 'error' } });
+            dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
+            return;
+        }
+
         if (!state.apiKey) return;
         const activeBgUrl = (typeof overrideBgUrl === 'string' ? overrideBgUrl : undefined) || state.backgroundUrl;
         const hasSourceScene = !!activeBgUrl;
@@ -1113,7 +1131,7 @@ const SceneCanvas = () => {
                     const uniqueCastIds = new Set(state.tokens.map(t => t.castId));
                     uniqueCastIds.forEach(id => {
                         const member = (state.cast || []).find(c => c.id === id);
-                        if (member) references.push({ url: member.url, label: `Character: ${member.name}` });
+                        if (member) references.push({ url: member.previewUrl || member.url, label: `Character: ${member.name}` });
                     });
                 }
 
@@ -1443,6 +1461,12 @@ const SceneCanvas = () => {
     };
 
     const generateFaceProtectionMask = async () => {
+        if (state.billingEntitlements.effectiveBillingMode === 'hosted' && state.hostedCredits === 0) {
+            dispatch({ type: 'ADD_LOG', payload: { message: "Mask generation blocked: Insufficient credits", type: 'error' } });
+            dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
+            return;
+        }
+
         if (!state.apiKey) {
             dispatch({ type: 'ADD_LOG', payload: { message: 'API Key required for protection mask.', type: 'error' } } as any);
             return;
@@ -2860,7 +2884,7 @@ const SceneCanvas = () => {
         const renderRightActions = () => {
             if (viewMode === 'shots') {
                 const currentSession = state.shotSessionsBySceneId?.[state.activeShotId || 'default'];
-                const selectedShots = currentSession?.variants.filter((v: any) => v.selected && (v.status === 'done' || v.status === 'error')) || [];
+                const selectedShots = currentSession?.variants.filter((v: any) => v.selected && (v.status === 'done' || v.status === 'error' || v.status === 'expired')) || [];
                 const isDisabled = selectedShots.length === 0;
 
                 const handleSaveShots = () => {
@@ -3360,7 +3384,7 @@ const SceneCanvas = () => {
                                             e.dataTransfer.setData('text/html', '');
                                         }}
                                     >
-                                        <img src={c.url} className="w-full h-full object-contain pointer-events-none" draggable={false} onDragStart={(e) => e.preventDefault()} />
+                                        <img src={c.previewUrl || c.url} className="w-full h-full object-contain pointer-events-none" draggable={false} onDragStart={(e) => e.preventDefault()} />
                                         <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
                                             <span className="text-[8px] font-bold text-white uppercase px-1 text-center leading-tight truncate w-full">{c.tag}</span>
                                         </div>
