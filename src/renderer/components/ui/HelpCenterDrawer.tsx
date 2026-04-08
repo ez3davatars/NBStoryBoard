@@ -331,9 +331,13 @@ export const HelpCenterDrawer: React.FC = () => {
                             
                             <div className="space-y-3">
                                 {[
-                                    { issue: "Library Not Updating", fix: "Use the scan/refresh control to force a folder re-read." },
-                                    { issue: "Staging feels inconsistent", fix: "STAGE is a preview feature. Focus on Scene Truth locks to fix background drifting between shots." },
-                                    { issue: "Actor Name looks generic on disk", fix: "The generic PNG name prevents file conflicts. The real name is safely stored in the JSON sidecar." },
+                                    { issue: "\"Not Linked\" Status", fix: "Go to Settings and re-select your 'Render Save Folder'." },
+                                    { issue: "Credit / Generation Mode Confusion", fix: "Ensure your generation mode (Hosted vs BYOK) in the Settings properly aligns with your intent." },
+                                    { issue: "Library Not Updating / Stuck Views", fix: "After saving or deleting, use the scan/refresh control to force a folder re-read to display changes properly." },
+                                    { issue: "Actor Name looks generic on disk", fix: "The generic PNG name prevents file conflicts. The exact real name is safely stored in the JSON sidecar." },
+                                    { issue: "Portrait Details Return After Clearing", fix: "Clearing should permanently erase a portrait from memory. If it returns visually, click the Clear button again to force it to lock durably." },
+                                    { issue: "Prop Still Appearing After Removal", fix: "Ensure the selected prop slot appears visually empty. If a ghost prop persists, a fast refresh or workspace re-open will force the interface to acknowledge the clean slate." },
+                                    { issue: "Staging feels inconsistent", fix: "Remember that STAGE is currently a preview-tier system. Focus on Scene Truth locks to fix background drifting between shots." },
                                     { issue: "Download or save issues", fix: "Confirm your 'Render Save Folder' is actively assigned and Connected in your settings." }
                                 ].map((item, i) => (
                                     <div key={i} className="bg-[#18181b] p-3 rounded-xl border border-white/5">
