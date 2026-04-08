@@ -47,6 +47,7 @@ export const HelpCenterDrawer: React.FC = () => {
                         "Use 'Synthetic' to build a custom face mathematically.",
                         "Use 'Reference' to upload a real photo or previous AI generation.",
                         "Unlock selective traits (like Hair or Skin) to override portions of an uploaded photo.",
+                        "Click 'Clear Result' to durably reset your active workspace to a clean slate without returning ghosts.",
                         "Send to Casting when finished to permanently store them."
                     ]
                 };
@@ -55,9 +56,9 @@ export const HelpCenterDrawer: React.FC = () => {
                     title: "NANO CAST Help",
                     desc: "Import a real person into the Cast Director Studio.",
                     actions: [
-                        "Use the webcam or upload Center, Left, and Right profile shots.",
+                        "For strongest identity preservation, always use front-facing, clear, well-lit reference photos.",
                         "Use the Identity Lock Slider to control how aggressively the AI holds onto their exact bone structure.",
-                        "Add a logo or faction symbol using the Branding section."
+                        "The 'Delete All' button safely clears temporary generation previews without affecting your saved permanent characters."
                     ]
                 };
             case 'wardrobe':
@@ -65,10 +66,9 @@ export const HelpCenterDrawer: React.FC = () => {
                     title: "WARDROBE Help",
                     desc: "Design costumes and fit them onto actors.",
                     actions: [
-                        "Use 'Costume Designer' to create clothing assets. Use SKETCH mode if you have a 2D line drawing.",
-                        "In 'Virtual Try-On', select your saved character and your designed outfit.",
+                        "Designer vs Try-On: Use SKETCH or COSTUME modes to create clothing first, then use Virtual Try-On to fit it onto your saved actors.",
                         "Use 'Auto-Remove BG' to isolate your actors immediately.",
-                        "Use the ERASER tool to fix the background if it accidentally deleted parts of the costume."
+                        "Your Character Sheet anchors the identity during generation."
                     ]
                 };
             case 'props':
@@ -76,9 +76,9 @@ export const HelpCenterDrawer: React.FC = () => {
                     title: "PROPS Help",
                     desc: "Create reusable scene assets and objects.",
                     actions: [
-                        "Describe a single standalone object.",
-                        "Isolate the object from its background immediately.",
-                        "Don't worry about size here, you scale props when building the final scene in STAGE."
+                        "Describe a single standalone object and isolate it from the background.",
+                        "Application Room: Clear an assigned prop by clicking the 'X' hover button on the active slot.",
+                        "Session Reset: Active props clear cleanly upon an app reload to prevent clutter."
                     ]
                 };
             case 'staging':
@@ -87,10 +87,10 @@ export const HelpCenterDrawer: React.FC = () => {
                     title: "STAGE [PREVIEW] Help",
                     desc: "Arrange your actors and props into a cinematic scene.",
                     actions: [
+                        "Remember that STAGE is a preview feature best used for concepting, scene planning, and selective building.",
                         "Drag actors and props from the sidebars onto the canvas.",
                         "Click on a token to manage its Z-Depth, Scale, and Occlusion.",
-                        "Describe what the character is doing in 'Actor Intelligence' using the Pose/Action -> Expression format.",
-                        "Lock the 'Scene Truth Snapshot' if generating multi-angle shots."
+                        "Describe what the character is doing in 'Actor Intelligence' using the Pose/Action -> Expression format."
                     ]
                 };
             case 'shots':
@@ -98,12 +98,20 @@ export const HelpCenterDrawer: React.FC = () => {
                     title: "SHOTS Help",
                     desc: "Generate consistent multi-angle cinematic shots.",
                     actions: [
-                        "Finalize your scene in the STAGE sub-tab first (generate at least one composite).",
+                        "PREREQUISITE: You must finalize your scene in the STAGE sub-tab and generate at least one composite image to act as your Scene Truth.",
                         "Switch to the SHOTS tab to begin multi-angle generation.",
-                        "Select a Pack (e.g., Cinematic) and Count to auto-populate the Directed Shot Plan.",
-                        "Customize each shot card with specific Camera Angles, Action/Intent, and Lighting.",
-                        "Click the green GENERATE button to render the full pack of shot previews.",
-                        "Select your favorite variants and click RENDER 4K to generate high-fidelity finals."
+                        "Select a Pack (e.g., Cinematic) and auto-populate the Directed Shot Plan.",
+                        "Click GENERATE to render low-res previews, then select favorites to RENDER 4K."
+                    ]
+                };
+            case 'region_edit':
+                return {
+                    title: "REGION EDIT Help",
+                    desc: "Correct part of an image without rerendering the full scene.",
+                    actions: [
+                        "Write specific, highly localized masking instructions for best results.",
+                        "Toggle Protect Face/Hair to prevent the AI from dissolving critical biometric features.",
+                        "Use layers to separate distinct structural and lighting actions."
                     ]
                 };
             case 'veo':
@@ -195,14 +203,25 @@ export const HelpCenterDrawer: React.FC = () => {
                                 <p className="text-sm text-gray-400">Cast Director Studio helps you create, refine, style, and stage characters for polished visual output.</p>
                             </div>
                             
+                            <div className="bg-[#18181b] p-4 rounded-xl border border-white/5 space-y-4">
+                                <div>
+                                    <h4 className="font-bold text-yellow-500 uppercase text-xs tracking-wider mb-2">Hosted vs BYOK</h4>
+                                    <p className="text-xs text-gray-300 hover:text-white transition-colors">Your generation credits and behavior depend on your Active Billing Mode in Settings. Always check whether you are running in Hosted Mode (using credits) or BYOK Mode (Bring Your Own Key).</p>
+                                </div>
+                                <div className="border-t border-white/5 pt-4">
+                                    <h4 className="font-bold text-yellow-500 uppercase text-xs tracking-wider mb-2">Save It or Lose It</h4>
+                                    <p className="text-xs text-gray-300 hover:text-white transition-colors">Many generated results remain temporary! If you love an actor, prop, or costume, explicitly click Save. You may need to refresh your library view after saving for it to securely register visually.</p>
+                                </div>
+                            </div>
+                            
                             <div className="bg-[#18181b] p-4 rounded-xl border border-white/5">
-                                <h4 className="font-bold text-yellow-500 uppercase text-xs tracking-wider mb-3 flex items-center gap-2"><Play className="w-3 h-3" /> Quick Start</h4>
-                                <ol className="list-decimal list-inside space-y-2 text-sm text-gray-300">
-                                    <li>Go to <strong>CAST</strong> and generate a character.</li>
+                                <h4 className="font-bold text-white uppercase text-xs tracking-wider mb-3 flex items-center gap-2"><Play className="w-3 h-3 text-yellow-500" /> Quick Start Workflow</h4>
+                                <ol className="list-decimal list-inside space-y-2 text-sm text-gray-400">
+                                    <li>Go to <strong className="text-gray-200">CAST</strong> and generate a character.</li>
                                     <li>Save the character to your library.</li>
-                                    <li>Open <strong>WARDROBE</strong> and apply a costume.</li>
-                                    <li>Open <strong>STAGE [PREVIEW]</strong> and place the character on a background.</li>
-                                    <li>Click <strong>Generate Composite</strong>.</li>
+                                    <li>Open <strong className="text-gray-200">WARDROBE</strong> and apply a costume.</li>
+                                    <li>Open <strong className="text-gray-200">STAGE [PREVIEW]</strong> and place the character on a background.</li>
+                                    <li>Click <strong className="text-gray-200">Generate Composite</strong>.</li>
                                 </ol>
                             </div>
                             <button 
@@ -261,7 +280,7 @@ export const HelpCenterDrawer: React.FC = () => {
                                 </div>
                             </button>
 
-                            <button onClick={() => handleGoalRoute('staging', 'tab-staging')} className="w-full flex items-start text-left gap-3 p-4 bg-[#18181b] hover:bg-[#202022] border border-white/5 hover:border-yellow-500/30 rounded-xl transition-all group">
+                            <button onClick={() => handleGoalRoute('staging', 'tab-region_edit')} className="w-full flex items-start text-left gap-3 p-4 bg-[#18181b] hover:bg-[#202022] border border-white/5 hover:border-yellow-500/30 rounded-xl transition-all group">
                                 <div className="p-2 bg-teal-500/10 text-teal-400 rounded-lg group-hover:scale-110 transition-transform"><ImagePlus className="w-5 h-5" /></div>
                                 <div>
                                     <h4 className="text-gray-200 font-bold mb-0.5">Fix part of an image</h4>
