@@ -23,8 +23,8 @@ export const HelpCenterDrawer: React.FC = () => {
 
     // Contextual Help Mapping
     const getTabHelpContent = () => {
-        const activeSection = state.helpContextSection.startsWith('tab-') 
-            ? state.helpContextSection.replace('tab-', '') 
+        const activeSection = state.helpContextSection.startsWith('tab-')
+            ? state.helpContextSection.replace('tab-', '')
             : state.view;
 
         switch (activeSection) {
@@ -37,8 +37,8 @@ export const HelpCenterDrawer: React.FC = () => {
                         "Upload Ref: Use the 'Upload Ref' button in the center module if you want to start from an existing image instead of pure text.",
                         "Actor Reference Sheets (Left Panel): Generate your character in multiple angles (Form, Face, Split) to lock down their design for future use.",
                         "Branding & Identity (Left Panel): Upload a logo file to automatically place graphics onto the character's clothing.",
-                        "Slicing Tools: After generating, use the 'Slicer' canvas tools to crop out specific parts of the image and save them as Cast Asset tokens.",
-                        "Cast Assets Manager: This holds your temporary generated previews. Unsaved previews expire from the cloud after 24 hours. When you click Save, the full image is downloaded directly to your local drive and secured permanently!"
+                        "Slicing Tools: After generating, use the 'Slicer' canvas tools to crop out specific parts of the image and add them as Cast Asset tokens.",
+                        "Cast Assets Manager: This holds your temporary generated previews. Unsaved previews expire from the cloud after 24 hours. When you click Add to Library, the full image is downloaded directly to your local drive and secured permanently!"
                     ]
                 };
             case 'portrait':
@@ -214,7 +214,7 @@ export const HelpCenterDrawer: React.FC = () => {
                                 <h3 className="text-xl font-bold text-white mb-2">Welcome to Cast Director</h3>
                                 <p className="text-sm text-gray-400">Cast Director Studio helps you create, refine, style, and stage characters for polished visual output.</p>
                             </div>
-                            
+
                             <div className="bg-[#18181b] p-4 rounded-xl border border-white/5 space-y-4">
                                 <div>
                                     <h4 className="font-bold text-yellow-500 uppercase text-xs tracking-wider mb-2">Hosted vs BYOK</h4>
@@ -225,7 +225,7 @@ export const HelpCenterDrawer: React.FC = () => {
                                     <p className="text-xs text-gray-300 hover:text-white transition-colors">Many generated results remain temporary! If you love an actor, prop, or costume, explicitly click Save. You may need to refresh your library view after saving for it to securely register visually.</p>
                                 </div>
                             </div>
-                            
+
                             <div className="bg-[#18181b] p-4 rounded-xl border border-white/5">
                                 <h4 className="font-bold text-white uppercase text-xs tracking-wider mb-3 flex items-center gap-2"><Play className="w-3 h-3 text-yellow-500" /> Quick Start Workflow</h4>
                                 <ol className="list-decimal list-inside space-y-2 text-sm text-gray-400">
@@ -236,7 +236,7 @@ export const HelpCenterDrawer: React.FC = () => {
                                     <li>Click <strong className="text-gray-200">Generate Composite</strong>.</li>
                                 </ol>
                             </div>
-                            <button 
+                            <button
                                 onClick={() => dispatch({ type: 'SET_HELP_SECTION', payload: 'goals' })}
                                 className="w-full py-3 bg-white/5 hover:bg-white/10 text-white rounded-lg transition-colors border border-white/10 font-bold"
                             >
@@ -259,7 +259,7 @@ export const HelpCenterDrawer: React.FC = () => {
                                     <p className="text-xs text-gray-500">Generate a fresh identity from scratch.</p>
                                 </div>
                             </button>
-                            
+
                             <button onClick={() => handleGoalRoute('nano_cast')} className="w-full flex items-start text-left gap-3 p-4 bg-[#18181b] hover:bg-[#202022] border border-white/5 hover:border-yellow-500/30 rounded-xl transition-all group">
                                 <div className="p-2 bg-emerald-500/10 text-emerald-400 rounded-lg group-hover:scale-110 transition-transform"><UserCircle className="w-5 h-5" /></div>
                                 <div>
@@ -316,7 +316,7 @@ export const HelpCenterDrawer: React.FC = () => {
                                 <h3 className="text-xl font-bold text-white mb-2">{tabHelp.title}</h3>
                                 <p className="text-sm text-gray-400">{tabHelp.desc}</p>
                             </div>
-                            
+
                             {tabHelp.actions.length > 0 && (
                                 <ul className="space-y-3 mt-4">
                                     {tabHelp.actions.map((act, i) => (
@@ -334,7 +334,7 @@ export const HelpCenterDrawer: React.FC = () => {
                             <div>
                                 <h3 className="text-xl font-bold text-white mb-2">Troubleshooting</h3>
                             </div>
-                            
+
                             <div className="space-y-3">
                                 {[
                                     { issue: "\"Not Linked\" Status", fix: "Go to Settings and re-select your 'Render Save Folder'." },
