@@ -87,10 +87,12 @@ export const HelpCenterDrawer: React.FC = () => {
                     title: "STAGE [PREVIEW] Help",
                     desc: "Arrange your actors and props into a cinematic scene.",
                     actions: [
-                        "Remember that STAGE is a preview feature best used for concepting, scene planning, and selective building.",
+                        "STAGE is a preview feature. Use it heavily for concepting, scene planning, and selective direction.",
+                        "For the strongest results: Always use clearly saved actors, cleanly isolated props, and very specific direction.",
                         "Drag actors and props from the sidebars onto the canvas.",
-                        "Click on a token to manage its Z-Depth, Scale, and Occlusion.",
-                        "Describe what the character is doing in 'Actor Intelligence' using the Pose/Action -> Expression format."
+                        "Click on any active token on the canvas to refine its Z-Depth order, Scale, and explicit Occlusion.",
+                        "Direct your actors: Describe exactly what the character is doing inside 'Actor Intelligence' (e.g., 'sitting on the floor -> looking shocked').",
+                        "Use the Bottom Toolbar to lock down your camera intent and draw manual path annotations if needed."
                     ]
                 };
             case 'shots':
