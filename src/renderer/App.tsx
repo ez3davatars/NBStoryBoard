@@ -1,4 +1,4 @@
-import { useEffect, useState, Component, useCallback } from 'react';
+import { useEffect, useState, Component, useCallback, useRef } from 'react';
 import type { ReactNode, ErrorInfo } from 'react';
 import SceneCanvas from './components/SceneCanvas';
 import WardrobeStudio from './components/WardrobeStudio';
@@ -26,6 +26,7 @@ import { FileMenu } from './components/ui/FileMenu';
 import { AppCloseDialog } from './components/ui/AppCloseDialog';
 import { HelpCenterDrawer } from './components/ui/HelpCenterDrawer';
 import { WelcomeModal } from './components/ui/WelcomeModal';
+import { CreditExhaustedModal } from './components/ui/CreditExhaustedModal';
 
 import {
   Settings,
@@ -52,7 +53,7 @@ const ImageInspector = () => {
       setResolvedDisplay(null);
       return;
     }
-    
+
     let isMounted = true;
     resolveDisplayUrl({
       localPath: state.inspectImageLocalPath,
@@ -185,8 +186,8 @@ const ImageInspector = () => {
                   const filename = `Inspect-Actor-${timestamp}.png`;
                   const fileHandle = await actorsDir.getFileHandle(filename, { create: true });
                   const writable = await fileHandle.createWritable();
-                  const fetchTarget = state.inspectImageLocalPath && state.inspectImageLocalPath.startsWith('file://') 
-                                        ? state.inspectImageLocalPath : state.inspectImage!;
+                  const fetchTarget = state.inspectImageLocalPath && state.inspectImageLocalPath.startsWith('file://')
+                    ? state.inspectImageLocalPath : state.inspectImage!;
                   const response = await fetch(fetchTarget);
                   const blob = await response.blob();
                   await writable.write(blob);
@@ -274,7 +275,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boole
 // --- 5. MAIN APP SHELL ---
 
 const renderTabLabel = (mode: string, isActive: boolean) => {
-  switch(mode) {
+  switch (mode) {
     case 'veo': return (
       <div className="flex items-center gap-1 lg:gap-1.5">
         <span>STORYBOARD</span>
@@ -296,13 +297,65 @@ const renderTabLabel = (mode: string, isActive: boolean) => {
     default: return mode.toUpperCase();
   }
 };
+const FramedPanel = ({ children, className = '', trackClassName = 'px-3 py-1 gap-1' }: { children: React.ReactNode, className?: string, trackClassName?: string }) => {
+  return (
+    <div className={`inline-flex bg-[#2a2a2c] rounded-xl p-[4px] border border-[#111] shadow-[0_1px_1px_rgba(255,255,255,0.05)] ${className}`}>
+      <div className={`flex items-center bg-[#161618] rounded-lg shadow-[inset_0_3px_6px_rgba(0,0,0,0.6),inset_0_0_0_1px_rgba(0,0,0,0.8)] w-full ${trackClassName}`}>
+        {children}
+      </div>
+    </div>
+  );
+};
 
 const App = () => {
   const { state, dispatch } = useAppContext();
 
+  // Track previous credits locally for debug metrics without breaking useEffect dependencies
+  const prevCreditsRef = useRef(state.hostedCredits);
+  useEffect(() => { prevCreditsRef.current = state.hostedCredits; }, [state.hostedCredits]);
+
+  const refreshCredits = useCallback(async () => {
+    if (state.billingEntitlements.effectiveBillingMode === 'hosted' && state.hostedSession?.user?.id) {
+      const credits = await SupabaseAuth.fetchHostedCredits(state.hostedSession.user.id);
+
+      console.groupCollapsed('[Credit Sync] Refreshing Hosted Credits');
+      console.log('Authenticated User ID:', state.hostedSession.user.id);
+      console.log('Fetched Balance:', credits);
+      console.log('Previous Display:', prevCreditsRef.current);
+      console.log('Updated Display:', credits);
+      console.groupEnd();
+
+      dispatch({ type: 'SET_HOSTED_CREDITS', payload: credits });
+    }
+  }, [state.billingEntitlements.effectiveBillingMode, state.hostedSession?.user?.id, dispatch]);
+
+  useEffect(() => {
+    refreshCredits();
+  }, [refreshCredits]);
+
+  useEffect(() => {
+    const handler = () => refreshCredits();
+    window.addEventListener('refresh-credits', handler);
+    return () => window.removeEventListener('refresh-credits', handler);
+  }, [refreshCredits]);
+
   useEffect(() => {
     console.log('[NBStoryBoard] VITE_APP_ENV =', import.meta.env.VITE_APP_ENV ?? '(undefined)');
   }, []);
+
+  // Transient Status Auto-Clear
+  useEffect(() => {
+    if (!state.liveStatus) return;
+    const remaining = 60000 - (Date.now() - state.liveStatus.createdAt);
+    if (remaining <= 0) {
+      dispatch({ type: 'SET_LIVE_STATUS', payload: null });
+      return;
+    }
+    const timer = setTimeout(() => {
+      dispatch({ type: 'SET_LIVE_STATUS', payload: null });
+    }, remaining);
+    return () => clearTimeout(timer);
+  }, [state.liveStatus, dispatch]);
 
   // Hosted Mode Background Poller
   useEffect(() => {
@@ -316,7 +369,7 @@ const App = () => {
       for (const job of pendingJobs) {
         const { data, error } = await supabase.from('generations').select('status, asset_url, timing_metrics').eq('id', job.id).single();
         if (error) {
-           console.error('[BackgroundPoller] Supabase error:', error);
+          console.error('[BackgroundPoller] Supabase error:', error);
         }
         if (data) {
           if (data.status === 'COMPLETED') {
@@ -326,23 +379,29 @@ const App = () => {
 
             dispatch({ type: 'COMPLETE_BACKGROUND_JOB', payload: { id: job.id, assetUrl: data.asset_url } });
             dispatch({ type: 'ADD_LOG', payload: { message: `Background job finished: ${job.context}`, type: 'success' } });
+            window.dispatchEvent(new CustomEvent('refresh-credits'));
 
             // Pipeline Diagnostics
             const d = {
-                 '1. Edge Queue Delay (ms)': (db.worker_claimed_at && t.edgeAcceptedAt) ? db.worker_claimed_at - t.edgeAcceptedAt : 'N/A',
-                 '2. Gemini Provider Latency (ms)': (db.provider_finished_at && db.provider_started_at) ? db.provider_finished_at - db.provider_started_at : 'N/A',
-                 '3. Upload Overhead (ms)': (db.r2_finished_at && db.r2_started_at) ? db.r2_finished_at - db.r2_started_at : 'N/A',
-                 '4. Poller Observation Lag (ms)': (db.db_completed_at) ? observedCompletedAt - db.db_completed_at : 'N/A',
-                 'Total End-to-End Time (ms)': t.submittedAt ? observedCompletedAt - t.submittedAt : 'N/A',
-                 'Post-Timeout Overrun (ms)': t.clientTimeoutAt ? observedCompletedAt - t.clientTimeoutAt : 'N/A'
+              '1. Edge Queue Delay (ms)': (db.worker_claimed_at && t.edgeAcceptedAt) ? db.worker_claimed_at - t.edgeAcceptedAt : 'N/A',
+              '2. Gemini Provider Latency (ms)': (db.provider_finished_at && db.provider_started_at) ? db.provider_finished_at - db.provider_started_at : 'N/A',
+              '3. Upload Overhead (ms)': (db.r2_finished_at && db.r2_started_at) ? db.r2_finished_at - db.r2_started_at : 'N/A',
+              '4. Poller Observation Lag (ms)': (db.db_completed_at) ? observedCompletedAt - db.db_completed_at : 'N/A',
+              'Total End-to-End Time (ms)': t.submittedAt ? observedCompletedAt - t.submittedAt : 'N/A',
+              'Post-Timeout Overrun (ms)': t.clientTimeoutAt ? observedCompletedAt - t.clientTimeoutAt : 'N/A'
             };
             console.groupCollapsed(`🚀 [HOSTED AUDIT] Generation ${job.id} Timings`);
             console.table(d);
             console.log("Raw Metric Dump:", { client: t, edge: { accepted: t.edgeAcceptedAt }, worker: db, observationTime: observedCompletedAt });
             console.groupEnd();
-          } else if (data.status === 'FAILED' || data.status === 'CANCELED') {
+          } else if (data.status === 'FAILED' || data.status === 'CANCELED' || data.status === 'EXPIRED') {
             dispatch({ type: 'FAIL_BACKGROUND_JOB', payload: { id: job.id, errorMessage: 'Provider rejected or failed' } });
             dispatch({ type: 'ADD_LOG', payload: { message: `Background job failed: ${job.context}`, type: 'error' } });
+            window.dispatchEvent(new CustomEvent('refresh-credits'));
+            const errorMsg = data.timing_metrics?.error || data.timing_metrics?.error_message || '';
+            if (data.status === 'FAILED' && errorMsg.toLowerCase().includes('insufficient')) {
+              dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
+            }
           }
         }
       }
@@ -481,7 +540,7 @@ const App = () => {
   const [tempKey, setTempKey] = useState(state.apiKey);
   const [tempModel, setTempModel] = useState<AppState['model']>(state.model);
   const [tempBillingMode, setTempBillingMode] = useState<'hosted' | 'byok'>(state.billingMode);
-  
+
   // Auth UI State
   const [authEmail, setAuthEmail] = useState('');
   const [authPass, setAuthPass] = useState('');
@@ -825,460 +884,477 @@ const App = () => {
   return (
     <ErrorBoundary>
       <HelpProvider>
-          <div className="flex min-h-screen h-[100dvh] min-w-0 flex-col overflow-hidden bg-[#0f0f11] text-gray-200 font-sans select-none">
+        <div className="flex min-h-screen h-[100dvh] min-w-0 flex-col overflow-hidden bg-[#0f0f11] text-gray-200 font-sans select-none">
 
-            {/* Header */}
-            <header className="border-b border-white/5 bg-[#18181b] grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 sm:gap-3 lg:gap-4 px-3 sm:px-4 lg:px-6 py-3 z-50 relative [style='-webkit-app-region:drag;']">
-              {/* Left Logo & Title */}
-              <div className="flex min-w-0 items-center gap-2.5 sm:gap-3.5 pr-1 sm:pr-2">
-                <div className="relative flex h-11 w-11 sm:h-12 sm:w-12 lg:h-14 lg:w-14 items-center justify-center rounded-xl border border-white/5 bg-white/5 shrink-0">
-                  <img
-                    src={`data:image/png;base64,${LOGO_BASE64}`}
-                    alt="Branding Logo"
-                    className="h-8 w-8 sm:h-9 sm:w-9 lg:h-10 lg:w-10 object-contain -[0_0_10px_rgba(234,179,8,0.45)] hover:scale-105 transition-all duration-300 cursor-pointer"
-                  />
-                </div>
-
-                <div className="min-w-0 max-w-[clamp(280px,34vw,560px)] overflow-hidden">
-                  <div className="flex items-center gap-1 sm:gap-1.5 overflow-hidden whitespace-nowrap font-black leading-none tracking-tight text-[clamp(1.15rem,1.85vw,2.3rem)]" role="heading" aria-level={1}>
-                    <span className="min-w-0 truncate text-white">CAST DIRECTOR</span>
-                    <span className="shrink-0 text-yellow-500">STUDIO</span>
-                  </div>
-
-                  <div className="mt-1.5 min-w-0 overflow-hidden">
-                    <div className="flex min-w-0 flex-col gap-0.5 lg:flex-row lg:items-center lg:gap-3">
-                      <p className="min-w-0 lg:flex-1 truncate text-[clamp(0.4rem,0.48vw,0.5rem)] font-black uppercase tracking-[0.18em] text-zinc-500/70">
-                        CAST · WARDROBE · PROPS · STAGE · ACTION
-                      </p>
-                      <span className="shrink-0 whitespace-nowrap text-[clamp(0.4rem,0.48vw,0.5rem)] font-bold uppercase tracking-[0.2em] text-zinc-600 lg:text-right">
-                        powered by <span className="text-zinc-500">Nanobanana 2</span>
-                      </span>
-                    </div>
-                  </div>
-                </div>
+          {/* Header */}
+          <header className="border-b border-white/5 bg-[#18181b] flex w-full items-center justify-between gap-4 px-3 sm:px-4 lg:px-6 py-3 z-50 relative [style='-webkit-app-region:drag;']">
+            {/* Left Logo & Title */}
+            <div className="flex-shrink-0 flex min-w-0 items-center gap-2.5 sm:gap-3.5">
+              <div className="relative flex h-11 w-11 sm:h-12 sm:w-12 lg:h-14 lg:w-14 items-center justify-center rounded-xl border border-white/5 bg-white/5 shrink-0">
+                <img
+                  src={`data:image/png;base64,${LOGO_BASE64}`}
+                  alt="Branding Logo"
+                  className="h-8 w-8 sm:h-9 sm:w-9 lg:h-10 lg:w-10 object-contain -[0_0_10px_rgba(234,179,8,0.45)] hover:scale-105 transition-all duration-300 cursor-pointer"
+                />
               </div>
 
-              {/* Center Navigation */}
-              <div className="self-start mt-2 sm:mt-2.5 lg:mt-3 flex items-start justify-center min-w-0 overflow-hidden [style='-webkit-app-region:no-drag;']">
-                <div className="w-full overflow-x-auto pb-3">
-                  <nav className="mx-auto flex w-max rounded-lg border border-[#27272a] bg-[#09090b] p-1">
-                    {(['casting', 'nano_cast', 'portrait', 'wardrobe', 'props', 'staging', 'veo'] as ViewMode[])
-                      .filter(mode => mode !== 'veo' || state.isStoryboardEnabled)
-                      .map(mode => (
-                        <button
-                          key={mode}
-                          onClick={() => dispatch({ type: 'SET_VIEW', payload: mode })}
-                          className={`px-2.5 sm:px-3 lg:px-4 py-1.5 rounded text-[9px] sm:text-[10px] lg:text-xs font-bold uppercase transition-all flex items-center gap-1 sm:gap-1.5 whitespace-nowrap ${state.view === mode ? 'bg-[#27272a] text-white ' : 'text-gray-500 hover:text-gray-300'}`}
-                        >
-                          {renderTabLabel(mode, state.view === mode)}
-                        </button>
-                      ))}
-                  </nav>
+              <div className="min-w-0 overflow-hidden">
+                <div className="flex items-center gap-1 sm:gap-1.5 overflow-hidden whitespace-nowrap font-black leading-none tracking-tight text-[clamp(1.15rem,1.85vw,2.3rem)]" role="heading" aria-level={1}>
+                  <span className="min-w-0 truncate text-white">CAST DIRECTOR</span>
+                  <span className="shrink-0 text-yellow-500">STUDIO</span>
+                </div>
+
+                <div className="mt-0.5 flex justify-end min-w-0 overflow-hidden">
+                  <span className="shrink-0 whitespace-nowrap text-[8px] sm:text-[9px] font-bold uppercase tracking-[0.2em] text-zinc-600">
+                    powered by <span className="text-zinc-500">Nanobanana 2</span>
+                  </span>
                 </div>
               </div>
+            </div>
 
-              {/* Right Settings & File Menu */}
-              <div className="self-start mt-2 sm:mt-2.5 lg:mt-3 flex items-start shrink-0 pr-1 [style='-webkit-app-region:no-drag;']">
-                <nav className="flex items-center rounded-lg border border-[#27272a] bg-[#09090b] p-1 gap-1">
+            {/* Center Navigation */}
+            <div className="flex-1 flex items-center justify-center min-w-0 [style='-webkit-app-region:no-drag;']">
+              <FramedPanel className="mx-auto" trackClassName="px-0.5 py-0.5 gap-0">
+                {(['casting', 'nano_cast', 'portrait', 'wardrobe', 'props', 'staging', 'veo'] as ViewMode[])
+                  .filter(mode => mode !== 'veo' || state.isStoryboardEnabled)
+                  .map(mode => (
+                    <button
+                      key={mode}
+                      onClick={() => dispatch({ type: 'SET_VIEW', payload: mode })}
+                      className={`bg-transparent border-none text-[11px] xl:text-[12px] font-semibold px-2 xl:px-2.5 py-1.5 rounded-md cursor-pointer transition-all duration-200 whitespace-nowrap ${state.view === mode ? 'text-white' : 'text-[#888] hover:text-[#ccc]'} focus:outline-none`}
+                    >
+                      {renderTabLabel(mode, state.view === mode)}
+                    </button>
+                  ))}
+              </FramedPanel>
+            </div>
+
+            {/* Right Settings & File Menu (Combined Unified Pill) */}
+            <div className="flex-shrink-0 flex items-center justify-end [style='-webkit-app-region:no-drag;']">
+              <FramedPanel className="scale-[0.80] origin-right lg:scale-90 pointer-events-auto">
+                
+                {/* Credits Segment */}
+                <div 
+                  className="flex items-center gap-3 px-1 cursor-help opacity-90 hover:opacity-100 transition-opacity"
+                  title={state.billingEntitlements.effectiveBillingMode === "hosted" ? `Hosted credits remaining: ${state.hostedCredits ?? "—"}` : "BYOK mode uses your own API key"}
+                >
+                  <span className="text-[#888] text-[12px] font-semibold tracking-[0.5px]">
+                    {state.billingEntitlements.effectiveBillingMode === "hosted" ? "HOSTED" : "BYOK"}
+                  </span>
+                  <div className="w-px h-[18px] bg-[#333]" />
+                  <span className="text-white text-[18px] font-semibold">
+                    {state.billingEntitlements.effectiveBillingMode === "byok" ? "—" : String(state.hostedCredits ?? "—")}
+                  </span>
+                </div>
+
+                <div className="w-px h-[18px] bg-[#333] mx-3" />
+
+                {/* Navigation Segment */}
+                <div className="flex items-center gap-1.5 h-full">
                   <FileMenu />
+                  
                   <button
                     onClick={() => {
-                        dispatch({ type: 'SET_HELP_SECTION', payload: 'start' });
-                        dispatch({ type: 'TOGGLE_HELP', payload: true });
+                      dispatch({ type: 'SET_HELP_SECTION', payload: 'start' });
+                      dispatch({ type: 'TOGGLE_HELP', payload: true });
                     }}
-                    className="px-2 lg:px-3 py-1.5 rounded text-[10px] lg:text-xs font-bold uppercase transition-all flex items-center justify-center text-gray-500 hover:text-yellow-500 hover:bg-yellow-500/10 focus:outline-none"
+                    className="flex items-center justify-center w-8 h-8 rounded-md text-[#888] hover:text-white hover:bg-white/5 transition-colors focus:outline-none"
                     title="Help & Guides"
                   >
-                    <HelpCircle className="w-4 h-4 shrink-0" />
+                    <HelpCircle className="w-[18px] h-[18px] shrink-0" />
                   </button>
+                  
                   <button
                     onClick={() => setShowSettings(true)}
-                    className="px-2 lg:px-3 py-1.5 rounded text-[10px] lg:text-xs font-bold uppercase transition-all flex items-center justify-center text-gray-500 hover:text-gray-300 hover:bg-white/5 focus:outline-none"
+                    className="flex items-center justify-center w-8 h-8 rounded-md text-[#888] hover:text-white hover:bg-white/5 transition-colors focus:outline-none"
                     title="Settings"
                   >
-                    <Settings className="w-4 h-4 shrink-0" />
+                    <Settings className="w-[18px] h-[18px] shrink-0" />
                   </button>
-                </nav>
-              </div>
-            </header>
-            {/* Main Content Area */}
-            <main className="relative flex-1 min-h-0 overflow-hidden">
-              {state.view === 'casting' && <CastingForge />}
-              {state.view === 'nano_cast' && <NanoCastingDirector />}
-              {state.view === 'portrait' && <PortraitStudio />}
-              {state.view === 'wardrobe' && <WardrobeStudio />}
-              {state.view === 'props' && <PropAccessoryStudio />}
-              {state.view === 'staging' && <SceneCanvas />}
-              {state.view === 'veo' && <VeoPromptStudio />}
-            </main>
-
-            {/* Cinematic Loading Overlay */}
-            {state.isProcessing && <NanobananaThinking />}
-
-            <AppCloseDialog
-              isOpen={showAppCloseDialog}
-              onClose={() => setShowAppCloseDialog(false)}
-              onSave={handleSaveClose}
-              onDiscard={performDiscardSession}
-            />
-
-            <ImageInspector />
-
-            <HelpCenterDrawer />
-            <WelcomeModal />
-
-            {/* Footer / Logs */}
-            <footer className="border-t border-[#27272a] bg-black px-3 sm:px-4 py-2 text-[10px] font-mono">
-              <div className="flex min-w-0 flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-gray-500">
-                  <span>ARCH: REACT_SPA</span>
-                  <span>MODE: {state.apiKey ? 'PRO (API ACTIVE)' : 'DEMO (SIMULATION)'}</span>
-                  {state.sessionName && (
-                    <span className="text-yellow-500 font-bold uppercase tracking-widest border-l border-[#27272a] pl-4 ml-2">
-                      SESSION: {state.sessionName}
-                    </span>
-                  )}
                 </div>
-                <div className="min-w-0 flex items-center gap-2 sm:justify-end">
-                  {state.backgroundJobs.filter(j => j.status === 'pending_background').length > 0 && (
-                      <div className="flex items-center gap-2 px-3 py-1 rounded bg-blue-500/10 text-blue-400 font-bold border border-blue-500/20 mr-2 shrink-0">
-                        <Clapperboard className="w-3 h-3 animate-pulse" />
-                        {state.backgroundJobs.filter(j => j.status === 'pending_background').length} hosted render still processing
-                      </div>
-                  )}
-                  {state.logs.length > 0 && (
-                    <span
-                      className={`block max-w-full truncate ${state.logs[state.logs.length - 1].type === 'error' ? 'text-red-500' : 'text-green-500'}`}
-                      title={state.logs[state.logs.length - 1].message}
-                    >
-                      {state.logs[state.logs.length - 1].message}
-                    </span>
-                  )}
-                </div>
-              </div>
-            </footer>
 
-            {/* Settings Modal */}
-            {
-              showSettings && (
-                <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[4000] flex items-center justify-center p-3 sm:p-6">
-                  <div className="bg-[#18181b] border border-gray-700 p-4 sm:p-6 rounded-xl w-full max-w-2xl max-h-[90dvh] overflow-y-auto animate-in fade-in zoom-in duration-200">
-                    <h2 className="text-lg font-bold text-white mb-4">Configuration</h2>
-                    <div className="space-y-4">
-                      {/* BILLING MODE & ENTITLEMENTS */}
-                      {import.meta.env.DEV ? (
-                        <>
-                          <div>
-                            <label className="block text-xs font-bold text-gray-400 uppercase mb-2 tracking-wider">Billing & Generation Mode (DEV OVERRIDE)</label>
-                            <div className="grid grid-cols-2 gap-2">
-                              <button
-                                onClick={() => setTempBillingMode('hosted')}
-                                className={`p-3 rounded-lg border transition-all text-left ${tempBillingMode === 'hosted' ? 'bg-blue-500/10 border-blue-500 ' : 'bg-[#09090b] border-[#27272a] hover:border-gray-600'}`}
-                              >
-                                <span className={`text-xs font-bold ${tempBillingMode === 'hosted' ? 'text-blue-500' : 'text-gray-200'}`}>Hosted Cloud</span>
-                                <p className="text-[10px] text-gray-500 mt-1">Uses secure Edge proxy and shared quota.</p>
-                              </button>
-                              <button
-                                onClick={() => setTempBillingMode('byok')}
-                                className={`p-3 rounded-lg border transition-all text-left ${tempBillingMode === 'byok' ? 'bg-yellow-500/10 border-yellow-500 ' : 'bg-[#09090b] border-[#27272a] hover:border-gray-600'}`}
-                              >
-                                <span className={`text-xs font-bold ${tempBillingMode === 'byok' ? 'text-yellow-500' : 'text-gray-200'}`}>Bring Your Own Key</span>
-                                <p className="text-[10px] text-gray-500 mt-1">Direct API requests using your local key.</p>
-                              </button>
-                            </div>
+              </FramedPanel>
+            </div>
+          </header>
+          {/* Main Content Area */}
+          <main className="relative flex-1 min-h-0 overflow-hidden">
+            {state.view === 'casting' && <CastingForge />}
+            {state.view === 'nano_cast' && <NanoCastingDirector />}
+            {state.view === 'portrait' && <PortraitStudio />}
+            {state.view === 'wardrobe' && <WardrobeStudio />}
+            {state.view === 'props' && <PropAccessoryStudio />}
+            {state.view === 'staging' && <SceneCanvas />}
+            {state.view === 'veo' && <VeoPromptStudio />}
+          </main>
+
+          {/* Cinematic Loading Overlay */}
+          {state.isProcessing && <NanobananaThinking />}
+
+          <AppCloseDialog
+            isOpen={showAppCloseDialog}
+            onClose={() => setShowAppCloseDialog(false)}
+            onSave={handleSaveClose}
+            onDiscard={performDiscardSession}
+          />
+
+          <ImageInspector />
+
+          <HelpCenterDrawer />
+          <WelcomeModal />
+          <CreditExhaustedModal />
+
+          {/* Footer / Logs */}
+          <footer className="border-t border-[#27272a] bg-black px-3 sm:px-4 py-2 text-[10px] font-mono">
+            <div className="flex min-w-0 flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-gray-500">
+                <span>ARCH: REACT_SPA</span>
+                <span>MODE: {state.apiKey ? 'PRO (API ACTIVE)' : 'DEMO (SIMULATION)'}</span>
+                {state.sessionName && (
+                  <span className="text-yellow-500 font-bold uppercase tracking-widest border-l border-[#27272a] pl-4 ml-2">
+                    SESSION: {state.sessionName}
+                  </span>
+                )}
+              </div>
+              <div className="min-w-0 flex items-center gap-2 sm:justify-end">
+                {state.backgroundJobs.filter(j => j.status === 'pending_background').length > 0 && (
+                  <div className="flex items-center gap-2 px-3 py-1 rounded bg-blue-500/10 text-blue-400 font-bold border border-blue-500/20 mr-2 shrink-0">
+                    <Clapperboard className="w-3 h-3 animate-pulse" />
+                    {state.backgroundJobs.filter(j => j.status === 'pending_background').length} hosted render still processing
+                  </div>
+                )}
+                {state.liveStatus && (
+                  <span
+                    className={`block max-w-full truncate ${state.liveStatus.type === 'error' ? 'text-red-500' : state.liveStatus.type === 'success' ? 'text-emerald-500' : 'text-blue-400'}`}
+                    title={state.liveStatus.text}
+                  >
+                    {state.liveStatus.text}
+                  </span>
+                )}
+              </div>
+            </div>
+          </footer>
+
+          {/* Settings Modal */}
+          {
+            showSettings && (
+              <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[4000] flex items-center justify-center p-3 sm:p-6">
+                <div className="bg-[#18181b] border border-gray-700 p-4 sm:p-6 rounded-xl w-full max-w-2xl max-h-[90dvh] overflow-y-auto animate-in fade-in zoom-in duration-200">
+                  <h2 className="text-lg font-bold text-white mb-4">Configuration</h2>
+                  <div className="space-y-4">
+                    {/* BILLING MODE & ENTITLEMENTS */}
+                    {import.meta.env.DEV ? (
+                      <>
+                        <div>
+                          <label className="block text-xs font-bold text-gray-400 uppercase mb-2 tracking-wider">Billing & Generation Mode (DEV OVERRIDE)</label>
+                          <div className="grid grid-cols-2 gap-2">
+                            <button
+                              onClick={() => setTempBillingMode('hosted')}
+                              className={`p-3 rounded-lg border transition-all text-left ${tempBillingMode === 'hosted' ? 'bg-blue-500/10 border-blue-500 ' : 'bg-[#09090b] border-[#27272a] hover:border-gray-600'}`}
+                            >
+                              <span className={`text-xs font-bold ${tempBillingMode === 'hosted' ? 'text-blue-500' : 'text-gray-200'}`}>Hosted Cloud</span>
+                              <p className="text-[10px] text-gray-500 mt-1">Uses secure Edge proxy and shared quota.</p>
+                            </button>
+                            <button
+                              onClick={() => setTempBillingMode('byok')}
+                              className={`p-3 rounded-lg border transition-all text-left ${tempBillingMode === 'byok' ? 'bg-yellow-500/10 border-yellow-500 ' : 'bg-[#09090b] border-[#27272a] hover:border-gray-600'}`}
+                            >
+                              <span className={`text-xs font-bold ${tempBillingMode === 'byok' ? 'text-yellow-500' : 'text-gray-200'}`}>Bring Your Own Key</span>
+                              <p className="text-[10px] text-gray-500 mt-1">Direct API requests using your local key.</p>
+                            </button>
                           </div>
-
-                          {tempBillingMode === 'byok' && (
-                            <div>
-                              <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Gemini API Key</label>
-                              <input
-                                type="password"
-                                className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-yellow-500 focus:outline-none"
-                                placeholder="AIzaSy..."
-                                value={tempKey}
-                                onChange={(e) => setTempKey(e.target.value)}
-                              />
-                              <p className="text-[10px] text-gray-500 mt-2">
-                                Required for BYOK Service Layer to connect directly to Google Cloud. 
-                              </p>
-                            </div>
-                          )}
-
-                          {tempBillingMode === 'hosted' && (
-                            <div className="p-4 bg-black/40 border border-[#27272a] rounded-lg">
-                              <label className="block text-xs font-bold text-blue-500 uppercase mb-2">Hosted Cloud Authentication</label>
-                              {state.hostedSession ? (
-                                <div className="flex items-center justify-between">
-                                  <div>
-                                    <p className="text-sm text-white">{state.hostedSession.user?.email}</p>
-                                    <p className="text-[10px] text-emerald-500 font-mono">Authenticated ✓</p>
-                                  </div>
-                                  <button onClick={handleSignOut} disabled={isAuthLoading} className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white rounded text-xs font-bold transition-colors">
-                                    {isAuthLoading ? 'Signing out...' : 'Sign Out'}
-                                  </button>
-                                </div>
-                              ) : (
-                                <div className="space-y-3">
-                                   <input type="email" value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} placeholder="Email account" className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-blue-500 focus:outline-none" />
-                                   <input type="password" value={authPass} onChange={(e) => setAuthPass(e.target.value)} placeholder="Password" className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-blue-500 focus:outline-none" />
-                                   <button onClick={handleSignIn} disabled={isAuthLoading || !authEmail || !authPass} className="w-full py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded text-sm font-bold transition-colors">
-                                     {isAuthLoading ? 'Authenticating...' : 'Sign In'}
-                                   </button>
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </>
-                      ) : (
-                        <div className="space-y-4">
-                           <div>
-                             <label className="block text-xs font-bold text-gray-400 uppercase mb-2 tracking-wider">Active Entitlement</label>
-                             {state.billingEntitlements.effectiveBillingMode === 'hosted' ? (
-                               <div className="p-4 rounded-lg border border-blue-500/50 bg-blue-500/10 text-blue-400">
-                                  <span className="font-bold text-sm block mb-1">Hosted Cloud</span>
-                                  <span className="text-xs">Your generation requests are routed securely through our Edge cloud using your active subscription.</span>
-                               </div>
-                             ) : state.billingEntitlements.effectiveBillingMode === 'byok' ? (
-                               <div className="p-4 rounded-lg border border-yellow-500/50 bg-yellow-500/10 text-yellow-500">
-                                  <span className="font-bold text-sm block mb-1">Bring Your Own Key</span>
-                                  <span className="text-xs">You are using your own local Gemini API credentials for generation.</span>
-                               </div>
-                             ) : (
-                               <div className="p-4 rounded-lg border border-red-500/50 bg-red-500/10 text-red-500">
-                                  <span className="font-bold text-sm block mb-1">No Active Entitlement</span>
-                                  <span className="text-xs">No active generation entitlement found. Please sign in to a Hosted account or activate a BYOK license.</span>
-                               </div>
-                             )}
-                           </div>
-                           
-                           {state.billingEntitlements.hasByokAccess && (
-                             <div>
-                               <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Gemini API Key</label>
-                               <input
-                                 type="password"
-                                 className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-yellow-500 focus:outline-none"
-                                 placeholder="AIzaSy..."
-                                 value={tempKey}
-                                 onChange={(e) => setTempKey(e.target.value)}
-                               />
-                               <p className="text-[10px] text-gray-500 mt-2">
-                                 Required for BYOK Service Layer to connect directly to Google Cloud. 
-                               </p>
-                             </div>
-                           )}
-
-                           {!state.billingEntitlements.hasHostedAccess && state.billingEntitlements.hasByokAccess ? (
-                             <div className="p-4 bg-[#09090b] border border-[#27272a] rounded-lg">
-                               <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Hosted Cloud</label>
-                               <p className="text-[10px] text-gray-400">
-                                 Your current entitlement is Bring Your Own Key. Hosted Cloud access is not active on this account.<br/><br/>
-                                 Sign in with a Hosted-enabled account or upgrade to use cloud generation.
-                               </p>
-                             </div>
-                           ) : (
-                             <div className="p-4 bg-black/40 border border-[#27272a] rounded-lg">
-                               <label className="block text-xs font-bold text-blue-500 uppercase mb-2">
-                                 {!state.billingEntitlements.hasHostedAccess && !state.billingEntitlements.hasByokAccess ? 'Hosted Cloud Access' : 'Hosted Cloud Authentication'}
-                               </label>
-                               {!state.billingEntitlements.hasHostedAccess && !state.billingEntitlements.hasByokAccess && (
-                                 <p className="text-[10px] text-gray-400 mb-3">Sign in with a Hosted-enabled account to use cloud generation.</p>
-                               )}
-                               {state.hostedSession ? (
-                                 <div className="flex items-center justify-between">
-                                   <div>
-                                     <p className="text-sm text-white">{state.hostedSession.user?.email}</p>
-                                     <p className="text-[10px] text-emerald-500 font-mono">Authenticated ✓</p>
-                                   </div>
-                                   <button onClick={handleSignOut} disabled={isAuthLoading} className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white rounded text-xs font-bold transition-colors">
-                                     {isAuthLoading ? 'Signing out...' : 'Sign Out'}
-                                   </button>
-                                 </div>
-                               ) : (
-                                 <div className="space-y-3">
-                                    <input type="email" value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} placeholder="Email account" className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-blue-500 focus:outline-none" />
-                                    <input type="password" value={authPass} onChange={(e) => setAuthPass(e.target.value)} placeholder="Password" className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-blue-500 focus:outline-none" />
-                                    <button onClick={handleSignIn} disabled={isAuthLoading || !authEmail || !authPass} className="w-full py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded text-sm font-bold transition-colors">
-                                      {isAuthLoading ? 'Authenticating...' : 'Sign In'}
-                                    </button>
-                                 </div>
-                               )}
-                             </div>
-                           )}
                         </div>
-                      )}
-                      <div>
-                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Render Save Folder</label>
-                        <div className="flex flex-col sm:flex-row gap-2">
+
+                        {tempBillingMode === 'byok' && (
+                          <div>
+                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Gemini API Key</label>
+                            <input
+                              type="password"
+                              className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-yellow-500 focus:outline-none"
+                              placeholder="AIzaSy..."
+                              value={tempKey}
+                              onChange={(e) => setTempKey(e.target.value)}
+                            />
+                            <p className="text-[10px] text-gray-500 mt-2">
+                              Required for BYOK Service Layer to connect directly to Google Cloud.
+                            </p>
+                          </div>
+                        )}
+
+                        {tempBillingMode === 'hosted' && (
+                          <div className="p-4 bg-black/40 border border-[#27272a] rounded-lg">
+                            <label className="block text-xs font-bold text-blue-500 uppercase mb-2">Hosted Cloud Authentication</label>
+                            {state.hostedSession ? (
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <p className="text-sm text-white">{state.hostedSession.user?.email}</p>
+                                  <p className="text-[10px] text-emerald-500 font-mono">Authenticated ✓</p>
+                                </div>
+                                <button onClick={handleSignOut} disabled={isAuthLoading} className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white rounded text-xs font-bold transition-colors">
+                                  {isAuthLoading ? 'Signing out...' : 'Sign Out'}
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="space-y-3">
+                                <input type="email" value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} placeholder="Email account" className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-blue-500 focus:outline-none" />
+                                <input type="password" value={authPass} onChange={(e) => setAuthPass(e.target.value)} placeholder="Password" className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-blue-500 focus:outline-none" />
+                                <button onClick={handleSignIn} disabled={isAuthLoading || !authEmail || !authPass} className="w-full py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded text-sm font-bold transition-colors">
+                                  {isAuthLoading ? 'Authenticating...' : 'Sign In'}
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <div className="space-y-4">
+                        <div>
+                          <label className="block text-xs font-bold text-gray-400 uppercase mb-2 tracking-wider">Active Entitlement</label>
+                          {state.billingEntitlements.effectiveBillingMode === 'hosted' ? (
+                            <div className="p-4 rounded-lg border border-blue-500/50 bg-blue-500/10 text-blue-400">
+                              <span className="font-bold text-sm block mb-1">Hosted Cloud</span>
+                              <span className="text-xs">Your generation requests are routed securely through our Edge cloud using your active subscription.</span>
+                            </div>
+                          ) : state.billingEntitlements.effectiveBillingMode === 'byok' ? (
+                            <div className="p-4 rounded-lg border border-yellow-500/50 bg-yellow-500/10 text-yellow-500">
+                              <span className="font-bold text-sm block mb-1">Bring Your Own Key</span>
+                              <span className="text-xs">You are using your own local Gemini API credentials for generation.</span>
+                            </div>
+                          ) : (
+                            <div className="p-4 rounded-lg border border-red-500/50 bg-red-500/10 text-red-500">
+                              <span className="font-bold text-sm block mb-1">No Active Entitlement</span>
+                              <span className="text-xs">No active generation entitlement found. Please sign in to a Hosted account or activate a BYOK license.</span>
+                            </div>
+                          )}
+                        </div>
+
+                        {state.billingEntitlements.hasByokAccess && (
+                          <div>
+                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Gemini API Key</label>
+                            <input
+                              type="password"
+                              className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-yellow-500 focus:outline-none"
+                              placeholder="AIzaSy..."
+                              value={tempKey}
+                              onChange={(e) => setTempKey(e.target.value)}
+                            />
+                            <p className="text-[10px] text-gray-500 mt-2">
+                              Required for BYOK Service Layer to connect directly to Google Cloud.
+                            </p>
+                          </div>
+                        )}
+
+                        {!state.billingEntitlements.hasHostedAccess && state.billingEntitlements.hasByokAccess ? (
+                          <div className="p-4 bg-[#09090b] border border-[#27272a] rounded-lg">
+                            <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Hosted Cloud</label>
+                            <p className="text-[10px] text-gray-400">
+                              Your current entitlement is Bring Your Own Key. Hosted Cloud access is not active on this account.<br /><br />
+                              Sign in with a Hosted-enabled account or upgrade to use cloud generation.
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="p-4 bg-black/40 border border-[#27272a] rounded-lg">
+                            <label className="block text-xs font-bold text-blue-500 uppercase mb-2">
+                              {!state.billingEntitlements.hasHostedAccess && !state.billingEntitlements.hasByokAccess ? 'Hosted Cloud Access' : 'Hosted Cloud Authentication'}
+                            </label>
+                            {!state.billingEntitlements.hasHostedAccess && !state.billingEntitlements.hasByokAccess && (
+                              <p className="text-[10px] text-gray-400 mb-3">Sign in with a Hosted-enabled account to use cloud generation.</p>
+                            )}
+                            {state.hostedSession ? (
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <p className="text-sm text-white">{state.hostedSession.user?.email}</p>
+                                  <p className="text-[10px] text-emerald-500 font-mono">Authenticated ✓</p>
+                                </div>
+                                <button onClick={handleSignOut} disabled={isAuthLoading} className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white rounded text-xs font-bold transition-colors">
+                                  {isAuthLoading ? 'Signing out...' : 'Sign Out'}
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="space-y-3">
+                                <input type="email" value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} placeholder="Email account" className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-blue-500 focus:outline-none" />
+                                <input type="password" value={authPass} onChange={(e) => setAuthPass(e.target.value)} placeholder="Password" className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-blue-500 focus:outline-none" />
+                                <button onClick={handleSignIn} disabled={isAuthLoading || !authEmail || !authPass} className="w-full py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded text-sm font-bold transition-colors">
+                                  {isAuthLoading ? 'Authenticating...' : 'Sign In'}
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    <div>
+                      <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Render Save Folder</label>
+                      <div className="flex flex-col sm:flex-row gap-2">
+                        <button
+                          onClick={async () => {
+                            try {
+                              // NATIVE ELECTRON MODE
+                              if (window.electronAPI) {
+                                const path = await window.electronAPI.selectFolder();
+                                if (path) {
+                                  dispatch({ type: 'SET_SAVE_PATH', payload: path });
+                                  dispatch({ type: 'ADD_LOG', payload: { message: `Save path set: ${path}`, type: 'success' } });
+                                }
+                                return;
+                              }
+
+                              // WEB MODE
+                              console.log("Requesting directory handle...");
+                              const handle = await (window as any).showDirectoryPicker();
+                              console.log("Directory handle received:", handle);
+                              dispatch({ type: 'SET_SAVE_DIRECTORY', payload: handle });
+                              await StorageService.save('nano_save_handle', handle);
+                              dispatch({ type: 'ADD_LOG', payload: { message: `Save folder set: ${handle.name}`, type: 'success' } });
+                            } catch (e: any) {
+                              console.error("Directory picker error:", e);
+                              if (e.name !== 'AbortError') {
+                                dispatch({ type: 'ADD_LOG', payload: { message: `Failed to set folder: ${e.message}`, type: 'error' } });
+                              }
+                            }
+                          }}
+                          className="min-w-0 flex-1 truncate bg-gray-800 hover:bg-gray-700 text-left text-white px-3 py-2 rounded text-xs font-bold transition-colors border border-gray-700"
+                        >
+                          {state.saveDirectoryPath
+                            ? `Folder: ...${state.saveDirectoryPath.split(/[/\\]/).pop()}`
+                            : state.saveDirectoryHandle
+                              ? `Folder: ${state.saveDirectoryHandle.name}`
+                              : 'Choose Save Folder...'}
+                        </button>
+                        {(state.saveDirectoryHandle || state.saveDirectoryPath) && (
                           <button
                             onClick={async () => {
-                              try {
-                                // NATIVE ELECTRON MODE
-                                if (window.electronAPI) {
-                                  const path = await window.electronAPI.selectFolder();
-                                  if (path) {
-                                    dispatch({ type: 'SET_SAVE_PATH', payload: path });
-                                    dispatch({ type: 'ADD_LOG', payload: { message: `Save path set: ${path}`, type: 'success' } });
-                                  }
-                                  return;
-                                }
-
-                                // WEB MODE
-                                console.log("Requesting directory handle...");
-                                const handle = await (window as any).showDirectoryPicker();
-                                console.log("Directory handle received:", handle);
-                                dispatch({ type: 'SET_SAVE_DIRECTORY', payload: handle });
-                                await StorageService.save('nano_save_handle', handle);
-                                dispatch({ type: 'ADD_LOG', payload: { message: `Save folder set: ${handle.name}`, type: 'success' } });
-                              } catch (e: any) {
-                                console.error("Directory picker error:", e);
-                                if (e.name !== 'AbortError') {
-                                  dispatch({ type: 'ADD_LOG', payload: { message: `Failed to set folder: ${e.message}`, type: 'error' } });
-                                }
-                              }
+                              dispatch({ type: 'SET_SAVE_DIRECTORY', payload: null });
+                              dispatch({ type: 'SET_SAVE_PATH', payload: null });
+                              await StorageService.remove('nano_save_handle');
+                              localStorage.removeItem('nano_save_path');
                             }}
-                            className="min-w-0 flex-1 truncate bg-gray-800 hover:bg-gray-700 text-left text-white px-3 py-2 rounded text-xs font-bold transition-colors border border-gray-700"
+                            className="bg-red-500/10 hover:bg-red-500/20 text-red-500 px-3 py-2 rounded text-xs transition-colors border border-red-500/30"
+                            title="Reset folder (use browser downloads)"
                           >
-                            {state.saveDirectoryPath
-                              ? `Folder: ...${state.saveDirectoryPath.split(/[/\\]/).pop()}`
-                              : state.saveDirectoryHandle
-                                ? `Folder: ${state.saveDirectoryHandle.name}`
-                                : 'Choose Save Folder...'}
+                            <X className="w-4 h-4" />
                           </button>
-                          {(state.saveDirectoryHandle || state.saveDirectoryPath) && (
-                            <button
-                              onClick={async () => {
-                                dispatch({ type: 'SET_SAVE_DIRECTORY', payload: null });
-                                dispatch({ type: 'SET_SAVE_PATH', payload: null });
-                                await StorageService.remove('nano_save_handle');
-                                localStorage.removeItem('nano_save_path');
-                              }}
-                              className="bg-red-500/10 hover:bg-red-500/20 text-red-500 px-3 py-2 rounded text-xs transition-colors border border-red-500/30"
-                              title="Reset folder (use browser downloads)"
-                            >
-                              <X className="w-4 h-4" />
-                            </button>
-                          )}
+                        )}
+                      </div>
+                      <p className="text-[10px] text-gray-500 mt-2">
+                        When set, rendered photos will save directly to this location.
+                      </p>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-gray-400 uppercase mb-2 tracking-wider">Active Engine</label>
+                      <div className="grid grid-cols-1 gap-2">
+                        {[
+                          { id: 'gemini-2.5-flash-image', name: 'Gemini 2.5 Flash (Image)', desc: 'Lightning fast multi-modal image generation (Recommended)' },
+                          { id: 'gemini-3.1-flash-image-preview', name: 'Gemini 3.1 Flash (Preview)', desc: 'Reasoning-capable 4k model (Requires proper billing quota)' },
+                          { id: 'imagen-4.0-generate-001', name: 'Imagen 4.0', desc: 'Text-to-image focus' }
+                        ].map(m => (
+                          <button
+                            key={m.id}
+                            onClick={() => setTempModel(m.id as any)}
+                            className={`text-left p-3 rounded-lg border transition-all ${tempModel === m.id ? 'bg-yellow-500/10 border-yellow-500 ' : 'bg-[#09090b] border-[#27272a] hover:border-gray-600'}`}
+                          >
+                            <div className="flex justify-between items-center mb-1">
+                              <span className={`text-xs font-bold ${tempModel === m.id ? 'text-yellow-500' : 'text-gray-200'}`}>{m.name}</span>
+                              {tempModel === m.id && <div className="w-2 h-2 rounded-full bg-yellow-500 -[0_0_8px_rgba(234,179,8,0.6)]"></div>}
+                            </div>
+                            <p className="text-[10px] text-gray-500">{m.desc}</p>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="pt-2 border-t border-white/5 space-y-4">
+                      <div className="flex items-start justify-between gap-4">
+                        <label className="text-xs font-bold text-gray-500 uppercase">Show Help Hints</label>
+                        <button
+                          onClick={() => dispatch({ type: 'SET_SHOW_HELP_HINTS', payload: !state.showHelpHints })}
+                          className={`shrink-0 relative inline-flex h-5 w-9 items-center rounded-full transition-colors`}
+                          style={{ backgroundColor: state.showHelpHints ? '#eab308' : '#52525b' }}
+                        >
+                          <span
+                            className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${state.showHelpHints ? 'translate-x-5' : 'translate-x-1'}`}
+                          />
+                        </button>
+                      </div>
+
+                      {/* GEMINI 3.1 OPTIMIZATIONS */}
+                      <div>
+                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Image Resolution (Gemini 3.1)</label>
+                        <select
+                          className="w-full bg-[#09090b] border border-[#27272a] rounded px-2 py-1.5 text-xs text-white focus:border-yellow-500 outline-none"
+                          value={state.imageResolution}
+                          onChange={(e) => dispatch({ type: 'SET_IMAGE_RESOLUTION', payload: e.target.value as '1K' | '2K' | '4K' })}
+                        >
+                          <option value="1K">1K (Fastest)</option>
+                          <option value="2K">2K (High Quality)</option>
+                          <option value="4K">4K (Ultra HD - Slow)</option>
+                        </select>
+                      </div>
+
+                      <div className="flex items-start justify-between gap-4 pt-2">
+                        <div>
+                          <label className="block text-xs font-bold text-gray-500 uppercase">Thinking Mode (Gemini 3.1)</label>
+                          <p className="text-[9px] text-gray-500">Improves prompt adherence at the cost of speed.</p>
                         </div>
-                        <p className="text-[10px] text-gray-500 mt-2">
-                          When set, rendered photos will save directly to this location.
+                        <button
+                          onClick={() => dispatch({ type: 'SET_ENABLE_IMAGE_THINKING', payload: !state.enableImageThinking })}
+                          className={`shrink-0 relative inline-flex h-5 w-9 items-center rounded-full transition-colors`}
+                          style={{ backgroundColor: state.enableImageThinking ? '#3b82f6' : '#52525b' }}
+                        >
+                          <span
+                            className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${state.enableImageThinking ? 'translate-x-5' : 'translate-x-1'}`}
+                          />
+                        </button>
+                      </div>
+                      <div className="flex items-start justify-between gap-4 pt-2">
+                        <div>
+                          <label className="block text-xs font-bold text-gray-500 uppercase">Google Image Search Grounding</label>
+                          <p className="text-[9px] text-gray-500">Enable Google Search grounding for increased accuracy.</p>
+                        </div>
+                        <button
+                          onClick={() => dispatch({ type: 'SET_ENABLE_GOOGLE_GROUNDING', payload: !state.enableGoogleGrounding })}
+                          className={`shrink-0 relative inline-flex h-5 w-9 items-center rounded-full transition-colors`}
+                          style={{ backgroundColor: state.enableGoogleGrounding ? '#10b981' : '#52525b' }} // Emerald
+                        >
+                          <span
+                            className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${state.enableGoogleGrounding ? 'translate-x-5' : 'translate-x-1'}`}
+                          />
+                        </button>
+                      </div>
+
+                      {/* VEO STORYBOARD TOGGLE */}
+                      <div className="pt-4 mt-2 border-t border-white/5">
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                            <label className="text-xs font-bold text-gray-500 uppercase">Enable Storyboard (Veo 3.1)</label>
+                            <span className="text-[9px] font-black uppercase tracking-wider text-yellow-500 border border-yellow-500/20 bg-yellow-500/10 px-1.5 py-0.5 rounded-sm">Experimental</span>
+                          </div>
+                          <button
+                            onClick={() => dispatch({ type: 'SET_STORYBOARD_ENABLED', payload: !state.isStoryboardEnabled })}
+                            className={`shrink-0 relative inline-flex h-5 w-9 items-center rounded-full transition-colors`}
+                            style={{ backgroundColor: state.isStoryboardEnabled ? '#eab308' : '#52525b' }}
+                          >
+                            <span
+                              className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${state.isStoryboardEnabled ? 'translate-x-5' : 'translate-x-1'}`}
+                            />
+                          </button>
+                        </div>
+                        <p className="text-[10px] text-gray-500 mt-1">
+                          Unlocks the Storyboard interface for early-access creative exploration. This feature is still evolving and is best used for testing, concept development, and selective workflows.
                         </p>
                       </div>
-                      <div>
-                        <label className="block text-xs font-bold text-gray-400 uppercase mb-2 tracking-wider">Active Engine</label>
-                        <div className="grid grid-cols-1 gap-2">
-                          {[
-                            { id: 'gemini-2.5-flash-image', name: 'Gemini 2.5 Flash (Image)', desc: 'Lightning fast multi-modal image generation (Recommended)' },
-                            { id: 'gemini-3.1-flash-image-preview', name: 'Gemini 3.1 Flash (Preview)', desc: 'Reasoning-capable 4k model (Requires proper billing quota)' },
-                            { id: 'imagen-4.0-generate-001', name: 'Imagen 4.0', desc: 'Text-to-image focus' }
-                          ].map(m => (
-                            <button
-                              key={m.id}
-                              onClick={() => setTempModel(m.id as any)}
-                              className={`text-left p-3 rounded-lg border transition-all ${tempModel === m.id ? 'bg-yellow-500/10 border-yellow-500 ' : 'bg-[#09090b] border-[#27272a] hover:border-gray-600'}`}
-                            >
-                              <div className="flex justify-between items-center mb-1">
-                                <span className={`text-xs font-bold ${tempModel === m.id ? 'text-yellow-500' : 'text-gray-200'}`}>{m.name}</span>
-                                {tempModel === m.id && <div className="w-2 h-2 rounded-full bg-yellow-500 -[0_0_8px_rgba(234,179,8,0.6)]"></div>}
-                              </div>
-                              <p className="text-[10px] text-gray-500">{m.desc}</p>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
+                    </div>
 
-                      <div className="pt-2 border-t border-white/5 space-y-4">
-                        <div className="flex items-start justify-between gap-4">
-                          <label className="text-xs font-bold text-gray-500 uppercase">Show Help Hints</label>
-                          <button
-                            onClick={() => dispatch({ type: 'SET_SHOW_HELP_HINTS', payload: !state.showHelpHints })}
-                            className={`shrink-0 relative inline-flex h-5 w-9 items-center rounded-full transition-colors`}
-                            style={{ backgroundColor: state.showHelpHints ? '#eab308' : '#52525b' }}
-                          >
-                            <span
-                              className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${state.showHelpHints ? 'translate-x-5' : 'translate-x-1'}`}
-                            />
-                          </button>
-                        </div>
-
-                        {/* GEMINI 3.1 OPTIMIZATIONS */}
-                        <div>
-                          <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Image Resolution (Gemini 3.1)</label>
-                          <select
-                            className="w-full bg-[#09090b] border border-[#27272a] rounded px-2 py-1.5 text-xs text-white focus:border-yellow-500 outline-none"
-                            value={state.imageResolution}
-                            onChange={(e) => dispatch({ type: 'SET_IMAGE_RESOLUTION', payload: e.target.value as '1K' | '2K' | '4K' })}
-                          >
-                            <option value="1K">1K (Fastest)</option>
-                            <option value="2K">2K (High Quality)</option>
-                            <option value="4K">4K (Ultra HD - Slow)</option>
-                          </select>
-                        </div>
-
-                        <div className="flex items-start justify-between gap-4 pt-2">
-                          <div>
-                            <label className="block text-xs font-bold text-gray-500 uppercase">Thinking Mode (Gemini 3.1)</label>
-                            <p className="text-[9px] text-gray-500">Improves prompt adherence at the cost of speed.</p>
-                          </div>
-                          <button
-                            onClick={() => dispatch({ type: 'SET_ENABLE_IMAGE_THINKING', payload: !state.enableImageThinking })}
-                            className={`shrink-0 relative inline-flex h-5 w-9 items-center rounded-full transition-colors`}
-                            style={{ backgroundColor: state.enableImageThinking ? '#3b82f6' : '#52525b' }}
-                          >
-                            <span
-                              className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${state.enableImageThinking ? 'translate-x-5' : 'translate-x-1'}`}
-                            />
-                          </button>
-                        </div>
-                        <div className="flex items-start justify-between gap-4 pt-2">
-                          <div>
-                            <label className="block text-xs font-bold text-gray-500 uppercase">Google Image Search Grounding</label>
-                            <p className="text-[9px] text-gray-500">Enable Google Search grounding for increased accuracy.</p>
-                          </div>
-                          <button
-                            onClick={() => dispatch({ type: 'SET_ENABLE_GOOGLE_GROUNDING', payload: !state.enableGoogleGrounding })}
-                            className={`shrink-0 relative inline-flex h-5 w-9 items-center rounded-full transition-colors`}
-                            style={{ backgroundColor: state.enableGoogleGrounding ? '#10b981' : '#52525b' }} // Emerald
-                          >
-                            <span
-                              className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${state.enableGoogleGrounding ? 'translate-x-5' : 'translate-x-1'}`}
-                            />
-                          </button>
-                        </div>
-
-                        {/* VEO STORYBOARD TOGGLE */}
-                        <div className="pt-4 mt-2 border-t border-white/5">
-                          <div className="flex items-start justify-between gap-4">
-                            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-                              <label className="text-xs font-bold text-gray-500 uppercase">Enable Storyboard (Veo 3.1)</label>
-                              <span className="text-[9px] font-black uppercase tracking-wider text-yellow-500 border border-yellow-500/20 bg-yellow-500/10 px-1.5 py-0.5 rounded-sm">Experimental</span>
-                            </div>
-                            <button
-                              onClick={() => dispatch({ type: 'SET_STORYBOARD_ENABLED', payload: !state.isStoryboardEnabled })}
-                              className={`shrink-0 relative inline-flex h-5 w-9 items-center rounded-full transition-colors`}
-                              style={{ backgroundColor: state.isStoryboardEnabled ? '#eab308' : '#52525b' }}
-                            >
-                              <span
-                                className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${state.isStoryboardEnabled ? 'translate-x-5' : 'translate-x-1'}`}
-                              />
-                            </button>
-                          </div>
-                          <p className="text-[10px] text-gray-500 mt-1">
-                            Unlocks the Storyboard interface for early-access creative exploration. This feature is still evolving and is best used for testing, concept development, and selective workflows.
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-                        <button onClick={closeSettings} className="w-full sm:w-auto px-4 py-2 text-gray-400 text-xs hover:text-white">Cancel</button>
-                        <button onClick={saveSettings} className="w-full sm:w-auto bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded text-xs font-bold">Save Config</button>
-                      </div>
+                    <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                      <button onClick={closeSettings} className="w-full sm:w-auto px-4 py-2 text-gray-400 text-xs hover:text-white">Cancel</button>
+                      <button onClick={saveSettings} className="w-full sm:w-auto bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded text-xs font-bold">Save Config</button>
                     </div>
                   </div>
                 </div>
-              )
-            }
+              </div>
+            )
+          }
 
-          </div>
+        </div>
       </HelpProvider >
     </ErrorBoundary >
   );

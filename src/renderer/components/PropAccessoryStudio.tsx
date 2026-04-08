@@ -1,17 +1,29 @@
 import { useState, useEffect, useRef } from 'react';
 import {
     Package, RefreshCcw, Maximize, Sparkles,
-    Download, UserPlus, X, Eraser, Save, Upload, Trash2
+    Download, X, Save, Upload, Trash2, ArrowRight
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
-import { removeBackground } from "@imgly/background-removal";
-import { CutoutService } from "../services/CutoutService";
-import { nativeJoinPath, nativeListFiles, nativeWriteFile, isNativeParams, safeFetchBlob } from '../utils/NativeFileAssets';
+import { nativeJoinPath, nativeListFiles, nativeWriteFile, isNativeParams } from '../utils/NativeFileAssets';
 import type { PropItem, CastMember } from '../context/AppContext';
 import ConfirmDialog from './ui/ConfirmDialog';
 import { LibraryAssetMaterializer } from '../services/LibraryAssetMaterializer';
 import { resolveDisplayUrl } from '../utils/assetUrlResolver';
+
+async function materializeDisplayUrl(url: string | null | undefined): Promise<string> {
+    if (!url) return '';
+    if (url.startsWith('blob:') || url.startsWith('data:')) return url;
+
+    if (/^https?:\/\//i.test(url)) {
+        const res = await fetch(url, { mode: 'cors' });
+        if (!res.ok) throw new Error(`Failed to fetch remote display asset: ${res.status}`);
+        const blob = await res.blob();
+        return URL.createObjectURL(blob);
+    }
+
+    return url;
+}
 
 const PropAccessoryStudio = () => {
     const { state, dispatch } = useAppContext();
@@ -22,16 +34,7 @@ const PropAccessoryStudio = () => {
         selectedProp,
         selectedCharacter,
         appliedImage,
-        applyNote,
-        applyMask,
-        removeApplyBg,
-        applyAiMaskActive,
-        applyTolerance,
-        applySpillSuppression,
-        applyMaskSoftening,
-        applyInvertBg,
-        matteErosion,
-        processedApplyUrl
+        applyNote
     } = state.propStudioState;
 
     const setPropState = (payload: Partial<typeof state.propStudioState>) => {
@@ -45,142 +48,10 @@ const PropAccessoryStudio = () => {
     const setSelectedCharacter = (val: CastMember | null) => setPropState({ selectedCharacter: val });
     const setAppliedImage = (val: string | null) => setPropState({ appliedImage: val });
     const setApplyNote = (val: string) => setPropState({ applyNote: val });
-    const setApplyMask = (val: string | null) => setPropState({ applyMask: val });
-    const setRemoveApplyBg = (val: boolean) => setPropState({ removeApplyBg: val });
-    const setApplyAiMaskActive = (val: boolean) => setPropState({ applyAiMaskActive: val });
-    const setApplyTolerance = (val: number) => setPropState({ applyTolerance: val });
-    const setApplySpillSuppression = (val: number) => setPropState({ applySpillSuppression: val });
-    const setApplyMaskSoftening = (val: number) => setPropState({ applyMaskSoftening: val });
-    const setMatteErosion = (val: number) => setPropState({ matteErosion: val });
-    const setProcessedApplyUrl = (val: string | null) => setPropState({ processedApplyUrl: val });
 
-    const applyImgRef = useRef<HTMLImageElement>(null);
-    const applyMaskImgRef = useRef<HTMLImageElement>(null);
-    const applyCanvasRef = useRef<HTMLCanvasElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
-    const runApplyIsolation = (): string | null => {
-        if (removeApplyBg && appliedImage && applyImgRef.current && applyCanvasRef.current) {
-            const canvas = applyCanvasRef.current;
-            const ctx = canvas.getContext('2d', { willReadFrequently: true });
-            const img = applyImgRef.current;
-            if (!img.complete || img.naturalWidth === 0) return null;
 
-            canvas.width = img.naturalWidth;
-            canvas.height = img.naturalHeight;
-            ctx?.clearRect(0, 0, canvas.width, canvas.height);
-
-            if (applyAiMaskActive && applyMask && applyMaskImgRef.current) {
-                const maskImg = applyMaskImgRef.current;
-                if (maskImg.complete && maskImg.naturalWidth > 0) {
-                    const tempCanvas = document.createElement('canvas');
-                    tempCanvas.width = canvas.width;
-                    tempCanvas.height = canvas.height;
-                    const tempCtx = tempCanvas.getContext('2d');
-                    tempCtx?.drawImage(maskImg, 0, 0, canvas.width, canvas.height);
-
-                    let maskData = tempCtx?.getImageData(0, 0, canvas.width, canvas.height);
-
-                    if (matteErosion > 0 && maskData) {
-                        const originalData = new Uint8ClampedArray(maskData.data);
-                        const width = canvas.width;
-                        const height = canvas.height;
-                        const eroded = maskData.data;
-                        const radius = matteErosion;
-
-                        for (let y = radius; y < height - radius; y++) {
-                            for (let x = radius; x < width - radius; x++) {
-                                const idx = (y * width + x) * 4;
-                                let minLuminance = 255;
-                                for (let dy = -radius; dy <= radius; dy++) {
-                                    for (let dx = -radius; dx <= radius; dx++) {
-                                        const nIdx = ((y + dy) * width + (x + dx)) * 4;
-                                        const lum = (originalData[nIdx] + originalData[nIdx + 1] + originalData[nIdx + 2]) / 3;
-                                        if (lum < minLuminance) minLuminance = lum;
-                                        if (minLuminance === 0) break;
-                                    }
-                                    if (minLuminance === 0) break;
-                                }
-                                eroded[idx] = eroded[idx + 1] = eroded[idx + 2] = minLuminance;
-                            }
-                        }
-                        tempCtx?.putImageData(maskData, 0, 0);
-                    }
-
-                    if (applyMaskSoftening > 0 && tempCtx) {
-                        const blurCanvas = document.createElement('canvas');
-                        blurCanvas.width = canvas.width;
-                        blurCanvas.height = canvas.height;
-                        const blurCtx = blurCanvas.getContext('2d');
-                        if (blurCtx) {
-                            blurCtx.filter = `blur(${applyMaskSoftening}px)`;
-                            blurCtx.drawImage(tempCanvas, 0, 0);
-                            maskData = blurCtx.getImageData(0, 0, canvas.width, canvas.height);
-                        }
-                    }
-
-                    ctx?.drawImage(img, 0, 0);
-                    const imgData = ctx?.getImageData(0, 0, canvas.width, canvas.height);
-                    const finalMaskData = maskData || tempCtx?.getImageData(0, 0, canvas.width, canvas.height);
-
-                    if (imgData && finalMaskData) {
-                        const data = imgData.data;
-                        const mask = finalMaskData.data;
-                        for (let i = 0; i < data.length; i += 4) {
-                            const maskLum = (mask[i] + mask[i + 1] + mask[i + 2]) / 3;
-                            data[i + 3] = applyInvertBg ? (255 - maskLum) : maskLum;
-
-                            if (applySpillSuppression > 0 && data[i + 3] > 0) {
-                                const r = data[i]; const g = data[i + 1]; const b = data[i + 2];
-                                const avgRB = (r + b) / 2;
-                                if (g > avgRB) {
-                                    const factor = applySpillSuppression / 100;
-                                    data[i + 1] = g * (1 - factor) + avgRB * factor;
-                                }
-                            }
-                        }
-                        ctx?.putImageData(imgData, 0, 0);
-                        setProcessedApplyUrl(canvas.toDataURL('image/png'));
-                        return canvas.toDataURL('image/png');
-                    }
-                }
-            }
-
-            ctx?.drawImage(img, 0, 0);
-            const imageData = ctx?.getImageData(0, 0, canvas.width, canvas.height);
-            if (imageData) {
-                const data = imageData.data;
-                const key = { r: data[0], g: data[1], b: data[2] };
-                for (let i = 0; i < data.length; i += 4) {
-                    const r = data[i]; const g = data[i + 1]; const b = data[i + 2];
-                    const isMatch = Math.abs(r - key.r) < applyTolerance && Math.abs(g - key.g) < applyTolerance && Math.abs(b - key.b) < applyTolerance;
-
-                    if (applyInvertBg) { if (!isMatch) data[i + 3] = 0; }
-                    else { if (isMatch) data[i + 3] = 0; }
-
-                    if (applySpillSuppression > 0 && data[i + 3] > 0) {
-                        const rP = data[i]; const gP = data[i + 1]; const bP = data[i + 2];
-                        const avgRB = (rP + bP) / 2;
-                        if (gP > avgRB) {
-                            const factor = applySpillSuppression / 100;
-                            data[i + 1] = gP * (1 - factor) + avgRB * factor;
-                        }
-                    }
-                }
-                ctx?.putImageData(imageData, 0, 0);
-                const res = canvas.toDataURL('image/png');
-                setProcessedApplyUrl(res);
-                return res;
-            }
-        } else {
-            setProcessedApplyUrl(null);
-        }
-        return null;
-    };
-
-    useEffect(() => {
-        runApplyIsolation();
-    }, [removeApplyBg, applyTolerance, matteErosion, appliedImage, applyMask, applyAiMaskActive, applySpillSuppression, applyMaskSoftening, applyInvertBg]);
 
     const scanProps = async () => {
         // 1. NATIVE MODE
@@ -385,10 +256,7 @@ const PropAccessoryStudio = () => {
         });
     };
 
-    const getFinalAppliedUrl = (): string | null => {
-        const freshUrl = runApplyIsolation();
-        return freshUrl || processedApplyUrl || appliedImage || null;
-    };
+
 
     const saveToProps = async (imageUrl: string, prompt: string) => {
         if (!state.saveDirectoryHandle && !state.saveDirectoryPath) return; // Need at least one
@@ -409,6 +277,9 @@ const PropAccessoryStudio = () => {
                 timestamp: Date.now()
             };
             dispatch({ type: 'ADD_PROP_ITEM', payload: newItem });
+            
+            // Immediate local pivot
+            if (mat.url) setDesignerImage(mat.url);
             dispatch({ type: 'ADD_LOG', payload: { message: `Prop saved to library: ${mat.filename || "Storage"}`, type: 'success' } });
         } catch (e: any) {
             dispatch({ type: 'ADD_LOG', payload: { message: `Failed to save prop: ${e.message}`, type: 'error' } });
@@ -416,7 +287,40 @@ const PropAccessoryStudio = () => {
     };
 
     const handleDesignerGenerate = async () => {
-        if (!designerPrompt || !state.apiKey) return;
+        const billingMode = state.billingEntitlements.effectiveBillingMode;
+        const hasHosted = state.billingEntitlements.hasHostedAccess;
+        const hasByok = state.billingEntitlements.hasByokAccess;
+        
+        if (billingMode === 'hosted' && state.hostedCredits === 0) {
+            dispatch({ type: 'ADD_LOG', payload: { message: "Generation blocked: Insufficient credits", type: 'error' } });
+            dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
+            return;
+        }
+
+        if (!designerPrompt) {
+            dispatch({
+                type: 'ADD_LOG',
+                payload: { message: 'Enter a prop description first.', type: 'error' }
+            });
+            return;
+        }
+
+        if (billingMode === 'hosted' && !hasHosted) {
+            dispatch({
+                type: 'ADD_LOG',
+                payload: { message: 'Hosted Cloud access required for Prop Designer.', type: 'error' }
+            });
+            return;
+        }
+
+        if (billingMode === 'byok' && (!hasByok || !state.apiKey)) {
+            dispatch({
+                type: 'ADD_LOG',
+                payload: { message: 'API Key required for BYOK Prop Designer.', type: 'error' }
+            });
+            return;
+        }
+
         dispatch({ type: 'SET_PROCESSING', payload: true });
 
         let currentPercent = 5;
@@ -472,7 +376,20 @@ extra objects, duplicate prop, altered proportions, floating parts, text, label,
             );
 
             if (actualGenId) dispatch({ type: 'REMOVE_BACKGROUND_JOB', payload: actualGenId });
-            setDesignerImage(res);
+
+            const rawUrl =
+                typeof res === 'string'
+                    ? res
+                    : (res && typeof res === 'object' ? (res as any).asset_url || '' : '');
+
+            let safeUrl = rawUrl;
+            try {
+                safeUrl = await materializeDisplayUrl(rawUrl);
+            } catch (e) {
+                console.warn("Failed to materialize prop designer result:", e);
+            }
+
+            setDesignerImage(safeUrl);
             dispatch({ type: 'ADD_LOG', payload: { message: "Prop generated on black studio background.", type: 'success' } });
         } catch (e: any) {
             const isTimeout = e.name === 'TimeoutError' || e.message?.includes('Pending');
@@ -489,60 +406,52 @@ extra objects, duplicate prop, altered proportions, floating parts, text, label,
         }
     };
 
-    const regenerateMask = async () => {
-        if (!appliedImage || !state.apiKey) return;
-        dispatch({ type: 'SET_PROCESSING', payload: true });
-        dispatch({ type: 'ADD_LOG', payload: { message: "Regenerating AI Mask...", type: 'info' } });
 
-        let currentPercent = 5;
-        dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text: "Generating Alpha Mask" } });
-        const etaMs = 15000;
-        const increment = (1000 / etaMs) * 100;
-        const progressInterval = window.setInterval(() => {
-            currentPercent += increment;
-            if (currentPercent > 95) currentPercent = 95;
-
-            let text = "Generating Alpha Mask";
-            if (currentPercent > 40) text = "Detecting Subject Edges...";
-            if (currentPercent > 70) text = "Refining Matte Segmentation...";
-            if (currentPercent >= 95) text = "Processing Silhouette... (Still working, please wait)";
-
-            dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text } });
-        }, 1000);
-
-        // Clear existing mask first
-        setApplyMask(null);
-        setApplyAiMaskActive(true);
-
-        try {
-            const blob = await safeFetchBlob(appliedImage!);
-            const config = await CutoutService.getImglyConfig(
-                (_key: string, current: number, total: number) => {
-                    if (total) {
-                        currentPercent = Math.round((current / total) * 100);
-                        if (currentPercent > 95) currentPercent = 95;
-                        dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text: "Isolating Matte..." } });
-                    }
-                }
-            );
-            const maskResBlob = await removeBackground(blob, config);
-            const maskResDataUrl = URL.createObjectURL(maskResBlob);
-            setApplyMask(maskResDataUrl);
-            dispatch({ type: 'ADD_LOG', payload: { message: "AI Mask refreshed via local engine.", type: 'success' } });
-        } catch (e: any) {
-            console.error(e);
-            dispatch({ type: 'ADD_LOG', payload: { message: "Mask isolation failed.", type: 'error' } });
-        } finally {
-            clearInterval(progressInterval);
-            dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
-            dispatch({ type: 'SET_PROCESSING', payload: false });
-        }
-    };
 
     const handleApply = async () => {
-        if (!selectedCharacter || !selectedProp || !state.apiKey) return;
-        setRemoveApplyBg(false);
-        setApplyMask(null);
+        const billingMode = state.billingEntitlements.effectiveBillingMode;
+        const hasHosted = state.billingEntitlements.hasHostedAccess;
+        const hasByok = state.billingEntitlements.hasByokAccess;
+        
+        if (billingMode === 'hosted' && state.hostedCredits === 0) {
+            dispatch({ type: 'ADD_LOG', payload: { message: "Generation blocked: Insufficient credits", type: 'error' } });
+            dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
+            return;
+        }
+
+        if (!selectedCharacter || !selectedProp) {
+            dispatch({
+                type: 'ADD_LOG',
+                payload: { message: 'Select both a subject and a prop before applying.', type: 'error' }
+            });
+            return;
+        }
+
+        if (billingMode === 'hosted' && !hasHosted) {
+            dispatch({
+                type: 'ADD_LOG',
+                payload: { message: 'Hosted Cloud access required for Prop Application.', type: 'error' }
+            });
+            return;
+        }
+
+        if (billingMode === 'byok' && (!hasByok || !state.apiKey)) {
+            dispatch({
+                type: 'ADD_LOG',
+                payload: { message: 'API Key required for BYOK Prop Application.', type: 'error' }
+            });
+            return;
+        }
+        
+        dispatch({
+            type: 'ADD_LOG',
+            payload: {
+                message: `Starting Prop Application (${state.billingEntitlements.effectiveBillingMode.toUpperCase()})...`,
+                type: 'info'
+            }
+        });
+
+
         dispatch({ type: 'SET_PROCESSING', payload: true });
 
         let currentPercent = 5;
@@ -596,7 +505,7 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                 state.apiKey,
                 state.model,
                 [
-                    { url: selectedCharacter.url, label: "Subject Reference" },
+                    { url: selectedCharacter.previewUrl || selectedCharacter.url, label: "Subject Reference" },
                     { url: selectedProp.url, label: "Prop Reference" }
                 ],
                 { 
@@ -610,20 +519,22 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
             );
             if (actualGenId) dispatch({ type: 'REMOVE_BACKGROUND_JOB', payload: actualGenId });
 
-            setAppliedImage(res);
-            dispatch({ type: 'ADD_LOG', payload: { message: "Prop integrated. Creating character edge mask...", type: 'info' } });
+            const rawUrl =
+                typeof res === 'string'
+                    ? res
+                    : (res && typeof res === 'object' ? (res as any).asset_url || '' : '');
 
-            // Inline generation for the first run, using same prompt logic as regenerate
+            let safeUrl = rawUrl;
             try {
-                const maskRes = await GeminiService.generateImage(
-                    "DIGITAL CHARACTER SEGMENTATION MASK: Create a precise black and white silhouette of the character and the prop. \nRULES:\n1. White = Character, Clothing, and Prop.\n2. Black = Background.\n3. CRITICAL: Do NOT mask out the shirt or clothing. The entire subject must be White.",
-                    state.apiKey,
-                    state.model,
-                    [{ url: res, label: "Reference" }],
-                    { aspectRatio: '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted'|'byok', entitlements: state.billingEntitlements }
-                );
-                setApplyMask(maskRes);
-            } catch { }
+                safeUrl = await materializeDisplayUrl(rawUrl);
+            } catch (e) {
+                console.warn("Failed to materialize applied prop result:", e);
+            }
+
+            setAppliedImage(safeUrl);
+            dispatch({ type: 'ADD_LOG', payload: { message: "Prop integrated.", type: 'info' } });
+
+
         } catch (e: any) {
             const isTimeout = e.name === 'TimeoutError' || e.message?.includes('Pending');
             if (isTimeout && e.generationId) {
@@ -639,47 +550,35 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
         }
     };
 
-    const handleAddToCast = () => {
-        const freshUrl = runApplyIsolation();
-        const finalUrl = freshUrl || processedApplyUrl || appliedImage;
-        if (!finalUrl || !selectedCharacter) return;
-        dispatch({
-            type: 'ADD_CAST',
-            payload: {
-                id: `propfit-${Date.now()}`,
-                url: finalUrl,
-                tag: 'front',
-                name: `${selectedCharacter.name} + Prop`,
-                profile: {
-                    identity: selectedCharacter.profile?.identity || selectedCharacter.name,
-                    wardrobe: selectedCharacter.profile?.wardrobe || "",
-                    accessories: selectedProp?.prompt || "Selected Accessory",
-                    style: selectedCharacter.profile?.style || ""
-                }
-            }
-        });
+    const handleSendToCastForge = () => {
+        if (!appliedImage) return;
+        dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: appliedImage });
+        dispatch({ type: 'SET_LAST_CASTED_PROMPT', payload: `Prop application result: ${applyNote || ''}` });
+        dispatch({ type: 'SET_VIEW', payload: 'casting' });
     };
 
 
     const handleSaveToActors = async () => {
-        const freshUrl = runApplyIsolation();
-        const finalUrl = freshUrl || processedApplyUrl || appliedImage;
-        if (!finalUrl || !state.saveDirectoryHandle) return;
+        const finalUrl = appliedImage;
+        const hasStorage = !!state.saveDirectoryHandle || !!state.saveDirectoryPath;
+        if (!finalUrl || !hasStorage) return;
         try {
-            const actorsDir = await state.saveDirectoryHandle.getDirectoryHandle('Actors', { create: true });
-            const safeName = (selectedCharacter?.name || 'PropActor').slice(0, 30).replace(/[^a-z0-9]/gi, '_');
-            const filename = `Actor-Prop-${Date.now()}-${safeName}.png`;
-            const fileHandle = await actorsDir.getFileHandle(filename, { create: true });
-            const writable = await fileHandle.createWritable();
-            const res = await fetch(finalUrl);
-            const blob = await res.blob();
-            await writable.write(blob);
-            await writable.close();
+            const mat = await LibraryAssetMaterializer.materializeCastAsset({
+                sourceUrl: finalUrl,
+                saveDirectoryPath: state.saveDirectoryPath,
+                actorName: `${selectedCharacter?.name || 'PropActor'} (Prop)`,
+                category: 'uncategorized'
+            });
+
             dispatch({
                 type: 'ADD_ACTOR_LIBRARY',
                 payload: {
-                    id: `actor-prop-${Date.now()}`,
-                    url: finalUrl,
+                    id: crypto.randomUUID(),
+                    url: mat.previewUrl,
+                    localPath: mat.localPath || undefined,
+                    sourceUrl: mat.sourceUrl,
+                    previewUrl: mat.previewUrl,
+                    filename: mat.filename,
                     tag: 'front',
                     name: `${selectedCharacter?.name} (Prop)`,
                     profile: {
@@ -690,7 +589,11 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                     }
                 }
             });
-            dispatch({ type: 'ADD_LOG', payload: { message: `Saved to Actors Library: ${filename}`, type: 'success' } });
+            
+            // Immediate UX pivot
+            if (mat.previewUrl) setAppliedImage(mat.previewUrl);
+            
+            dispatch({ type: 'ADD_LOG', payload: { message: `Saved to Actors Library: ${mat.filename || "Storage"}`, type: 'success' } });
         } catch (e: any) {
             dispatch({ type: 'ADD_LOG', payload: { message: `Failed to save actor: ${e.message}`, type: 'error' } });
         }
@@ -780,7 +683,11 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                                 <div className="bg-[#18181b] p-6 rounded-2xl border border-gray-800 flex flex-col min-h-0">
                                     <h3 className="text-xs font-black text-gray-400 uppercase mb-4 tracking-widest">Designer Workshop</h3>
                                     <textarea value={designerPrompt} onChange={(e) => setDesignerPrompt(e.target.value)} className="w-full bg-[#09090b] border border-[#27272a] p-4 rounded-xl text-sm text-gray-200 flex-grow resize-none mb-4 focus:border-blue-500 focus:outline-none" placeholder="Describe the object..." />
-                                    <button onClick={handleDesignerGenerate} disabled={state.isProcessing || !designerPrompt} className="w-full shrink-0 bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-xl font-black text-xs uppercase transition-all active:scale-95">Generate Prop</button>
+                                    <button onClick={handleDesignerGenerate} disabled={
+                                        state.isProcessing || !designerPrompt ||
+                                        (state.billingEntitlements.effectiveBillingMode === 'hosted' && !state.billingEntitlements.hasHostedAccess) ||
+                                        (state.billingEntitlements.effectiveBillingMode === "hosted" && !state.billingEntitlements.hasHostedAccess) || (state.billingEntitlements.effectiveBillingMode === 'byok' && (!state.billingEntitlements.hasByokAccess || !state.apiKey))
+                                    } className="w-full shrink-0 bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-xl font-black text-xs uppercase transition-all active:scale-95 disabled:opacity-50">Generate Prop</button>
                                 </div>
                             </div>
 
@@ -810,12 +717,25 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                                     <h3 className="text-xs font-black text-gray-400 uppercase mb-4 tracking-widest">1. Subject</h3>
                                     <div className="grid grid-cols-4 gap-2 mb-6 h-32 overflow-y-auto custom-scrollbar">
                                         {state.cast.map(c => (
-                                            <button key={c.id} onClick={() => setSelectedCharacter(c)} className={`aspect-square rounded-lg border-2 overflow-hidden transition-all ${selectedCharacter?.id === c.id ? 'border-blue-500 -[0_0_0_2px_rgba(59,130,246,0.3)] scale-95' : 'border-gray-800 hover:border-gray-600'}`}><img src={c.url} className="w-full h-full object-cover" /></button>
+                                            <button key={c.id} onClick={() => setSelectedCharacter(c)} className={`aspect-square rounded-lg border-2 overflow-hidden transition-all ${selectedCharacter?.id === c.id ? 'border-green-500 ring-1 ring-green-500 scale-95' : 'border-gray-800 hover:border-gray-600'}`}><img src={c.previewUrl || c.url} className="w-full h-full object-cover" /></button>
                                         ))}
                                     </div>
                                     <h3 className="text-xs font-black text-gray-400 uppercase mb-4 tracking-widest border-t border-gray-800 pt-6">2. Active Prop</h3>
-                                    <div className="h-48 bg-[#09090b] rounded-xl border border-gray-800 flex items-center justify-center overflow-hidden">
-                                        {selectedProp ? <img src={selectedProp.url} className="w-full h-full object-contain p-2" /> : <Package className="w-10 h-10 opacity-10" />}
+                                    <div className="h-48 bg-[#09090b] rounded-xl border border-gray-800 flex items-center justify-center overflow-hidden relative group">
+                                        {selectedProp ? (
+                                            <>
+                                                <img src={selectedProp.url} className="w-full h-full object-contain p-2" />
+                                                <button
+                                                    onClick={() => setSelectedProp(null)}
+                                                    className="absolute top-2 right-2 bg-black/50 hover:bg-red-500/80 text-white p-1.5 rounded-full opacity-0 group-hover:opacity-100 transition-colors backdrop-blur-sm"
+                                                    title="Remove Prop"
+                                                >
+                                                    <X className="w-3 h-3" />
+                                                </button>
+                                            </>
+                                        ) : (
+                                            <Package className="w-10 h-10 opacity-10" />
+                                        )}
                                     </div>
                                 </div>
 
@@ -823,7 +743,16 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                                 <div className="bg-[#18181b] p-6 rounded-2xl border border-gray-800 flex-grow flex flex-col min-h-0">
                                     <h3 className="text-xs font-black text-gray-400 uppercase mb-4 tracking-widest">3. Placement Notes</h3>
                                     <textarea className="w-full bg-[#09090b] border border-[#27272a] p-3 rounded-lg text-xs text-gray-300 flex-grow mb-4 focus:border-blue-500 focus:outline-none resize-none min-h-[80px]" placeholder="Where should the prop be?..." value={applyNote} onChange={(e) => setApplyNote(e.target.value)} />
-                                    <button onClick={handleApply} disabled={state.isProcessing || !selectedCharacter || !selectedProp} className="w-full bg-blue-600 hover:bg-blue-500 text-white py-4 rounded-xl font-black text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-50 transition-all">Apply to Character</button>
+                                    
+
+
+                                    <button onClick={handleApply} disabled={
+                                        state.isProcessing ||
+                                        !selectedCharacter ||
+                                        !selectedProp ||
+                                        (state.billingEntitlements.effectiveBillingMode === 'hosted' && !state.billingEntitlements.hasHostedAccess) ||
+                                        (state.billingEntitlements.effectiveBillingMode === "hosted" && !state.billingEntitlements.hasHostedAccess) || (state.billingEntitlements.effectiveBillingMode === 'byok' && (!state.billingEntitlements.hasByokAccess || !state.apiKey))
+                                    } className="w-full bg-blue-600 hover:bg-blue-500 text-white py-4 rounded-xl font-black text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-50 transition-all">Apply to Character</button>
                                 </div>
                             </div>
 
@@ -837,22 +766,22 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                                             <span className="text-xs font-black uppercase tracking-widest text-gray-400">Preview Stage</span>
                                         </div>
 
-                                        {/* Header Actions (Moved from floating toolbar) */}
+                                        {/* Header Actions */}
                                         {appliedImage && (
                                             <div className="flex items-center gap-2 animate-in fade-in duration-300">
                                                 <button onClick={(e) => {
                                                     if ((e as any).shiftKey) {
-                                                        const finalUrl = getFinalAppliedUrl();
+                                                        const finalUrl = appliedImage;
                                                         if (finalUrl) bindToFirstEmptyRefSlot(finalUrl, `${selectedCharacter?.name || 'Subject'} + Prop Result`);
                                                         return;
                                                     }
-                                                    handleAddToCast();
-                                                }} className="h-8 px-3 bg-emerald-500/20 text-emerald-500 rounded-lg flex items-center gap-2 border border-emerald-500/30 hover:bg-emerald-500/30 transition-all text-[10px] uppercase font-bold tracking-wider hover:scale-105 active:scale-95"><UserPlus className="w-3.5 h-3.5" /> Add to Cast</button>
+                                                    handleSendToCastForge();
+                                                }} className="h-8 px-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg flex items-center gap-2 transition-all text-[10px] uppercase font-black tracking-wider hover:scale-105 active:scale-95 shadow-[0_0_15px_rgba(16,185,129,0.3)]"><Sparkles className="w-3.5 h-3.5" /> Send to Cast Forge <ArrowRight className="w-3.5 h-3.5" /></button>
 
                                                 <div className="h-4 w-px bg-gray-700 mx-2" />
 
                                                 <button onClick={handleSaveToActors} className="p-1.5 hover:bg-indigo-500/20 text-gray-400 hover:text-indigo-400 rounded-lg transition-colors" title="Save to Actors"><Save className="w-4 h-4" /></button>
-                                                <button onClick={() => { const l = document.createElement('a'); l.href = processedApplyUrl || appliedImage!; l.download = "applied-prop.png"; l.click(); }} className="p-1.5 hover:bg-white/10 text-gray-400 hover:text-white rounded-lg transition-colors" title="Download"><Download className="w-4 h-4" /></button>
+                                                <button onClick={() => { const l = document.createElement('a'); l.href = appliedImage!; l.download = "applied-prop.png"; l.click(); }} className="p-1.5 hover:bg-white/10 text-gray-400 hover:text-white rounded-lg transition-colors" title="Download"><Download className="w-4 h-4" /></button>
                                                 <button onClick={() => setAppliedImage(null)} className="p-1.5 hover:bg-red-500/20 text-gray-400 hover:text-red-400 rounded-lg transition-colors" title="Clear Stage"><X className="w-4 h-4" /></button>
                                             </div>
                                         )}
@@ -862,10 +791,7 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                                     <div className="flex-grow relative w-full flex items-center justify-center p-8 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-gray-900/50 to-black">
                                         {appliedImage ? (
                                             <div className="relative w-full h-full flex items-center justify-center">
-                                                <img ref={applyImgRef} src={appliedImage} className={processedApplyUrl ? 'hidden' : 'max-w-full max-h-full object-contain '} />
-                                                {processedApplyUrl && <img src={processedApplyUrl} className="max-w-full max-h-full object-contain " />}
-                                                <canvas ref={applyCanvasRef} className="hidden" />
-                                                {applyMask && <img ref={applyMaskImgRef} src={applyMask} className="hidden" />}
+                                                <img src={appliedImage} className={'max-w-full max-h-full object-contain '} />
                                             </div>
                                         ) : (
                                             <div className="flex flex-col items-center gap-4 text-gray-800 select-none pointer-events-none">
@@ -874,84 +800,6 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                                             </div>
                                         )}
                                     </div>
-                                </div>
-
-                                {/* RIGHT COLUMN: Magic Tools (Preserved) */}
-                                <div className="w-96 shrink-0 bg-[#18181b]/50 h-full flex flex-col p-6 space-y-6 overflow-y-auto custom-scrollbar">
-                                    {appliedImage ? (
-                                        <div className="bg-[#18181b] p-6 rounded-2xl border border-gray-800 space-y-6 animate-in slide-in-from-right-4 duration-300">
-                                            <h3 className="text-xs font-black text-gray-400 uppercase tracking-widest flex items-center gap-2">
-                                                <Sparkles className="w-3 h-3 text-blue-500" /> Magic Tools
-                                            </h3>
-
-                                            <div className="space-y-4">
-                                                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center justify-between cursor-pointer p-3 bg-black/40 rounded-lg border border-white/5 hover:border-white/10 transition-colors">
-                                                    <span className="flex items-center gap-2"><Eraser className="w-3.5 h-3.5" /> Remove Background</span>
-                                                    <input type="checkbox" checked={removeApplyBg} onChange={(e) => setRemoveApplyBg(e.target.checked)} className="w-4 h-4 accent-blue-500 rounded" />
-                                                </label>
-
-                                                {applyMask && (
-                                                    <label className="text-[10px] font-black text-blue-400 uppercase tracking-widest flex items-center justify-between cursor-pointer p-3 bg-blue-500/10 rounded-lg border border-blue-500/20">
-                                                        <span className="flex items-center gap-2"><Sparkles className="w-3 h-3" /> AI Masking</span>
-                                                        <input type="checkbox" checked={applyAiMaskActive} onChange={(e) => setApplyAiMaskActive(e.target.checked)} className="w-3.5 h-3.5 accent-blue-500 rounded" />
-                                                    </label>
-                                                )}
-                                            </div>
-
-                                            {removeApplyBg && (
-                                                <div className="space-y-4 pt-2 border-t border-gray-800">
-                                                    <div className="space-y-2">
-                                                        <div className="flex items-center justify-between text-[9px] font-bold text-gray-500 uppercase tracking-wider"><span>Tolerance</span><span>{applyTolerance}%</span></div>
-                                                        <input type="range" min="1" max="100" value={applyTolerance} onChange={(e) => setApplyTolerance(parseInt(e.target.value))} className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer" />
-                                                    </div>
-
-                                                    {applyMask && applyAiMaskActive && (
-                                                        <>
-                                                            <div className="space-y-2">
-                                                                <div className="flex items-center justify-between text-[9px] font-bold text-blue-400/60 uppercase"><span>Matte Contraction</span><span>{matteErosion}px</span></div>
-                                                                <input type="range" min="0" max="10" step="1" value={matteErosion} onChange={(e) => setMatteErosion(parseInt(e.target.value))} className="w-full h-1 bg-blue-900/30 rounded-lg appearance-none cursor-pointer" />
-                                                            </div>
-                                                            <div className="space-y-2">
-                                                                <div className="flex items-center justify-between text-[9px] font-bold text-blue-400/60 uppercase"><span>Mask Softening</span><span>{applyMaskSoftening}px</span></div>
-                                                                <input type="range" min="0" max="10" step="0.5" value={applyMaskSoftening} onChange={(e) => setApplyMaskSoftening(parseFloat(e.target.value))} className="w-full h-1 bg-blue-900/30 rounded-lg appearance-none cursor-pointer" />
-                                                            </div>
-                                                        </>
-                                                    )}
-
-                                                    <div className="space-y-2">
-                                                        <div className="flex items-center justify-between text-[9px] font-bold text-green-400/60 uppercase"><span>Spill Suppression</span><span>{applySpillSuppression}%</span></div>
-                                                        <input type="range" min="0" max="100" value={applySpillSuppression} onChange={(e) => setApplySpillSuppression(parseInt(e.target.value))} className="w-full h-1 bg-green-900/30 rounded-lg appearance-none cursor-pointer" />
-                                                    </div>
-
-                                                    {/* Mask Reset Action */}
-                                                    <div className="pt-4 border-t border-gray-800">
-                                                        <button
-                                                            onClick={() => {
-                                                                setApplyTolerance(10);
-                                                                setMatteErosion(0);
-                                                                setApplyMaskSoftening(1.0);
-                                                                setApplySpillSuppression(50);
-                                                                setApplyAiMaskActive(true);
-                                                                regenerateMask();
-                                                            }}
-                                                            disabled={state.isProcessing}
-                                                            className="w-full py-3 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed text-[10px] font-bold uppercase tracking-widest text-gray-400 rounded-lg transition-all flex items-center justify-center gap-2 group hover:text-white"
-                                                        >
-                                                            <RefreshCcw className={`w-3 h-3 ${state.isProcessing ? 'animate-spin' : 'group-hover:rotate-180 transition-transform duration-500'}`} />
-                                                            {state.isProcessing ? 'Regenerating...' : 'Reset Mask Settings'}
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                            )}
-                                        </div>
-                                    ) : (
-                                        <div className="h-full border-l border-gray-800 border-dashed rounded-2xl flex items-center justify-center">
-                                            <div className="text-center opacity-30">
-                                                <Sparkles className="w-12 h-12 mx-auto mb-2" />
-                                                <p className="text-[10px] uppercase font-black tracking-widest">Tools awaiting image</p>
-                                            </div>
-                                        </div>
-                                    )}
                                 </div>
                             </div>
                         </div>

@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useAppContext } from '../../context/AppContext';
 import { SessionService } from '../../services/SessionService';
 import { File, Save, FolderOpen, FilePlus, SaveAll, BookOpen } from 'lucide-react';
@@ -171,19 +172,20 @@ export const FileMenu = () => {
                 onClick={() => setIsOpen(!isOpen)}
                 onMouseEnter={handleMouseEnter}
                 onMouseLeave={handleMouseLeave}
-                className={`px-2 lg:px-3 py-1.5 rounded text-[10px] lg:text-xs font-bold uppercase transition-all flex items-center justify-center gap-1.5 whitespace-nowrap ${isOpen ? 'bg-[#27272a] text-white ' : 'text-gray-500 hover:text-gray-300 hover:bg-white/5'} focus:outline-none`}
+                className={`text-[11px] lg:text-[12px] font-semibold tracking-wide uppercase transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap px-3 py-1.5 ${isOpen ? 'text-white' : 'text-[#888] hover:text-white'} focus:outline-none`}
+                style={{ backgroundColor: 'transparent', boxShadow: 'none' }}
                 title="File Menu"
             >
-                <File className="w-4 h-4 shrink-0" />
+                <File className="w-[15px] h-[15px] shrink-0" />
                 <span className="hidden sm:inline">FILE</span>
             </button>
 
-            {isOpen && (
+            {isOpen && window.document.body && createPortal(
                 <div
                     ref={menuRef}
                     onMouseEnter={handleMouseEnter}
                     onMouseLeave={handleMouseLeave}
-                    className="fixed z-[9999] w-56 bg-[#1a1a1c] border border-gray-700 rounded-md py-1"
+                    className="fixed z-[9999] w-56 bg-[#1a1a1c] border border-gray-700 rounded-md py-1 shadow-[0_10px_40px_rgba(0,0,0,0.5)]"
                     style={{ top: menuPosition.top, left: menuPosition.left }}
                 >
                     <div className="px-3 py-1 mb-1 border-b border-gray-700/50">
@@ -220,7 +222,8 @@ export const FileMenu = () => {
                         dispatch({ type: 'TOGGLE_HELP', payload: true });
                     }} />
 
-                </div>
+                </div>,
+                document.body
             )}
 
             <ConfirmDialog

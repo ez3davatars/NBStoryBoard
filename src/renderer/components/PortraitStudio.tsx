@@ -22,6 +22,17 @@ import {
     JAW_PRESETS
 } from "../../prompts/portraitPrompts";
 
+export type NanoRefSheetHandoff = {
+    imageUrl: string;
+    compiledPrompt: string;
+    weightLbs: number;
+    heightIn: number;
+    age: number;
+    hairStyle?: string;
+    source: "portrait_studio";
+    createdAt: number;
+};
+
 const DEFAULT_DNA: CharacterDNA = {
     id: "default",
     identity: {
@@ -128,10 +139,14 @@ export default function PortraitStudio() {
     const [generatedImage, setGeneratedImage] = useState<string | null>(() => {
         const saved = localStorage.getItem("portrait_session_state");
         if (!saved) return null;
+
         try {
             const parsed = JSON.parse(saved);
-            return parsed.generatedImage || null;
-        } catch (e) {
+            const candidate = parsed.generatedImage || null;
+            return typeof candidate === "string" && candidate.startsWith("data:")
+                ? candidate
+                : null;
+        } catch {
             return null;
         }
     });
@@ -139,6 +154,28 @@ export default function PortraitStudio() {
     const [isCompiling, setIsCompiling] = useState(false);
     const [isInspecting, setIsInspecting] = useState(false);
     // --- CHARACTER STATE ---
+    const remoteUrlToDataUrl = async (url: string): Promise<string> => {
+        if (!url) return url;
+        if (url.startsWith("data:")) return url;
+
+        const res = await fetch(url, { mode: "cors" });
+        if (!res.ok) {
+            throw new Error(`Failed to fetch remote image: ${res.status}`);
+        }
+
+        const blob = await res.blob();
+
+        return await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                const result = reader.result as string;
+                if (!result) reject(new Error("Failed to convert blob to data URL"));
+                else resolve(result);
+            };
+            reader.onerror = () => reject(new Error("FileReader failed"));
+            reader.readAsDataURL(blob);
+        });
+    };
 
     // --- PRESET SYSTEM (PHASE 4) ---
     useEffect(() => {
@@ -176,7 +213,7 @@ export default function PortraitStudio() {
         } catch (e) {
             console.warn("Session persistence failed (Storage likely full):", e);
         }
-    }, [dna]);
+    }, [dna, generatedImage]);
     // Note: If generatedImage/variations are needed across refresh, they should be stored 
     // in IndexedDB or as local files, not localStorage.
 
@@ -244,8 +281,8 @@ export default function PortraitStudio() {
             // Full replacement of state
             setDna(loadedDna);
 
-            // Reset transient UI state
-            setGeneratedImage(null);
+            // Reset transient UI state and results
+            clearPortraitResult();
         }
     };
 
@@ -430,10 +467,32 @@ export default function PortraitStudio() {
     const [progress, setProgress] = useState<{ phase: string, percent: number, text?: string } | null>(null);
 
     const handleGenerate = async () => {
-        if (!state.apiKey) {
-            dispatch({ type: "ADD_LOG", payload: { message: "API Key required for generation", type: "error" } });
+        if (state.billingEntitlements.effectiveBillingMode === 'hosted' && state.hostedCredits === 0) {
+            dispatch({ type: 'ADD_LOG', payload: { message: "Generation blocked: Insufficient credits", type: 'error' } });
+            dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
             return;
         }
+
+        const billingMode = state.billingEntitlements.effectiveBillingMode;
+        const hasHosted = state.billingEntitlements.hasHostedAccess;
+        const hasByok = state.billingEntitlements.hasByokAccess;
+
+        if (billingMode === "hosted" && !hasHosted) {
+            dispatch({
+                type: "ADD_LOG",
+                payload: { message: "Hosted Cloud access required for generation", type: "error" }
+            });
+            return;
+        }
+
+        if (billingMode === "byok" && (!hasByok || !state.apiKey)) {
+            dispatch({
+                type: "ADD_LOG",
+                payload: { message: "API Key required for BYOK generation", type: "error" }
+            });
+            return;
+        }
+
         setIsGenerating(true);
         dispatch({ type: "ADD_LOG", payload: { message: "Generating Portrait...", type: "info" } });
 
@@ -456,8 +515,11 @@ export default function PortraitStudio() {
                 : [];
 
             const url = await GeminiService.generateImage(compiledPrompt, state.apiKey, state.model, referenceImages, { imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements });
-            setGeneratedImage(url); // Set local state for preview
-            dispatch({ type: "SET_LAST_CASTED_IMAGE", payload: url });
+            
+            const stableDisplayUrl = /^https?:\/\//i.test(url) ? await remoteUrlToDataUrl(url) : url;
+            
+            setGeneratedImage(stableDisplayUrl); // Set local state for preview
+            dispatch({ type: "SET_LAST_CASTED_IMAGE", payload: stableDisplayUrl });
             dispatch({ type: "SET_LAST_CASTED_PROMPT", payload: compiledPrompt });
             dispatch({ type: "ADD_LOG", payload: { message: "Portrait Generated", type: "success" } });
         } catch (e: any) {
@@ -469,9 +531,30 @@ export default function PortraitStudio() {
         }
     };
 
+    const clearPortraitResult = () => {
+        // 1. Clear in-memory local state
+        setGeneratedImage(null);
+
+        // 2. Clear the shared app-level state preventing cross-tab zombie images
+        dispatch({ type: "SET_LAST_CASTED_IMAGE", payload: null });
+        dispatch({ type: "SET_LAST_CASTED_PROMPT", payload: "" });
+
+        // 3. Scrub from localStorage so it doesn't survive a full browser reload
+        try {
+            const saved = localStorage.getItem("portrait_session_state");
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                parsed.generatedImage = null;
+                localStorage.setItem("portrait_session_state", JSON.stringify(parsed));
+            }
+        } catch (e) {
+            console.warn("Failed to clear portrait session state from localStorage", e);
+        }
+    };
+
     const handleStartNew = () => {
         setDna(DEFAULT_DNA);
-        setGeneratedImage(null);
+        clearPortraitResult();
     };
 
     const sendToNanoCast = () => {
@@ -482,8 +565,33 @@ export default function PortraitStudio() {
     };
 
     const sendToReferenceSheet = () => {
-        console.log({ dna, compiledPrompt });
-        dispatch({ type: "ADD_LOG", payload: { message: "Sent to Ref Sheet (Console Logged)", type: "info" } });
+        const imageUrl = generatedImage || state.lastCastedImage;
+
+        if (!imageUrl) {
+            dispatch({
+                type: "ADD_LOG",
+                payload: { message: "Generate a portrait first before sending to NanoCast Ref Sheet.", type: "error" }
+            });
+            return;
+        }
+
+        const handoff: NanoRefSheetHandoff = {
+            imageUrl,
+            compiledPrompt,
+            weightLbs: Math.round(dna.morphology.weightKg / 0.453592),
+            heightIn: Math.round(dna.morphology.heightCm / 2.54),
+            age: dna.identity.age,
+            hairStyle: dna.hair.style || "",
+            source: "portrait_studio",
+            createdAt: Date.now()
+        };
+
+        localStorage.setItem("nano_refsheet_handoff", JSON.stringify(handoff));
+
+        dispatch({ type: "SET_LAST_CASTED_IMAGE", payload: imageUrl });
+        dispatch({ type: "SET_LAST_CASTED_PROMPT", payload: compiledPrompt });
+        dispatch({ type: "SET_VIEW", payload: "nano_cast" });
+        dispatch({ type: "ADD_LOG", payload: { message: "Portrait transferred to NanoCast Ref Sheet workflow", type: "success" } });
     };
 
     return (
@@ -1219,7 +1327,7 @@ export default function PortraitStudio() {
                 {generatedImage && (
                     <SolidPanel className="p-1 border-green-500/20 -[0_0_30px_rgba(74,222,128,0.1)] relative group shrink-0 animate-in slide-in-from-bottom-2 fade-in duration-300">
                         <button
-                            onClick={() => setGeneratedImage(null)}
+                            onClick={clearPortraitResult}
                             className="absolute top-3 right-3 z-20 p-1.5 bg-black/50 hover:bg-red-500/80 text-white rounded-full transition-colors backdrop-blur-sm opacity-0 group-hover:opacity-100"
                             title="Close Result"
                         >
@@ -1417,6 +1525,8 @@ export default function PortraitStudio() {
                                 const newCast: any = {
                                     id: `cast-insp-${Date.now()}`,
                                     url: generatedImage,
+                                    previewUrl: generatedImage,
+                                    sourceUrl: generatedImage,
                                     tag: 'front',
                                     name: 'New Portrait Subject',
                                     profile: { identity: dna.identity.ethnicity, wardrobe: '', accessories: '', style: 'Portrait' }

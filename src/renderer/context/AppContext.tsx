@@ -399,6 +399,13 @@ export interface LogEntry {
 
 export type BackgroundJobSurface = 'casting' | 'wardrobe_designer' | 'prop_designer' | 'prop_applied' | 'scene_render';
 
+export type LiveStatusMessage = {
+  id: string;
+  text: string;
+  type: 'info' | 'success' | 'error';
+  createdAt: number;
+};
+
 export interface BackgroundJob {
     id: string;
     status: 'polling_foreground' | 'pending_background' | 'completed' | 'failed';
@@ -502,8 +509,11 @@ export interface AppState {
     billingMode: 'hosted' | 'byok';
     billingEntitlements: Entitlements;
     hostedSession: any | null;
+    hostedCredits: number | null;
+    showCreditModal: boolean;
 
     backgroundJobs: BackgroundJob[];
+    liveStatus: LiveStatusMessage | null;
 }
 
 export interface WardrobeState {
@@ -539,15 +549,6 @@ export interface PropAccessoryState {
     selectedCharacter: CastMember | null;
     appliedImage: string | null;
     applyNote: string;
-    applyMask: string | null;
-    removeApplyBg: boolean;
-    applyAiMaskActive: boolean;
-    applyTolerance: number;
-    applySpillSuppression: number;
-    applyMaskSoftening: number;
-    applyInvertBg: boolean;
-    matteErosion: number;
-    processedApplyUrl: string | null;
 }
 
 const DEFAULT_WARDROBE_STATE: WardrobeState = {
@@ -581,16 +582,7 @@ const DEFAULT_PROP_STUDIO_STATE: PropAccessoryState = {
     selectedProp: null,
     selectedCharacter: null,
     appliedImage: null,
-    applyNote: '',
-    applyMask: null,
-    removeApplyBg: false,
-    applyAiMaskActive: true,
-    applyTolerance: 15,
-    applySpillSuppression: 100,
-    applyMaskSoftening: 1.5,
-    applyInvertBg: false,
-    matteErosion: 1,
-    processedApplyUrl: null
+    applyNote: ''
 };
 
 export type Action =
@@ -694,11 +686,14 @@ export type Action =
     | { type: 'SET_BILLING_MODE'; payload: 'hosted' | 'byok' }
     | { type: 'SET_BILLING_ENTITLEMENTS'; payload: Entitlements }
     | { type: 'SET_HOSTED_SESSION'; payload: any | null }
+    | { type: 'SET_HOSTED_CREDITS'; payload: number | null }
+    | { type: 'SET_CREDIT_MODAL'; payload: boolean }
     | { type: 'ADD_BACKGROUND_JOB'; payload: BackgroundJob }
     | { type: 'UPDATE_BACKGROUND_JOB'; payload: { id: string; updates: Partial<BackgroundJob> } }
     | { type: 'REMOVE_BACKGROUND_JOB'; payload: string }
     | { type: 'COMPLETE_BACKGROUND_JOB'; payload: { id: string; assetUrl: string } }
-    | { type: 'FAIL_BACKGROUND_JOB'; payload: { id: string; errorMessage?: string } };
+    | { type: 'FAIL_BACKGROUND_JOB'; payload: { id: string; errorMessage?: string } }
+    | { type: 'SET_LIVE_STATUS'; payload: LiveStatusMessage | null };
 
 // --- HELPERS ---
 
@@ -882,6 +877,15 @@ const DEFAULT_REGION_EDIT: RegionEditState = {
     ],
 };
 
+const loadedPropStudioState = loadJson<PropAccessoryState>('nano_prop_studio_state', DEFAULT_PROP_STUDIO_STATE);
+const initialPropStudioState: PropAccessoryState = {
+    ...loadedPropStudioState,
+    selectedProp: null,
+    selectedCharacter: null,
+    appliedImage: null,
+    applyNote: ''
+};
+
 export const initialState: AppState = {
     apiKey: localStorage.getItem('nano_api_key') || '',
     model: getInitialModel(),
@@ -957,7 +961,7 @@ export const initialState: AppState = {
     wardrobeState: loadJson<WardrobeState>('nano_wardrobe_state', DEFAULT_WARDROBE_STATE),
 
     // PROP STUDIO PERSISTENCE
-    propStudioState: loadJson<PropAccessoryState>('nano_prop_studio_state', DEFAULT_PROP_STUDIO_STATE),
+    propStudioState: initialPropStudioState,
 
     sessionName: null,
     sessionFilePath: null,
@@ -965,6 +969,9 @@ export const initialState: AppState = {
     billingMode: loadJson<'hosted' | 'byok'>('nano_billing_mode', 'byok'),
     billingEntitlements: { hasHostedAccess: false, hasByokAccess: false, effectiveBillingMode: 'none' }, // Resolved on auth change
     hostedSession: null,
+    hostedCredits: null,
+    showCreditModal: false,
+    liveStatus: null,
 };
 
 // --- DATA SANITIZATION ---
@@ -1057,6 +1064,10 @@ export const reducer = (state: AppState, action: Action): AppState => {
                 billingEntitlements: EntitlementResolver.resolveEntitlements(nextSession, state.apiKey, import.meta.env.DEV, state.billingMode)
             };
         }
+        case 'SET_HOSTED_CREDITS':
+            return { ...state, hostedCredits: action.payload };
+        case 'SET_CREDIT_MODAL':
+            return { ...state, showCreditModal: action.payload };
 
         case 'ADD_CAST':
             return { ...state, cast: [...state.cast, action.payload] };
@@ -1128,7 +1139,21 @@ export const reducer = (state: AppState, action: Action): AppState => {
 
         case 'SET_PROP_STUDIO_STATE': {
             const nextState = { ...state.propStudioState, ...action.payload };
-            localStorage.setItem('nano_prop_studio_state', JSON.stringify(nextState));
+            
+            // Immediately persist a sanitized version
+            const persistedPropStudioState = {
+                ...nextState,
+                selectedProp: null,
+                selectedCharacter: null,
+                appliedImage: null,
+                applyNote: ''
+            };
+            try {
+                localStorage.setItem('nano_prop_studio_state', JSON.stringify(persistedPropStudioState));
+            } catch (e) {
+                console.warn('Failed to persist clean prop studio state', e);
+            }
+            
             return { ...state, propStudioState: nextState };
         }
         case 'SET_DIRECTOR': {
@@ -1327,8 +1352,21 @@ export const reducer = (state: AppState, action: Action): AppState => {
             return { ...state, isDepthProcessing: action.payload };
         case 'SET_GLOBAL_VEO_DRAFT':
             return { ...state, veoPromptDraft: action.payload };
-        case 'ADD_LOG':
-            return { ...state, logs: [...state.logs, { ...action.payload, id: Math.random().toString(), timestamp: new Date() }].slice(-50) };
+        case 'ADD_LOG': {
+            const nextLog = { ...action.payload, id: Math.random().toString(), timestamp: new Date() };
+            return { 
+                ...state, 
+                logs: [...state.logs, nextLog].slice(-50),
+                liveStatus: {
+                    id: nextLog.id,
+                    text: nextLog.message,
+                    type: nextLog.type,
+                    createdAt: Date.now()
+                }
+            };
+        }
+        case 'SET_LIVE_STATUS':
+            return { ...state, liveStatus: action.payload };
         case 'DISCARD_SESSION': {
             return {
                 ...state,
@@ -2264,6 +2302,20 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         state.enableGoogleGrounding,
         state.billingMode
     ]);
+
+    // --- EFFECT 3.5: Debounced UI State Persistence ---
+    useEffect(() => {
+        if (!hydratedRef.current) return;
+        const timer = setTimeout(() => {
+            try {
+                // propStudioState is persisted synchronously in the reducer to strip transient session fields
+                localStorage.setItem('nano_wardrobe_state', JSON.stringify(state.wardrobeState));
+            } catch (e) {
+                console.warn('UI state persistence failed', e);
+            }
+        }, 800);
+        return () => clearTimeout(timer);
+    }, [state.wardrobeState]);
 
     // --- EFFECT 4: Persistence (Large Collections / StorageService) ---
     useEffect(() => {
