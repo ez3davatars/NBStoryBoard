@@ -1,4 +1,4 @@
-import type { AppState, StageToken, StageAnnotation, Shot, CastMember, PropItem, DirectorSettings, RegionEditState, HistorySnapshot, WardrobeItem, ReferenceSlot } from '../context/AppContext';
+import type { AppState, StageToken, StageAnnotation, Shot, DirectorSettings, RegionEditState, HistorySnapshot, ReferenceSlot } from '../context/AppContext';
 import type { ShotSession } from '../types/shots';
 
 export interface SessionPayload {
@@ -9,9 +9,6 @@ export interface SessionPayload {
         tokens: StageToken[];
         annotations: StageAnnotation[];
         shots: Shot[];
-        actorLibrary: CastMember[];
-        wardrobeItems: WardrobeItem[];
-        propItems: PropItem[];
         director: DirectorSettings;
         regionEdit: RegionEditState;
         backgroundUrl: string | null;
@@ -41,9 +38,6 @@ export const SessionService = {
                 tokens: state.tokens,
                 annotations: state.annotations,
                 shots: state.shots,
-                actorLibrary: state.actorLibrary,
-                wardrobeItems: state.wardrobeItems,
-                propItems: state.propItems,
                 director: state.director,
                 regionEdit: state.regionEdit,
                 backgroundUrl: state.backgroundUrl,
@@ -88,11 +82,6 @@ export const SessionService = {
                 tokens: payload.state.tokens || [],
                 annotations: payload.state.annotations || [],
                 shots: payload.state.shots || [],
-                // Carefully merge Actor Library. Perhaps we shouldn't overwrite the global one entirely?
-                // But for a full "Session" restore, usually we do want the exact project state.
-                actorLibrary: payload.state.actorLibrary || [],
-                wardrobeItems: payload.state.wardrobeItems || [],
-                propItems: payload.state.propItems || [],
                 director: payload.state.director,
                 regionEdit: payload.state.regionEdit || undefined,
                 backgroundUrl: payload.state.backgroundUrl || null,

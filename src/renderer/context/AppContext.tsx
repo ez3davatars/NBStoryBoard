@@ -1338,13 +1338,10 @@ export const reducer = (state: AppState, action: Action): AppState => {
                 latestCompositeResultUrl: action.payload.latestCompositeResultUrl !== undefined ? action.payload.latestCompositeResultUrl : state.latestCompositeResultUrl
             };
         case 'SET_PROCESSING':
-            // Clear global progress when processing stops
             return {
                 ...state,
                 isProcessing: action.payload,
                 globalProgress: action.payload ? state.globalProgress : undefined,
-                sessionName: action.payload ? state.sessionName : null,
-                sessionFilePath: action.payload ? state.sessionFilePath : null,
             };
         case 'SET_GLOBAL_PROGRESS':
             return { ...state, globalProgress: action.payload || undefined };
@@ -1398,13 +1395,99 @@ export const reducer = (state: AppState, action: Action): AppState => {
         }
         case 'SET_SESSION_INFO':
             return { ...state, sessionName: action.payload.name, sessionFilePath: action.payload.path };
-        case 'LOAD_SESSION_STATE':
+        case 'LOAD_SESSION_STATE': {
+            const loaded = action.payload;
+
             return {
-                ...state,
-                ...action.payload,
-                director: { ...defaultDirector, ...(action.payload.director || {}) },
-                regionEdit: { ...DEFAULT_REGION_EDIT, ...(action.payload.regionEdit || {}) }
+                ...initialState,
+
+                // preserve true app-level globals only
+                apiKey: state.apiKey,
+                model: state.model,
+                view: state.view,
+                saveDirectoryHandle: state.saveDirectoryHandle,
+                saveDirectoryPath: state.saveDirectoryPath,
+                isHelpOpen: state.isHelpOpen,
+                helpContextSection: state.helpContextSection,
+                hasSeenWelcome: state.hasSeenWelcome,
+                showHelpHints: state.showHelpHints,
+                stagePanelState: state.stagePanelState,
+                imageResolution: state.imageResolution,
+                enableImageThinking: state.enableImageThinking,
+                enableGoogleGrounding: state.enableGoogleGrounding,
+                billingMode: state.billingMode,
+                billingEntitlements: state.billingEntitlements,
+                hostedCredits: state.hostedCredits,
+                showCreditModal: state.showCreditModal,
+                actorLibrary: state.actorLibrary,
+                wardrobeItems: state.wardrobeItems,
+                propItems: state.propItems,
+
+                // loaded session payload becomes authoritative
+                ...loaded,
+
+                // re-normalize nested structures
+                director: { ...defaultDirector, ...(loaded.director || {}) },
+                regionEdit: {
+                    ...smartClone(DEFAULT_REGION_EDIT),
+                    ...(loaded.regionEdit || {}),
+                    layers: loaded.regionEdit?.layers
+                        ? loaded.regionEdit.layers.map((layer: any, index: number) => ({
+                            ...smartClone(DEFAULT_REGION_EDIT.layers[index] || DEFAULT_REGION_EDIT.layers[0]),
+                            ...layer
+                        }))
+                        : smartClone(DEFAULT_REGION_EDIT.layers)
+                },
+
+                // kill stale transient UI/session artifacts
+                selection: null,
+                selectionType: null,
+                logs: state.logs,
+                isProcessing: false,
+                globalProgress: undefined,
+                liveStatus: null,
+                backgroundJobs: [],
+                inspectImage: null,
+                inspectMask: null,
+                inspectImageLocalPath: undefined,
+                inspectImageSourceUrl: undefined,
+                lastCastedImage: null,
+                lastCastedPrompt: '',
+                lastCastedMask: null,
+                storyboardSource: null,
+                storyboardEndSource: null,
+                storyboardGenerations: [],
+                customCovers: {},
+
+                // reset studio transient state that should not bleed across sessions
+                wardrobeState: {
+                    ...DEFAULT_WARDROBE_STATE,
+                    designerImage: null,
+                    fittedImage: null,
+                    processedTryOnUrl: null,
+                    tryOnViews: null,
+                    tryOnSheetFB: null,
+                    tryOnSheetLR: null,
+                    selectedCharacter: null,
+                    selectedCostume: null,
+                    brandingLogo: null,
+                },
+
+                propStudioState: {
+                    ...DEFAULT_PROP_STUDIO_STATE,
+                    selectedProp: null,
+                    selectedCharacter: null,
+                    designerImage: null,
+                    appliedImage: null,
+                    applyNote: ''
+                },
+
+                historyPast: loaded.historyPast || [],
+                historyFuture: loaded.historyFuture || [],
+                sessionName: loaded.sessionName ?? state.sessionName ?? null,
+                sessionFilePath: loaded.sessionFilePath ?? state.sessionFilePath ?? null,
             };
+        }
         case 'SET_SAVE_DIRECTORY':
             return { ...state, saveDirectoryHandle: action.payload };
         case 'SET_IMAGE_RESOLUTION':

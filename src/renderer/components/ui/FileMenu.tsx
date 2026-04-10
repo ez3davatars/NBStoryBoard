@@ -129,9 +129,17 @@ export const FileMenu = () => {
                 if (jsonText) {
                     const loadedState = SessionService.parseSession(jsonText);
                     if (loadedState) {
-                        dispatch({ type: 'LOAD_SESSION_STATE', payload: loadedState });
                         const filename = p.split(/[/\\]/).pop()?.replace('.cds', '') || 'Loaded Session';
-                        dispatch({ type: 'SET_SESSION_INFO', payload: { name: filename, path: p } });
+
+                        dispatch({
+                            type: 'LOAD_SESSION_STATE',
+                            payload: {
+                                ...loadedState,
+                                sessionName: filename,
+                                sessionFilePath: p
+                            }
+                        });
+
                         dispatch({ type: 'ADD_LOG', payload: { message: `Loaded session: ${filename}`, type: 'success' } });
                     } else {
                         dispatch({ type: 'ADD_LOG', payload: { message: "Failed to parse session file. File might be corrupted.", type: 'error' } });

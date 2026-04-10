@@ -9,7 +9,6 @@ import { nativeJoinPath, nativeListFiles, nativeWriteFile, isNativeParams } from
 import type { PropItem, CastMember } from '../context/AppContext';
 import ConfirmDialog from './ui/ConfirmDialog';
 import { LibraryAssetMaterializer } from '../services/LibraryAssetMaterializer';
-import { resolveDisplayUrl } from '../utils/assetUrlResolver';
 
 async function materializeDisplayUrl(url: string | null | undefined): Promise<string> {
     if (!url) return '';
