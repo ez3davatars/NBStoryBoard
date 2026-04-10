@@ -900,11 +900,25 @@ export function buildShotVariantPrompt(args: BuildShotVariantPromptArgs): string
     if (args.subjectActionText) p += `- Action context: ${args.subjectActionText}\n`;
     if (args.lightingText) p += `- Lighting context: ${args.lightingText}\n`;
 
-    p += `\n### NEGATIVE CONSTRAINTS\n`;
-    p += `No text, no watermark, no duplicate subjects, no distorted anatomy, no unrealistic perspective warping.\n`;
-    p += `Do not output a contact sheet, grid, or collage.\n`;
-    p += `Do not turn this into a simple zoom or crop.\n`;
-    p += `Do not add cinematic black bars unless already present in the anchor.\n`;
+    p += `\n### SHOT BLUEPRINT RULES\n`;
+    p += `- Preserve the exact subject count from the anchor scene.\n`;
+    p += `- Preserve identity, wardrobe, environment, and scene continuity.\n`;
+    p += `- Follow the requested framing exactly: ${preset.framing.toUpperCase()}.\n`;
+    p += `- Follow the requested camera elevation exactly: ${preset.elevation.toUpperCase()}.\n`;
+    p += `- Follow the requested orbit exactly: ${preset.orbit.toUpperCase()}.\n`;
+    p += `- Follow the requested screen placement exactly: ${preset.placement.toUpperCase()}.\n`;
+    p += `- Do not collapse into a generic centered crop.\n`;
+    p += `- Do not produce an angle equivalent to another preset.\n`;
+    p += `- Do not invent a new composition class.\n`;
+
+    p += `\n### NEGATIVE SHOT RULES\n`;
+    preset.negatives.forEach(neg => {
+        p += `- ${neg}\n`;
+    });
+    p += `- No text, no watermark, no duplicate subjects, no distorted anatomy, no unrealistic perspective warping.\n`;
+    p += `- Do not output a contact sheet, grid, or collage.\n`;
+    p += `- Do not turn this into a simple zoom or crop.\n`;
+    p += `- Do not add cinematic black bars unless already present in the anchor.\n`;
 
     if (args.actorIdentitySets && args.actorIdentitySets.length > 0) {
         p += `\n### ACTOR REFERENCE ANCHORS\n`;
@@ -999,6 +1013,8 @@ export type BuildShotFinalRerenderPromptArgs = {
 };
 
 export function buildShotFinalRerenderPrompt(args: BuildShotFinalRerenderPromptArgs): string {
+  const preset = SHOT_PRESETS[args.presetId];
+
   let p = `CRITICAL DIRECTIVE: Use the selected shot image as the primary composition and framing anchor.\n`;
   p += `Preserve the exact composition, camera angle, crop, subject placement, pose relationships, and scene arrangement from that selected shot.\n`;
   p += `Use the original staged result image only as supporting scene continuity context.\n`;
@@ -1017,12 +1033,21 @@ export function buildShotFinalRerenderPrompt(args: BuildShotFinalRerenderPromptA
   if (args.locks.background) p += `- Maintain the same environment and set dressing continuity.\n`;
   if (args.locks.lighting) p += `- Maintain the same lighting direction, tone, and exposure logic.\n`;
 
-  p += `\n### NEGATIVE CONSTRAINTS\n`;
-  p += `Do not generate a new alternative shot.\n`;
-  p += `Do not zoom or crop differently.\n`;
-  p += `Do not rearrange subjects.\n`;
-  p += `Do not duplicate subjects.\n`;
-  p += `Do not add text or watermark.\n`;
+  p += `\n### SHOT BLUEPRINT RULES\n`;
+  p += `- Follow the requested framing exactly: ${preset.framing.toUpperCase()}.\n`;
+  p += `- Follow the requested camera elevation exactly: ${preset.elevation.toUpperCase()}.\n`;
+  p += `- Follow the requested orbit exactly: ${preset.orbit.toUpperCase()}.\n`;
+  p += `- Follow the requested screen placement exactly: ${preset.placement.toUpperCase()}.\n`;
+
+  p += `\n### NEGATIVE SHOT RULES\n`;
+  preset.negatives.forEach(neg => {
+      p += `- ${neg}\n`;
+  });
+  p += `- Do not generate a new alternative shot.\n`;
+  p += `- Do not zoom or crop differently.\n`;
+  p += `- Do not rearrange subjects.\n`;
+  p += `- Do not duplicate subjects.\n`;
+  p += `- Do not add text or watermark.\n`;
 
   const hasFaceAnchors = args.actorIdentitySets?.some(s => !!s.primaryFaceAnchor || s.angleFaceAnchors.length > 0) || false;
   const hasActorReferences = (args.actorIdentitySets?.length || 0) > 0;

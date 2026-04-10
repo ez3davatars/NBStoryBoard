@@ -97,6 +97,7 @@ export type ShotVariant = {
   localFinalPath?: string;
   sourcePreviewUrl?: string;
   sourceFinalUrl?: string;
+  blueprintUrl?: string;
   coveragePurpose?: string;
   targetRole?: string;
   targetType?: ShotTargetType;

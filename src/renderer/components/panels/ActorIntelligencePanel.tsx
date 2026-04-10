@@ -152,15 +152,16 @@ export const ActorIntelligencePanel = ({
                                 <span className="text-[11px] font-bold text-white uppercase">{token.tag}</span>
                                 <button
                                     onClick={async () => {
-                                        if (!state.apiKey) {
-                                            dispatch({ type: 'ADD_LOG', payload: { message: "API Key required for Auto Analyze.", type: 'error' } });
+                                        if (state.billingEntitlements.effectiveBillingMode === 'byok' && (!state.billingEntitlements.hasByokAccess || !state.apiKey)) {
+                                            dispatch({ type: 'ADD_LOG', payload: { message: "BYOK mode is selected. Add your API key in Settings to continue.", type: 'error' } });
                                             return;
                                         }
                                         setAnalyzingTokenId(token.id);
                                         try {
                                             const intelligence = await GeminiService.analyzeImage(
                                                 "Describe this character's pose, expression, and physical action in this scene context. Be very specific about lighting interaction. Max 30 words.",
-                                                state.apiKey, state.model, token.url
+                                                state.apiKey || '', state.model, token.url,
+                                                { billingMode: state.billingEntitlements.effectiveBillingMode === 'none' ? undefined : state.billingEntitlements.effectiveBillingMode, expectedResponseType: 'text' }
                                             );
                                             dispatch({ type: 'UPDATE_TOKEN', payload: { id: token.id, intelligence } });
                                         } catch { /* error handled by UI state */ }

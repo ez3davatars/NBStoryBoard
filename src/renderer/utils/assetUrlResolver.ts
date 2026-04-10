@@ -35,14 +35,8 @@ export async function resolveDisplayUrl(input: ResolveAssetUrlInput): Promise<st
   if (candidatePath && window.electronAPI) {
       try {
         const cleanlyFormattedPath = candidatePath.startsWith('file://') ? candidatePath.slice(7) : candidatePath;
-        const exists = await window.electronAPI.exists(cleanlyFormattedPath);
-        if (exists) {
-           const base64 = await window.electronAPI.readFile(cleanlyFormattedPath);
-           if (base64) {
-             const ext = cleanlyFormattedPath.split('.').pop()?.toLowerCase() || 'png';
-             return `data:image/${ext};base64,${base64}`;
-           }
-        }
+        // The cleanlyFormattedPath is absolute natively (e.g. C:\... or /usr/...)
+        return `app:///${cleanlyFormattedPath.replace(/\\/g, '/')}`;
       } catch (error) {
         // Suppress failure noise and fallback gracefully
       }
@@ -58,4 +52,23 @@ export async function resolveDisplayUrl(input: ResolveAssetUrlInput): Promise<st
   
   // Last resorts (just return what we have as raw to avoid completely breaking things)
   return input.localPath || input.localUrl || input.sourceUrl || input.sourceFinalUrl || input.sourcePreviewUrl || input.finalUrl || input.previewUrl || input.remoteUrl || null;
+}
+
+export async function materializeDisplayUrl(url: string | null | undefined): Promise<string> {
+  if (!url) return '';
+  if (url.startsWith('blob:') || url.startsWith('data:')) return url;
+
+  if (/^https?:\/\//i.test(url)) {
+    try {
+      const res = await fetch(url, { mode: 'cors' });
+      if (!res.ok) throw new Error(`Failed to fetch remote display asset: ${res.status}`);
+      const blob = await res.blob();
+      return URL.createObjectURL(blob);
+    } catch (err) {
+      console.warn('Failed to materialize remote URL, falling back to raw:', err);
+      return url;
+    }
+  }
+
+  return url;
 }

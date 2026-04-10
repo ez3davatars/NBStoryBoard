@@ -32,3 +32,37 @@ BEGIN
   RETURNING generations.id, generations.provider_model, generations.request_payload;
 END;
 $$;
+
+-- 4. Enable required networking and scheduler extensions for Edge logic
+CREATE EXTENSION IF NOT EXISTS pg_cron;
+CREATE EXTENSION IF NOT EXISTS pg_net;
+
+-- 5. Extend the status enum to formally support strict R2 asset expiration cycles
+ALTER TYPE generation_status ADD VALUE IF NOT EXISTS 'EXPIRED';
+
+-- 6. Construct the automated Edge Function invocation scheduler for autonomous cleanup
+-- Idempotent check: Drop existing scheduler if present to prevent duplicate job collision
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM cron.job
+    WHERE jobname = 'r2_expiry_edge_cleanup_cron'
+  ) THEN
+    PERFORM cron.unschedule('r2_expiry_edge_cleanup_cron');
+  END IF;
+END
+$$;
+
+SELECT 
+  cron.schedule(
+    'r2_expiry_edge_cleanup_cron', 
+    '*/15 * * * *', 
+    $$
+    SELECT net.http_post(
+      url:='https://wtgkeytabshxtspjoegb.supabase.co/functions/v1/cleanup-expired-generations',
+      headers:='{"Authorization": "Bearer 1b4d3f6c7a886d4f4b429c3d7f7d4f2e1a912c5d4a2d9e5d", "Content-Type": "application/json"}'::jsonb,
+      body:='{}'::jsonb
+    );
+    $$
+  );

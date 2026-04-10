@@ -28,6 +28,7 @@ import {
 } from '../utils/FileSystemAssets';
 import { isNativeParams, nativeLoadCover, nativeSaveCover, nativeWriteFile, nativeJoinPath, safeFetchBlob } from '../utils/NativeFileAssets';
 
+
 import coverRealism from '../assets/cover-realism.png';
 import coverAnim from '../assets/cover-anim.png';
 import coverIllustration from '../assets/cover-illustration.png';
@@ -149,8 +150,43 @@ async function materializeDisplayUrl(url: string | null | undefined): Promise<st
   return url;
 }
 
+const LibraryActorSkeleton = () => (
+  <div className="relative aspect-square rounded-xl overflow-hidden bg-black/40 border border-[#27272a]">
+    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent animate-shimmer" />
+    <div className="absolute inset-0 flex items-center justify-center">
+      <div className="w-8 h-8 rounded-lg bg-white/5 border border-white/10" />
+    </div>
+    <div className="absolute bottom-0 inset-x-0 h-8 bg-black/50 border-t border-white/5" />
+  </div>
+);
+
+const LibraryStudioSkeleton = () => (
+  <div className="relative h-48 w-full rounded-3xl overflow-hidden border border-white/10 bg-black/30">
+    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent animate-shimmer" />
+    <div className="absolute inset-0 bg-gradient-to-r from-black/40 via-black/15 to-transparent" />
+    <div className="absolute left-6 bottom-6 right-6 space-y-3">
+      <div className="h-6 w-40 rounded bg-white/10" />
+      <div className="flex items-center gap-3">
+        <div className="h-3 w-44 rounded bg-white/10" />
+        <div className="h-5 w-16 rounded bg-white/10" />
+      </div>
+    </div>
+  </div>
+);
+
 const CastingForge = () => {
   const { state, dispatch } = useAppContext();
+  
+  const [libraryViewLoading, setLibraryViewLoading] = useState(false);
+  const withLibraryTransition = (next: () => void, delay = 180) => {
+    setLibraryViewLoading(true);
+    window.setTimeout(() => {
+      next();
+      window.setTimeout(() => {
+        setLibraryViewLoading(false);
+      }, delay);
+    }, 40);
+  };
 
   // Pre-compute styles locally to ensure consistency
   const knownStyles = React.useMemo(() => {
@@ -413,22 +449,41 @@ const CastingForge = () => {
 
       const finalFilename = targetCategoryLabel ? `${targetCategoryLabel}/${filename}` : filename;
 
-      if (isNativeParams() && state.saveDirectoryPath) {
+      let absoluteLocalPath = '';
+      let displayUrl = '';
+      let previewUrlForState: string | undefined = undefined;
+
+      if (isNativeParams() && state.saveDirectoryPath && window.electronAPI?.readFile) {
         const actorsDir = await nativeJoinPath(state.saveDirectoryPath, 'Actors');
         const targetDir = targetCategoryLabel ? await nativeJoinPath(actorsDir, targetCategoryLabel) : actorsDir;
         const fullPath = await nativeJoinPath(targetDir, filename);
+
+        absoluteLocalPath = fullPath;
         await nativeWriteFile(fullPath, file);
+
+        const base64 = await window.electronAPI.readFile(fullPath);
+        if (base64) {
+          displayUrl = `data:image/png;base64,${base64}`;
+        }
       } else if (state.saveDirectoryHandle) {
         const webPath = targetCategoryLabel ? `Actors/${targetCategoryLabel}/${filename}` : `Actors/${filename}`;
         await saveAssetToDisk(state.saveDirectoryHandle, webPath, file);
-      }
+        absoluteLocalPath = webPath;
 
-      const stablePreviewUrl = URL.createObjectURL(blob);
+        const stablePreviewUrl = URL.createObjectURL(blob);
+        displayUrl = stablePreviewUrl;
+        previewUrlForState = stablePreviewUrl;
+      } else {
+        const stablePreviewUrl = URL.createObjectURL(blob);
+        displayUrl = stablePreviewUrl;
+        previewUrlForState = stablePreviewUrl;
+      }
 
       const newActor: CastMember = {
         id: newActorId,
-        url: finalFilename, // Use the durable filename path instead of blob/object URL
-        previewUrl: stablePreviewUrl,
+        url: displayUrl,
+        localPath: absoluteLocalPath || undefined,
+        previewUrl: previewUrlForState,
         sourceUrl: finalUrl,
         tag: 'front',
         name,
@@ -468,9 +523,9 @@ const CastingForge = () => {
 
   const handleGenerate = async () => {
     if (state.billingEntitlements.effectiveBillingMode === 'hosted' && state.hostedCredits === 0) {
-       dispatch({ type: 'ADD_LOG', payload: { message: "Generation blocked: Insufficient credits", type: 'error' } });
-       dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
-       return;
+      dispatch({ type: 'ADD_LOG', payload: { message: "Generation blocked: Insufficient credits", type: 'error' } });
+      dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
+      return;
     }
 
     // CHANGE: "Character design sheet" triggers text layouts. Use "Full body character portrait" instead.
@@ -612,13 +667,13 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
       let safeResolvedUrl = rawResolvedUrl;
       try {
         safeResolvedUrl = await materializeDisplayUrl(rawResolvedUrl);
-      } catch(e) {
+      } catch (e) {
         console.warn(e);
       }
 
       if (generationIdRef.current === currentGenId) {
         if (state.lastCastedImage && state.lastCastedImage.startsWith('blob:')) {
-            URL.revokeObjectURL(state.lastCastedImage);
+          URL.revokeObjectURL(state.lastCastedImage);
         }
         dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: safeResolvedUrl });
         setProcessedPreviewUrl(null);
@@ -813,13 +868,13 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
         const actorsDir = await window.electronAPI.joinPath(state.saveDirectoryPath, 'Actors');
         let counter = 1;
         let testPath = await window.electronAPI.joinPath(actorsDir, finalRelativePath);
-        
+
         const oldFullPath = await window.electronAPI.joinPath(actorsDir, actor.filename);
 
         while (await window.electronAPI.exists(testPath)) {
           // If the old path and new path are exactly the same (e.g. user typed same name in same folder), we don't need to rename
           if (oldFullPath === testPath) {
-            break; 
+            break;
           }
           finalFilename = `${safeName} (${counter}).${ext}`;
           finalRelativePath = newCatLabel ? `${newCatLabel}/${finalFilename}` : finalFilename;
@@ -829,48 +884,48 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
 
         // 3. ATOMIC DISK OPERATION
         if (oldFullPath !== testPath) {
-           const success = await window.electronAPI.renameFile!(oldFullPath, testPath);
-           if (!success) throw new Error("Native Rename IPC Returned False");
+          const success = await window.electronAPI.renameFile!(oldFullPath, testPath);
+          if (!success) throw new Error("Native Rename IPC Returned False");
         }
       } else if (state.saveDirectoryHandle) {
-         // WEB FALLBACK
-         const webPath = finalRelativePath;
-         const res = await fetch(actor.url);
-         const blob = await res.blob();
-         const file = new File([blob], finalFilename, { type: `image/${ext === 'jpeg' ? 'jpeg' : 'png'}` });
-         await saveAssetToDisk(state.saveDirectoryHandle, webPath, file);
-         
-         if (actor.filename !== finalRelativePath) {
-           let curDir = await state.saveDirectoryHandle.getDirectoryHandle('Actors');
-           const oldParts = actor.filename.split(/[\\/]/);
-           for (let i = 0; i < oldParts.length - 1; i++) {
-             curDir = await curDir.getDirectoryHandle(oldParts[i]);
-           }
-           await curDir.removeEntry(oldParts[oldParts.length - 1]);
-         }
+        // WEB FALLBACK
+        const webPath = finalRelativePath;
+        const res = await fetch(actor.url);
+        const blob = await res.blob();
+        const file = new File([blob], finalFilename, { type: `image/${ext === 'jpeg' ? 'jpeg' : 'png'}` });
+        await saveAssetToDisk(state.saveDirectoryHandle, webPath, file);
+
+        if (actor.filename !== finalRelativePath) {
+          let curDir = await state.saveDirectoryHandle.getDirectoryHandle('Actors');
+          const oldParts = actor.filename.split(/[\\/]/);
+          for (let i = 0; i < oldParts.length - 1; i++) {
+            curDir = await curDir.getDirectoryHandle(oldParts[i]);
+          }
+          await curDir.removeEntry(oldParts[oldParts.length - 1]);
+        }
       }
 
       // 4. ATOMIC MEMORY UPDATE (Only triggers if disk success)
-      const updatedProfile = { 
-         style: newStyle, 
-         identity: safeName,
-         wardrobe: actor.profile?.wardrobe || "",
-         accessories: actor.profile?.accessories || ""
+      const updatedProfile = {
+        style: newStyle,
+        identity: safeName,
+        wardrobe: actor.profile?.wardrobe || "",
+        accessories: actor.profile?.accessories || ""
       };
-      
+
       dispatch({
         type: 'UPDATE_ACTOR_LIBRARY',
         payload: {
           id: actor.id,
-          updates: { 
-             name: safeName, 
-             filename: finalRelativePath, 
-             profile: updatedProfile,
-             // url: newUrl // Re-evaluating URL update later if necessary, currently base64 is already safe
+          updates: {
+            name: safeName,
+            filename: finalRelativePath,
+            profile: updatedProfile,
+            // url: newUrl // Re-evaluating URL update later if necessary, currently base64 is already safe
           }
         }
       });
-      
+
       dispatch({ type: 'ADD_LOG', payload: { message: `Actor ${isMove ? 'organized' : 'renamed'} successfully`, type: 'success' } });
 
     } catch (e: any) {
@@ -1115,10 +1170,10 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
         };
         const timeA = extractTimestamp(a);
         const timeB = extractTimestamp(b);
-        
+
         if (timeA === 0 && timeB === 0) {
-            // Un-timestamped fallback: sort natively inverted to bubble newer generic IDs up
-            return b.id.localeCompare(a.id);
+          // Un-timestamped fallback: sort natively inverted to bubble newer generic IDs up
+          return b.id.localeCompare(a.id);
         }
         return timeB - timeA;
       }
@@ -1492,7 +1547,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
     const billingMode = state.billingEntitlements.effectiveBillingMode;
     const hasHosted = state.billingEntitlements.hasHostedAccess;
     const hasByok = state.billingEntitlements.hasByokAccess;
-    
+
     if (billingMode === "hosted" && !hasHosted) return;
     if (billingMode === "byok" && (!hasByok || !state.apiKey)) return;
     dispatch({ type: 'SET_PROCESSING', payload: true });
@@ -1559,7 +1614,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
         inputImages,
         { aspectRatio: refLayout === 'split_focus' ? '16:9' : '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements }
       );
-      
+
       let safeRefSheetUrl = res as string;
       if (typeof safeRefSheetUrl === 'string' && safeRefSheetUrl.startsWith('http')) {
         try {
@@ -2050,12 +2105,10 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
                     onClick={() => setSelectedStyleId(style.id)}
                     className="flex items-center gap-2 group text-left"
                   >
-                    <div className={`w-2 h-2 rounded-full transition-colors flex-shrink-0 ${
-                      active ? 'bg-yellow-500 shadow-[0_0_8px_rgba(234,179,8,0.5)]' : 'bg-[#27272a] group-hover:bg-[#3f3f46]'
-                    }`} />
-                    <span className={`text-[11.5px] font-black uppercase tracking-[0.06em] transition-colors ${
-                      active ? 'text-gray-300' : 'text-gray-500 group-hover:text-gray-300'
-                    }`}>
+                    <div className={`w-2 h-2 rounded-full transition-colors flex-shrink-0 ${active ? 'bg-yellow-500 shadow-[0_0_8px_rgba(234,179,8,0.5)]' : 'bg-[#27272a] group-hover:bg-[#3f3f46]'
+                      }`} />
+                    <span className={`text-[11.5px] font-black uppercase tracking-[0.06em] transition-colors ${active ? 'text-gray-300' : 'text-gray-500 group-hover:text-gray-300'
+                      }`}>
                       {style.label}
                     </span>
                   </button>
@@ -2069,11 +2122,10 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
               <button
                 onClick={handleGenerate}
                 disabled={state.isProcessing}
-                className={`flex items-center justify-center gap-2 py-3 rounded-xl text-[10px] font-black transition-all border uppercase tracking-[0.08em] active:scale-95 ${
-                  state.isProcessing
+                className={`flex items-center justify-center gap-2 py-3 rounded-xl text-[10px] font-black transition-all border uppercase tracking-[0.08em] active:scale-95 ${state.isProcessing
                     ? 'bg-[#27272a] text-gray-500 border-[#3f3f46] cursor-not-allowed'
                     : 'bg-[#18181b] text-white border-white/10 hover:bg-[#27272a] hover:border-white/20'
-                }`}
+                  }`}
               >
                 {state.isProcessing ? (
                   <RotateCw className="animate-spin w-4 h-4" />
@@ -2506,28 +2558,24 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
                               key={style.id}
                               type="button"
                               onClick={() => setSelectedStyleId(style.id)}
-                              className={`relative h-[clamp(4.5rem,12vh,8.5rem)] rounded-2xl overflow-hidden border transition-all duration-300 text-left group/card ${
-                                active
+                              className={`relative h-[clamp(4.5rem,12vh,8.5rem)] rounded-2xl overflow-hidden border transition-all duration-300 text-left group/card ${active
                                   ? 'border-yellow-400 scale-[1.02] shadow-[0_0_30px_rgba(234,179,8,0.32)]'
                                   : 'border-white/8 opacity-70 hover:opacity-100 hover:border-white/20'
-                              }`}
+                                }`}
                             >
                               <img
                                 src={style.img}
-                                className={`absolute inset-0 w-full h-full object-cover transition-all duration-500 group-hover/card:scale-105 ${
-                                  active ? 'opacity-100' : 'opacity-78'
-                                }`}
+                                className={`absolute inset-0 w-full h-full object-cover transition-all duration-500 group-hover/card:scale-105 ${active ? 'opacity-100' : 'opacity-78'
+                                  }`}
                               />
-                              <div className={`absolute inset-0 transition-all duration-300 ${
-                                active
+                              <div className={`absolute inset-0 transition-all duration-300 ${active
                                   ? 'bg-gradient-to-t from-black/70 via-black/15 to-transparent'
                                   : 'bg-gradient-to-t from-black/82 via-black/38 to-black/12'
-                              }`} />
+                                }`} />
 
                               <div className="absolute inset-x-0 bottom-0 p-[clamp(0.5rem,1.5vh,1rem)]">
-                                <div className={`text-[clamp(10px,2vh,14px)] font-black uppercase tracking-[0.08em] leading-none ${
-                                  active ? 'text-yellow-400' : 'text-white'
-                                }`}>
+                                <div className={`text-[clamp(10px,2vh,14px)] font-black uppercase tracking-[0.08em] leading-none ${active ? 'text-yellow-400' : 'text-white'
+                                  }`}>
                                   {style.label}
                                 </div>
                                 <div className="mt-1 text-[8px] font-bold uppercase tracking-[0.08em] text-gray-300 leading-tight opacity-90 hidden sm:block">
@@ -2574,11 +2622,10 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
                         <button
                           onClick={handleGenerate}
                           disabled={state.isProcessing}
-                          className={`relative group flex-[2] py-3 rounded-2xl font-black uppercase text-[10px] tracking-[0.16em] transition-all flex items-center justify-center gap-2 border overflow-hidden shrink-0 active:scale-[0.98] ${
-                            state.isProcessing
+                          className={`relative group flex-[2] py-3 rounded-2xl font-black uppercase text-[10px] tracking-[0.16em] transition-all flex items-center justify-center gap-2 border overflow-hidden shrink-0 active:scale-[0.98] ${state.isProcessing
                               ? 'bg-[#27272a] text-gray-500 border-[#3f3f46] cursor-not-allowed'
                               : 'bg-[#09090b] hover:bg-black border-white/10 hover:border-purple-500/50'
-                          }`}
+                            }`}
                         >
                           {!state.isProcessing && <div className="absolute inset-0 bg-gradient-to-r from-blue-500/10 via-purple-500/10 to-pink-500/10 opacity-0 group-hover:opacity-100 transition-opacity"></div>}
                           {state.isProcessing ? (
@@ -2586,11 +2633,10 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
                           ) : (
                             <MonitorPlay className="w-3.5 h-3.5 text-cyan-400 group-hover:text-cyan-300 relative" />
                           )}
-                          <span className={`relative transition-colors duration-300 ${
-                            state.isProcessing
+                          <span className={`relative transition-colors duration-300 ${state.isProcessing
                               ? 'text-gray-400'
                               : 'text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-purple-400 to-pink-400 group-hover:from-cyan-300 group-hover:via-purple-300 group-hover:to-pink-300'
-                          }`}>
+                            }`}>
                             GENERATE CHARACTER
                           </span>
                         </button>
@@ -2858,7 +2904,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
           </h2>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => loadDiskCovers(true)}
+              onClick={() => withLibraryTransition(() => loadDiskCovers(true))}
               title="Reload Custom Assets (Fixes Missing Covers)"
               className="p-1 rounded-full hover:bg-white/10 text-gray-500 hover:text-white transition-colors"
             >
@@ -2884,7 +2930,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
             {activeFolder && (
               <div className="flex items-center gap-3 h-[34px]">
                 <button
-                  onClick={() => setActiveFolder(null)}
+                  onClick={() => withLibraryTransition(() => setActiveFolder(null))}
                   className="flex items-center gap-2 px-3 py-2 bg-white/5 hover:bg-white/10 rounded-lg border border-white/10 text-xs font-bold text-gray-300 hover:text-white transition-all uppercase tracking-wider"
                 >
                   <ArrowDownUp className="w-3 h-3 rotate-90" /> Studios
@@ -2935,7 +2981,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
 
 
           {/* CONTENT PADDING WRAPPER */}
-          <div className="p-4 pt-2">
+          <div className={`p-4 pt-2 transition-opacity duration-200 ${libraryViewLoading ? 'opacity-80' : 'opacity-100'}`}>
 
             {/* NATIVE MODE: MISSING CONFIG WARNING */}
             {isNativeParams() && !state.saveDirectoryPath && (
@@ -2981,6 +3027,13 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
             )}
 
             {!activeFolder ? (
+              libraryViewLoading ? (
+                <div className="flex flex-col gap-4 pb-20">
+                  {Array.from({ length: 5 }).map((_, i) => (
+                    <LibraryStudioSkeleton key={`studio-skeleton-${i}`} />
+                  ))}
+                </div>
+              ) : (
               // ROOT VIEW: HERO STUDIO CARDS
               <div className="flex flex-col gap-4 pb-20">
                 <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleCoverUpload} />
@@ -2999,7 +3052,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
                   const activeImage = state.customCovers[folder.id] || folder.image;
 
                   return (
-                    <div key={folder.id} className="group relative h-48 w-full rounded-3xl overflow-hidden border border-white/10 transition-all hover:scale-[1.02] hover:border-white/30 cursor-pointer" onClick={() => setActiveFolder(folder.id)}>
+                    <div key={folder.id} className="group relative h-48 w-full rounded-3xl overflow-hidden border border-white/10 transition-all hover:scale-[1.02] hover:border-white/30 cursor-pointer" onClick={() => withLibraryTransition(() => setActiveFolder(folder.id))}>
                       {/* Background Image */}
                       {activeImage ? (
                         <img src={activeImage} className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
@@ -3041,113 +3094,132 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
                   );
                 })}
               </div>
+              )
             ) : (
               // FOLDER VIEW: GRID
               <div className="grid grid-cols-2 gap-4 pb-20">
-                {filteredLibrary.map(actor => (
-                  <div key={actor.id} className="group relative aspect-square rounded-xl overflow-hidden bg-black/40 border border-[#27272a] hover:border-yellow-500/50 transition-all hover:">
-                    <img src={actor.previewUrl || actor.url} className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-500" />
-                    {/* Overlay Actions */}
-                    <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 transition-all duration-300 flex flex-col items-center justify-center gap-2 backdrop-blur-md">
-                      {/* Top Row: 3 Actions */}
-                      <div className="flex gap-2">
-                        <HelpTooltip zone="cast" id="sendToDirectorButton">
+                {libraryViewLoading ? (
+                  Array.from({ length: 8 }).map((_, i) => (
+                    <LibraryActorSkeleton key={`actor-skeleton-${i}`} />
+                  ))
+                ) : (
+                  <>
+                    {filteredLibrary.map(actor => {
+                      const safeDisplayUrl = actor.previewUrl || actor.url || '';
+
+                  return (
+                    <div key={actor.id} className="group relative aspect-square rounded-xl overflow-hidden bg-black/40 border border-[#27272a] hover:border-yellow-500/50 transition-all hover:">
+                      {safeDisplayUrl ? (
+                        <img
+                          src={safeDisplayUrl}
+                          className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-500"
+                        />
+                      ) : (
+                        <div className="w-full h-full bg-black/60 animate-pulse" />
+                      )}
+                      {/* Overlay Actions */}
+                      <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 transition-all duration-300 flex flex-col items-center justify-center gap-2 backdrop-blur-md">
+                        {/* Top Row: 3 Actions */}
+                        <div className="flex gap-2">
+                          <HelpTooltip zone="cast" id="sendToDirectorButton">
+                            <button
+                              onClick={() => {
+                                dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: safeDisplayUrl });
+                                dispatch({ type: 'SET_LAST_CASTED_PROMPT', payload: actor.profile?.identity || "" });
+                                dispatch({ type: 'SET_LAST_CASTED_MASK', payload: null });
+                                setProcessedPreviewUrl(null);
+                                dispatch({ type: 'ADD_LOG', payload: { message: `Loaded ${actor.name} into Viewport`, type: 'info' } });
+                              }}
+                              className="bg-[#27272a] hover:bg-orange-600 w-8 h-8 rounded-lg border border-white/10 hover:border-orange-400/50 transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
+                              title="Load to Forge / Turnaround"
+                            >
+                              <Hammer className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
+                            </button>
+                          </HelpTooltip>
+                          <InlineHint zone="cast" id="sendToDirectorButton" className="hidden" />
+                          <button
+                            onClick={() => dispatch({ type: 'SET_INSPECT_IMAGE', payload: safeDisplayUrl })}
+                            className="bg-[#27272a] hover:bg-blue-600 w-8 h-8 rounded-lg border border-white/10 hover:border-blue-400/50 transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
+                            title="Inspect Large"
+                          >
+                            <Maximize className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
+                          </button>
                           <button
                             onClick={() => {
-                              dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: actor.previewUrl || actor.url });
-                              dispatch({ type: 'SET_LAST_CASTED_PROMPT', payload: actor.profile?.identity || "" });
-                              dispatch({ type: 'SET_LAST_CASTED_MASK', payload: null });
-                              setProcessedPreviewUrl(null);
-                              dispatch({ type: 'ADD_LOG', payload: { message: `Loaded ${actor.name} into Viewport`, type: 'info' } });
+                              dispatch({
+                                type: 'ADD_CAST',
+                                payload: {
+                                  ...actor,
+                                  id: `ref-${Date.now()}-${Math.random()}`,
+                                  name: `${actor.name} (Ref)`,
+                                  url: safeDisplayUrl,
+                                  previewUrl: safeDisplayUrl,
+                                  sourceUrl: actor.sourceUrl || actor.url
+                                }
+                              });
                             }}
-                            className="bg-[#27272a] hover:bg-orange-600 w-8 h-8 rounded-lg border border-white/10 hover:border-orange-400/50 transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
-                            title="Load to Forge / Turnaround"
+                            className="bg-[#27272a] hover:bg-emerald-600 w-8 h-8 rounded-lg border border-white/10 hover:border-emerald-400/50 transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
+                            title="Add to Cast"
                           >
-                            <Hammer className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
+                            <UserPlus className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
                           </button>
-                        </HelpTooltip>
-                        <InlineHint zone="cast" id="sendToDirectorButton" className="hidden" />
-                        <button
-                          onClick={() => dispatch({ type: 'SET_INSPECT_IMAGE', payload: actor.previewUrl || actor.url })}
-                          className="bg-[#27272a] hover:bg-blue-600 w-8 h-8 rounded-lg border border-white/10 hover:border-blue-400/50 transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
-                          title="Inspect Large"
-                        >
-                          <Maximize className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
-                        </button>
-                        <button
-                          onClick={() => {
-                            const castUrl = actor.previewUrl || actor.url;
-                            dispatch({
-                              type: 'ADD_CAST',
-                              payload: {
-                                ...actor,
-                                id: `ref-${Date.now()}-${Math.random()}`,
-                                name: `${actor.name} (Ref)`,
-                                url: castUrl,
-                                previewUrl: actor.previewUrl || castUrl,
-                                sourceUrl: actor.sourceUrl || actor.url
+                        </div>
+                        {/* Bottom Row: 2 Actions (Centered) */}
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => setOrganizeTarget({ id: actor.id, name: actor.name })}
+                            className="bg-[#27272a] hover:bg-purple-600 w-8 h-8 rounded-lg border border-white/10 hover:border-purple-400/50 transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
+                            title="Move to Studio Folder"
+                          >
+                            <FolderInput className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
+                          </button>
+                          <button
+                            onClick={() => setDeleteTarget({ type: 'library', payload: actor.id, name: actor.name })}
+                            className="bg-[#27272a] hover:bg-red-600 w-8 h-8 rounded-lg border border-white/10 hover:border-red-400/50 transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
+                            title="Remove from Library"
+                          >
+                            <Trash2 className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
+                          </button>
+                        </div>
+                        <span className="text-[9px] font-black uppercase tracking-widest text-white/60 mt-3 pointer-events-none">Add to Stage</span>
+                      </div>
+                      {/* Centered Editable Label */}
+                      <div className="absolute bottom-0 inset-x-0 bg-black/60 backdrop-blur-md border-t border-white/5 p-1.5 flex justify-center items-center">
+                        <HelpTooltip zone="cast" id="actorNameDisplay">
+                          <input
+                            className="bg-transparent text-[10px] font-black uppercase text-center text-white/70 hover:text-white focus:text-white focus:outline-none w-full tracking-wider transition-colors"
+                            value={editingActorName?.id === actor.id ? editingActorName.name : actor.name}
+                            onChange={(e) => setEditingActorName({ id: actor.id, name: e.target.value })}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.currentTarget.blur();
                               }
-                            });
-                          }}
-                          className="bg-[#27272a] hover:bg-emerald-600 w-8 h-8 rounded-lg border border-white/10 hover:border-emerald-400/50 transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
-                          title="Add to Cast"
-                        >
-                          <UserPlus className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
-                        </button>
+                            }}
+                            onBlur={() => {
+                              if (editingActorName?.id === actor.id) {
+                                handleActorDiskOperation(actor.id, { newName: editingActorName.name });
+                                setEditingActorName(null);
+                              }
+                            }}
+                            onFocus={(e) => {
+                              setEditingActorName({ id: actor.id, name: actor.name });
+                              e.target.select();
+                            }}
+                            title="Click to Rename Actor"
+                          />
+                        </HelpTooltip>
                       </div>
-                      {/* Bottom Row: 2 Actions (Centered) */}
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => setOrganizeTarget({ id: actor.id, name: actor.name })}
-                          className="bg-[#27272a] hover:bg-purple-600 w-8 h-8 rounded-lg border border-white/10 hover:border-purple-400/50 transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
-                          title="Move to Studio Folder"
-                        >
-                          <FolderInput className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
-                        </button>
-                        <button
-                          onClick={() => setDeleteTarget({ type: 'library', payload: actor.id, name: actor.name })}
-                          className="bg-[#27272a] hover:bg-red-600 w-8 h-8 rounded-lg border border-white/10 hover:border-red-400/50 transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
-                          title="Remove from Library"
-                        >
-                          <Trash2 className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
-                        </button>
-                      </div>
-                      <span className="text-[9px] font-black uppercase tracking-widest text-white/60 mt-3 pointer-events-none">Add to Stage</span>
                     </div>
-                    {/* Centered Editable Label */}
-                    <div className="absolute bottom-0 inset-x-0 bg-black/60 backdrop-blur-md border-t border-white/5 p-1.5 flex justify-center items-center">
-                      <HelpTooltip zone="cast" id="actorNameDisplay">
-                        <input
-                          className="bg-transparent text-[10px] font-black uppercase text-center text-white/70 hover:text-white focus:text-white focus:outline-none w-full tracking-wider transition-colors"
-                          value={editingActorName?.id === actor.id ? editingActorName.name : actor.name}
-                          onChange={(e) => setEditingActorName({ id: actor.id, name: e.target.value })}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              e.currentTarget.blur();
-                            }
-                          }}
-                          onBlur={() => {
-                            if (editingActorName?.id === actor.id) {
-                              handleActorDiskOperation(actor.id, { newName: editingActorName.name });
-                              setEditingActorName(null);
-                            }
-                          }}
-                          onFocus={(e) => {
-                            setEditingActorName({ id: actor.id, name: actor.name });
-                            e.target.select();
-                          }}
-                          title="Click to Rename Actor"
-                        />
-                      </HelpTooltip>
-                    </div>
-                  </div>
-                ))}
+                  )
+                })}
                 {filteredLibrary.length === 0 && (
                   <div className="col-span-2 py-10 flex flex-col items-center justify-center text-gray-600 gap-2 border border-dashed border-gray-800 rounded-xl">
                     <Folder className="w-8 h-8 opacity-20" />
                     <p className="text-xs uppercase font-bold tracking-widest">Empty Studio</p>
                   </div>
                 )}
+                </>
+              )}
               </div>
             )}
           </div>

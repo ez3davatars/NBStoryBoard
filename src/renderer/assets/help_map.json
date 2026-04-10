@@ -113,6 +113,10 @@
             }
         },
         "stage": {
+            "stageInstructions": {
+                "type": "tooltip",
+                "text": "Drag and drop subjects or click to define scene structure."
+            },
             "stageHeader": {
                 "type": "inline",
                 "text": "Direct intent, not pixels."

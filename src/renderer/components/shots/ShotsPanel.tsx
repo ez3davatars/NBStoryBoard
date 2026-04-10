@@ -13,6 +13,7 @@ import { ShotGrid } from './ShotGrid';
 import { DirectedShotCard } from './DirectedShotCard';
 import { useAppContext } from '../../context/AppContext';
 import { buildSceneTruthSnapshot } from '../../utils/sceneTruthHelpers';
+import { buildShotBlueprintImage } from '../../utils/shotBlueprintHelpers';
 
 export type ShotsPanelProps = {
   sceneId: string;
@@ -233,15 +234,41 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
       });
 
       try {
+        const preset = SHOT_PRESETS[variant.presetId];
+        const directedSlot = slots.find(s => s.shotType === variant.presetId && s.cameraFlavor === variant.cameraFlavor);
+        
+        const rawBlueprintUrl = await buildShotBlueprintImage({
+            anchorImageUrl: effectiveResultImageUrl,
+            preset,
+            directedSlot
+        });
+
+        // Materialize the blueprint so we can inspect it without dealing with 2MB base64 strings in redux
+        let materializedBlueprintUrl = rawBlueprintUrl;
+        try {
+            const matBp = await LocalAssetService.materializeImageAsset({
+                sourceUrl: rawBlueprintUrl,
+                sceneId: sceneId,
+                variantId: variant.id,
+                kind: 'blueprint' as any,
+                saveDirectoryPath: state.saveDirectoryPath
+            });
+            materializedBlueprintUrl = matBp.displayUrl;
+        } catch (bpErr) {
+            console.warn("Could not materialize blueprint for variant", variant.id, bpErr);
+        }
+
         const previewUrl = await GeminiService.generateShotPreview({
           anchorImageUrl: effectiveResultImageUrl,
+          shotBlueprintUrl: rawBlueprintUrl,
           actorIdentitySets,
           prompt: variant.prompt,
           apiKey,
           model,
           sceneTruth,
           presetId: variant.presetId,
-          hasSubjectStyleAnalysis: !!safeSubjectActionText 
+          hasSubjectStyleAnalysis: !!safeSubjectActionText,
+          options: { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements }
         });
 
         const materialized = await LocalAssetService.materializeImageAsset({
@@ -260,6 +287,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
               ...v, 
               status: 'done', 
               previewUrl: materialized.displayUrl,
+              blueprintUrl: materializedBlueprintUrl,
               localPreviewPath: materialized.localPath || undefined,
               sourcePreviewUrl: previewUrl
             } : v)
@@ -333,7 +361,8 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
           apiKey,
           model,
           sceneTruth: session.sceneTruth,
-          presetId: variant.presetId
+          presetId: variant.presetId,
+          options: { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements }
         });
 
         const materialized = await LocalAssetService.materializeImageAsset({
@@ -406,7 +435,8 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
         actorIdentitySets: session.actorIdentitySets,
         prompt: variant.prompt,
         apiKey,
-        model
+        model,
+        options: { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements }
       });
 
       const materialized = await LocalAssetService.materializeImageAsset({

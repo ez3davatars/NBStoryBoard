@@ -37,8 +37,19 @@ async function materializeDisplayUrl(url: string | null | undefined): Promise<st
     return url;
 }
 
+const WardrobeLibrarySkeletonCard = () => (
+    <div className="aspect-square rounded-lg border border-gray-800 overflow-hidden bg-black/40 relative">
+        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent animate-[shimmer_1.8s_linear_infinite]" />
+        <div className="absolute inset-0 flex items-center justify-center">
+            <div className="w-8 h-8 rounded-lg bg-white/5 border border-white/10" />
+        </div>
+        <div className="absolute bottom-2 left-2 right-2 h-3 rounded bg-white/5" />
+    </div>
+);
+
 // --- WARDROBE STUDIO COMPONENT ---
 const WardrobeStudio = () => {
+    const [libraryLoading, setLibraryLoading] = useState(false);
     const { state, dispatch } = useAppContext();
     const [activeTab, setActiveTab] = useState<'designer' | 'library'>('designer');
     // GLOBAL STATE MAPPING
@@ -982,11 +993,11 @@ const WardrobeStudio = () => {
                         if (file.toLowerCase().includes('_designer_')) continue;
 
                         const fullPath = await nativeJoinPath(wardrobePath, file);
-                        const displayUrl = await resolveDisplayUrl({ localPath: fullPath });
-                        if (displayUrl) {
+                        const base64 = await window.electronAPI?.readFile?.(fullPath);
+                        if (base64) {
                             items.push({
                                 id: file,
-                                url: displayUrl,
+                                url: `data:image/png;base64,${base64}`,
                                 localPath: fullPath,
                                 filename: file,
                                 name: file.replace(/\.[^/.]+$/, "").split('-').slice(1).join(' '),
@@ -1040,6 +1051,17 @@ const WardrobeStudio = () => {
         } catch (e: any) {
             dispatch({ type: 'ADD_LOG', payload: { message: `Wardrobe scan failed: ${e.message} `, type: 'error' } });
         }
+    };
+
+    const withLibraryTransition = (work: () => void | Promise<void>, minMs = 180) => {
+        setLibraryLoading(true);
+        const started = Date.now();
+
+        Promise.resolve(work()).finally(() => {
+            const elapsed = Date.now() - started;
+            const remaining = Math.max(0, minMs - elapsed);
+            window.setTimeout(() => setLibraryLoading(false), remaining);
+        });
     };
 
     useEffect(() => {
@@ -1853,11 +1875,11 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                 <div className="p-4 border-b border-gray-800 flex justify-between items-center">
                     <h2 className="text-sm font-black text-white tracking-widest uppercase">Wardrobe Library</h2>
                     <div className="flex gap-1.5">
-                        <label className="flex items-center justify-center w-7 h-7 hover:bg-gray-700 rounded transition-colors text-gray-400 cursor-pointer" title="Upload Costume">
+                        <button onClick={() => document.getElementById('wardrobe-upload-input')?.click()} className="p-1.5 hover:bg-gray-700 rounded transition-colors text-gray-400" title="Upload Costume">
                             <Upload className="w-3.5 h-3.5" />
-                            <input type="file" className="hidden" accept="image/*" onChange={handleUploadCostume} />
-                        </label>
-                        <button onClick={scanWardrobe} className="flex items-center justify-center w-7 h-7 hover:bg-gray-700 rounded transition-colors text-gray-400" title="Scan Folder">
+                            <input id="wardrobe-upload-input" type="file" className="hidden" accept="image/*" onChange={handleUploadCostume} />
+                        </button>
+                        <button onClick={() => withLibraryTransition(scanWardrobe)} className="p-1.5 hover:bg-gray-700 rounded transition-colors text-gray-400" title="Scan Folder">
                             <RefreshCcw className="w-3.5 h-3.5" />
                         </button>
                     </div>
@@ -1873,38 +1895,44 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                     )}
 
                     <div className="grid grid-cols-2 gap-2">
-                        {state.wardrobeItems.map(item => (
-                            <div
-                                key={item.id}
-                                onClick={() => setSelectedCostume(item)}
-                                className={`aspect-square rounded-lg border overflow-hidden transition-all group relative cursor-pointer ${selectedCostume?.id === item.id ? 'border-yellow-500 border-2 ' : 'border-gray-800 hover:border-gray-600'}`}
-                            >
-                                <img src={item.url} className="w-full h-full transition-transform group-hover:scale-110 object-contain" />
-                                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-                                    <button
-                                        onClick={(e) => {
-                                            e.preventDefault();
-                                            e.stopPropagation();
-                                            dispatch({ type: 'SET_INSPECT_IMAGE', payload: item.url });
-                                        }}
-                                        className="bg-blue-500/80 hover:bg-blue-500 text-white p-1.5 rounded-full cursor-pointer"
-                                        title="Inspect Large"
-                                    >
-                                        <Maximize className="w-3.5 h-3.5" />
-                                    </button>
+                        {libraryLoading ? (
+                            Array.from({ length: 8 }).map((_, i) => (
+                                <WardrobeLibrarySkeletonCard key={`wardrobe-skeleton-${i}`} />
+                            ))
+                        ) : (
+                            state.wardrobeItems.map(item => (
+                                <div
+                                    key={item.id}
+                                    onClick={() => setSelectedCostume(item)}
+                                    className={`aspect-square rounded-lg border overflow-hidden transition-all group relative cursor-pointer ${selectedCostume?.id === item.id ? 'border-yellow-500 border-2' : 'border-gray-800 hover:border-gray-600'}`}
+                                >
+                                    <img src={item.url} className="w-full h-full transition-transform group-hover:scale-110 object-contain" />
+                                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                                        <button
+                                            onClick={(e) => {
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                                dispatch({ type: 'SET_INSPECT_IMAGE', payload: item.url });
+                                            }}
+                                            className="bg-blue-500/80 hover:bg-blue-500 text-white p-1.5 rounded-full cursor-pointer"
+                                            title="Inspect Large"
+                                        >
+                                            <Maximize className="w-3.5 h-3.5" />
+                                        </button>
 
-                                    <button
-                                        onClick={(e) => { e.stopPropagation(); setConfirmDelete(item); }}
-                                        className="bg-red-500/80 hover:bg-red-500 text-white p-1.5 rounded-full cursor-pointer transition-transform hover:scale-110"
-                                        title="Delete Costume"
-                                    >
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                    </button>
+                                        <button
+                                            onClick={(e) => { e.stopPropagation(); setConfirmDelete(item); }}
+                                            className="bg-red-500/80 hover:bg-red-500 text-white p-1.5 rounded-full cursor-pointer transition-transform hover:scale-110"
+                                            title="Delete Costume"
+                                        >
+                                            <Trash2 className="w-3.5 h-3.5" />
+                                        </button>
+                                    </div>
+
+                                    <span className="text-[8px] font-bold text-white uppercase truncate absolute bottom-2 left-2 right-2 text-center">{item.name}</span>
                                 </div>
-
-                                <span className="text-[8px] font-bold text-white uppercase truncate absolute bottom-2 left-2 right-2 text-center">{item.name}</span>
-                            </div>
-                        ))}
+                            ))
+                        )}
                     </div>
 
                     {state.wardrobeItems.length === 0 && (

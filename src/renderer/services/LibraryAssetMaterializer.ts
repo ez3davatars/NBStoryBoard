@@ -176,12 +176,12 @@ export const LibraryAssetMaterializer = {
             const success = await window.electronAPI.writeFile(finalPath, new Uint8Array(buffer));
             if (!success) throw new Error('Failed to write file to disk');
 
-            const displayUrl = await resolveDisplayUrl({ localPath: finalPath });
-            if (!displayUrl) throw new Error('Failed to resolve wardrobe materialization.');
+            const base64 = await window.electronAPI.readFile(finalPath);
+            if (!base64) throw new Error('Failed to read saved file from disk');
 
             return {
                 localPath: finalPath,
-                url: displayUrl,
+                url: `data:image/png;base64,${base64}`,
                 sourceUrl: args.sourceUrl,
                 filename
             };
@@ -225,12 +225,12 @@ export const LibraryAssetMaterializer = {
             const success = await window.electronAPI.writeFile(finalPath, new Uint8Array(buffer));
             if (!success) throw new Error('Failed to write file to disk');
 
-            const displayUrl = await resolveDisplayUrl({ localPath: finalPath });
-            if (!displayUrl) throw new Error('Failed to resolve prop materialization.');
+            const base64 = await window.electronAPI.readFile(finalPath);
+            if (!base64) throw new Error('Failed to read saved file from disk');
 
             return {
                 localPath: finalPath,
-                url: displayUrl,
+                url: `data:image/png;base64,${base64}`,
                 sourceUrl: args.sourceUrl,
                 filename
             };

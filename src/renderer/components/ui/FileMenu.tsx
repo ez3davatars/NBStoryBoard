@@ -2,7 +2,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useAppContext } from '../../context/AppContext';
 import { SessionService } from '../../services/SessionService';
-import { File, Save, FolderOpen, FilePlus, SaveAll, BookOpen } from 'lucide-react';
+import { File, Save, FolderOpen, FilePlus, SaveAll, BookOpen, X } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 import ConfirmDialog from './ConfirmDialog';
 
 export const FileMenu = () => {
@@ -11,6 +12,7 @@ export const FileMenu = () => {
     const menuRef = useRef<HTMLDivElement>(null);
     const triggerRef = useRef<HTMLButtonElement>(null);
     const [showNewSessionConfirm, setShowNewSessionConfirm] = useState(false);
+    const [showOpenConfirm, setShowOpenConfirm] = useState(false);
     const closeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
     // Hardcoded absolute positioning prevents disturbing the header flexbox
@@ -103,37 +105,42 @@ export const FileMenu = () => {
     };
 
     const doOpen = async () => {
-        if (!window.electronAPI || !window.electronAPI.showOpenDialog) return;
+        try {
+            if (!window.electronAPI || !window.electronAPI.showOpenDialog) return;
 
-        let defaultPath = undefined;
-        if (state.saveDirectoryPath) {
-            defaultPath = await window.electronAPI.joinPath(state.saveDirectoryPath, 'Sessions');
-            // Ensure root sessions folder exists for the Open dialog
-            await window.electronAPI.createDir(defaultPath);
-        }
+            let defaultPath = undefined;
+            if (state.saveDirectoryPath) {
+                defaultPath = await window.electronAPI.joinPath(state.saveDirectoryPath, 'Sessions');
+                // Ensure root sessions folder exists for the Open dialog
+                await window.electronAPI.createDir(defaultPath);
+            }
 
-        const filePaths = await window.electronAPI.showOpenDialog({
-            title: 'Open Cast Director Session',
-            defaultPath,
-            filters: [{ name: 'Session Files', extensions: ['cds'] }],
-            properties: ['openFile']
-        });
+            const filePaths = await window.electronAPI.showOpenDialog({
+                title: 'Open Cast Director Session',
+                defaultPath,
+                filters: [{ name: 'Session Files', extensions: ['cds'] }],
+                properties: ['openFile']
+            });
 
-        if (filePaths && filePaths.length > 0) {
-            dispatch({ type: 'ADD_LOG', payload: { message: "Loading session...", type: 'info' } });
-            const p = filePaths[0];
-            const jsonText = await window.electronAPI!.readTextFile(p);
-            if (jsonText) {
-                const loadedState = SessionService.parseSession(jsonText);
-                if (loadedState) {
-                    dispatch({ type: 'LOAD_SESSION_STATE', payload: loadedState });
-                    const filename = p.split(/[/\\]/).pop()?.replace('.cds', '') || 'Loaded Session';
-                    dispatch({ type: 'SET_SESSION_INFO', payload: { name: filename, path: p } });
-                    dispatch({ type: 'ADD_LOG', payload: { message: `Loaded session: ${filename}`, type: 'success' } });
-                } else {
-                    dispatch({ type: 'ADD_LOG', payload: { message: "Failed to parse session file.", type: 'error' } });
+            if (filePaths && filePaths.length > 0) {
+                dispatch({ type: 'ADD_LOG', payload: { message: "Loading session...", type: 'info' } });
+                const p = filePaths[0];
+                const jsonText = await window.electronAPI!.readTextFile(p);
+                if (jsonText) {
+                    const loadedState = SessionService.parseSession(jsonText);
+                    if (loadedState) {
+                        dispatch({ type: 'LOAD_SESSION_STATE', payload: loadedState });
+                        const filename = p.split(/[/\\]/).pop()?.replace('.cds', '') || 'Loaded Session';
+                        dispatch({ type: 'SET_SESSION_INFO', payload: { name: filename, path: p } });
+                        dispatch({ type: 'ADD_LOG', payload: { message: `Loaded session: ${filename}`, type: 'success' } });
+                    } else {
+                        dispatch({ type: 'ADD_LOG', payload: { message: "Failed to parse session file. File might be corrupted.", type: 'error' } });
+                    }
                 }
             }
+        } catch (error: any) {
+            console.error("Session Open Error:", error);
+            dispatch({ type: 'ADD_LOG', payload: { message: `Open error: ${error.message || error}`, type: 'error' } });
         }
     };
 
@@ -198,8 +205,8 @@ export const FileMenu = () => {
                     }} />
 
                     <MenuButton icon={<FolderOpen className="w-3.5 h-3.5" />} label="Open Session..." shortcut="Ctrl+O" onClick={() => {
+                        setShowOpenConfirm(true);
                         setIsOpen(false);
-                        doOpen();
                     }} />
 
                     <div className="h-px bg-gray-700/50 my-1 mx-2" />
@@ -226,18 +233,82 @@ export const FileMenu = () => {
                 document.body
             )}
 
-            <ConfirmDialog
-                isOpen={showNewSessionConfirm}
-                onClose={() => setShowNewSessionConfirm(false)}
-                onConfirm={() => {
-                    dispatch({ type: 'DISCARD_SESSION' });
-                    dispatch({ type: 'ADD_LOG', payload: { message: "New session started", type: 'success' } });
-                }}
-                title="New Session"
-                message="Clear current session? Unsaved changes will be lost."
-                confirmText="Clear Session"
-                variant="danger"
-            />
+            {window.document.body && createPortal(
+                <>
+                    <ConfirmDialog
+                        isOpen={showNewSessionConfirm}
+                        onClose={() => setShowNewSessionConfirm(false)}
+                        onConfirm={() => {
+                            dispatch({ type: 'DISCARD_SESSION' });
+                            dispatch({ type: 'ADD_LOG', payload: { message: "New session started", type: 'success' } });
+                        }}
+                        title="New Session"
+                        message="Clear current session? Unsaved changes will be lost."
+                        confirmText="Clear Session"
+                        variant="danger"
+                    />
+
+                    <AnimatePresence>
+                        {showOpenConfirm && (
+                            <div className="fixed inset-0 z-[99999] bg-black/80 backdrop-blur-md flex items-center justify-center p-8">
+                                <motion.div
+                                    initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                                    exit={{ opacity: 0, scale: 0.9, y: 20 }}
+                                    className="bg-[#111113] border border-white/10 rounded-3xl max-w-xl w-full relative overflow-hidden"
+                                >
+                                    <div className="h-1 w-full bg-blue-500" />
+                                    <div className="p-8">
+                                        <div className="flex items-center gap-4 mb-4">
+                                            <FolderOpen className="w-6 h-6 text-blue-500" />
+                                            <h3 className="text-xl font-black text-white uppercase tracking-wider">
+                                                Open Session
+                                            </h3>
+                                        </div>
+                                        <p className="text-gray-400 text-sm leading-relaxed mb-8">
+                                            Do you want to save the current session before opening a new one? Unsaved changes will be lost.
+                                        </p>
+                                        <div className="flex flex-wrap items-center justify-end gap-2">
+                                            <button
+                                                onClick={() => setShowOpenConfirm(false)}
+                                                className="flex-grow py-3 px-4 whitespace-nowrap rounded-xl text-[10px] font-bold uppercase tracking-[0.2em] text-gray-500 hover:text-white hover:bg-white/5 transition-all"
+                                            >
+                                                Cancel
+                                            </button>
+                                            <button
+                                                onClick={async () => {
+                                                    setShowOpenConfirm(false);
+                                                    doOpen();
+                                                }}
+                                                className="flex-grow py-3 px-4 whitespace-nowrap rounded-xl text-[10px] font-bold uppercase tracking-[0.2em] text-red-500 hover:text-white bg-red-500/10 hover:bg-red-500 border border-red-500/20 hover:border-red-500 transition-all"
+                                            >
+                                                Don't Save
+                                            </button>
+                                            <button
+                                                onClick={async () => {
+                                                    setShowOpenConfirm(false);
+                                                    const saved = await doSave(false);
+                                                    if (saved) doOpen();
+                                                }}
+                                                className="flex-grow py-3 px-4 whitespace-nowrap rounded-xl text-[10px] font-black uppercase tracking-[0.2em] text-blue-500 hover:text-white bg-blue-500/10 hover:bg-blue-500 border border-blue-500/20 transition-all"
+                                            >
+                                                Save & Open
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <button
+                                        onClick={() => setShowOpenConfirm(false)}
+                                        className="absolute top-4 right-4 text-gray-600 hover:text-white transition-colors"
+                                    >
+                                        <X className="w-4 h-4" />
+                                    </button>
+                                </motion.div>
+                            </div>
+                        )}
+                    </AnimatePresence>
+                </>,
+                window.document.body
+            )}
         </>
     );
 };

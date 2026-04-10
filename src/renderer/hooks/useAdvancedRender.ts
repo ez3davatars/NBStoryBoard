@@ -29,12 +29,8 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
             dispatch({ type: 'ADD_LOG', payload: { message: "No background set to analyze.", type: 'error' } });
             return null;
         }
-        if (state.billingEntitlements.effectiveBillingMode === 'hosted') {
-            dispatch({ type: 'ADD_LOG', payload: { message: "DNA analysis is currently BYOK-only. Please provide an API key.", type: 'error' } });
-            return null;
-        }
         if (state.billingEntitlements.effectiveBillingMode === 'byok' && (!state.billingEntitlements.hasByokAccess || !state.apiKey)) {
-            dispatch({ type: 'ADD_LOG', payload: { message: "API Key required for DNA analysis.", type: 'error' } });
+            dispatch({ type: 'ADD_LOG', payload: { message: "BYOK mode is selected. Add your API key in Settings to continue.", type: 'error' } });
             return null;
         }
 
@@ -44,9 +40,10 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
         try {
             const raw = await GeminiService.analyzeImage(
                 "Analyze this image for a film director. Return a JSON object with 3 keys: 'environment' (string, concise setting/vibe), 'lighting' (string, e.g. 'Golden Hour', 'Neon', 'Dark/Moody'), and 'camera' (string, e.g. 'Wide Angle', 'Close Up', 'Drone'). Only return the JSON.",
-                state.apiKey,
+                state.apiKey || '',
                 state.model,
-                state.backgroundUrl
+                state.backgroundUrl,
+                { billingMode: state.billingEntitlements.effectiveBillingMode === 'none' ? undefined : state.billingEntitlements.effectiveBillingMode, expectedResponseType: 'json' }
             );
 
             const parsed = safeParseJson(raw);
@@ -82,7 +79,6 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
     // Auto DNA on background change
     useEffect(() => {
         if (!autoAnchorDNA || !state.backgroundUrl) return;
-        if (state.billingEntitlements.effectiveBillingMode === 'hosted') return;
         if (state.billingEntitlements.effectiveBillingMode === 'byok' && (!state.billingEntitlements.hasByokAccess || !state.apiKey)) return;
         if (state.director?.environment || state.director?.lighting || state.director?.camera) return;
         if (lastDnaBgRef.current === state.backgroundUrl) return;
@@ -95,9 +91,10 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
             "Analyze this single character/object cutout. Return a JSON object with keys: " +
             "'identity' (who/what it is), 'wardrobe' (clothing/body/materials), 'accessories' (items held/worn), 'style' (render style/texture cues). " +
             "Keep each value concise (max ~18 words). If unknown, use empty string. ONLY return JSON.",
-            state.apiKey!,
+            state.apiKey || '',
             state.model,
-            imageUrl
+            imageUrl,
+            { billingMode: state.billingEntitlements.effectiveBillingMode === 'none' ? undefined : state.billingEntitlements.effectiveBillingMode, expectedResponseType: 'json' }
         );
 
         const parsed = safeParseJson(raw);
@@ -121,7 +118,6 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
         const overrides = new Map<string, WhitelistProfile>();
 
         if (!shouldRun) return overrides;
-        if (state.billingEntitlements.effectiveBillingMode === 'hosted') return overrides;
         if (state.billingEntitlements.effectiveBillingMode === 'byok' && (!state.billingEntitlements.hasByokAccess || !state.apiKey)) return overrides;
 
         const missing = tokens.filter(t => !t.profile);
@@ -151,11 +147,10 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
 
     const handleAnalyzeMissingTokenProfiles = async () => {
         if (state.tokens.length === 0) return;
-        if (state.billingEntitlements.effectiveBillingMode === 'hosted') {
-            dispatch({ type: 'ADD_LOG', payload: { message: "Token Profile Analysis is currently BYOK-only. Please provide an API key.", type: 'error' } });
-            return;
+        if (state.billingEntitlements.effectiveBillingMode === 'byok' && (!state.billingEntitlements.hasByokAccess || !state.apiKey)) {
+             dispatch({ type: 'ADD_LOG', payload: { message: "BYOK mode is selected. Add your API key in Settings to continue.", type: 'error' } });
+             return;
         }
-        if (state.billingEntitlements.effectiveBillingMode === 'byok' && (!state.billingEntitlements.hasByokAccess || !state.apiKey)) return;
         dispatch({ type: 'SET_PROCESSING', payload: true });
         try {
             await ensureTokenProfiles(state.tokens, { force: true });

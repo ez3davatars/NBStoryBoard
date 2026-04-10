@@ -1,0 +1,25 @@
+﻿79ffcd9 chore: pre-launch workspace cleanup
+50c1063 chore: add remaining assets, logs, and untracked files
+3ca0ca4 UI refinement and state hardening
+b1d5fb0 fix(nanocast): resolve phase 5 generated image bug, harden entitlement overrides, responsive UI tweaks
+b1a7558 feat/ui: Upgrade CastingForge Hero aesthetics and patch DEV Override entitlement resolution
+1297958 Release v1.0.1
+1f1feeb Fix: Hardened hosted generation orchestration queue against locking race conditions
+8b2f25a NanoCast Optimization
+3d29622 Help Center Edit
+2afde5e feat: Add contextual help buttons to major workspaces
+8ba176e feat: Integrated multi-layered Help Center, Welcome Modal, and SHOTS instructions
+36cc7fe docs(guide): insert detailed step-by-step execution guides for all recent Phase 1 and Phase 5 features
+1ac44e4 docs(guide): add Power of Directed SHOTS overview with Semantic Locks into Phase 5 preamble
+68d1908 docs(guide): revise Staging PREVIEW feature notification messaging per user direction
+cdf42c1 docs(guide): update USER_GUIDE to reflect Phase 5 PREVIEW status, Scene Truth architecture, modular sidebars, and Cast Asset bulk management
+5bf42f9 Add 'Delete All' cast assets button in CastingForge with confirmation modal protection
+5c02c0f Update default initialization to keep Available Cast panel open on startup
+b1f8fa7 Initialize Left and Right panels to user preferred layout defaults, and add localStorage bindings for both Array-Ordering and Open/Closed Collapse states layout persistence
+7fd5f90 Enable dragging for Actor Intelligence Panel
+e8eff23 Enable flex-order drag and drop reordering for Left Sidebar panels
+fb4fa81 Shots UI Fix
+ee34d15 UI Polish: Responsive optimizations, aggressive RegionEdit compression, PromptEngine layout fixes, and linter cleanup
+b2a2c5c feat(shots): implement Directed Shot Builder and Reference DNA Target Roster
+0e5f4df Auto-Style Environment Upgrade
+6f504d6 feat(prompt-studio): Phase 2 Style-Aware Environment Generation

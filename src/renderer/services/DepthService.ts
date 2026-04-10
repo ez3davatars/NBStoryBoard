@@ -45,7 +45,7 @@ async function getCachedCanvas(url: string | null): Promise<HTMLCanvasElement | 
             const canvas = document.createElement('canvas');
             canvas.width = img.width;
             canvas.height = img.height;
-            const ctx = canvas.getContext('2d');
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
             if (!ctx) {
                 resolve(null);
                 return;
@@ -268,7 +268,7 @@ class DepthServiceBase {
         const canvas = document.createElement('canvas');
         canvas.width = targetWidth;
         canvas.height = targetHeight;
-        const ctx = canvas.getContext('2d');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
         if (!ctx) return { maskUrl: '', visibilityRatio: 1.0 };
 
         // RENDERER GUARDRAIL: Immutability Check

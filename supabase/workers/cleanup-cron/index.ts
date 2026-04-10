@@ -1,19 +1,19 @@
 import { createClient } from '@supabase/supabase-js';
 import { DeleteObjectCommand, S3Client } from '@aws-sdk/client-s3';
 
-const SUPABASE_URL = process.env.SUPABASE_URL || 'https://wtgkeytabshxtspjoegb.supabase.co';
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'sb_secret_12qAUYx1gzluIF0kxQqPNw_zMGtwwVr';
-const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID || '6c36be70912cdcabc7b26eb790314e2c';
-const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID || '2285c183d3af0f4c3a30e9636c5c7562';
-const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY || '12befab0e645e9becb47bffdefc32b399b1671c5922d8efb43c2ed8f28ad2b53';
-const R2_BUCKET_NAME = process.env.R2_BUCKET_NAME || 'cd-generations';
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY;
+const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID;
+const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID;
+const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY;
+const R2_BUCKET_NAME = process.env.R2_BUCKET_NAME;
 
-if (!SUPABASE_SERVICE_ROLE_KEY || !R2_ACCOUNT_ID || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY || !R2_BUCKET_NAME) {
-  console.error('FATAL: Missing essential credentials. Cleanup worker standing down.');
+if (!SUPABASE_URL || !SUPABASE_SECRET_KEY || !R2_ACCOUNT_ID || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY || !R2_BUCKET_NAME) {
+  console.error('[CleanupCron] FATAL: Missing essential environment credentials. Cleanup worker standing down.');
   process.exit(1);
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+const supabase = createClient(SUPABASE_URL, SUPABASE_SECRET_KEY);
 const r2 = new S3Client({
   region: 'auto',
   endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
@@ -30,6 +30,8 @@ async function runCleanup() {
       .from('generations')
       .select('id, asset_storage_path')
       .eq('status', 'COMPLETED')
+      .eq('asset_persistence', 'temporary')
+      .not('asset_storage_path', 'is', null)
       .lt('asset_expires_at', new Date().toISOString())
       .limit(50); // Batch limit
 
@@ -43,7 +45,11 @@ async function runCleanup() {
       return;
     }
 
-    console.log(`[CleanupWorker] Found ${expiredJobs.length} expired assets to process.`);
+    console.log(`[CleanupWorker] Found ${expiredJobs.length} expired rows to process.`);
+
+    let successCount = 0;
+    let failCount = 0;
+    let skippedCount = 0;
 
     for (const job of expiredJobs) {
       if (job.asset_storage_path) {
@@ -54,11 +60,15 @@ async function runCleanup() {
               Key: job.asset_storage_path,
             })
           );
-          console.log(`[CleanupWorker] R2 Deleted: ${job.asset_storage_path}`);
+          console.log(`[CleanupWorker] R2 Deleted successfully: ${job.asset_storage_path}`);
         } catch (s3Err: any) {
-          console.error(`[CleanupWorker] Failed to delete ${job.asset_storage_path} from R2:`, s3Err.message);
+          console.error(`[CleanupWorker] Failed R2 deletion for ${job.asset_storage_path}:`, s3Err.message);
+          failCount++;
           continue; // Skip DB update if delete failed so we can retry later safely
         }
+      } else {
+        console.log(`[CleanupWorker] Skipped row ${job.id} - missing asset_storage_path`);
+        skippedCount++;
       }
 
       const { error: updateErr } = await supabase
@@ -71,11 +81,15 @@ async function runCleanup() {
         .eq('id', job.id);
 
       if (updateErr) {
-         console.error(`[CleanupWorker] Failed to update DB status for ${job.id}:`, updateErr.message);
+         console.error(`[CleanupWorker] Failed DB expiration update for ${job.id}:`, updateErr.message);
+         failCount++;
       } else {
-         console.log(`[CleanupWorker] Generation ${job.id} marked as EXPIRED.`);
+         console.log(`[CleanupWorker] Successful DB expiration update. ${job.id} marked as EXPIRED.`);
+         successCount++;
       }
     }
+    
+    console.log(`[CleanupWorker] Pass complete. Success/DB Nullified: ${successCount}. R2/DB Fails: ${failCount}. Skipped: ${skippedCount}.`);
   } catch (err: any) {
     console.error('[CleanupWorker] Error during cleanup pass:', err.message);
   } finally {

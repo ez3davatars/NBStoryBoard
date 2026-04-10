@@ -2,7 +2,7 @@
 import { createContext, useContext, useReducer, useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { StorageService } from '../services/StorageService';
-import { safeFetchBlob, isNativeParams, nativeJoinPath } from '../utils/NativeFileAssets';
+import { isNativeParams, nativeJoinPath } from '../utils/NativeFileAssets';
 import { computeDepthScore } from '../utils/spatialHelpers';
 import { resolveDisplayUrl } from '../utils/assetUrlResolver';
 
@@ -2104,27 +2104,48 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                         
                         if (!resolvedPath && actor.filename && isNativeParams() && savePath) {
                             const fullPath = await nativeJoinPath(savePath, 'Actors', actor.filename);
-                            resolvedPath = `file:///${fullPath.replace(/\\/g, '/')}`;
+                            resolvedPath = fullPath;
                         }
 
-                        let hydratedPreview = actor.previewUrl;
-                        const finalDisplayUrl = await resolveDisplayUrl({
-                            localPath: resolvedPath,
-                            sourcePreviewUrl: actor.sourceUrl,
-                            previewUrl: actor.previewUrl || actor.url
-                        });
-                        
-                        hydratedPreview = finalDisplayUrl || actor.previewUrl || actor.sourceUrl || actor.url;
+                        let finalDisplayUrl: string | null = null;
 
-                        // Last resort blob reconstruction if lost
-                        if (!finalDisplayUrl && actor.url && actor.url.startsWith('blob:')) {
+                        // Native mode: rebuild thumbnail directly from disk into a data URL
+                        if (isNativeParams() && resolvedPath && (window as any).electronAPI?.readFile) {
                             try {
-                                const blob = await safeFetchBlob(actor.url);
-                                hydratedPreview = URL.createObjectURL(blob);
-                            } catch { }
+                                const base64 = await (window as any).electronAPI.readFile(resolvedPath);
+                                if (base64) {
+                                    finalDisplayUrl = `data:image/png;base64,${base64}`;
+                                }
+                            } catch (readErr) {
+                                console.warn(`[AppContext] Native thumbnail read failed for actor ${actor.id}`, readErr);
+                            }
                         }
 
-                        return { ...actor, previewUrl: hydratedPreview, url: hydratedPreview || actor.url };
+                        // Web / fallback path
+                        if (!finalDisplayUrl) {
+                            const cleanPreviewUrl =
+                                actor.previewUrl && actor.previewUrl.startsWith('blob:') ? undefined : actor.previewUrl;
+                            const cleanUrl =
+                                actor.url && actor.url.startsWith('blob:') ? undefined : actor.url;
+
+                            finalDisplayUrl = await resolveDisplayUrl({
+                                localPath: resolvedPath,
+                                sourcePreviewUrl: actor.sourceUrl,
+                                previewUrl: cleanPreviewUrl || cleanUrl
+                            });
+                        }
+
+                        const safeUrl =
+                            finalDisplayUrl ||
+                            (actor.url && !actor.url.startsWith('blob:') ? actor.url : '') ||
+                            '';
+
+                        return {
+                            ...actor,
+                            localPath: resolvedPath,
+                            previewUrl: undefined,
+                            url: safeUrl
+                        };
                     } catch (e) {
                         console.warn(`[AppContext] Failed to hydrate previewUrl for actor ${actor.id}`, e);
                         return actor;
@@ -2144,16 +2165,26 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                     try {
                         let resolvedPath = item.localPath;
                         const savePath = localStorage.getItem('nano_save_path');
+                        
                         if (!resolvedPath && item.filename && isNativeParams() && savePath) {
-                            const fullPath = await nativeJoinPath(savePath, 'wardrobe', item.filename);
-                            resolvedPath = `file:///${fullPath.replace(/\\/g, '/')}`;
+                            resolvedPath = await nativeJoinPath(savePath, 'wardrobe', item.filename);
                         }
+                        
+                        if (isNativeParams() && resolvedPath && (window as any).electronAPI?.readFile) {
+                            try {
+                                const base64 = await (window as any).electronAPI.readFile(resolvedPath);
+                                if (base64) {
+                                    return { ...item, localPath: resolvedPath, url: `data:image/png;base64,${base64}` };
+                                }
+                            } catch {}
+                        }
+                        
                         const finalDisplayUrl = await resolveDisplayUrl({
                             localPath: resolvedPath,
                             sourcePreviewUrl: item.sourceUrl,
                             previewUrl: item.url
                         });
-                        return { ...item, url: finalDisplayUrl || item.url };
+                        return { ...item, localPath: resolvedPath, url: finalDisplayUrl || item.url };
                     } catch (e) {
                         return item;
                     }
@@ -2163,16 +2194,26 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                     try {
                         let resolvedPath = item.localPath;
                         const savePath = localStorage.getItem('nano_save_path');
+                        
                         if (!resolvedPath && item.filename && isNativeParams() && savePath) {
-                            const fullPath = await nativeJoinPath(savePath, 'props', item.filename);
-                            resolvedPath = `file:///${fullPath.replace(/\\/g, '/')}`;
+                            resolvedPath = await nativeJoinPath(savePath, 'props', item.filename);
                         }
+                        
+                        if (isNativeParams() && resolvedPath && (window as any).electronAPI?.readFile) {
+                            try {
+                                const base64 = await (window as any).electronAPI.readFile(resolvedPath);
+                                if (base64) {
+                                    return { ...item, localPath: resolvedPath, url: `data:image/png;base64,${base64}` };
+                                }
+                            } catch {}
+                        }
+                        
                         const finalDisplayUrl = await resolveDisplayUrl({
                             localPath: resolvedPath,
                             sourcePreviewUrl: item.sourceUrl,
                             previewUrl: item.url
                         });
-                        return { ...item, url: finalDisplayUrl || item.url };
+                        return { ...item, localPath: resolvedPath, url: finalDisplayUrl || item.url };
                     } catch (e) {
                         return item;
                     }
@@ -2347,6 +2388,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                             if (url && url.startsWith('data:')) url = '';
                             if (previewUrl && previewUrl.startsWith('data:')) previewUrl = undefined;
                         }
+                        
+                        // Treat object blob URLs as session-ephemeral only
+                        if (url && url.startsWith('blob:')) url = '';
+                        if (previewUrl && previewUrl.startsWith('blob:')) previewUrl = undefined;
+
                         return { ...actor, url, previewUrl };
                     });
 

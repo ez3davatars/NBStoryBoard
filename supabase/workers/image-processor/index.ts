@@ -5,44 +5,24 @@ import * as crypto from 'node:crypto';
 // ==========================================
 // CONFIGURATION
 // ==========================================
-const SUPABASE_URL =
-  process.env.SUPABASE_URL || 'https://wtgkeytabshxtspjoegb.supabase.co';
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'sb_secret_12qAUYx1gzluIF0kxQqPNw_zMGtwwVr';
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || 'AIzaSyBaGcnd1_gxdECdTE89HVNQgxdYk4d3WxE';
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 // Cloudflare R2 configuration
-const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID || '6c36be70912cdcabc7b26eb790314e2c';
-const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID || '2285c183d3af0f4c3a30e9636c5c7562';
-const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY || '12befab0e645e9becb47bffdefc32b399b1671c5922d8efb43c2ed8f28ad2b53';
-const R2_BUCKET_NAME = process.env.R2_BUCKET_NAME || 'cd-generations';
-const R2_PUBLIC_URL = (process.env.R2_PUBLIC_URL || 'https://pub-62f299edb7ef4f748caadb57f15f1d02.r2.dev').replace(/\/+$/, '');
-
-function decodeJwtPayload(token: string) {
-  try {
-    const parts = token.split('.');
-    if (parts.length !== 3) return null;
-    const payload = parts[1]
-      .replace(/-/g, '+')
-      .replace(/_/g, '/')
-      .padEnd(Math.ceil(parts[1].length / 4) * 4, '=');
-    return JSON.parse(Buffer.from(payload, 'base64').toString('utf8'));
-  } catch {
-    return null;
-  }
-}
-
-const jwtPayload = decodeJwtPayload(SUPABASE_SERVICE_ROLE_KEY);
+const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID;
+const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID;
+const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY;
+const R2_BUCKET_NAME = process.env.R2_BUCKET_NAME;
+const R2_PUBLIC_URL = (process.env.R2_PUBLIC_URL || '').replace(/\/+$/, '');
 
 console.log('[Worker] SUPABASE_URL:', SUPABASE_URL);
-console.log('[Worker] service key present:', !!SUPABASE_SERVICE_ROLE_KEY);
-console.log('[Worker] service key prefix:', SUPABASE_SERVICE_ROLE_KEY.slice(0, 20));
-console.log('[Worker] decoded role claim:', jwtPayload?.role);
-console.log('[Worker] decoded iss claim:', jwtPayload?.iss);
-console.log('[Worker] decoded ref claim:', jwtPayload?.ref);
-console.log('[Worker] key prefix raw:', SUPABASE_SERVICE_ROLE_KEY.slice(0, 16));
+console.log('[Worker] service key present:', !!SUPABASE_SECRET_KEY);
+console.log('[Worker] key prefix raw:', SUPABASE_SECRET_KEY ? SUPABASE_SECRET_KEY.slice(0, 16) : 'none');
 
 if (
-  !SUPABASE_SERVICE_ROLE_KEY ||
+  !SUPABASE_URL ||
+  !SUPABASE_SECRET_KEY ||
   !GEMINI_API_KEY ||
   !R2_ACCOUNT_ID ||
   !R2_ACCESS_KEY_ID ||
@@ -53,7 +33,7 @@ if (
   process.exit(1);
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+const supabase = createClient(SUPABASE_URL, SUPABASE_SECRET_KEY);
 const WORKER_ID = crypto.randomUUID();
 
 const r2 = new S3Client({
@@ -274,27 +254,39 @@ async function executeJob(job: JobRecord) {
       (p: any) => p?.inlineData?.data
     )?.inlineData?.data;
 
-    if (!imgData) {
+    const textData = result?.candidates?.[0]?.content?.parts?.find(
+      (p: any) => p?.text
+    )?.text;
+
+    if (!imgData && !textData) {
       failCode = 'PROVIDER_ERROR';
-      throw new Error('PROVIDER_ERROR: Provider succeeded but returned no image data.');
+      throw new Error('PROVIDER_ERROR: Provider succeeded but returned neither image nor text data.');
     }
 
-    console.log(`[Worker ${WORKER_ID}] Uploading image to Cloudflare R2...`);
     let fileKey = '';
     let publicUrl: string | null = null;
     const r2_started_at = Date.now();
+    let r2_finished_at = Date.now();
 
-    try {
-      const upload = await uploadToR2(job.id, imgData);
-      fileKey = upload.fileKey;
-      publicUrl = upload.publicUrl;
-    } catch (uploadErr: any) {
-      failCode = 'STORAGE_ERROR';
-      throw new Error(`STORAGE_ERROR: R2 upload failed: ${uploadErr?.message || String(uploadErr)}`);
+    if (imgData) {
+        console.log(`[Worker ${WORKER_ID}] Uploading image to Cloudflare R2...`);
+        try {
+          const upload = await uploadToR2(job.id, imgData);
+          fileKey = upload.fileKey;
+          publicUrl = upload.publicUrl;
+        } catch (uploadErr: any) {
+          failCode = 'STORAGE_ERROR';
+          throw new Error(`STORAGE_ERROR: R2 upload failed: ${uploadErr?.message || String(uploadErr)}`);
+        }
+        r2_finished_at = Date.now();
+    } else if (textData) {
+        console.log(`[Worker ${WORKER_ID}] Received text/vision payload. Encoding as data URI...`);
+        fileKey = 'text-result';
+        // URI encode to prevent breaking JSON strings in the database URL column
+        publicUrl = `data:application/json;charset=utf-8,${encodeURIComponent(textData)}`;
     }
-    const r2_finished_at = Date.now();
 
-    console.log(`[Worker ${WORKER_ID}] R2 upload complete. Writing metrics and finalizing generation...`);
+    console.log(`[Worker ${WORKER_ID}] Generation task payload handler complete. Writing metrics and finalizing generation...`);
 
     const db_start_attempt = Date.now();
     try {

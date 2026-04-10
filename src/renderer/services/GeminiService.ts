@@ -212,6 +212,137 @@ export const GeminiService = {
     return undefined;
   },
 
+  async _executeHostedRequest(
+    model: string,
+    requestBody: any,
+    options: {
+      imageSize?: '1K' | '2K' | '4K',
+      expectedResponseType?: 'image' | 'text' | 'json',
+      onJobAccepted?: (generationId: string, acceptedAt?: number) => void
+    } = {}
+  ): Promise<string> {
+    if ((window as any).electronAPI && typeof (window as any).electronAPI.getWorkerStatus === 'function') {
+        const workerState = await (window as any).electronAPI.getWorkerStatus();
+        if (workerState.imageWorker.status !== 'online') {
+            throw new Error(`Hosted Generation is unavailable because the required background worker is not currently online. Status: ${workerState.imageWorker.status}. Reason: ${workerState.imageWorker.lastError || 'None'}`);
+        }
+    }
+
+    const { SupabaseAuth, supabase } = await import('./SupabaseClient');
+    const token = await SupabaseAuth.getValidJwt();
+    const idempotencyKey = "batch_" + Date.now() + "_" + Math.floor(Math.random() * 1000);
+
+    const payloadBodyForEdge = {
+      model,
+      requestBody
+    };
+
+    const hashBuffer = await crypto.subtle.digest(
+      'SHA-256',
+      new TextEncoder().encode(JSON.stringify(payloadBodyForEdge))
+    );
+    const executionFingerprint = Array.from(new Uint8Array(hashBuffer))
+      .map(b => b.toString(16).padStart(2, '0'))
+      .join('');
+
+    if (!supabase) throw new Error('Supabase is not configured for hosted execution.');
+    if (!token || token.split('.').length !== 3) {
+      throw new Error('Hosted Execution Error: Missing or malformed user JWT');
+    }
+
+    const edgeUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-image`;
+    const rawResponse = await fetch(edgeUrl, {
+      method: 'POST',
+      cache: 'no-store',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+        'Content-Type': 'application/json',
+        'X-Idempotency-Key': idempotencyKey,
+        Accept: 'application/json'
+      },
+      body: JSON.stringify({
+        payload: payloadBodyForEdge,
+        options,
+        executionFingerprint
+      })
+    });
+
+    const responseText = await rawResponse.text();
+
+    if (rawResponse.status === 202) {
+      const data = JSON.parse(responseText);
+      const genId = data.generationId;
+      if (!genId) throw new Error('Hosted Generation Error: Received 202 but no generationId.');
+
+      if (options.onJobAccepted) options.onJobAccepted(genId, data.acceptedAt);
+      
+      if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('refresh-credits'));
+      }
+
+      let attempts = 0;
+      let MAX_ATTEMPTS = 45; // 1K default (90s)
+      if (options.imageSize === '2K') MAX_ATTEMPTS = 60; // 120s
+      if (options.imageSize === '4K') MAX_ATTEMPTS = 90; // 180s
+      
+      while (attempts < MAX_ATTEMPTS) {
+        await new Promise(r => setTimeout(r, 2000));
+        attempts++;
+        
+        const { data: pollData, error: pollErr } = await supabase
+          .from('generations')
+          .select('status, asset_url, error_message, failure_code')
+          .eq('id', genId)
+          .single();
+          
+        if (pollErr) {
+          console.warn(`[Hosted Polling] db fetch error:`, pollErr.message);
+          continue; // Soft retry
+        }
+        
+        if (pollData) {
+          if (pollData.status === 'COMPLETED') {
+            if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('refresh-credits'));
+            
+            if (options.expectedResponseType === 'json' || options.expectedResponseType === 'text') {
+               if (!pollData.asset_url) throw new Error("Hosted Execution Error: COMPLETED but missing analysis payload.");
+               return pollData.asset_url; // Returns raw string (JSON/text) placed by worker
+            }
+
+            if (!pollData.asset_url) throw new Error("Hosted Generation Error: COMPLETED but missing asset_url.");
+            return pollData.asset_url;
+          }
+          if (pollData.status === 'FAILED') {
+            if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('refresh-credits'));
+            throw new Error(`Hosted Execution Error [${pollData.failure_code || 'PROVIDER_ERROR'}]: ${pollData.error_message}`);
+          }
+          if (pollData.status === 'EXPIRED') {
+            throw new Error("Hosted Execution Error: Asset expired and was cleaned up. Please save locally in time.");
+          }
+          if (pollData.status === 'CANCELED') {
+            throw new Error('Hosted Execution Error: Job was canceled manually.');
+          }
+        }
+      }
+      
+      const timeoutErr = new Error('Hosted Generation Pending: Generation exceeded the current UI wait window and may still complete in the background.');
+      timeoutErr.name = 'TimeoutError';
+      (timeoutErr as any).generationId = genId;
+      throw timeoutErr;
+    }
+
+    if (!rawResponse.ok) {
+      let cleanMsg = responseText;
+      try { cleanMsg = JSON.parse(responseText).error || cleanMsg; } catch { }
+      throw new Error(`Hosted Orchestration Auth/Queue Error (${rawResponse.status}): ${cleanMsg}`);
+    }
+
+    const data = JSON.parse(responseText);
+    return data.imageUrl;
+  },
+
+
   async generateImage(
     prompt: string,
     apiKey: string,
@@ -406,137 +537,8 @@ export const GeminiService = {
       if (thinkingConfig) {
         requestBody.generationConfig.thinkingConfig = thinkingConfig;
       }
-
       if (options.billingMode === 'hosted') {
-        if ((window as any).electronAPI && typeof (window as any).electronAPI.getWorkerStatus === 'function') {
-            const workerState = await (window as any).electronAPI.getWorkerStatus();
-            if (workerState.status !== 'online') {
-                throw new Error(`Hosted Generation is unavailable because the required background worker is not currently online. Status: ${workerState.status}. Reason: ${workerState.lastError || 'None'}`);
-            }
-        }
-
-        const { SupabaseAuth, supabase } = await import('./SupabaseClient');
-
-        const token = await SupabaseAuth.getValidJwt();
-        const idempotencyKey = executionBatchId;
-
-        const payloadBodyForEdge = {
-          model,
-          requestBody
-        };
-
-        const hashBuffer = await crypto.subtle.digest(
-          'SHA-256',
-          new TextEncoder().encode(JSON.stringify(payloadBodyForEdge))
-        );
-        const executionFingerprint = Array.from(new Uint8Array(hashBuffer))
-          .map(b => b.toString(16).padStart(2, '0'))
-          .join('');
-
-        if (!supabase) throw new Error('Supabase is not configured for hosted generation.');
-
-        if (!token || token.split('.').length !== 3) {
-          throw new Error('Hosted Generation Error: Missing or malformed user JWT');
-        }
-
-        const edgeUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-image`;
-
-        const rawResponse = await fetch(edgeUrl, {
-          method: 'POST',
-          cache: 'no-store',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
-            'Content-Type': 'application/json',
-            'X-Idempotency-Key': idempotencyKey,
-            Accept: 'application/json'
-          },
-          body: JSON.stringify({
-            payload: payloadBodyForEdge,
-            options,
-            executionFingerprint
-          })
-        });
-
-        const responseText = await rawResponse.text();
-
-        if (rawResponse.status === 202) {
-          const data = JSON.parse(responseText);
-          const genId = data.generationId;
-          if (!genId) throw new Error('Hosted Generation Error: Received 202 but no generationId.');
-
-          if (options.onJobAccepted) options.onJobAccepted(genId, data.acceptedAt);
-          
-          if (typeof window !== 'undefined') {
-              window.dispatchEvent(new CustomEvent('refresh-credits'));
-          }
-
-          // Polling loop logic: Max 90-180 seconds based on image size
-          let attempts = 0;
-          let MAX_ATTEMPTS = 45; // 1K default (90s)
-          if (options.imageSize === '2K') MAX_ATTEMPTS = 60; // 120s
-          if (options.imageSize === '4K') MAX_ATTEMPTS = 90; // 180s
-          
-          while (attempts < MAX_ATTEMPTS) {
-            await new Promise(r => setTimeout(r, 2000));
-            attempts++;
-            
-            const { data: pollData, error: pollErr } = await supabase
-              .from('generations')
-              .select('status, asset_url, error_message, failure_code')
-              .eq('id', genId)
-              .single();
-              
-            if (pollErr) {
-              console.warn(`[Hosted Polling] db fetch error:`, pollErr.message);
-              continue; // Soft retry
-            }
-            
-            if (pollData) {
-              if (pollData.status === 'COMPLETED') {
-                if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('refresh-credits'));
-                if (!pollData.asset_url) throw new Error("Hosted Generation Error: COMPLETED but missing asset_url.");
-                return pollData.asset_url;
-              }
-              if (pollData.status === 'FAILED') {
-                if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('refresh-credits'));
-                throw new Error(`Hosted Generation Error [${pollData.failure_code || 'PROVIDER_ERROR'}]: ${pollData.error_message}`);
-              }
-              if (pollData.status === 'EXPIRED') {
-                throw new Error("Hosted Generation Error: Asset expired and was cleaned up. Please save locally in time.");
-              }
-              if (pollData.status === 'CANCELED') {
-                throw new Error('Hosted Generation Error: Job was canceled manually.');
-              }
-            }
-          }
-          
-          const timeoutErr = new Error('Hosted Generation Pending: Generation exceeded the current UI wait window and may still complete in the background.');
-          timeoutErr.name = 'TimeoutError';
-          (timeoutErr as any).generationId = genId;
-          throw timeoutErr;
-        }
-
-        if (!rawResponse.ok) {
-          let errMsg = responseText;
-          try {
-            const parsed = JSON.parse(responseText);
-            errMsg = parsed.message || parsed.error || errMsg;
-          } catch {}
-          
-          if (rawResponse.status === 402 || rawResponse.status === 403) {
-             if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('refresh-credits'));
-          }
-          throw new Error(`Hosted Generation Error [${rawResponse.status}]: ${errMsg}`);
-        }
-
-        const data = JSON.parse(responseText);
-        // Fallback for exact cache hit scenarios returning 200
-        if (!data?.imageUrl) {
-          throw new Error('Hosted Generation Error: No image returned from orchestrator.');
-        }
-
-        return data.imageUrl;
+        return await GeminiService._executeHostedRequest(model, requestBody, options);
       }
       // ===============================================
 
@@ -616,25 +618,36 @@ export const GeminiService = {
     prompt: string,
     apiKey: string,
     _model: string,
-    imageUrl: string
+    imageUrl: string,
+    options: { billingMode?: 'hosted' | 'byok', entitlements?: any, onJobAccepted?: any, expectedResponseType?: 'image' | 'text' | 'json' } = {}
   ): Promise<string> {
-    if (!apiKey) throw new Error("No API Key provided.");
+    if (!apiKey && options.billingMode !== 'hosted') throw new Error("No API Key provided.");
     // Force a vision-text model for analysis to avoid modality errors with generation models
     const useModel = 'gemini-2.5-flash';
     const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${useModel}:generateContent`;
 
     const inline = await GeminiService._resolveImageData(imageUrl, 1024);
+    const requestBody = {
+      contents: [{
+        parts: [
+          { text: prompt },
+          { inlineData: { mimeType: inline.mimeType, data: inline.data } }
+        ]
+      }]
+    };
+
+    if (options.billingMode === 'hosted') {
+        const hostedDataUrl = await GeminiService._executeHostedRequest(useModel, requestBody, options);
+        if (hostedDataUrl && hostedDataUrl.startsWith('data:application/json')) {
+            return decodeURIComponent(hostedDataUrl.split(',')[1]);
+        }
+        return hostedDataUrl;
+    }
+
     const response = await fetch(`${baseUrl}?key=${apiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{
-          parts: [
-            { text: prompt },
-            { inlineData: { mimeType: inline.mimeType, data: inline.data } }
-          ]
-        }]
-      })
+      body: JSON.stringify(requestBody)
     });
 
     if (!response.ok) {
@@ -656,9 +669,10 @@ export const GeminiService = {
     prompt: string,
     apiKey: string,
     _model: string,
-    frames: { url: string; label: string }[]
+    frames: { url: string; label: string }[],
+    options: { billingMode?: 'hosted' | 'byok', entitlements?: any, onJobAccepted?: any, expectedResponseType?: 'image' | 'text' | 'json' } = {}
   ): Promise<string> {
-    if (!apiKey) throw new Error("No API Key provided.");
+    if (!apiKey && options.billingMode !== 'hosted') throw new Error("No API Key provided.");
     // Multi-frame reasoning requires a vision-capable text model
     const useModel = 'gemini-2.5-flash';
     const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${useModel}:generateContent`;
@@ -677,12 +691,24 @@ export const GeminiService = {
     // 2. Inject the reasoning prompt
     parts.push({ text: prompt });
 
+    const requestBody = {
+      contents: [{ parts }]
+    };
+
+    if (options.billingMode === 'hosted') {
+        const rawResultText = await GeminiService._executeHostedRequest(useModel, requestBody, { ...options, expectedResponseType: 'text' });
+        
+        // Backwards compatibility purely for legacy payloads already queued
+        if (rawResultText && rawResultText.startsWith('data:application/json')) {
+            return decodeURIComponent(rawResultText.split(',')[1]);
+        }
+        return rawResultText;
+    }
+
     const response = await fetch(`${baseUrl}?key=${apiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts }]
-      })
+      body: JSON.stringify(requestBody)
     });
 
     if (!response.ok) {
@@ -702,7 +728,8 @@ export const GeminiService = {
     prompt: string,
     apiKey: string,
     model: string,
-    frames: { url: string; label: string }[]
+    frames: { url: string; label: string }[],
+    options: { billingMode?: 'hosted' | 'byok', entitlements?: any, onJobAccepted?: any, expectedResponseType?: 'image' | 'text' | 'json' } = {}
   ): Promise<T> {
     const strictPrompt = `
        ${prompt}
@@ -712,7 +739,8 @@ export const GeminiService = {
 
     // Reuse the underlying fetch logic or just call analyzeMultiFrame if acceptable. 
     // For safety/types, let's call the base method since it returns string.
-    const rawText = await GeminiService.analyzeMultiFrame(strictPrompt, apiKey, model, frames);
+    // Request explicit JSON payload typing for Edge normalization
+    const rawText = await GeminiService.analyzeMultiFrame(strictPrompt, apiKey, model, frames, { ...options, expectedResponseType: 'json' });
 
     try {
       // Clean potentially messy output (e.g. ```json ... ```)
@@ -734,6 +762,8 @@ export const GeminiService = {
     }
   },
 
+
+
   /**
    * Style Transfer Pipeline: Phase 1
    * Analyzes a character image to extract aesthetic style descriptors.
@@ -741,9 +771,10 @@ export const GeminiService = {
   async analyzeCharacterStyle(
     imageUrl: string,
     apiKey: string,
-    model: string = 'gemini-2.5-flash' // Defaulting to the fast multimodal model
+    model: string = 'gemini-2.5-flash', // Defaulting to the fast multimodal model
+    options: { billingMode?: 'hosted' | 'byok', entitlements?: any, onJobAccepted?: any } = {}
   ): Promise<ExtractedStyle> {
-    if (!apiKey) throw new Error("No API Key provided for style analysis.");
+    if (!apiKey && options.billingMode !== 'hosted') throw new Error("No API Key provided for style analysis.");
 
     const prompt = `Analyze this character image. Return a JSON object describing their exact artistic medium, color palette, and mood. Do NOT describe the character's physical features or clothing. Only describe the aesthetic style (e.g., 3D animated, CG animated, pastel colors, cel-shaded, gritty cinematic, etc.). Return only style descriptors. No full sentences.
 
@@ -766,7 +797,8 @@ export const GeminiService = {
         prompt,
         apiKey,
         model,
-        [{ url: imageUrl, label: 'Character Asset' }]
+        [{ url: imageUrl, label: 'Character Asset' }],
+        options
       );
       
       if (!result || !result.styleSummary) {
@@ -796,8 +828,9 @@ export const GeminiService = {
     apiKey: string,
     model: string,
     referenceImages: { url: string; label: string }[] = [],
-    options: { aspectRatio?: string } = {}
+    options: { aspectRatio?: string, billingMode?: 'hosted' | 'byok', entitlements?: any, expectedResponseType?: 'image' } = {}
   ): Promise<string> {
+    if (!apiKey && options.billingMode !== 'hosted') throw new Error("No API Key provided.");
     const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
     const base = await GeminiService._resolveImageData(baseImageUrl);
@@ -838,13 +871,20 @@ Hard constraints:
 `
     });
 
+    const requestBody = {
+        contents: [{ parts }],
+        generationConfig: { temperature: 0.2 }
+    };
+
+    if (options.billingMode === 'hosted') {
+        const payload = await GeminiService._executeHostedRequest(model, requestBody, options);
+        return payload;
+    }
+
     const response = await fetch(`${baseUrl}?key=${apiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts }],
-        generationConfig: { temperature: 0.2 }
-      })
+      body: JSON.stringify(requestBody)
     });
 
     if (!response.ok) {
@@ -977,11 +1017,15 @@ Hard constraints:
   },
 
   /**
-   * Phase 3: Semantic scene intent parser using Gemini LLM (with rule-based fallback)
+   * Semantic scene intent parser using Gemini LLM (with rule-based fallback)
    */
-  async analyzeSceneIntent(prompt: string, apiKey?: string): Promise<SceneIntent> {
+  async analyzeSceneIntent(
+    prompt: string, 
+    apiKey?: string,
+    model: string = 'gemini-2.5-flash',
+    options: { billingMode?: 'hosted' | 'byok', entitlements?: any, onJobAccepted?: any, expectedResponseType?: 'image' | 'text' | 'json' } = {}
+  ): Promise<SceneIntent> {
     const p = prompt.toLowerCase();
-    // Split prompt into words, removing basic punctuation
     const words = p.replace(/[.,!?]/g, '').split(/\s+/);
     
     const intent: SceneIntent = {
@@ -993,7 +1037,10 @@ Hard constraints:
 
     if (!prompt.trim()) return intent;
 
-    if (apiKey) {
+    // Use dummy apiKey if hosted mode is active
+    const effectiveKey = options.billingMode === 'hosted' ? 'HOSTED_MODE' : apiKey;
+
+    if (effectiveKey) {
       try {
         const strictPrompt = `
 Analyze this scene description for a background plate generator.
@@ -1019,9 +1066,13 @@ Return ONLY valid JSON without markdown formatting. Exact schema:
   "recommendedLighting": "string"
 }
 `;
-        const rawText = await GeminiService.generateText(strictPrompt, apiKey);
-        const cleaned = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
-        const parsed = JSON.parse(cleaned);
+        const parsed = await this.analyzeMultiFrameJson<any>(
+          strictPrompt,
+          effectiveKey,
+          model,
+          [],
+          options
+        );
 
         return {
           location: parsed.location || prompt.trim(), 
@@ -1389,6 +1440,7 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
    */
   async generateShotPreview(args: {
     anchorImageUrl: string;
+    shotBlueprintUrl?: string;
     actorIdentitySets?: ActorIdentityReferenceSet[];
     prompt: string;
     aspectRatio?: string;
@@ -1397,8 +1449,9 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
     sceneTruth?: import('../types/shots').SceneTruthSnapshot;
     presetId?: string;
     hasSubjectStyleAnalysis?: boolean;
+    options?: { billingMode?: 'hosted' | 'byok', entitlements?: any, onJobAccepted?: any, expectedResponseType?: 'image' | 'text' | 'json' };
   }): Promise<string> {
-    const { anchorImageUrl, actorIdentitySets = [], prompt, aspectRatio, apiKey, model, sceneTruth, presetId, hasSubjectStyleAnalysis } = args;
+    const { anchorImageUrl, shotBlueprintUrl, actorIdentitySets = [], prompt, aspectRatio, apiKey, model, sceneTruth, presetId, hasSubjectStyleAnalysis } = args;
     
     if (sceneTruth) {
       console.log(`[GeminiService:generateShotPreview] Metadata Dump:`, {
@@ -1410,12 +1463,24 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
       });
     }
     
-    if (!apiKey) throw new Error("No API Key provided for shot generation");
+    if (args.options?.billingMode !== 'hosted' && !apiKey) throw new Error("No API Key provided for shot generation");
     
     const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
     const parts: any[] = [];
     
-    // 1. Supplemental identity anchors
+    // 1. Primary scene anchor (MUST BE FIRST)
+    const anchor = await GeminiService._resolveImageData(anchorImageUrl);
+    parts.push({ text: `[AUTHORITATIVE SCENE AND LAYOUT ANCHOR]` });
+    parts.push({ inlineData: { mimeType: anchor.mimeType, data: anchor.data } });
+
+    // 2. Camera Instruction Blueprint (MUST BE SECOND)
+    if (shotBlueprintUrl) {
+        const blueprint = await GeminiService._resolveImageData(shotBlueprintUrl);
+        parts.push({ text: `[CAMERA INSTRUCTION BLUEPRINT: Adhere to the teal framing guide and occlusion overlays]` });
+        parts.push({ inlineData: { mimeType: blueprint.mimeType, data: blueprint.data } });
+    }
+    
+    // 3. Supplemental identity anchors (MUST BE THIRD)
     for (const set of actorIdentitySets) {
         if (!hasStrongFaceAnchor(set)) {
             console.warn(`[IdentityLock] Missing face anchor for generation request`, { actorId: set.actorId, path: 'shots-preview' });
@@ -1427,11 +1492,6 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
             parts.push({ inlineData: { mimeType: ref.mimeType, data: ref.data } });
         }
     }
-    
-    // 2. Primary scene anchor
-    const anchor = await GeminiService._resolveImageData(anchorImageUrl);
-    parts.push({ text: `[AUTHORITATIVE SCENE AND LAYOUT ANCHOR]` });
-    parts.push({ inlineData: { mimeType: anchor.mimeType, data: anchor.data } });
     
     // Shot Prompt
     parts.push({ text: prompt });
@@ -1447,6 +1507,12 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
         }
       }
     };
+    
+    if (args.options?.billingMode === 'hosted') {
+        const hostedArgs = { ...args.options };
+        if (!hostedArgs.expectedResponseType) hostedArgs.expectedResponseType = 'image';
+        return await GeminiService._executeHostedRequest(model, payload, hostedArgs);
+    }
     
     const response = await fetch(`${baseUrl}?key=${apiKey}`, {
       method: "POST",
@@ -1481,8 +1547,9 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
     model: string;
     sceneTruth?: import('../types/shots').SceneTruthSnapshot;
     presetId?: string;
+    options?: { billingMode?: 'hosted' | 'byok', entitlements?: any, onJobAccepted?: any, expectedResponseType?: 'image' | 'text' | 'json' };
   }): Promise<string> {
-    const { sourceResultUrl, selectedShotPreviewUrl, actorIdentitySets = [], prompt, aspectRatio, apiKey, model, sceneTruth, presetId } = args;
+    const { sourceResultUrl, selectedShotPreviewUrl, actorIdentitySets = [], prompt, aspectRatio, apiKey, model, sceneTruth, presetId, options } = args;
     
     if (sceneTruth) {
       console.log(`[GeminiService:rerenderShotFinal] Metadata Dump:`, {
@@ -1493,7 +1560,7 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
       });
     }
     
-    if (!apiKey) throw new Error("No API Key provided for shot generation");
+    if (options?.billingMode !== 'hosted' && !apiKey) throw new Error("No API Key provided for shot generation");
     
     const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
     const parts: any[] = [];
@@ -1535,6 +1602,12 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
         }
       }
     };
+    
+    if (options?.billingMode === 'hosted') {
+        const hostedArgs = { ...options };
+        if (!hostedArgs.expectedResponseType) hostedArgs.expectedResponseType = 'image';
+        return await GeminiService._executeHostedRequest(model, payload, hostedArgs);
+    }
     
     const response = await fetch(`${baseUrl}?key=${apiKey}`, {
       method: "POST",

@@ -4,7 +4,7 @@ import SceneCanvas from './components/SceneCanvas';
 import WardrobeStudio from './components/WardrobeStudio';
 import PropAccessoryStudio from './components/PropAccessoryStudio';
 import { LibraryAssetMaterializer } from './services/LibraryAssetMaterializer';
-import { resolveDisplayUrl } from './utils/assetUrlResolver';
+import { resolveDisplayUrl, materializeDisplayUrl } from './utils/assetUrlResolver';
 import PortraitStudio from './components/PortraitStudio';
 import VeoPromptStudio from './components/VeoPromptStudio';
 import { StorageService } from './services/StorageService';
@@ -312,9 +312,11 @@ const App = () => {
 
   // Track previous credits locally for debug metrics without breaking useEffect dependencies
   const prevCreditsRef = useRef(state.hostedCredits);
+  const debounceTimerRef = useRef<any>(null);
+  
   useEffect(() => { prevCreditsRef.current = state.hostedCredits; }, [state.hostedCredits]);
 
-  const refreshCredits = useCallback(async () => {
+  const refreshCreditsNow = useCallback(async () => {
     if (state.billingEntitlements.effectiveBillingMode === 'hosted' && state.hostedSession?.user?.id) {
       const credits = await SupabaseAuth.fetchHostedCredits(state.hostedSession.user.id);
 
@@ -329,14 +331,24 @@ const App = () => {
     }
   }, [state.billingEntitlements.effectiveBillingMode, state.hostedSession?.user?.id, dispatch]);
 
+  const refreshCredits = useCallback(() => {
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    debounceTimerRef.current = setTimeout(() => {
+        refreshCreditsNow();
+    }, 1500);
+  }, [refreshCreditsNow]);
+
   useEffect(() => {
-    refreshCredits();
-  }, [refreshCredits]);
+    refreshCreditsNow(); // Run immediately on mount or fundamental mode changes
+  }, [state.billingEntitlements.effectiveBillingMode, state.hostedSession?.user?.id, refreshCreditsNow]);
 
   useEffect(() => {
     const handler = () => refreshCredits();
     window.addEventListener('refresh-credits', handler);
-    return () => window.removeEventListener('refresh-credits', handler);
+    return () => {
+        window.removeEventListener('refresh-credits', handler);
+        if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    };
   }, [refreshCredits]);
 
   useEffect(() => {
@@ -377,7 +389,12 @@ const App = () => {
             const t = job.timing || {} as any;
             const db = data.timing_metrics || {};
 
-            dispatch({ type: 'COMPLETE_BACKGROUND_JOB', payload: { id: job.id, assetUrl: data.asset_url } });
+            let finalAssetUrl = data.asset_url;
+            if (job.context === 'scene_render' && finalAssetUrl) {
+                finalAssetUrl = await materializeDisplayUrl(finalAssetUrl);
+            }
+
+            dispatch({ type: 'COMPLETE_BACKGROUND_JOB', payload: { id: job.id, assetUrl: finalAssetUrl } });
             dispatch({ type: 'ADD_LOG', payload: { message: `Background job finished: ${job.context}`, type: 'success' } });
             window.dispatchEvent(new CustomEvent('refresh-credits'));
 
@@ -740,6 +757,57 @@ const App = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.saveDirectoryHandle]); // Only run when folder connection changes
 
+  // Targeted WebFS Thumbnail Rehydrator (Materializes existing library records)
+  useEffect(() => {
+    const rehydrateLibraryThumbnails = async () => {
+      if (window.electronAPI || !state.saveDirectoryHandle || state.actorLibrary.length === 0) return;
+
+      // @ts-ignore
+      const permission = await state.saveDirectoryHandle.queryPermission({ mode: 'read' });
+      if (permission !== 'granted') return;
+
+      const needsHydration = state.actorLibrary.filter(
+        a => !a.previewUrl && a.localPath && !a.localPath.startsWith('app://') && !a.localPath.startsWith('file://')
+      );
+
+      if (needsHydration.length === 0) return;
+
+      const updatedActors = [...state.actorLibrary];
+      let hasChanges = false;
+
+      for (const actor of needsHydration) {
+        try {
+          const pathParts = actor.localPath!.split('/');
+          let currentHandle: FileSystemDirectoryHandle = state.saveDirectoryHandle;
+
+          for (let i = 0; i < pathParts.length - 1; i++) {
+            currentHandle = await currentHandle.getDirectoryHandle(pathParts[i], { create: false });
+          }
+
+          const filename = pathParts[pathParts.length - 1];
+          const fileHandle = await currentHandle.getFileHandle(filename, { create: false });
+          const file = await fileHandle.getFile();
+          
+          const blobUrl = URL.createObjectURL(file);
+          
+          const index = updatedActors.findIndex(a => a.id === actor.id);
+          if (index !== -1) {
+            updatedActors[index] = { ...updatedActors[index], previewUrl: blobUrl, url: blobUrl };
+            hasChanges = true;
+          }
+        } catch (err) {
+          // Gracefully skip missing WebFS files
+        }
+      }
+
+      if (hasChanges) {
+        dispatch({ type: 'SET_ACTOR_LIBRARY', payload: updatedActors });
+      }
+    };
+
+    rehydrateLibraryThumbnails();
+  }, [state.saveDirectoryHandle, state.actorLibrary]);
+
   // --- NATIVE DISK SYNC (Electron) ---
   useEffect(() => {
     const syncFromNative = async () => {
@@ -780,15 +848,15 @@ const App = () => {
             try {
               const fullPath = await window.electronAPI!.joinPath(catPath, filename);
               const base64 = await window.electronAPI!.readFile(fullPath);
-
-              if (!base64) return;
-
+              
               const diskId = `disk-${catOrRoot || 'root'}-${filename}`; // Ensure ID uniqueness
               const displayName = filename.replace(/\.(png|jpg|jpeg)$/i, '');
 
               externalActors.push({
                 id: diskId,
                 url: `data:image/png;base64,${base64}`,
+                localPath: fullPath,
+                previewUrl: undefined,
                 tag: 'front',
                 name: displayName,
                 filename: catOrRoot ? `${catOrRoot}/${filename}` : filename,
@@ -844,7 +912,14 @@ const App = () => {
           const finalDiskActors = externalActors.map(newActor => {
             const existing = existingMap.get(newActor.id);
             if (existing) {
-              return { ...newActor, ...existing, url: newActor.url, filename: newActor.filename }; // Update URL and Path, keep metadata
+              return { 
+                ...newActor, 
+                ...existing, 
+                url: newActor.url, 
+                previewUrl: newActor.previewUrl,
+                localPath: newActor.localPath,
+                filename: newActor.filename 
+              }; // Update strictly durable runtime fields, keeping profile metadata
             }
 
             // Also check if there was a memory zombie (UUID id scheme) that we just purged, 

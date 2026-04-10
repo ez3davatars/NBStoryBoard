@@ -61,7 +61,7 @@ serve(async (req) => {
     // Service-role client for billing RPCs (Phase 1 security model)
     supabaseService = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+      Deno.env.get('SUPABASE_SECRET_KEY') ?? ''
     );
 
     const payloadRaw = await withTimeout(req.json(), 3000, "req.json");

@@ -25,7 +25,17 @@ async function materializeDisplayUrl(url: string | null | undefined): Promise<st
     return url;
 }
 
+const PropLibrarySkeletonCard = () => (
+    <div className="aspect-square rounded-lg border border-gray-800 overflow-hidden bg-black/40 relative">
+        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent animate-[shimmer_1.8s_linear_infinite]" />
+        <div className="absolute inset-0 flex items-center justify-center">
+            <div className="w-8 h-8 rounded-lg bg-white/5 border border-white/10" />
+        </div>
+    </div>
+);
+
 const PropAccessoryStudio = () => {
+    const [libraryLoading, setLibraryLoading] = useState(false);
     const { state, dispatch } = useAppContext();
     const {
         activeTab,
@@ -53,6 +63,17 @@ const PropAccessoryStudio = () => {
 
 
 
+    const withLibraryTransition = (work: () => void | Promise<void>, minMs = 180) => {
+        setLibraryLoading(true);
+        const started = Date.now();
+
+        Promise.resolve(work()).finally(() => {
+            const elapsed = Date.now() - started;
+            const remaining = Math.max(0, minMs - elapsed);
+            window.setTimeout(() => setLibraryLoading(false), remaining);
+        });
+    };
+
     const scanProps = async () => {
         // 1. NATIVE MODE
         if (isNativeParams() && state.saveDirectoryPath) {
@@ -64,11 +85,11 @@ const PropAccessoryStudio = () => {
                 for (const filename of files) {
                     if (/\.(png|jpg|jpeg|webp)$/i.test(filename)) {
                         const fullPath = await nativeJoinPath(propsPath, filename);
-                        const displayUrl = await resolveDisplayUrl({ localPath: fullPath });
-                        if (displayUrl) {
+                        const base64 = await window.electronAPI?.readFile?.(fullPath);
+                        if (base64) {
                             items.push({
                                 id: filename,
-                                url: displayUrl,
+                                url: `data:image/png;base64,${base64}`,
                                 localPath: fullPath,
                                 filename: filename,
                                 name: filename.replace('.png', '').split('-').slice(1).join(' '),
@@ -615,57 +636,62 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                         <button onClick={() => fileInputRef.current?.click()} className="p-1.5 hover:bg-gray-700 rounded transition-colors text-gray-400" title="Upload Prop">
                             <Upload className="w-3.5 h-3.5" />
                         </button>
-                        <button onClick={scanProps} className="p-1.5 hover:bg-gray-700 rounded transition-colors text-gray-400">
+                        <button onClick={() => withLibraryTransition(scanProps)} className="p-1.5 hover:bg-gray-700 rounded transition-colors text-gray-400">
                             <RefreshCcw className="w-3.5 h-3.5" />
                         </button>
                     </div>
                 </div>
 
                 <div className="flex-grow overflow-y-auto p-4 grid grid-cols-2 gap-2 content-start">
-                    {state.propItems.map(item => (
-                        <div
-                            key={item.id}
-                            onClick={(e) => {
-                                if ((e as any).shiftKey) {
-                                    bindToFirstEmptyRefSlot(item.url, item.name || 'Prop');
-                                    return;
-                                }
-                                setSelectedProp(item);
-                            }}
-                            className={`aspect-square rounded-lg border overflow-hidden transition-all group relative cursor-pointer ${selectedProp?.id === item.id ? 'border-blue-500 border-2' : 'border-gray-800 hover:border-gray-600'}`}
-                        >
-                            <img src={item.url} className="w-full h-full object-contain" />
-
-                            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-                                <button
-                                    onClick={(e) => {
-                                        e.preventDefault();
-                                        e.stopPropagation();
-                                        dispatch({ type: 'SET_INSPECT_IMAGE', payload: item.url });
-                                    }}
-                                    onKeyDown={(e) => {
-                                        if (e.key === 'Enter' || e.key === ' ') {
+                    {libraryLoading ? (
+                        Array.from({ length: 8 }).map((_, i) => (
+                            <PropLibrarySkeletonCard key={`prop-skeleton-${i}`} />
+                        ))
+                    ) : (
+                        state.propItems.map(item => (
+                            <div
+                                key={item.id}
+                                onClick={(e) => {
+                                    if ((e as any).shiftKey) {
+                                        bindToFirstEmptyRefSlot(item.url, item.name || 'Prop');
+                                        return;
+                                    }
+                                    setSelectedProp(item);
+                                }}
+                                className={`aspect-square rounded-lg border overflow-hidden transition-all group relative cursor-pointer ${selectedProp?.id === item.id ? 'border-blue-500 border-2' : 'border-gray-800 hover:border-gray-600'}`}
+                            >
+                                <img src={item.url} className="w-full h-full object-contain" />
+                                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                                    <button
+                                        onClick={(e) => {
                                             e.preventDefault();
                                             e.stopPropagation();
                                             dispatch({ type: 'SET_INSPECT_IMAGE', payload: item.url });
-                                        }
-                                    }}
-                                    className="bg-blue-500/80 hover:bg-blue-500 text-white p-1.5 rounded-full "
-                                    title="Inspect Large"
-                                >
-                                    <Maximize className="w-3.5 h-3.5" />
-                                </button>
+                                        }}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter' || e.key === ' ') {
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                                dispatch({ type: 'SET_INSPECT_IMAGE', payload: item.url });
+                                            }
+                                        }}
+                                        className="bg-blue-500/80 hover:bg-blue-500 text-white p-1.5 rounded-full"
+                                        title="Inspect Large"
+                                    >
+                                        <Maximize className="w-3.5 h-3.5" />
+                                    </button>
 
-                                <button
-                                    onClick={(e) => { e.stopPropagation(); setConfirmDelete(item); }}
-                                    className="bg-red-500/80 hover:bg-red-500 text-white p-1.5 rounded-full transition-transform hover:scale-110"
-                                    title="Delete Prop"
-                                >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                </button>
+                                    <button
+                                        onClick={(e) => { e.stopPropagation(); setConfirmDelete(item); }}
+                                        className="bg-red-500/80 hover:bg-red-500 text-white p-1.5 rounded-full transition-transform hover:scale-110"
+                                        title="Delete Prop"
+                                    >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                </div>
                             </div>
-                        </div>
-                    ))}
+                        ))
+                    )}
                 </div>
             </div>
 

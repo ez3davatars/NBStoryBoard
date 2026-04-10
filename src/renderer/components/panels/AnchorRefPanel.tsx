@@ -117,12 +117,13 @@ export const AnchorRefPanel = ({
  className="hidden"
  accept="image/*"
  onChange={async (e) => {
+ const inputEl = anchorFileInputRef.current;
  const file = e.target.files?.[0];
  if (file) {
  const url = await fileToDataUrl(file);
  dispatch({ type: 'SET_BG', payload: url });
  }
- e.currentTarget.value = '';
+ if (inputEl) inputEl.value = '';
  }}
  />
  </div>
