@@ -897,7 +897,7 @@ export const initialState: AppState = {
     director: loadJson<DirectorSettings>('nano_director_v3', defaultDirector),
     selection: null,
     selectionType: null,
-    backgroundUrl: localStorage.getItem('nano_bg_url') || null,
+    backgroundUrl: null,
     resultImage: null,
     logs: [],
     isProcessing: false,
@@ -915,9 +915,9 @@ export const initialState: AppState = {
     actorLibrary: [],
     propItems: [], // initialize empty, load async
     customCovers: {},
-    depthMapUrl: localStorage.getItem('nano_depth_url') || null,
-    depthMapHash: localStorage.getItem('nano_depth_hash') || null,
-    sourceBackgroundHash: localStorage.getItem('nano_source_hash') || null,
+    depthMapUrl: null,
+    depthMapHash: null,
+    sourceBackgroundHash: null,
     imageResolution: loadJson<'1K' | '2K' | '4K'>('nano_image_resolution', '2K'),
     enableImageThinking: localStorage.getItem('nano_enable_image_thinking') !== 'false',
     enableGoogleGrounding: localStorage.getItem('nano_enable_google_grounding') === 'true' ? true : false,
@@ -932,7 +932,7 @@ export const initialState: AppState = {
     historyFuture: [],
 
     shots: [],
-    activeShotId: localStorage.getItem('nano_active_shot_id') || null,
+    activeShotId: null,
     shotSessionsBySceneId: {},
     isStoryboardEnabled: loadJson<boolean>('nano_storyboard_enabled', false), // Persistent setting
     showHelpHints: loadJson<boolean>('nano_help_hints', true),
@@ -1380,8 +1380,6 @@ export const reducer = (state: AppState, action: Action): AppState => {
                 selection: null,
                 selectionType: null,
                 storyboardGenerations: [],
-                wardrobeItems: [],
-                propItems: [],
                 veoPromptDraft: undefined,
                 historyPast: [],
                 historyFuture: [],
@@ -1401,7 +1399,10 @@ export const reducer = (state: AppState, action: Action): AppState => {
             return {
                 ...initialState,
 
-                // preserve true app-level globals only
+                // loaded session payload becomes authoritative for canvas content
+                ...loaded,
+
+                // RE-ASSERT GLOBALS (prevents old session payloads from overwriting active system settings and libraries)
                 apiKey: state.apiKey,
                 model: state.model,
                 view: state.view,
@@ -1415,16 +1416,16 @@ export const reducer = (state: AppState, action: Action): AppState => {
                 imageResolution: state.imageResolution,
                 enableImageThinking: state.enableImageThinking,
                 enableGoogleGrounding: state.enableGoogleGrounding,
+                isStoryboardEnabled: state.isStoryboardEnabled,
                 billingMode: state.billingMode,
                 billingEntitlements: state.billingEntitlements,
+                hostedSession: state.hostedSession,
                 hostedCredits: state.hostedCredits,
                 showCreditModal: state.showCreditModal,
                 actorLibrary: state.actorLibrary,
                 wardrobeItems: state.wardrobeItems,
                 propItems: state.propItems,
-
-                // loaded session payload becomes authoritative
-                ...loaded,
+                customCovers: state.customCovers,
 
                 // re-normalize nested structures
                 director: { ...defaultDirector, ...(loaded.director || {}) },
@@ -1457,7 +1458,6 @@ export const reducer = (state: AppState, action: Action): AppState => {
                 storyboardSource: null,
                 storyboardEndSource: null,
                 storyboardGenerations: [],
-                customCovers: {},
 
                 // reset studio transient state that should not bleed across sessions
                 wardrobeState: {
@@ -2168,14 +2168,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
         const restore = async () => {
             try {
-                const [_tokens, _annotations, rawActors, wardrobe, props, shots, shotSessions] = await Promise.all([
+                const [_tokens, _annotations, rawActors, rawWardrobe, rawProps] = await Promise.all([
                     migrateOrLoad<StageToken[]>('nano_tokens', sanitizeTokens),
                     migrateOrLoad<StageAnnotation[]>('nano_annotations', sanitizeAnnotations),
                     StorageService.load<CastMember[]>('nano_actors', []),
                     StorageService.load<WardrobeItem[]>('nano_wardrobe', []),
                     StorageService.load<PropItem[]>('nano_props', []),
-                    StorageService.load<Shot[]>('nano_shots', []),
-                    StorageService.load<Record<string, ShotSession>>('nano_shot_sessions', {}),
                 ]);
 
                 if (cancelled) return;
@@ -2244,7 +2242,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                 */
                 if (actors.length > 0) dispatch({ type: 'SET_ACTOR_LIBRARY', payload: actors });
 
-                const hydratedWardrobe = await Promise.all(wardrobe.map(async (item) => {
+                const hydratedWardrobe = await Promise.all(rawWardrobe.map(async (item) => {
                     try {
                         let resolvedPath = item.localPath;
                         const savePath = localStorage.getItem('nano_save_path');
@@ -2273,7 +2271,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                     }
                 }));
 
-                const hydratedProps = await Promise.all(props.map(async (item) => {
+                const hydratedProps = await Promise.all(rawProps.map(async (item) => {
                     try {
                         let resolvedPath = item.localPath;
                         const savePath = localStorage.getItem('nano_save_path');
@@ -2305,56 +2303,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                 if (hydratedWardrobe.length > 0) dispatch({ type: 'SET_WARDROBE_ITEMS', payload: hydratedWardrobe });
                 if (hydratedProps.length > 0) dispatch({ type: 'SET_PROP_ITEMS', payload: hydratedProps });
 
-                if (shots.length > 0) {
-                    const hydratedShots = await Promise.all(shots.map(async s => {
-                        const hydratedRefSlots = await Promise.all((s.referenceSlots || []).map(async slot => {
-                            let hydratedUrl = slot.url;
-                            const resolved = await resolveDisplayUrl({
-                                localPath: slot.localPath,
-                                sourcePreviewUrl: slot.sourceUrl,
-                                previewUrl: slot.url
-                            });
-                            if (resolved) hydratedUrl = resolved;
-                            return { ...slot, url: hydratedUrl };
-                        }));
-                        return { ...s, referenceSlots: hydratedRefSlots };
-                    }));
-
-                    dispatch({ type: 'SET_SHOTS', payload: hydratedShots });
-                    const savedActive = localStorage.getItem('nano_active_shot_id');
-                    const preferred = savedActive ? hydratedShots.find((s: any) => s.id === savedActive) : null;
-                    const fallback = hydratedShots[hydratedShots.length - 1];
-                    dispatch({ type: 'SET_ACTIVE_SHOT', payload: { id: (preferred || fallback).id } });
-                }
-
-                if (shotSessions && Object.keys(shotSessions).length > 0) {
-                    const restoredShotSessions: Record<string, ShotSession> = {};
-                    for (const [sceneId, session] of Object.entries(shotSessions)) {
-                        const variants = await Promise.all(session.variants.map(async (v) => {
-                            let finalUrl = v.finalUrl;
-                            let previewUrl = v.previewUrl;
-
-                            const resolvedFinal = await resolveDisplayUrl({
-                                localFinalPath: v.localFinalPath,
-                                sourceFinalUrl: v.sourceFinalUrl,
-                                finalUrl: v.finalUrl
-                            });
-                            if (resolvedFinal) finalUrl = resolvedFinal;
-
-                            const resolvedPreview = await resolveDisplayUrl({
-                                localPreviewPath: v.localPreviewPath,
-                                sourcePreviewUrl: v.sourcePreviewUrl,
-                                previewUrl: v.previewUrl
-                            });
-                            if (resolvedPreview) previewUrl = resolvedPreview;
-
-                            return { ...v, finalUrl, previewUrl };
-                        }));
-                        restoredShotSessions[sceneId] = { ...session, variants };
-                    }
-                    dispatch({ type: 'LOAD_SESSION_STATE', payload: { shotSessionsBySceneId: restoredShotSessions } });
-                }
-
+                // Load Library Assets instead
                 hydratedRef.current = true;
             } catch (e) {
                 console.error('Restore failed', e);

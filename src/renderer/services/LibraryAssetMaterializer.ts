@@ -33,8 +33,12 @@ export const LibraryAssetMaterializer = {
             const success = await window.electronAPI.writeFile(finalPath, new Uint8Array(buffer));
             if (!success) throw new Error('Failed to write file to disk');
 
-            const displayUrl = await resolveDisplayUrl({ localPath: finalPath });
-            if (!displayUrl) throw new Error('Materialized file could not be natively resolved.');
+            // Generate resilient Base64 Data URL for immediate session memory display, matching Bootloader
+            const displayUrl = await new Promise<string>((resolve) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result as string);
+                reader.readAsDataURL(blob);
+            });
 
             return {
                 localPath: finalPath,
@@ -82,8 +86,12 @@ export const LibraryAssetMaterializer = {
             const success = await window.electronAPI.writeFile(finalPath, new Uint8Array(buffer));
             if (!success) throw new Error('Failed to write file to disk');
 
-            const displayUrl = await resolveDisplayUrl({ localPath: finalPath });
-            if (!displayUrl) throw new Error('Materialized ref file could not be resolved.');
+            // Generate resilient Base64 Data URL for immediate session memory display
+            const displayUrl = await new Promise<string>((resolve) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result as string);
+                reader.readAsDataURL(blob);
+            });
 
             return {
                 localPath: finalPath,

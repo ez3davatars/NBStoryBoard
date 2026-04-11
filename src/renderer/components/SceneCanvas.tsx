@@ -79,6 +79,47 @@ import { DEPTH_BAND_RADIUS } from '../services/SpatialIntelligence';
 
 import { useSceneSpec } from "../../scene/useSceneSpec"
 
+async function materializeDisplayUrl(url: string | null | undefined): Promise<string> {
+    if (!url) return '';
+    if (url.startsWith('blob:') || url.startsWith('data:')) return url;
+    if (/^https?:\/\//i.test(url)) {
+        try {
+            const res = await fetch(url, { mode: 'cors' });
+            if (!res.ok) throw new Error(`Failed to fetch remote display asset: ${res.status}`);
+            const fetchedBlob = await res.blob();
+            // True Base64 Pivot instead of transient blob
+            return await new Promise<string>((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result as string);
+                reader.onerror = reject;
+                reader.readAsDataURL(fetchedBlob);
+            });
+        } catch (e) {
+            console.warn("Display Materialization Error for image:", url, e);
+            return url;
+        }
+    }
+    return url;
+}
+
+const normalizeGeneratedImageUrl = async (res: any): Promise<string> => {
+    const rawUrl =
+        typeof res === 'string'
+            ? res
+            : (res && typeof res === 'object'
+                ? (res.asset_url || res.url || '')
+                : '');
+
+    if (!rawUrl) {
+        throw new Error('GenerateImage returned no usable image URL.');
+    }
+
+    try {
+        return await materializeDisplayUrl(rawUrl);
+    } catch {
+        return rawUrl;
+    }
+};
 
 // B. Scene Blocking Component
 
@@ -152,6 +193,38 @@ const SceneCanvas = () => {
         depthLink.download = `NB_Scene_Depth_${Date.now()}.png`;
         depthLink.click();
         dispatch({ type: 'ADD_LOG', payload: { message: 'Depth map captured successfully.', type: 'success' } });
+    };
+
+    const ensureStagingAiAccess = (featureLabel: string): boolean => {
+        const billingMode = state.billingEntitlements?.effectiveBillingMode;
+        
+        if (billingMode === 'hosted') {
+            if (!state.billingEntitlements.hasHostedAccess) {
+                dispatch({ type: 'ADD_LOG', payload: { message: `${featureLabel} blocked: Hosted access required`, type: 'error' } });
+                return false;
+            }
+
+            const hostedCredits = state.hostedCredits;
+            if (hostedCredits !== null && hostedCredits <= 0) {
+                dispatch({ type: 'ADD_LOG', payload: { message: `${featureLabel} blocked: Insufficient credits`, type: 'error' } });
+                dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
+                return false;
+            }
+
+            return true;
+        }
+
+        if (billingMode === 'byok') {
+            if (!state.billingEntitlements.hasByokAccess || !state.apiKey) {
+                dispatch({ type: 'ADD_LOG', payload: { message: `${featureLabel} blocked: API Key required for BYOK`, type: 'error' } } as any);
+                return false;
+            }
+
+            return true;
+        }
+
+        dispatch({ type: 'ADD_LOG', payload: { message: `${featureLabel} blocked: No billing mode available`, type: 'error' } } as any);
+        return false;
     };
 
     // --- DOM CAPTURE FOR SHOTS ---
@@ -270,14 +343,38 @@ const SceneCanvas = () => {
 
         // 2. Add or Update actors from tokens
         tokens.forEach(t => {
+            if (
+                !Number.isFinite(t.x) ||
+                !Number.isFinite(t.y) ||
+                !Number.isFinite(t.width) ||
+                !Number.isFinite(t.height) ||
+                t.width! <= 0 ||
+                t.height! <= 0 ||
+                !Number.isFinite(viewportBox.w) ||
+                !Number.isFinite(viewportBox.h) ||
+                viewportBox.w <= 0 ||
+                viewportBox.h <= 0
+            ) {
+                return;
+            }
+
             const existingActor = currentActors.find(a => a.id === t.id);
 
             const boundingBox = {
-                x: (t.x - (t.width * (t.anchorX ?? 0.5))) / viewportBox.w,
-                y: (t.y - (t.height * (t.anchorY ?? 0.8))) / viewportBox.h,
-                width: t.width / viewportBox.w,
-                height: t.height / viewportBox.h
+                x: (t.x - (t.width! * (t.anchorX ?? 0.5))) / viewportBox.w,
+                y: (t.y - (t.height! * (t.anchorY ?? 0.8))) / viewportBox.h,
+                width: t.width! / viewportBox.w,
+                height: t.height! / viewportBox.h
             };
+
+            if (
+                !Number.isFinite(boundingBox.x) ||
+                !Number.isFinite(boundingBox.y) ||
+                !Number.isFinite(boundingBox.width) ||
+                !Number.isFinite(boundingBox.height)
+            ) {
+                return;
+            }
 
             if (!existingActor) {
                 store.addActor({
@@ -295,12 +392,11 @@ const SceneCanvas = () => {
                     poseLock: true
                 });
             } else {
-                // Differential update for bounding box
                 const boxChanged =
-                    Math.abs(existingActor.boundingBox.x - boundingBox.x) > 0.001 ||
-                    Math.abs(existingActor.boundingBox.y - boundingBox.y) > 0.001 ||
-                    Math.abs(existingActor.boundingBox.width - boundingBox.width) > 0.001 ||
-                    Math.abs(existingActor.boundingBox.height - boundingBox.height) > 0.001;
+                    Math.abs(existingActor.boundingBox.x - boundingBox.x) > 0.005 ||
+                    Math.abs(existingActor.boundingBox.y - boundingBox.y) > 0.005 ||
+                    Math.abs(existingActor.boundingBox.width - boundingBox.width) > 0.005 ||
+                    Math.abs(existingActor.boundingBox.height - boundingBox.height) > 0.005;
 
                 if (boxChanged) {
                     store.updateActor(t.id, { boundingBox });
@@ -393,6 +489,42 @@ const SceneCanvas = () => {
 
 
     const [dragItem, setDragItem] = useState<{ id: string, type: 'token' | 'annotation', startX: number, startY: number, initialX: number, initialY: number } | null>(null);
+    const dragFrameRef = useRef<number | null>(null);
+    const latestDragRef = useRef<
+        | { type: 'token'; id: string; x: number; y: number }
+        | { type: 'annotation'; id: string; x: number; y: number }
+        | null
+    >(null);
+
+    const flushLatestDragUpdate = useCallback(() => {
+        const latest = latestDragRef.current;
+        if (!latest) {
+            dragFrameRef.current = null;
+            return;
+        }
+
+        if (latest.type === 'token') {
+            dispatch({
+                type: 'UPDATE_TOKEN',
+                payload: { id: latest.id, x: latest.x, y: latest.y }
+            });
+        } else {
+            dispatch({
+                type: 'UPDATE_ANNOTATION',
+                payload: { id: latest.id, x: latest.x, y: latest.y }
+            });
+        }
+
+        dragFrameRef.current = null;
+    }, [dispatch]);
+
+    useEffect(() => {
+        return () => {
+            if (dragFrameRef.current !== null) {
+                cancelAnimationFrame(dragFrameRef.current);
+            }
+        };
+    }, []);
     const [resizeItem, setResizeItem] = useState<{
         id: string,
         type: 'token' | 'annotation',
@@ -425,13 +557,8 @@ const SceneCanvas = () => {
     const lastBgRef = useRef<string | null>(state.backgroundUrl);
 
     const refreshSpatialData = useCallback(async () => {
-        if (!state.backgroundUrl || !state.apiKey || state.isDepthProcessing) return;
-
-        if (state.billingEntitlements.effectiveBillingMode === 'hosted' && state.hostedCredits === 0) {
-            dispatch({ type: 'ADD_LOG', payload: { message: "Auto-Depth blocked: Insufficient credits", type: 'error' } });
-            dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
-            return;
-        }
+        if (!state.backgroundUrl || state.isDepthProcessing) return;
+        if (!ensureStagingAiAccess('Auto-Depth')) return;
 
         dispatch({ type: 'SET_DEPTH_PROCESSING', payload: true });
 
@@ -439,13 +566,15 @@ const SceneCanvas = () => {
             // "Ghost" generation: Use Gemini to infer the depth map from the RGB image
             const depthPrompt = "Generate a high-fidelity grayscale depth map of this scene. White represents near objects (foreground), Black represents far objects (background). The output must be a strict grayscale depth mask. Maintain exact aspect ratio and composition.";
 
-            const depthUrl = await GeminiService.generateImage(
+            const res = await GeminiService.generateImage(
                 depthPrompt,
                 state.apiKey,
                 state.model,
                 [{ url: state.backgroundUrl, label: "Scene Context" }],
                 { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements }
             );
+
+            const depthUrl = await normalizeGeneratedImageUrl(res);
 
             if (depthUrl) {
                 // 4. Analyze for Spatial Features (Floor & Volumes)
@@ -484,11 +613,7 @@ const SceneCanvas = () => {
 
     // Style Transfer Pipeline: Phase 1 Logic
     const handleAutoStyleEnvironment = async () => {
-        if (state.billingEntitlements.effectiveBillingMode === 'hosted' && state.hostedCredits === 0) {
-            dispatch({ type: 'ADD_LOG', payload: { message: "Style Environment blocked: Insufficient credits", type: 'error' } });
-            dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
-            return;
-        }
+        if (!ensureStagingAiAccess('Style Environment')) return;
 
         // StageTokens are actors if they have a sourceImage or cutoutUrl in this context
         const activeToken = state.tokens.find((t: StageToken) => t.id === state.selection);
@@ -506,54 +631,107 @@ const SceneCanvas = () => {
         try {
             const style = await GeminiService.analyzeCharacterStyle(
                 analysisUrl, 
-                state.apiKey
+                state.apiKey,
+                state.model,
+                {
+                    billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
+                    entitlements: state.billingEntitlements
+                }
             );
             
             setExtractedStyle(style);
             dispatch({ type: 'ADD_LOG', payload: { message: `Style extracted: ${style.styleSummary}`, type: 'success' } });
 
             // Phase 3: Automated Environment Plate Generation
-            if (bgPrompt.trim()) {
+            const hasUserScenePrompt = !!bgPrompt.trim();
+
+            let intent: SceneIntent | null = null;
+            if (hasUserScenePrompt) {
                 dispatch({ type: 'ADD_LOG', payload: { message: `Parsing scene intent...`, type: 'info' } });
-                const intent = await GeminiService.analyzeSceneIntent(bgPrompt, state.apiKey);
-                setSceneIntent(intent);
-
-                dispatch({ type: 'ADD_LOG', payload: { message: `Generating style-matched environment plate...`, type: 'info' } });
-                
-                // --- PHASE 4: Automated Inference for Scene Settings ---
-                const inferredCamera = (!state.director.camera || state.director.camera === 'Default / Auto') ? intent.recommendedCamera : state.director.camera;
-                const inferredLighting = (!state.director.lighting || state.director.lighting === 'Default / Auto') ? intent.recommendedLighting : state.director.lighting;
-
-                if (inferredCamera && inferredCamera !== state.director.camera) {
-                     dispatch({ type: 'SET_DIRECTOR', payload: { camera: inferredCamera } });
-                     dispatch({ type: 'ADD_LOG', payload: { message: `Auto-inferred Camera: ${inferredCamera}`, type: 'success' } });
-                }
-                if (inferredLighting && inferredLighting !== state.director.lighting) {
-                     dispatch({ type: 'SET_DIRECTOR', payload: { lighting: inferredLighting } });
-                    dispatch({ type: 'ADD_LOG', payload: { message: `Auto-inferred Lighting: ${inferredLighting}`, type: 'success' } });
-                }
-
-                const { buildEnvironmentOnlyPrompt } = await import('../utils/promptHelpers');
-                const envPrompt = buildEnvironmentOnlyPrompt(intent, style, inferredCamera || state.director.camera, state.tokens, state.annotations);
-
-                dispatch({ type: 'SET_PROCESSING', payload: true });
-
-                const img = await GeminiService.generateImage(
-                    envPrompt,
-                    state.apiKey!,
+                intent = await GeminiService.analyzeSceneIntent(
+                    bgPrompt,
+                    state.apiKey,
                     state.model,
-                    [], 
-                    { aspectRatio: state.director.aspectRatio || '16:9', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements }
+                    {
+                        billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
+                        entitlements: state.billingEntitlements
+                    }
                 );
-
-                setPreviousBackgroundUrl(state.backgroundUrl || null);
-                dispatch({ type: 'SET_BG', payload: img });
-                dispatch({ type: 'ADD_LOG', payload: { message: `Environment plate generated successfully.`, type: 'success' } });
-
-                // Phase 4: Automatically trigger the composite pass to place the actor in the new environment
-                dispatch({ type: 'ADD_LOG', payload: { message: `Auto-starting composite pass...`, type: 'info' } });
-                generateBg(img);
+                setSceneIntent(intent);
+            } else {
+                intent = {
+                    summary: 'Clean cinematic environment matched to the extracted character style',
+                    mood: style?.mood || 'calm',
+                    recommendedCamera: state.director.camera || 'Default / Auto',
+                    recommendedLighting: state.director.lighting || 'Default / Auto'
+                } as SceneIntent;
             }
+
+            dispatch({ type: 'ADD_LOG', payload: { message: `Generating style-matched environment plate...`, type: 'info' } });
+            
+            // --- PHASE 4: Automated Inference for Scene Settings ---
+            const inferredCamera = (!state.director.camera || state.director.camera === 'Default / Auto') ? intent.recommendedCamera : state.director.camera;
+            const inferredLighting = (!state.director.lighting || state.director.lighting === 'Default / Auto') ? intent.recommendedLighting : state.director.lighting;
+
+            if (inferredCamera && inferredCamera !== state.director.camera) {
+                 dispatch({ type: 'SET_DIRECTOR', payload: { camera: inferredCamera } });
+                 dispatch({ type: 'ADD_LOG', payload: { message: `Auto-inferred Camera: ${inferredCamera}`, type: 'success' } });
+            }
+            if (inferredLighting && inferredLighting !== state.director.lighting) {
+                 dispatch({ type: 'SET_DIRECTOR', payload: { lighting: inferredLighting } });
+                dispatch({ type: 'ADD_LOG', payload: { message: `Auto-inferred Lighting: ${inferredLighting}`, type: 'success' } });
+            }
+
+            let envPrompt = "";
+            if (hasUserScenePrompt) {
+                const { buildEnvironmentOnlyPrompt } = await import('../utils/promptHelpers');
+                envPrompt = buildEnvironmentOnlyPrompt(intent, style, inferredCamera || state.director.camera, state.tokens, state.annotations);
+            } else {
+                envPrompt = `
+Create a clean environment plate only.
+
+ERA / WORLD CONSISTENCY (HIGH PRIORITY):
+Match the environment to the character's visible wardrobe, props, and implied time period.
+Inferred era: ${style.impliedEra || 'None detected'}
+World type: ${style.impliedWorld || 'Neutral'}
+Architecture direction: ${style.architectureHints || 'Clean, abstract'}
+Do not generate an environment that contradicts the character's clothing or prop language.
+Constraints/Forbidden elements: ${style.environmentMustAvoid || 'None'}
+
+AESTHETIC STYLE:
+Match the visual style, material treatment, color logic, and mood of the analyzed character style.
+Do not include any people or characters.
+Do not include foreground subjects.
+Create a clean cinematic environment background suitable for staging and compositing.
+
+Style summary: ${style.styleSummary}
+Lighting: ${style.lighting || 'cinematic neutral'}
+Mood: ${style.mood || 'calm'}
+Color palette: ${style.palette || 'balanced cinematic tones'}
+
+Output: environment plate only.
+`;
+            }
+
+            dispatch({ type: 'SET_PROCESSING', payload: true });
+
+            const res = await GeminiService.generateImage(
+                envPrompt,
+                state.apiKey!,
+                state.model,
+                [], 
+                { aspectRatio: state.director.aspectRatio || '16:9', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements }
+            );
+
+            const img = await normalizeGeneratedImageUrl(res);
+
+            setPreviousBackgroundUrl(state.backgroundUrl || null);
+            dispatch({ type: 'SET_BG', payload: img });
+            dispatch({ type: 'ADD_LOG', payload: { message: `Environment plate generated successfully.`, type: 'success' } });
+
+            // Phase 4: Automatically trigger the composite pass to place the actor in the new environment
+            dispatch({ type: 'ADD_LOG', payload: { message: `Auto-starting composite pass...`, type: 'info' } });
+            generateBg(img);
 
         } catch (err: any) {
             console.error("Style Extract / BG Gen Error", err);
@@ -981,13 +1159,7 @@ const SceneCanvas = () => {
 
     // Unified Workflow Generate Button
     const generateBg = async (overrideBgUrl?: string | any) => {
-        if (state.billingEntitlements.effectiveBillingMode === 'hosted' && state.hostedCredits === 0) {
-            dispatch({ type: 'ADD_LOG', payload: { message: "Generation blocked: Insufficient credits", type: 'error' } });
-            dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
-            return;
-        }
-
-        if (!state.apiKey) return;
+        if (!ensureStagingAiAccess('Environment Plate Generation')) return;
         const activeBgUrl = (typeof overrideBgUrl === 'string' ? overrideBgUrl : undefined) || state.backgroundUrl;
         const hasSourceScene = !!activeBgUrl;
         const hasPromptText = !!bgPrompt?.trim() || !!state.director.subject?.trim();
@@ -1087,7 +1259,7 @@ const SceneCanvas = () => {
                 const limitedRefs = refs.slice(0, 14);
 
                 let actualGenId = '';
-                const img = await GeminiService.generateImage(
+                const res = await GeminiService.generateImage(
                     strictPromptText,
                     state.apiKey!,
                     state.model,
@@ -1100,6 +1272,8 @@ const SceneCanvas = () => {
                         }
                     }
                 );
+
+                const img = await normalizeGeneratedImageUrl(res);
 
                 if (actualGenId) dispatch({ type: 'REMOVE_BACKGROUND_JOB', payload: actualGenId });
 
@@ -1155,7 +1329,7 @@ const SceneCanvas = () => {
                 );
 
                 let actualGenId = '';
-                const img = await GeminiService.generateImage(
+                const res = await GeminiService.generateImage(
                     loosePromptText,
                     state.apiKey!,
                     state.model,
@@ -1168,6 +1342,8 @@ const SceneCanvas = () => {
                         }
                     }
                 );
+
+                const img = await normalizeGeneratedImageUrl(res);
 
                 if (actualGenId) dispatch({ type: 'REMOVE_BACKGROUND_JOB', payload: actualGenId });
 
@@ -1467,10 +1643,7 @@ const SceneCanvas = () => {
             return;
         }
 
-        if (!state.apiKey) {
-            dispatch({ type: 'ADD_LOG', payload: { message: 'API Key required for protection mask.', type: 'error' } } as any);
-            return;
-        }
+        if (!ensureStagingAiAccess('Protection Mask')) return;
         setProtectStatus('generating');
         try {
             const captured = await captureSceneImage();
@@ -1490,8 +1663,10 @@ const SceneCanvas = () => {
                 { aspectRatio: state.director.aspectRatio, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements }
             );
 
-            setRawProtectMaskUrl(res);
-            setProtectMaskUrl(res); // Initial set (erosion 0)
+            const maskUrl = await normalizeGeneratedImageUrl(res);
+
+            setRawProtectMaskUrl(maskUrl);
+            setProtectMaskUrl(maskUrl); // Initial set (erosion 0)
             setProtectStatus('ready');
             dispatch({ type: 'ADD_LOG', payload: { message: 'Protection mask generated (face/hair).', type: 'success' } } as any);
         } catch (e: any) {
@@ -1652,10 +1827,7 @@ const SceneCanvas = () => {
     };
 
     const applyRegionEditQueue = async () => {
-        if (!state.apiKey) {
-            dispatch({ type: 'ADD_LOG', payload: { message: 'API Key required for Region Edit.', type: 'error' } } as any);
-            return;
-        }
+        if (!ensureStagingAiAccess('Region Edit')) return;
         if (!regionEdit?.layers?.some((l: any) => l.enabled && l.maskDataUrl && (l.prompt || '').trim())) {
             dispatch({ type: 'ADD_LOG', payload: { message: 'No enabled mask layers with both mask + prompt.', type: 'error' } } as any);
             return;
@@ -2120,11 +2292,13 @@ const SceneCanvas = () => {
             const dy = e.clientY - dragItem.startY;
             const updates = { x: dragItem.initialX + dx, y: dragItem.initialY + dy };
 
-            if (dragItem.type === 'token') {
-                // Pure visual movement during drag (Authority Handoff Contract)
-                dispatch({ type: 'UPDATE_TOKEN', payload: { id: dragItem.id, x: updates.x, y: updates.y } });
-            } else {
-                dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: dragItem.id, ...updates } });
+            latestDragRef.current =
+                dragItem.type === 'token'
+                    ? { type: 'token', id: dragItem.id, x: updates.x, y: updates.y }
+                    : { type: 'annotation', id: dragItem.id, x: updates.x, y: updates.y };
+
+            if (dragFrameRef.current === null) {
+                dragFrameRef.current = requestAnimationFrame(flushLatestDragUpdate);
             }
         } else if (resizeItem) {
             const dx = e.clientX - resizeItem.startX;
@@ -2223,6 +2397,12 @@ const SceneCanvas = () => {
 
 
     const handleStageMouseUp = () => {
+        if (dragFrameRef.current !== null) {
+            cancelAnimationFrame(dragFrameRef.current);
+            dragFrameRef.current = null;
+        }
+        latestDragRef.current = null;
+
         if (dragItem && dragItem.type === 'token') {
             const token = state.tokens.find(t => t.id === dragItem.id);
             if (token) {
@@ -2449,6 +2629,7 @@ const SceneCanvas = () => {
             // 2. Check Occlusion against volumes (if available)
             if (state.occupiedVolumes && state.occupiedVolumes.length > 0) {
                for (const vol of state.occupiedVolumes) {
+                   if (!vol.footprint || typeof vol.footprint.x !== 'number') continue;
                    const vx = vol.footprint.x * viewportBox.w;
                    const vy = vol.footprint.y * viewportBox.h;
                    const vw = vol.footprint.w * viewportBox.w;

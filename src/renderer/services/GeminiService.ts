@@ -8,7 +8,11 @@ export type ExtractedStyle = {
   lighting?: string;
   renderStyle?: string;
   mood?: string;
-  styleSummary: string;
+  styleSummary?: string;
+  impliedEra?: string;
+  impliedWorld?: string;
+  architectureHints?: string;
+  environmentMustAvoid?: string;
 };
 
 export type SceneIntent = {
@@ -616,12 +620,13 @@ export const GeminiService = {
   // Vision/Text-only analysis from a single image (returns model text)
   async analyzeImage(
     prompt: string,
-    apiKey: string,
+    apiKey: string | null | undefined,
     _model: string,
     imageUrl: string,
     options: { billingMode?: 'hosted' | 'byok', entitlements?: any, onJobAccepted?: any, expectedResponseType?: 'image' | 'text' | 'json' } = {}
   ): Promise<string> {
     if (!apiKey && options.billingMode !== 'hosted') throw new Error("No API Key provided.");
+    const effectiveKey = options.billingMode === 'hosted' ? 'HOSTED_MODE' : (apiKey || '');
     // Force a vision-text model for analysis to avoid modality errors with generation models
     const useModel = 'gemini-2.5-flash';
     const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${useModel}:generateContent`;
@@ -644,7 +649,7 @@ export const GeminiService = {
         return hostedDataUrl;
     }
 
-    const response = await fetch(`${baseUrl}?key=${apiKey}`, {
+    const response = await fetch(`${baseUrl}?key=${effectiveKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestBody)
@@ -667,12 +672,13 @@ export const GeminiService = {
   // Multi-frame reasoning for Motion Director (Start + End frames)
   async analyzeMultiFrame(
     prompt: string,
-    apiKey: string,
+    apiKey: string | null | undefined,
     _model: string,
     frames: { url: string; label: string }[],
     options: { billingMode?: 'hosted' | 'byok', entitlements?: any, onJobAccepted?: any, expectedResponseType?: 'image' | 'text' | 'json' } = {}
   ): Promise<string> {
     if (!apiKey && options.billingMode !== 'hosted') throw new Error("No API Key provided.");
+    const effectiveKey = options.billingMode === 'hosted' ? 'HOSTED_MODE' : (apiKey || '');
     // Multi-frame reasoning requires a vision-capable text model
     const useModel = 'gemini-2.5-flash';
     const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${useModel}:generateContent`;
@@ -705,7 +711,7 @@ export const GeminiService = {
         return rawResultText;
     }
 
-    const response = await fetch(`${baseUrl}?key=${apiKey}`, {
+    const response = await fetch(`${baseUrl}?key=${effectiveKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestBody)
@@ -726,7 +732,7 @@ export const GeminiService = {
 
   async analyzeMultiFrameJson<T>(
     prompt: string,
-    apiKey: string,
+    apiKey: string | null | undefined,
     model: string,
     frames: { url: string; label: string }[],
     options: { billingMode?: 'hosted' | 'byok', entitlements?: any, onJobAccepted?: any, expectedResponseType?: 'image' | 'text' | 'json' } = {}
@@ -770,15 +776,22 @@ export const GeminiService = {
    */
   async analyzeCharacterStyle(
     imageUrl: string,
-    apiKey: string,
+    apiKey: string | null | undefined,
     model: string = 'gemini-2.5-flash', // Defaulting to the fast multimodal model
     options: { billingMode?: 'hosted' | 'byok', entitlements?: any, onJobAccepted?: any } = {}
   ): Promise<ExtractedStyle> {
     if (!apiKey && options.billingMode !== 'hosted') throw new Error("No API Key provided for style analysis.");
+    const effectiveKey = options.billingMode === 'hosted' ? 'HOSTED_MODE' : (apiKey || '');
 
-    const prompt = `Analyze this character image. Return a JSON object describing their exact artistic medium, color palette, and mood. Do NOT describe the character's physical features or clothing. Only describe the aesthetic style (e.g., 3D animated, CG animated, pastel colors, cel-shaded, gritty cinematic, etc.). Return only style descriptors. No full sentences.
+    const prompt = `Analyze this character image. Return a JSON object describing their exact artistic medium, color palette, mood, and inferred setting details based on their wardrobe/prop vocabulary.
+
+    AESTHETICS:
+    Do NOT describe the character's physical features or clothing. Only describe the aesthetic style (e.g., 3D animated, CG animated, pastel colors, cel-shaded, gritty cinematic, etc.). Return only style descriptors. No full sentences.
 
     CRITICAL LIGHTING RULE: Do NOT include character-specific or studio lighting descriptors (e.g., "soft studio lighting", "portrait lighting", "beauty lighting", "rim lighting", "flat"). These will conflict with environment generation later. If you describe lighting, keep it broad and environment-safe (e.g., "volumetric", "cinematic", "moody", or prioritize "mood").
+
+    SETTING / WORLD INFERENCE:
+    Look at the character's wardrobe, props, and silhouette. Infer the probable time period (e.g. Ancient, Biblical, Medieval, Cyberpunk, 1920s), world type (e.g. Desert village, Sci-Fi metropolis, High Fantasy castle), and derived architecture hints. Also note what environmental aesthetics would contradict the clothing.
 
     Return EXACTLY this JSON structure:
 {
@@ -787,7 +800,11 @@ export const GeminiService = {
   "lighting": "string (e.g., 'Volumetric', 'Flat cel-shaded')",
   "renderStyle": "string (e.g., 'Unreal Engine 5', 'Anime')",
   "mood": "string (e.g., 'Gritty', 'Whimsical')",
-  "styleSummary": "string (A comma-separated list of the best descriptors from above)"
+  "styleSummary": "string (A comma-separated list of the best aesthetic descriptors)",
+  "impliedEra": "string (e.g., 'Ancient/Pre-modern', 'Sci-Fi')",
+  "impliedWorld": "string (e.g., 'Biblical town', 'Space station')",
+  "architectureHints": "string (e.g., 'Stone and plaster, no modern glass')",
+  "environmentMustAvoid": "string (A comma-separated list of things that contradict the era)"
 }
     `;
 
@@ -795,7 +812,7 @@ export const GeminiService = {
       // Reuse the JSON generation logic with the image attached
       const result = await this.analyzeMultiFrameJson<ExtractedStyle>(
         prompt,
-        apiKey,
+        effectiveKey,
         model,
         [{ url: imageUrl, label: 'Character Asset' }],
         options
@@ -825,12 +842,13 @@ export const GeminiService = {
     baseImageUrl: string,
     maskDataUrl: string,
     instruction: string,
-    apiKey: string,
+    apiKey: string | null | undefined,
     model: string,
     referenceImages: { url: string; label: string }[] = [],
     options: { aspectRatio?: string, billingMode?: 'hosted' | 'byok', entitlements?: any, expectedResponseType?: 'image' } = {}
   ): Promise<string> {
     if (!apiKey && options.billingMode !== 'hosted') throw new Error("No API Key provided.");
+    const effectiveKey = options.billingMode === 'hosted' ? 'HOSTED_MODE' : (apiKey || '');
     const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
     const base = await GeminiService._resolveImageData(baseImageUrl);
@@ -881,7 +899,7 @@ Hard constraints:
         return payload;
     }
 
-    const response = await fetch(`${baseUrl}?key=${apiKey}`, {
+    const response = await fetch(`${baseUrl}?key=${effectiveKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestBody)
@@ -1021,7 +1039,7 @@ Hard constraints:
    */
   async analyzeSceneIntent(
     prompt: string, 
-    apiKey?: string,
+    apiKey: string | null | undefined,
     model: string = 'gemini-2.5-flash',
     options: { billingMode?: 'hosted' | 'byok', entitlements?: any, onJobAccepted?: any, expectedResponseType?: 'image' | 'text' | 'json' } = {}
   ): Promise<SceneIntent> {

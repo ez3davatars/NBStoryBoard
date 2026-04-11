@@ -609,6 +609,14 @@ export const buildEnvironmentOnlyPrompt = (
     }
 
     if (extractedStyle) {
+        prompt += `\n### ERA / WORLD CONSISTENCY (HIGH PRIORITY):
+Match the environment to the character's visible wardrobe, props, and implied time period.
+Inferred era: ${extractedStyle.impliedEra || 'None detected'}
+World type: ${extractedStyle.impliedWorld || 'Neutral'}
+Architecture direction: ${extractedStyle.architectureHints || 'Clean, abstract'}
+Do not generate an environment that contradicts the character's clothing or prop language.
+Constraints/Forbidden elements: ${extractedStyle.environmentMustAvoid || 'None'}\n\n`;
+
         prompt += `### STYLE ENVELOPE (VISUAL TREATMENT ONLY):
 - Artistic Medium: ${extractedStyle.medium}
 - Render Style: ${extractedStyle.renderStyle}

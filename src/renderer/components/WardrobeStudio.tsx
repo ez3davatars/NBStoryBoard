@@ -27,10 +27,22 @@ async function materializeDisplayUrl(url: string | null | undefined): Promise<st
     if (url.startsWith('blob:') || url.startsWith('data:')) return url;
 
     if (/^https?:\/\//i.test(url)) {
-        const res = await fetch(url, { mode: 'cors' });
-        if (!res.ok) throw new Error(`Failed to fetch remote display asset: ${res.status}`);
-        const blob = await res.blob();
-        return URL.createObjectURL(blob);
+        try {
+            const res = await fetch(url, { mode: 'cors' });
+            if (!res.ok) throw new Error(`Failed to fetch remote display asset: ${res.status}`);
+            const fetchedBlob = await res.blob();
+            
+            // True Base64 Pivot instead of transient blob
+            return await new Promise<string>((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result as string);
+                reader.onerror = reject;
+                reader.readAsDataURL(fetchedBlob);
+            });
+        } catch (e) {
+            console.warn(`Failed to materialize remote display asset to base64:`, e);
+            return url;
+        }
     }
 
     return url;
@@ -2182,6 +2194,13 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                                         className="bg-blue-600 hover:bg-blue-500 text-white px-8 py-3 rounded-full font-black text-[10px] uppercase tracking-widest border border-blue-400 transition-all active:scale-95 flex items-center gap-3"
                                                     >
                                                         <Shirt className="w-4 h-4" /> Save to Wardrobe
+                                                    </button>
+                                                    <button
+                                                        onClick={clearDesignerWorkspace}
+                                                        className="bg-red-600/80 hover:bg-red-500 text-white px-8 py-3 rounded-full font-black text-[10px] uppercase tracking-widest border border-red-500/50 transition-all active:scale-95 flex items-center gap-3"
+                                                        title="Discard Generated Costume"
+                                                    >
+                                                        <X className="w-4 h-4" /> Clear
                                                     </button>
                                                     <button
                                                         onClick={() => downloadImage(designerImage!, `costume-${Date.now()}.png`)}

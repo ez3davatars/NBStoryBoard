@@ -369,6 +369,22 @@ const App = () => {
     return () => clearTimeout(timer);
   }, [state.liveStatus, dispatch]);
 
+  // Enforce Clean Canvas on App Close
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      localStorage.removeItem('nano_bg_url');
+      localStorage.removeItem('nano_depth_url');
+      localStorage.removeItem('nano_depth_hash');
+      localStorage.removeItem('nano_source_hash');
+      localStorage.removeItem('nano_active_shot_id');
+      // Intentionally NOT clearing models/api keys here
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, []);
+
   // Hosted Mode Background Poller
   useEffect(() => {
     const pendingJobs = state.backgroundJobs.filter(j => j.status === 'pending_background');
@@ -904,6 +920,9 @@ const App = () => {
           // Filter out preserved actors if their base filename corresponds to an actual file we just synced from disk.
           const cleanPreservedActors = preservedActors.filter(pa => {
             const basename = pa.filename?.split(/[\\/]/).pop();
+            // Legacy bug cleanup: if it's the hardcoded 'portrait.png' without a path, drop it.
+            if (basename === 'portrait.png' && pa.id.startsWith('nano_') === false) return false;
+            
             // If the disk scanner found this image natively, we DROP the memory zombie and let finalDiskActors handle it
             if (basename && newlyDiscoveredBasenames.has(basename)) return false;
             return true;
@@ -927,7 +946,14 @@ const App = () => {
             const basename = newActor.filename?.split(/[\\/]/).pop() || "";
             const memoryZombie = preservedActors.find(pa => pa.filename?.split(/[\\/]/).pop() === basename);
             if (memoryZombie) {
-              return { ...newActor, ...memoryZombie, id: newActor.id, url: newActor.url, filename: newActor.filename };
+              return { 
+                  ...newActor, 
+                  ...memoryZombie, 
+                  id: newActor.id, 
+                  url: newActor.url, 
+                  previewUrl: newActor.previewUrl, // MUST explicitly override to prevent broken memory URLs from returning
+                  filename: newActor.filename 
+              };
             }
 
             return newActor;

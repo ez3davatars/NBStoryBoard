@@ -10,7 +10,7 @@ import {
     EyeOff, Shirt, Sparkles, LayoutTemplate, Download, X, ChevronDown, Pencil,
     Trash2, Maximize, RefreshCcw, FolderPlus, AlertTriangle
 } from 'lucide-react';
-import { nativeJoinPath, nativeListFiles, nativeReadFile, nativeWriteFile } from '../utils/NativeFileAssets';
+import { nativeJoinPath, nativeListFiles, nativeReadFile } from '../utils/NativeFileAssets';
 import { nativeSelectFolder } from '../utils/NativeFileAssets';
 import type { CastMember } from '../context/AppContext';
 import { useAppContext } from '../context/AppContext';
@@ -157,10 +157,22 @@ async function materializeDisplayUrl(url: string | null | undefined): Promise<st
     if (url.startsWith('blob:') || url.startsWith('data:')) return url;
 
     if (/^https?:\/\//i.test(url)) {
-        const res = await fetch(url, { mode: 'cors' });
-        if (!res.ok) throw new Error(`Failed to fetch remote display asset: ${res.status}`);
-        const blob = await res.blob();
-        return URL.createObjectURL(blob);
+        try {
+            const res = await fetch(url, { mode: 'cors' });
+            if (!res.ok) throw new Error(`Failed to fetch remote display asset: ${res.status}`);
+            const fetchedBlob = await res.blob();
+            
+            // True Base64 Pivot instead of transient blob
+            return await new Promise<string>((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result as string);
+                reader.onerror = reject;
+                reader.readAsDataURL(fetchedBlob);
+            });
+        } catch (e) {
+            console.warn(`Failed to materialize remote display asset to base64:`, e);
+            return url;
+        }
     }
 
     return url;
@@ -1566,120 +1578,59 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
             return;
         }
 
+        const catToStyle: Record<string, string> = {
+            "realism": "exact_studio",
+            "anim": "family_3d",
+            "illustration": "retro_anime",
+            "scifi": "cyberpunk_neon",
+            "uncategorized": "exact_studio",
+            "nano": "exact_studio"
+        };
+        const activeStyle = catToStyle[targetCategory] || "exact_studio";
+
         try {
-            // NATIVE MODE
-            if (state.saveDirectoryPath) {
-                const root = state.saveDirectoryPath;
-                const actorsDir = await nativeJoinPath(root, 'Actors');
-                const catDir = await nativeJoinPath(actorsDir, targetCategory);
+            const mat = await LibraryAssetMaterializer.materializeCastAsset({
+                sourceUrl: targetUrl,
+                saveDirectoryPath: state.saveDirectoryPath,
+                actorName: targetName,
+                category: targetCategory
+            });
 
-                const safeName = targetName.replace(/[^a-z0-9\s-_]/gi, '').trim() || `Actor-${Date.now()}`;
-                const portraitPath = await nativeJoinPath(catDir, safeName, 'portrait.png');
-
-                const res = await fetch(targetUrl);
-                const blob = await res.blob();
-
-                await nativeWriteFile(portraitPath, blob); // Handles partial directory creation
-                
-                // Immediately pivot UI from Hosted to Durable Native Local display URL
-                const resolvedPortrait = await resolveDisplayUrl({ localPath: portraitPath });
-
-                // Reference Sheet Backup
-                if (saveMode === 'ref_sheet') {
-                    const refPath = await nativeJoinPath(catDir, safeName, 'reference_sheet.png');
-                    await nativeWriteFile(refPath, blob);
-                    const resolvedRef = await resolveDisplayUrl({ localPath: refPath });
-                    if (resolvedRef) setRefSheetUrl(resolvedRef);
-                } else {
-                    if (resolvedPortrait) setFinalCharacterUrl(resolvedPortrait);
-                }
-
-                // Metadata
-                const metaPath = await nativeJoinPath(catDir, safeName, 'actor.json');
-                const metadata = {
-                    id: crypto.randomUUID(),
-                    name: safeName,
-                    description: saveMode === 'ref_sheet' ? "Nano Reference Sheet" : (state.lastCastedPrompt || "Nano Cast Generation"),
-                    tags: [targetCategory, "Nano Cast", selectedBody || "Unknown Class", saveMode === 'ref_sheet' ? 'Reference Sheet' : 'Portrait'],
-                    version: "1.0",
-                    created: Date.now(),
-                    dna: {
-                        weight: weightLbs,
-                        height: heightIn,
-                        identity_lock: directorControls.identityStrength,
-                        stylization: directorControls.stylization
-                    }
-                };
-                const metaBlob = new Blob([JSON.stringify(metadata, null, 2)], { type: 'application/json' });
-                await nativeWriteFile(metaPath, metaBlob);
-
-                showToast(`Saved to Library (Native): ${targetCategory}/${safeName}`);
-                setShowSaveModal(false);
-                return;
-            }
-
-            // WEB MODE
-            if (!state.saveDirectoryHandle) return;
-            // 1. Get/Create "Actors" folder
-            const root = state.saveDirectoryHandle;
-            const actorsDir = await root.getDirectoryHandle('Actors', { create: true });
-
-            // 2. Get/Create Category folder
-            const catDir = await actorsDir.getDirectoryHandle(targetCategory, { create: true });
-
-            // 3. Create Actor Folder
-            const safeName = targetName.replace(/[^a-z0-9\s-_]/gi, '').trim() || `Actor-${Date.now()}`;
-            const actorDir = await catDir.getDirectoryHandle(safeName, { create: true });
-
-            // 4. Save Main Image (as portrait.png for consistency in library)
-            const fileHandle = await actorDir.getFileHandle('portrait.png', { create: true });
-            const writable = await fileHandle.createWritable();
-
-            const res = await fetch(targetUrl);
-            const blob = await res.blob();
-
-            await writable.write(blob);
-            await writable.close();
-            
-            const activeBlobUrl = URL.createObjectURL(blob);
-
-            // 4b. If Reference Sheet, save backup copy with distinct name
-            if (saveMode === 'ref_sheet') {
-                const refHandle = await actorDir.getFileHandle('reference_sheet.png', { create: true });
-                const refWritable = await refHandle.createWritable();
-                await refWritable.write(blob); // Same blob
-                await refWritable.close();
-                setRefSheetUrl(activeBlobUrl);
-            } else {
-                setFinalCharacterUrl(activeBlobUrl);
-            }
-
-            // 5. Save Metadata (actor.json)
-            const metaHandle = await actorDir.getFileHandle('actor.json', { create: true });
-            const metaWritable = await metaHandle.createWritable();
-            const metadata = {
+            const newActor = {
                 id: crypto.randomUUID(),
-                name: safeName,
-                description: saveMode === 'ref_sheet' ? "Nano Reference Sheet" : (state.lastCastedPrompt || "Nano Cast Generation"),
-                tags: [targetCategory, "Nano Cast", selectedBody || "Unknown Class", saveMode === 'ref_sheet' ? 'Reference Sheet' : 'Portrait'],
-                version: "1.0",
-                created: Date.now(),
-                dna: {
-                    weight: weightLbs,
-                    height: heightIn,
-                    identity_lock: directorControls.identityStrength,
-                    stylization: directorControls.stylization
+                name: targetName || `Actor-${Date.now()}`,
+                url: mat.previewUrl,
+                localPath: mat.localPath || undefined,
+                previewUrl: mat.previewUrl,
+                sourceUrl: mat.sourceUrl,
+                tag: 'front' as const,
+                filename: mat.filename,
+                profile: {
+                    identity: targetName || `Actor-${Date.now()}`,
+                    style: activeStyle,
+                    wardrobe: saveMode === 'ref_sheet' ? "Reference Sheet" : "Casting Director",
+                    accessories: ""
                 }
             };
-            await metaWritable.write(JSON.stringify(metadata, null, 2));
-            await metaWritable.close();
+            
+            // @ts-ignore
+            dispatch({ type: 'ADD_ACTOR_LIBRARY', payload: newActor });
 
-            showToast(`Saved to Library: ${targetCategory}/${safeName}`);
+            if (mat.previewUrl) {
+                if (saveMode === 'ref_sheet') {
+                    setRefSheetUrl(mat.previewUrl);
+                } else {
+                    setFinalCharacterUrl(mat.previewUrl);
+                }
+            }
+
+            showToast(`Saved to Library: ${targetCategory}/${newActor.name}`);
             setShowSaveModal(false);
+            if (saveMode === 'ref_sheet') setShowRefSheet(false);
 
-        } catch (e: any) {
-            console.error("Save to Library Failed:", e);
-            showToast("Save Failed: " + e.message);
+        } catch (err: any) {
+            console.error("Save to Library Failed:", err);
+            showToast("Save Failed: " + err.message);
         }
     };
 
@@ -2094,6 +2045,23 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
             const safeKeywords = getSafeKeywords(targetStyleKey, styleConfig.keywords);
 
             // 3. PROMPT CONSTRUCTION
+            const isPortraitLockedSheet = identitySource !== 'biometric' && Boolean(finalCharacterUrl);
+            const allowTypedOutfitOverride =
+                identitySource === 'biometric' &&
+                !selectedWardrobeItem &&
+                !!directorControls.outfit?.trim();
+            const allowHairOverride =
+                identitySource === 'biometric' &&
+                !!directorControls.hairStyle?.trim();
+            
+            const wardrobeMode = isPortraitLockedSheet
+                ? 'portrait_lock'
+                : selectedWardrobeItem
+                    ? 'wardrobe_asset'
+                    : allowTypedOutfitOverride
+                        ? 'typed_outfit'
+                        : 'none';
+
             const effectiveStylization = directorControls.stylization;
             const styleNote = "";
             let effectiveIdentityStrength = directorControls.identityStrength;
@@ -2105,6 +2073,16 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
             }
 
             let finalPrompt = "";
+
+            if (isPortraitLockedSheet) {
+                finalPrompt += `PORTRAIT AUTHORITY BLOCK (ABSOLUTE HIGHEST PRIORITY):\n`;
+                finalPrompt += `Use [IMAGE 1] as the SINGLE SOURCE OF TRUTH for the full character.\n`;
+                finalPrompt += `This includes: face, hair, beard, wardrobe, silhouette, fabric, colors, layering, accessories, and visible branding.\n`;
+                finalPrompt += `The task is NOT to redesign the character.\n`;
+                finalPrompt += `The task is to rotate and restage the SAME approved portrait character from [IMAGE 1] into a technical multi-angle reference sheet.\n`;
+                finalPrompt += `All panels must depict the exact same outfit already visible in [IMAGE 1].\n`;
+                finalPrompt += `Do not invent alternate clothing. Do not substitute a generic costume. Do not simplify, restyle, or randomize the wardrobe.\n\n`;
+            }
 
             // 0. GLOBAL LAYOUT (MUST BE FIRST)
             finalPrompt += `REFERENCE SHEET BACKGROUND PROTOCOL:\n`;
@@ -2150,11 +2128,13 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
             finalPrompt += `- Do not produce a second left-leaning 3/4 view when a true right profile is required.\n\n`;
 
             if (identitySource !== 'biometric') {
-                // GENERATED IDENTITY
                 finalPrompt += `GENERATE CHARACTER REFERENCE SHEET:\n`;
-                finalPrompt += `Subject: ${selectedBody ? bodyArchetypes.find(b => b.id === selectedBody)?.name : "Character"}.\n`;
-                if (directorControls.hairStyle) { finalPrompt += `Hair Style: ${directorControls.hairStyle}.\n`; }
-                finalPrompt += `Reference: Use [IMAGE 1] as the base character.\n`;
+                finalPrompt += `Reference: Use [IMAGE 1] as the COMPLETE character authority.\n`;
+                finalPrompt += `IDENTITY LOCK: Preserve the exact face, skull shape, facial proportions, skin tone, hair, facial hair, and grooming from [IMAGE 1].\n`;
+                finalPrompt += `WARDROBE LOCK: Preserve the exact wardrobe from [IMAGE 1], including clothing design, silhouette, colors, materials, seams, collar shape, sleeve shape, layering, visible accessories, and branding placement.\n`;
+                finalPrompt += `This is a turnaround/reference-sheet expansion of the existing approved portrait in [IMAGE 1]. It is NOT a redesign.\n`;
+                finalPrompt += `Every panel must read as the SAME approved character already shown in [IMAGE 1], merely rotated into new technical reference angles.\n`;
+                finalPrompt += `Do NOT invent a new outfit. Do NOT combine [IMAGE 1] with any typed outfit prompt. Do NOT reinterpret the clothing.\n\n`;
             } else {
                 // BIOMETRIC IDENTITY STRENGTH INJECTION
                 finalPrompt += `IDENTITY WEIGHT: ${effectiveIdentityStrength}% (CRITICAL).\n`;
@@ -2162,7 +2142,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
 
             // --- B. COSTUME / WARDROBE ---
 
-            if (selectedWardrobeItem && wardrobeRefIndex > 0) {
+            if (wardrobeMode === 'wardrobe_asset' && wardrobeRefIndex > 0) {
                 finalPrompt += `COSTUME DIRECTIVE (PILOT PROTOCOL):\n`;
                 finalPrompt += `Wear the outfit shown in [IMAGE ${wardrobeRefIndex}].\n`;
                 finalPrompt += `1. PILOT IN COCKPIT: Treat [IMAGE 1] as a pilot sitting INSIDE the costume [IMAGE ${wardrobeRefIndex}]. The suit is a rigid exterior shell.\n`;
@@ -2174,11 +2154,22 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                     finalPrompt += `RE-ASSERTING IDENTITY LOCK:\n`;
                     finalPrompt += `The FACE in ALL views must be a PIXEL-PERFECT MATCH to [IMAGE 1]. Same person, same likeness, no morphing.\n\n`;
                 }
-            } else if (directorControls.outfit) {
+            } else if (wardrobeMode === 'portrait_lock') {
+                finalPrompt += `WARDROBE LOCK (MAXIMUM PRIORITY):\n`;
+                finalPrompt += `Use the clothing shown in [IMAGE 1] as the ABSOLUTE wardrobe authority.\n`;
+                finalPrompt += `Preserve the exact garment type, silhouette, colors, fabric texture, sleeve structure, neckline/collar shape, seams, layering, accessories, and visible branding exactly as shown.\n`;
+                finalPrompt += `Every panel must show the same approved outfit from [IMAGE 1], only rotated into new views.\n`;
+                finalPrompt += `Do not change the outfit into robes, tunics, jackets, armor, uniforms, casualwear, or any generic reference-sheet clothing.\n`;
+                finalPrompt += `Do not reinterpret the portrait wardrobe into a thematic costume.\n`;
+                finalPrompt += `If a detail is visible in [IMAGE 1], preserve it.\n\n`;
+
+                finalPrompt += `STYLE APPLICATION RULE:\n`;
+                finalPrompt += `The selected style may affect rendering treatment, lighting, and material response, but it must NOT change the approved wardrobe design from [IMAGE 1].\n\n`;
+            } else if (wardrobeMode === 'typed_outfit') {
                 finalPrompt += `COSTUME DIRECTIVE (ABSOLUTE OVERRIDE):\n`;
                 finalPrompt += `0. THE CHARACTER MUST WEAR: ${directorControls.outfit}.\n`;
                 finalPrompt += `1. YOU MUST OVERRIDE THE ORIGINAL CLOTHING MULTIMODAL REFERENCES. DO NOT copy the colors, patterns, or style of the original clothing.\n`;
-                finalPrompt += `2. If you do not follow the exact clothing description, the generation is a failure. YOU MUST RENDER THE SHIRT AS DESCRIBED IN THE OVERRIDE PROMPT.\n\n`;
+                finalPrompt += `2. If you do not follow the exact clothing description, the generation is a failure.\n\n`;
             }
 
             // --- C. BRANDING / LOGO ---
@@ -2274,7 +2265,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                 if (isRealistic) {
                     finalPrompt += `FINAL INSTRUCTION: The face in ALL views must be a PIXEL-PERFECT IDENTITY LIKENESS to [IMAGE 1]. PRESERVE FACIAL GEOMETRY ABOVE ALL ELSE.\n`;
                     finalPrompt += `CRITICAL ROTATION OVERRIDE: While the identity must match, YOU MUST NOT COPY THE CAMERA ANGLE OF [IMAGE 1]. You MUST dynamically rotate the character's head and body in 3D space to precisely match the required LENS angle (Profile, 3/4, Back, etc) for each individual panel.\n`;
-                    if (directorControls.hairStyle) {
+                    if (allowHairOverride) {
                         finalPrompt += `GROOMING OVERRIDE: Apply the hairstyle "${directorControls.hairStyle}". Preserve facial hair from [IMAGE 1] but override head hair.\n`;
                     } else {
                         finalPrompt += `GROOMING LOCK: The Hairstyle (or lack thereof) and Facial Hair must match [IMAGE 1] exactly. IMPORTANT: If the subject is BALD in [IMAGE 1], they MUST BE BALD in the output. Do not add hair. Do not change the beard style.\n`;
@@ -2306,6 +2297,9 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
             finalPrompt += `cropped legs, cut off feet, cowboy shot, 3/4 shot, knees up, waist up, torso only, close up body, cropped head.\n`;
             if (directorControls.outfit) {
                 finalPrompt += `EXTREMELY IMPORTANT: DO NOT COPY THE CLOTHING FROM THE SOURCE IMAGES. DO NOT RENDER THE ORIGINAL ATTIRE.\n`;
+            }
+            if (wardrobeMode === 'portrait_lock') {
+                finalPrompt += `portrait wardrobe drift, generic outfit replacement, tunic, robe, cloak, fantasy robe, biblical robe, peasant clothing, costume substitution, alternate wardrobe, stylized costume swap, random garment generation, clothing simplification, outfit redesign, changed silhouette, changed fabric, changed neckline, changed sleeves, changed layering, missing hoodie, missing shirt, missing pants, missing footwear, portrait outfit ignored.\n`;
             }
             if (identitySource === 'biometric') {
                 finalPrompt += `generic face, random person, default avatar, face swap, extra people, text, watermarks, maps.\n`;
@@ -3901,6 +3895,12 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                             setNewActorName(name);
                             setSaveCategory(category);
                             confirmSaveToLibrary(name, category);
+                        }}
+                        backgrounds={{
+                            realism: saveMode === 'ref_sheet' ? (refSheetUrl || undefined) : (finalCharacterUrl || undefined),
+                            animation: saveMode === 'ref_sheet' ? (refSheetUrl || undefined) : (finalCharacterUrl || undefined),
+                            illustration: saveMode === 'ref_sheet' ? (refSheetUrl || undefined) : (finalCharacterUrl || undefined),
+                            scifi: saveMode === 'ref_sheet' ? (refSheetUrl || undefined) : (finalCharacterUrl || undefined)
                         }}
                     />
 

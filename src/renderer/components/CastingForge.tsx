@@ -16,6 +16,7 @@ import { CutoutService } from "../services/CutoutService";
 import { GeminiService } from '../services/GeminiService';
 import HelpTooltip from './ui/HelpTooltip';
 import InlineHint from './ui/InlineHint';
+import ActorSaveModal from './ActorSaveModal';
 import ConfirmDialog from './ui/ConfirmDialog';
 
 // Types are exported from AppContext
@@ -141,10 +142,22 @@ async function materializeDisplayUrl(url: string | null | undefined): Promise<st
   if (url.startsWith('blob:') || url.startsWith('data:')) return url;
 
   if (/^https?:\/\//i.test(url)) {
-    const res = await fetch(url, { mode: 'cors' });
-    if (!res.ok) throw new Error(`Failed to fetch remote display asset: ${res.status}`);
-    const blob = await res.blob();
-    return URL.createObjectURL(blob);
+    try {
+        const res = await fetch(url, { mode: 'cors' });
+        if (!res.ok) throw new Error(`Failed to fetch remote display asset: ${res.status}`);
+        const fetchedBlob = await res.blob();
+        
+        // True Base64 Pivot instead of transient blob
+        return await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.onerror = reject;
+            reader.readAsDataURL(fetchedBlob);
+        });
+    } catch (e) {
+        console.warn(`Failed to materialize remote display asset to base64:`, e);
+        return url;
+    }
   }
 
   return url;
@@ -427,7 +440,7 @@ const CastingForge = () => {
 
   const [pendingRefSheet, setPendingRefSheet] = useState<string | null>(null);
 
-  const handleSaveToActorLibrary = async (targetFolderOverride?: string) => {
+  const handleSaveToActorLibrary = async (targetFolderOverride?: string, nameOverride?: string) => {
     const isRefSheet = !!pendingRefSheet;
     const finalUrl = pendingRefSheet || processedPreviewUrl || state.lastCastedImage;
     if (!finalUrl) return;
@@ -439,7 +452,7 @@ const CastingForge = () => {
     const timestamp = Date.now();
     const newActorId = isRefSheet ? `ref-${timestamp}` : `actor-${timestamp}`;
     const filename = isRefSheet ? `RefSheet_${timestamp}.png` : `Actor_${timestamp}.png`;
-    const name = isRefSheet ? `Ref Sheet ${new Date().toLocaleTimeString()}` : `Actor ${state.actorLibrary.length + 1}`;
+    const name = nameOverride || (isRefSheet ? `Ref Sheet ${new Date().toLocaleTimeString()}` : `Actor ${state.actorLibrary.length + 1}`);
     const identity = isRefSheet ? 'Reference Sheet' : (state.lastCastedPrompt || 'Unknown Identity');
     const targetCategoryLabel = targetFolderId === 'uncategorized' ? '' : (targetFolder?.label || '');
 
@@ -582,8 +595,8 @@ const CastingForge = () => {
 
       let text = "Synthesizing Asset";
       if (currentPercent > 40) text = "Processing Style Protocol...";
-      if (currentPercent > 70) text = "Refining Cutout Mask...";
-      if (currentPercent >= 95) text = "Refining Cutout Mask... (Still working, please wait)";
+      if (currentPercent > 70) text = "Applying Character Stylization...";
+      if (currentPercent >= 95) text = "Finalizing Stylization... (Still working, please wait)";
 
       dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text } });
     }, updateMs);
@@ -2837,64 +2850,18 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
         </div>
       </div>
 
-      {/* SAVE MODAL */}
-      {
-        showSaveModal && (
-          <div className="fixed inset-0 z-[3000] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={() => setShowSaveModal(false)}>
-            <div className="bg-[#18181b] border border-gray-700 rounded-2xl p-6 max-w-md w-full relative overflow-hidden" onClick={e => e.stopPropagation()}>
-              <h3 className="text-lg font-black text-white uppercase tracking-widest mb-2 flex items-center gap-2">
-                <FolderInput className="w-5 h-5 text-emerald-500" /> Save to Actor Library
-              </h3>
-              <p className="text-xs text-gray-400 mb-4">Select a Studio Folder to organize this actor:</p>
-
-              <div className="grid grid-cols-1 gap-2 mb-4 max-h-[60vh] overflow-y-auto pr-1 custom-scrollbar">
-                {STUDIO_FOLDERS.map((folder) => {
-                  const activeImage = state.customCovers[folder.id] || folder.image;
-                  return (
-                    <button
-                      key={folder.id}
-                      onClick={() => handleSaveToActorLibrary(folder.id)}
-                      className="group relative h-24 w-full rounded-xl overflow-hidden border border-white/10 transition-all hover:scale-[1.02] hover:border-emerald-500 cursor-pointer mb-1 text-left"
-                    >
-                      {/* Background Image */}
-                      {activeImage ? (
-                        <img src={activeImage} className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-110 opacity-60 group-hover:opacity-100" />
-                      ) : (
-                        <div className="absolute inset-0 bg-gradient-to-br from-gray-800 to-black flex items-center justify-center">
-                          <Folder className="w-8 h-8 text-white/10" />
-                        </div>
-                      )}
-
-                      {/* Cinematic Overlay */}
-                      <div className="absolute inset-0 bg-gradient-to-r from-black/60 via-black/40 to-transparent flex flex-col justify-center px-6">
-                        <div>
-                          <h3 className="text-xl font-black text-white italic tracking-tighter uppercase group-hover:text-emerald-400 transition-colors leading-none">
-                            {folder.label}
-                          </h3>
-                          <div className="flex items-center gap-2 mt-1">
-                            <p className="text-[10px] font-bold text-gray-300 border-l-2 border-emerald-500 pl-2">
-                              {folder.description}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                    </button>
-                  )
-                })}
-              </div>
-
-              <div className="flex justify-end">
-                <button
-                  onClick={() => setShowSaveModal(false)}
-                  className="px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider text-gray-400 hover:text-white hover:bg-gray-800 transition-colors"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          </div>
-        )
-      }
+      {/* SAVE MODAL (Universal) */}
+      <ActorSaveModal
+        isOpen={showSaveModal}
+        initialName={`Actor ${state.actorLibrary.length + 1}`}
+        onClose={() => setShowSaveModal(false)}
+        title="Save to Actor Library"
+        description="Select a Studio Folder to organize this actor:"
+        onSave={(name, category) => {
+          handleSaveToActorLibrary(category, name);
+          setShowSaveModal(false);
+        }}
+      />
 
       {/* 3. RIGHT SIDEBAR: Actor Library */}
       <div className="w-96 border-l border-gray-800 bg-[#18181b] flex flex-col shrink-0">
