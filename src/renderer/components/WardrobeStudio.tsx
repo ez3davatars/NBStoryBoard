@@ -1503,6 +1503,26 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                 ? `${tryOnNote ? `${tryOnNote}. ` : ''}Preserve the costume exactly. If the design has a dedicated face window, keep that opening exactly as shown and place the subject's face only there. Do not use any other cavity or decorative opening as the face opening.`
                 : (tryOnNote || "Transfer the garment exactly and preserve the visible design.");
 
+            const sourceAppearanceContinuityBlock = `
+ SOURCE APPEARANCE CONTINUITY LOCK (CRITICAL)
+ - Preserve the complete worn appearance package established by the Subject Reference, Costume Reference, and Canonical Front/Back Sheet.
+ - Any element that is worn, attached, styled, or visibly part of the look must remain present and consistent across all generated views unless explicitly instructed otherwise.
+ - This includes hairstyle state, headwear, jewelry, eyewear, veils, hoods, scarves, gloves, sleeves, footwear, attached adornments, and any other worn or source-established appearance elements.
+ - Do NOT remove, simplify, restyle, reinterpret, swap, or silently omit worn elements in side, back, or profile views.
+ - Do NOT trade off one appearance element to preserve another.
+ - If multiple appearance elements coexist, preserve all of them together.
+ - All turnaround views must be rotations of the same exact worn look, not creative reinterpretations.
+`;
+
+            const hairConsistencyBlock = `
+ HAIR STATE LOCK
+ - Preserve the exact hairstyle state across all generated views.
+ - If hair is worn down in the source or canonical sheet, it must remain down in all turnaround angles unless explicitly instructed otherwise.
+ - Do NOT convert loose hair into a bun, ponytail, braid, pinned style, updo, or tied-back style unless explicitly shown in the source.
+ - Preserve approximate hair length, fullness, parting, texture, and silhouette.
+ - Hair continuity must coexist with all worn accessories and headwear.
+`;
+
             let brandingInstruction = "";
             const baseImages: { url: string; label: string }[] = [
                 ...subjectRefs,
@@ -1630,6 +1650,8 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  - Use the Subject Reference image(s) only to preserve the exact facial identity and likeness.
  - The LEFT and RIGHT panels must depict the SAME person.
  - Do NOT let body anatomy override costume structure.
+ ${sourceAppearanceContinuityBlock}
+ ${hairConsistencyBlock}
 
  COSTUME (HARD TRANSFER AUTHORITY)
  - The Costume Reference (${costumeName}) is the authority for the outfit.
@@ -1671,6 +1693,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  face placed in wrong opening, face placed in decorative cavity, face placed in non-face opening,
  redesigned face hole, widened face window, shrunken face window, moved face window, broken face-window border,
  extra limbs, duplicate arms, duplicate sleeves, duplicate gloves, extra costume appendages, invented openings, extra cutouts, exposed neck when not shown, exposed wrists when not shown, exposed ankles when not shown, exposed hands when not shown, exposed feet when not shown, anatomy contouring, body-hugging reinterpretation, bodysuit reinterpretation, costume redesign, mascot redesign,
+ missing worn accessory, removed accessory, dropped headwear, missing jewelry, removed jewelry, missing eyewear, removed eyewear, missing veil, removed veil, missing hood, removed hood, missing scarf, removed scarf, missing glove, removed glove, missing footwear, removed footwear, missing adornment, simplified adornment, omitted source appearance element, restyled hair, bun hairstyle, updo, tied-back hair, ponytail, braid, pinned hair, shorter hair, different hair volume, different hair silhouette,
  altered costume colors, shifted palette, desaturated costume, brighter costume, darker costume, material reinterpretation,
  flat cutout, bad photoshop, unnatural drape, floating clothes, modified design, text, watermark.`,
                 state.apiKey,
@@ -1705,13 +1728,15 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  - The LEFT and RIGHT panels must depict the exact same person.
  - Preserve face identity and neutral upright posture.
  - Do NOT let body anatomy override the costume structure established by the Canonical Front/Back Sheet.
+ ${sourceAppearanceContinuityBlock}
+ ${hairConsistencyBlock}
 
- COSTUME (CANONICAL LOCK)
- - The Canonical Front/Back Sheet is the absolute source of truth.
- - Match the Canonical Front/Back Sheet exactly: same silhouette, same materials, same construction, same visible coverage, same openings, same appendages.
- - Do NOT add or remove any structure.
- - Do NOT reinterpret the costume into a more fitted or more revealing version.
- - Do NOT invent side-specific anatomy exposure or limb-like costume parts.
+ COSTUME & APPEARANCE CANON (ABSOLUTE LOCK)
+ - The Canonical Front/Back Sheet is the absolute source of truth for the full worn look.
+ - Preserve the same costume structure, same visible coverage, same accessories, same hairstyle state, same headwear, same worn adornments, and same footwear across all turnaround views.
+ - Do NOT add, remove, restyle, simplify, or reinterpret any source-established appearance element.
+ - Side and back views must be faithful rotations of the same exact appearance package.
+ - If the source-established look contains multiple simultaneous elements, preserve all of them together.
  ${sideViewLockBlock}
  ${faceWindowLockBlock}
  - If the costume has a dedicated face window, that is the only valid face placement location.
@@ -1750,6 +1775,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  extra limbs, duplicate arms, duplicate sleeves, duplicate gloves, extra costume appendages, invented openings, exposed neck when not shown, exposed wrists when not shown, exposed ankles when not shown,
  exposed hands when not shown, exposed feet when not shown, anatomy contouring, body-hugging reinterpretation, bodysuit reinterpretation,
  costume redesign, side-view reinterpretation, outfit mismatch,
+ missing worn accessory, removed accessory, dropped headwear, missing jewelry, removed jewelry, missing eyewear, removed eyewear, missing veil, removed veil, missing hood, removed hood, missing scarf, removed scarf, missing glove, removed glove, missing footwear, removed footwear, missing adornment, simplified adornment, omitted source appearance element, restyled hair, bun hairstyle, updo, tied-back hair, ponytail, braid, pinned hair, shorter hair, different hair volume, different hair silhouette,
  altered costume colors, shifted palette, desaturated costume, brighter costume, darker costume, material reinterpretation,
  text, watermark.`,
                 state.apiKey,

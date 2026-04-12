@@ -9,6 +9,12 @@ import { nativeJoinPath, nativeListFiles, nativeWriteFile, isNativeParams } from
 import type { PropItem, CastMember } from '../context/AppContext';
 import ConfirmDialog from './ui/ConfirmDialog';
 import { LibraryAssetMaterializer } from '../services/LibraryAssetMaterializer';
+import { WearableLandmarkService } from '../services/WearableLandmarkService';
+import { WearableAnchorEngine } from '../services/WearableAnchorEngine';
+import { WearableOverlayComposer } from '../services/WearableOverlayComposer';
+import { WearableRefinementValidator } from '../services/WearableRefinementValidator';
+import { WearableAdjustmentCanvas } from './WearableAdjustmentCanvas';
+import type { WearableAnchorContract, WearablePlacement } from '../services/WearableAnchorEngine';
 
 async function materializeDisplayUrl(url: string | null | undefined): Promise<string> {
     if (!url) return '';
@@ -47,6 +53,23 @@ const PropLibrarySkeletonCard = () => (
 
 const PropAccessoryStudio = () => {
     const [libraryLoading, setLibraryLoading] = useState(false);
+    const [adjustmentState, setAdjustmentState] = useState<{
+        subjectUrl: string;
+        propUrl: string;
+        fitClass: string;
+        anchorContract: WearableAnchorContract;
+        initialOffsetX?: number;
+        initialOffsetY?: number;
+        initialScale?: number;
+    } | null>(null);
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const [lastConfirmedPlacement, setLastConfirmedPlacement] = useState<{
+        placement: WearablePlacement;
+        precompositeUrl: string;
+        propId: string;
+        offsets: {x: number, y: number, scaleMultiplier: number};
+    } | null>(null);
+    void lastConfirmedPlacement; // suppress TS6133
     const { state, dispatch } = useAppContext();
     const {
         activeTab,
@@ -440,7 +463,162 @@ extra objects, duplicate prop, altered proportions, floating parts, text, label,
 
 
 
+    const executeRefinement = async (fitClass: string, subjectUrl: string, propUrl: string, lockedPlacement: WearablePlacement, precompositeUrl: string) => {
+        console.warn(`[DEBUG_PATH] executeRefinement called for ${fitClass}`);
+        let finalUrl = precompositeUrl;
+        let refinementAccepted = false;
+
+        dispatch({
+            type: 'ADD_LOG',
+            payload: { message: 'Running wearable refinement pass...', type: 'info' }
+        });
+
+        const lockedRefinementPrompt = `Create a single image.
+
+[IMAGE 1] is the exact subject.
+[IMAGE 2] is the exact ${fitClass} reference.
+[IMAGE 3] is the locked precomposite geometry that must be preserved exactly.
+
+PRIMARY RULE
+- IMAGE 3 already contains the correct wearable size and placement.
+- Preserve the geometry from IMAGE 3 exactly.
+- Do not resize the wearable.
+- Do not reposition the wearable.
+- Do not rotate the wearable.
+- Do not redesign the wearable.
+- Treat the wearable in IMAGE 3 as placement-locked and scale-locked.
+
+ALLOWED CHANGES ONLY
+- Improve edge integration.
+- Add subtle realistic overlap where appropriate (e.g. hair over straps).
+- Add subtle contact shadowing.
+- Improve realism of blending and material response.
+- Clean compositing artifacts only.
+
+FORBIDDEN CHANGES
+- No enlargement.
+- No shrinkage.
+- No re-centering.
+- No floating placement.
+- No theatrical scale.
+- No identity change.
+- No pose change.
+- No wardrobe change.
+- No background change.
+
+OUTPUT GOAL
+- The final image must look exactly like IMAGE 3 geometrically, but naturally integrated.
+- When uncertain, preserve IMAGE 3 rather than changing geometry.
+
+NEGATIVE CONSTRAINTS
+oversized wearable, resized wearable, moved wearable, floating wearable, theatrical overscaling, altered subject, changed pose, changed wardrobe, changed background, text, watermark.`;
+
+        try {
+            const refinedRes = await GeminiService.generateImage(
+                lockedRefinementPrompt,
+                state.apiKey,
+                state.model as any,
+                [
+                    { url: subjectUrl, label: 'Subject Reference' },
+                    { url: propUrl, label: `${fitClass} Reference` },
+                    { url: precompositeUrl, label: 'Locked Wearable Overlay' }
+                ],
+                {
+                    aspectRatio: '1:1',
+                    imageSize: state.imageResolution,
+                    thinkingLevel: state.enableImageThinking,
+                    googleGrounding: false,
+                    strictMode: true,
+                    billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
+                    entitlements: state.billingEntitlements
+                }
+            );
+
+            const refinedRaw = typeof refinedRes === 'string'
+                ? refinedRes
+                : (refinedRes && typeof refinedRes === 'object' ? (refinedRes as any).asset_url || '' : '');
+
+            if (refinedRaw) {
+                const materializedRefined = await materializeDisplayUrl(refinedRaw);
+                const isValid = await WearableRefinementValidator.validate({
+                    refinedUrl: materializedRefined,
+                    lockedPlacement,
+                    fitClass: fitClass as any
+                });
+
+                if (isValid) {
+                    finalUrl = materializedRefined;
+                    refinementAccepted = true;
+                } else {
+                    console.warn('Refined wearable result drifted; keeping locked precomposite.');
+                    dispatch({
+                        type: 'ADD_LOG',
+                        payload: { message: 'Refinement rejected due to drift; keeping locked overlay.', type: 'error' }
+                    });
+                }
+            }
+        } catch (e) {
+            console.warn('Failed to materialize or validate refined wearable result:', e);
+            dispatch({ type: 'ADD_LOG', payload: { message: 'Refinement failed; using locked overlay.', type: 'info' } });
+        }
+
+        setAppliedImage(finalUrl);
+
+        dispatch({
+            type: 'ADD_LOG',
+            payload: {
+                message: refinementAccepted
+                    ? 'Wearable integrated with locked refinement.'
+                    : 'Wearable integrated using locked pre-fit overlay.',
+                type: 'info'
+            }
+        });
+    };
+
+    const handleConfirmFit = async (placement: WearablePlacement, precompositeUrl: string, persistedOffsets: {x: number, y: number, scaleMultiplier: number}) => {
+        console.warn(`[DEBUG_PATH] handleConfirmFit called`);
+        if (!adjustmentState) return;
+        const { fitClass, subjectUrl, propUrl } = adjustmentState;
+        
+        setAdjustmentState(null);
+        setLastConfirmedPlacement({
+            placement,
+            precompositeUrl,
+            propId: selectedProp?.id || '',
+            offsets: persistedOffsets
+        });
+
+        dispatch({ type: 'SET_PROCESSING', payload: true });
+        let currentPercent = 5;
+        dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text: "Integrating Prop" } });
+        const progressInterval = window.setInterval(() => {
+            currentPercent += 20;
+            if (currentPercent > 95) currentPercent = 95;
+            dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text: "Finalizing Output..." } });
+        }, 1000);
+
+        try {
+            if (fitClass === 'headwear') {
+                console.warn(`[DEBUG_PATH] headwear bypass: skipping full-frame refinement per architectural rule`);
+                setAppliedImage(precompositeUrl);
+                dispatch({
+                    type: 'ADD_LOG',
+                    payload: { message: 'Wearable integrated using direct locked composite (Refinement bypassed).', type: 'info' }
+                });
+            } else {
+                await executeRefinement(fitClass, subjectUrl, propUrl, placement, precompositeUrl);
+            }
+        } catch (e: any) {
+            dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });
+        } finally {
+            clearInterval(progressInterval);
+            dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
+            dispatch({ type: 'SET_PROCESSING', payload: false });
+        }
+    };
+
     const handleApply = async () => {
+        console.warn(`[DEBUG_PATH] handleApply invoked! Button was clicked.`);
         const billingMode = state.billingEntitlements.effectiveBillingMode;
         const hasHosted = state.billingEntitlements.hasHostedAccess;
         const hasByok = state.billingEntitlements.hasByokAccess;
@@ -508,8 +686,71 @@ extra objects, duplicate prop, altered proportions, floating parts, text, label,
 
         try {
             let actualGenId = '';
-            const res = await GeminiService.generateImage(
-                `Create a single image.
+            const fitClass = WearableAnchorEngine.inferClass(selectedProp?.name, selectedProp?.prompt, applyNote);
+            const subtype = fitClass === 'headwear' ? WearableAnchorEngine.inferHeadwearSubtype(selectedProp?.name, selectedProp?.prompt, applyNote) : undefined;
+            const subjectUrl = selectedCharacter.previewUrl || selectedCharacter.url;
+
+            console.warn(`[DEBUG_PATH] fitClass inferred: ${fitClass} for prop: ${selectedProp?.name}`);
+
+            if (fitClass === 'headwear' || fitClass === 'eyewear') {
+                console.warn(`[DEBUG_PATH] Deterministic branch entered for: ${fitClass}`);
+                dispatch({
+                    type: 'ADD_LOG',
+                    payload: { message: `Building deterministic wearable overlay for ${fitClass}...`, type: 'info' }
+                });
+
+                const framedSubjectUrl = await WearableOverlayComposer.buildFramedSubject(subjectUrl, state.imageResolution);
+
+                const landmarks = await WearableLandmarkService.detect(framedSubjectUrl);
+                const placement = WearableAnchorEngine.computePlacement(fitClass, landmarks, applyNote, subtype);
+                
+                if (fitClass === 'headwear') {
+                    console.warn(`[DEBUG_PATH] headwear branch entered`);
+                    
+                    const reuseOffsets = lastConfirmedPlacement?.propId === selectedProp.id 
+                        ? lastConfirmedPlacement.offsets 
+                        : null;
+
+                    setAdjustmentState({
+                        subjectUrl: framedSubjectUrl,
+                        propUrl: selectedProp.url,
+                        fitClass,
+                        anchorContract: placement,
+                        initialOffsetX: reuseOffsets?.x,
+                        initialOffsetY: reuseOffsets?.y,
+                        initialScale: reuseOffsets?.scaleMultiplier
+                    });
+                    console.warn(`[DEBUG_PATH] adjustmentState set`);
+                    
+                    clearInterval(progressInterval);
+                    dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
+                    dispatch({ type: 'SET_PROCESSING', payload: false });
+                    console.warn(`[DEBUG_PATH] early return executed for confirm mode`);
+                    return;
+                }
+
+                console.warn(`[DEBUG_PATH] old deterministic auto-apply pipeline entered for ${fitClass}`);
+
+                const overlay = await WearableOverlayComposer.compose({
+                    subjectUrl: framedSubjectUrl,
+                    propUrl: selectedProp.url,
+                    anchorContract: placement
+                });
+
+                setAppliedImage(overlay.precompositeUrl);
+
+                dispatch({
+                    type: 'ADD_LOG',
+                    payload: {
+                        message: 'Locked wearable fit established. Refinement will preserve this geometry.',
+                        type: 'info'
+                    }
+                });
+
+                await executeRefinement(fitClass, subjectUrl, selectedProp.url, overlay.placement, overlay.precompositeUrl);
+            } else {
+                const res = await GeminiService.generateImage(
+                    `Create a single image.
 
 SUBJECT LOCK
 - [IMAGE 1] is the target SUBJECT.
@@ -534,38 +775,54 @@ INTEGRATION
 
 NEGATIVE CONSTRAINTS:
 extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop colors, altered prop materials, prop redesign, extra straps, extra attachments, extra people, text, watermark.`,
-                state.apiKey,
-                state.model,
-                [
-                    { url: selectedCharacter.previewUrl || selectedCharacter.url, label: "Subject Reference" },
-                    { url: selectedProp.url, label: "Prop Reference" }
-                ],
-                { 
-                    aspectRatio: '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted'|'byok', entitlements: state.billingEntitlements,
-                    onJobAccepted: (id, acceptedAt) => {
-                        actualGenId = id;
-                        actualAcceptedAt = acceptedAt || Date.now();
-                        dispatch({ type: 'ADD_BACKGROUND_JOB', payload: { id, status: 'polling_foreground', context: 'prop_applied', startedAt: Date.now(), timing: { submittedAt, edgeAcceptedAt: actualAcceptedAt } } });
+                    state.apiKey,
+                    state.model,
+                    [
+                        { url: subjectUrl, label: "Subject Reference" },
+                        { url: selectedProp.url, label: "Prop Reference" }
+                    ],
+                    {
+                        aspectRatio: '1:1',
+                        imageSize: state.imageResolution,
+                        thinkingLevel: state.enableImageThinking,
+                        googleGrounding: false,
+                        strictMode: true,
+                        billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
+                        entitlements: state.billingEntitlements,
+                        onJobAccepted: (id, acceptedAt) => {
+                            actualGenId = id;
+                            actualAcceptedAt = acceptedAt || Date.now();
+                            dispatch({
+                                type: 'ADD_BACKGROUND_JOB',
+                                payload: {
+                                    id,
+                                    status: 'polling_foreground',
+                                    context: 'prop_applied',
+                                    startedAt: Date.now(),
+                                    timing: { submittedAt, edgeAcceptedAt: actualAcceptedAt }
+                                }
+                            });
+                        }
                     }
+                );
+
+                if (actualGenId) dispatch({ type: 'REMOVE_BACKGROUND_JOB', payload: actualGenId });
+
+                const rawUrl =
+                    typeof res === 'string'
+                        ? res
+                        : (res && typeof res === 'object' ? (res as any).asset_url || '' : '');
+
+                let safeUrl = rawUrl;
+                try {
+                    safeUrl = await materializeDisplayUrl(rawUrl);
+                } catch (e) {
+                    console.warn("Failed to materialize applied prop result:", e);
                 }
-            );
-            if (actualGenId) dispatch({ type: 'REMOVE_BACKGROUND_JOB', payload: actualGenId });
 
-            const rawUrl =
-                typeof res === 'string'
-                    ? res
-                    : (res && typeof res === 'object' ? (res as any).asset_url || '' : '');
-
-            let safeUrl = rawUrl;
-            try {
-                safeUrl = await materializeDisplayUrl(rawUrl);
-            } catch (e) {
-                console.warn("Failed to materialize applied prop result:", e);
+                setAppliedImage(safeUrl);
+                dispatch({ type: 'ADD_LOG', payload: { message: "Prop integrated.", type: 'info' } });
             }
-
-            setAppliedImage(safeUrl);
-            dispatch({ type: 'ADD_LOG', payload: { message: "Prop integrated.", type: 'info' } });
-
 
         } catch (e: any) {
             const isTimeout = e.name === 'TimeoutError' || e.message?.includes('Pending');
@@ -796,6 +1053,21 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
 
                             {/* RESULT COLUMN */}
                             <div className="flex-grow flex flex-row bg-[#09090b] rounded-2xl overflow-hidden border border-gray-800 relative min-w-0">
+                                {adjustmentState && (
+                                    <WearableAdjustmentCanvas
+                                        subjectUrl={adjustmentState.subjectUrl}
+                                        propUrl={adjustmentState.propUrl}
+                                        anchorContract={adjustmentState.anchorContract}
+                                        initialOffsetX={adjustmentState.initialOffsetX}
+                                        initialOffsetY={adjustmentState.initialOffsetY}
+                                        initialScale={adjustmentState.initialScale}
+                                        onConfirm={handleConfirmFit}
+                                        onCancel={() => {
+                                            setAdjustmentState(null);
+                                            dispatch({ type: 'ADD_LOG', payload: { message: 'Fit calibration aborted.', type: 'info' } });
+                                        }}
+                                    />
+                                )}
                                 <div className="flex-grow h-full bg-black flex flex-col border-r border-gray-800 relative overflow-hidden ">
                                     {/* Stage Header */}
                                     <div className="h-14 border-b border-gray-800 bg-white/5 flex items-center justify-between px-6 shrink-0 backdrop-blur-md">

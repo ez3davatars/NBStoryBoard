@@ -105,7 +105,7 @@ export const RefInspectorModal = ({
  <div className="space-y-2">
     <div className="flex items-center justify-between">
       <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest pl-1">
-        Subject & Style Analysis
+        Reference DNA / Notes
       </label>
       <button
         onClick={onAnalyze}

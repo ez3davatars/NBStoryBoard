@@ -582,7 +582,7 @@ const DEFAULT_PROP_STUDIO_STATE: PropAccessoryState = {
     selectedProp: null,
     selectedCharacter: null,
     appliedImage: null,
-    applyNote: ''
+    applyNote: 'Automatically fit and anchor the prop proportionately to the correct body part.'
 };
 
 export type Action =

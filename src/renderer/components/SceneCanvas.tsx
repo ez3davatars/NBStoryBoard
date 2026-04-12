@@ -1157,6 +1157,270 @@ Output: environment plate only.
         return canvas.toDataURL('image/png');
     };
 
+    const getAssignedZoneForActor = (token: StageToken) => {
+        const zones = [...state.annotations]
+            .filter((a: any) => a.type === 'zone' && a.visible !== false)
+            .sort((a: any, b: any) => a.zIndex - b.zIndex);
+
+        if (!zones.length) return null;
+
+        const refs = state.referenceSlots || [];
+        
+        // Match 1: Explicit castId matching if available (deterministic root)
+        let exactSlot = refs.find((r: any) => r.castId && token.castId && r.castId === token.castId);
+        
+        // Match 2: Name lookup matching (fallback if slots lost castId references)
+        if (!exactSlot && token.castId && state.cast) {
+            const castMember = state.cast.find((c: any) => c.id === token.castId);
+            if (castMember && castMember.name) {
+                const searchName = castMember.name.toLowerCase();
+                exactSlot = refs.find((r: any) => `${r.name || ''} ${r.analysis || ''} ${r.target || ''}`.toLowerCase().includes(searchName));
+            }
+        }
+        
+        // Match 3: Label lookup matching (fallback for anonymous single-shot items)
+        if (!exactSlot && token.tag) {
+             const searchName = token.tag.toLowerCase();
+             exactSlot = refs.find((r: any) => `${r.name || ''} ${r.analysis || ''} ${r.target || ''}`.toLowerCase().includes(searchName));
+        }
+
+        // If we found a slot, parse its target for zone assignment
+        if (exactSlot) {
+            const text = `${exactSlot.name || ''} ${exactSlot.analysis || ''} ${exactSlot.target || ''}`.toLowerCase();
+            const zoneMatch = text.match(/zone\s*(\d+)/i);
+            if (zoneMatch) {
+                const zoneIndex = Math.max(0, parseInt(zoneMatch[1], 10) - 1);
+                if (zones[zoneIndex]) return zones[zoneIndex];
+            }
+        }
+        
+        // If there is ONLY ONE zone on the screen, heavily bias to using it for the primary token constraint
+        if (zones.length === 1) return zones[0];
+
+        return null;
+    };
+
+    const computeZoneFitPlacement = async (
+        actorUrl: string,
+        zone: any
+    ): Promise<{
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+        anchorX: number;
+        anchorY: number;
+    }> => {
+        const img = await loadImage(actorUrl);
+
+        const zoneW = Math.max(1, zone.width);
+        const zoneH = Math.max(1, zone.height);
+
+        const imgAspect = img.width / img.height;
+        const zoneAspect = zoneW / zoneH;
+
+        let fittedW = zoneW;
+        let fittedH = zoneH;
+
+        if (imgAspect > zoneAspect) {
+            fittedW = zoneW;
+            fittedH = zoneW / imgAspect;
+        } else {
+            fittedH = zoneH;
+            fittedW = zoneH * imgAspect;
+        }
+
+        const anchorX = 0.5;
+        const anchorY = 1.0;
+
+        const x = zone.x + zoneW / 2;
+        const y = zone.y + zoneH;
+
+        return {
+            x,
+            y,
+            width: fittedW,
+            height: fittedH,
+            anchorX,
+            anchorY
+        };
+    };
+
+    const buildDeterministicComposite = async (
+        backgroundUrl: string,
+        actorUrl: string,
+        placement: { x: number; y: number; width: number; height: number; anchorX: number; anchorY: number }
+    ): Promise<{
+        compositeUrl: string;
+        actorMaskUrl: string;
+    }> => {
+        const canvas = document.createElement('canvas');
+        const w = Math.max(1, Math.round(viewportBox.w));
+        const h = Math.max(1, Math.round(viewportBox.h));
+        canvas.width = w;
+        canvas.height = h;
+
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('Canvas context unavailable.');
+
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, w, h);
+
+        const bg = await loadImage(backgroundUrl);
+        ctx.drawImage(bg, 0, 0, w, h);
+
+        const actorImg = await loadImage(actorUrl);
+
+        const left = placement.x - placement.width * placement.anchorX;
+        const top = placement.y - placement.height * placement.anchorY;
+
+        ctx.drawImage(actorImg, left, top, placement.width, placement.height);
+
+        const compositeUrl = canvas.toDataURL('image/png');
+
+        // build actor mask
+        const maskCanvas = document.createElement('canvas');
+        maskCanvas.width = w;
+        maskCanvas.height = h;
+        const maskCtx = maskCanvas.getContext('2d');
+        if (!maskCtx) throw new Error('Mask canvas context unavailable.');
+
+        maskCtx.fillStyle = '#000';
+        maskCtx.fillRect(0, 0, w, h);
+        maskCtx.drawImage(actorImg, left, top, placement.width, placement.height);
+
+        const actorMaskUrl = maskCanvas.toDataURL('image/png');
+
+        return { compositeUrl, actorMaskUrl };
+    };
+
+    const buildIntegrationOnlyPrompt = () => `
+INTEGRATION-ONLY PASS (DO NOT REPOSITION SUBJECT)
+
+You are given a pre-composited scene where the actor has already been placed exactly.
+Your job is to improve realism and integration only.
+
+NON-NEGOTIABLE:
+- Do NOT move the actor.
+- Do NOT rescale the actor.
+- Do NOT change the actor pose.
+- Do NOT change the framing.
+- Do NOT replace the actor.
+- Do NOT alter the actor silhouette.
+- Do NOT move feet away from the planted ground position.
+- Preserve exact silhouette geometry exactly!
+- Preserve exact scale precisely!
+- Preserve exact foot placement!
+- Preserve exact body occupancy in frame!
+- No regeneration of anatomy or costume proportions!
+
+ALLOWED:
+- contact shadows
+- ambient occlusion
+- lighting harmonization
+- edge blending
+- atmospheric integration
+- texture unification
+- color balance
+- grounding realism
+
+Preserve exact actor placement and exact actor size.
+`;
+
+    const splitReferenceInstruction = (raw?: string) => {
+        const text = (raw || '').trim();
+        if (!text) {
+            return {
+                identityStyle: '',
+                placementAction: ''
+            };
+        }
+
+        const placementPatterns = [
+            /\bzone\s*\d+\b/i,
+            /\bfit\b/i,
+            /\binside\b/i,
+            /\boverflow\b/i,
+            /\bfull body\b/i,
+            /\bfeet\b/i,
+            /\bbottom edge\b/i,
+            /\bface\b/i,
+            /\bfacing\b/i,
+            /\bspeaks?\b/i,
+            /\btalks?\b/i,
+            /\bdoorway\b/i,
+            /\bleft\b/i,
+            /\bright\b/i,
+            /\bcenter\b/i,
+            /\bforeground\b/i,
+            /\bbackground\b/i,
+            /\bin front of\b/i,
+            /\bbehind\b/i
+        ];
+
+        const sentences = text
+            .split(/(?<=[.!?])\s+|\n+/)
+            .map(s => s.trim())
+            .filter(Boolean);
+
+        const placementAction: string[] = [];
+        const identityStyle: string[] = [];
+
+        for (const sentence of sentences) {
+            const isPlacement = placementPatterns.some(rx => rx.test(sentence));
+            if (isPlacement) placementAction.push(sentence);
+            else identityStyle.push(sentence);
+        }
+
+        return {
+            identityStyle: identityStyle.join(' ').trim(),
+            placementAction: placementAction.join(' ').trim()
+        };
+    };
+
+    const buildReferenceDirectiveBlocks = () => {
+        const refs = (state.referenceSlots || []).filter((r: any) => r.active && (r.url || r.name || r.analysis || r.target));
+        if (!refs.length) {
+            return {
+                identityBlock: '',
+                placementBlock: ''
+            };
+        }
+
+        const identityLines: string[] = [];
+        const placementLines: string[] = [];
+
+        identityLines.push('REFERENCE IDENTITY / STYLE DNA:');
+        placementLines.push('REFERENCE PLACEMENT / ACTION DIRECTIVES (HIGH PRIORITY):');
+
+        refs.forEach((slot: any, idx: number) => {
+            const actorAlias =
+                (slot.name && slot.name.trim()) ||
+                (slot.target && slot.target.trim()) ||
+                `Reference ${slot.index || idx + 1}`;
+
+            const combined = [slot.analysis, slot.target].filter(Boolean).join(' ').trim();
+            const split = splitReferenceInstruction(combined);
+
+            if (split.identityStyle) {
+                identityLines.push(`- ${actorAlias}: ${split.identityStyle}`);
+            }
+
+            if (split.placementAction) {
+                placementLines.push(`- ${actorAlias}: ${split.placementAction}`);
+            }
+        });
+
+        const identityBlock = identityLines.length > 1 ? `${identityLines.join('\n')}\n\n` : '';
+        const placementBlock = placementLines.length > 1 ? `${placementLines.join('\n')}\n\n` : '';
+
+        return { identityBlock, placementBlock };
+    };
+
+    const buildZoneFitPromptBlock = () => {
+        return '';
+    };
+
     // Unified Workflow Generate Button
     const generateBg = async (overrideBgUrl?: string | any) => {
         if (!ensureStagingAiAccess('Environment Plate Generation')) return;
@@ -1189,6 +1453,68 @@ Output: environment plate only.
         }, 1000);
 
         try {
+            const primaryToken = state.tokens.find(t => t.visible !== false && (t.elementType === 'actor' || !t.elementType));
+            const assignedZone = primaryToken ? getAssignedZoneForActor(primaryToken) : null;
+
+            if (primaryToken && assignedZone && activeBgUrl) {
+                // Determine source cutoutUrl, abort fallback if none exist (Hard Constraint #3/#4)
+                const actorUrl = primaryToken.cutoutUrl;
+                if (!actorUrl) {
+                    console.warn('[DeterministicCompositor] Primary actor token lacks cutoutUrl transparency. Falling back to Generative Staging mode to natively extract silhouette.');
+                } else {
+                    const fitted = await computeZoneFitPlacement(actorUrl, assignedZone);
+                    dispatch({
+                        type: 'UPDATE_TOKEN',
+                        payload: {
+                            id: primaryToken.id,
+                            x: fitted.x,
+                            y: fitted.y,
+                            width: fitted.width,
+                            height: fitted.height,
+                            anchorX: fitted.anchorX,
+                            anchorY: fitted.anchorY,
+                            hasConfirmedPlacement: true
+                        }
+                    });
+
+                    // Pass actorUrl and fitted strictly
+                    const { compositeUrl, actorMaskUrl } = await buildDeterministicComposite(activeBgUrl, actorUrl, fitted);
+
+                    const integrationPrompt = buildIntegrationOnlyPrompt();
+
+                    const refined = await GeminiService.editImageWithMask(
+                        compositeUrl,
+                        actorMaskUrl,
+                        integrationPrompt,
+                        state.apiKey,
+                        state.model as string,
+                        [],
+                        {
+                            aspectRatio: state.director.aspectRatio,
+                            billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', 
+                            entitlements: state.billingEntitlements 
+                        }
+                    );
+
+                    const finalUrl = await normalizeGeneratedImageUrl(refined);
+
+                    dispatch({ type: 'SET_RESULT_IMAGE', payload: finalUrl });
+                    dispatch({
+                        type: 'SET_COMPOSITE_METADATA',
+                        payload: {
+                            latestCompositeSource: 'directorCanvas',
+                            latestCompositeResultUrl: finalUrl
+                        }
+                    });
+                    setViewMode('result');
+                    dispatch({ type: 'ADD_LOG', payload: { message: 'Deterministic composite + integration pass complete.', type: 'success' } });
+                    
+                    window.clearInterval(progressInterval);
+                    dispatch({ type: 'SET_PROCESSING', payload: false });
+                    return; // EXIT EARLY
+                }
+            }
+
             let dnaForRender = anchorDNA;
 
             // In Strict Mode, we attempt to refresh the Anchor DNA if it is missing
@@ -1207,6 +1533,9 @@ Output: environment plate only.
 
             const tokenOverrides = await ensureTokenProfiles(state.tokens, { force: autoTokenProfiles });
 
+            const { identityBlock, placementBlock } = buildReferenceDirectiveBlocks();
+            const zoneFitBlock = buildZoneFitPromptBlock();
+
             const { buildStrictPrompt, buildLoosePrompt } = await import('../utils/promptHelpers');
             const { sanitizeStyleForStrictIdentity } = await import('../utils/analysisSanitizers');
 
@@ -1223,7 +1552,7 @@ Output: environment plate only.
                 const plan = buildRegionPlan({ token: tokenOverrides });
                 const anchorPlate = await buildAnchorPlate(plan);
                 
-                const strictPromptText = buildStrictPrompt(
+                const strictPromptBase = buildStrictPrompt(
                     plan, 
                     dnaForRender, 
                     compiledPrompt, // reusing real-time compiledPrompt as notes
@@ -1233,6 +1562,14 @@ Output: environment plate only.
                     state.director,
                     safeExtractedStyle
                 );
+
+                const strictPromptText = `${placementBlock}${zoneFitBlock}${identityBlock}ANCHOR GUIDE RULES:
+[ANCHOR_GUIDE] contains the hard placement boxes and foot-anchor points.
+Placement / Action directives must be obeyed before general scene styling.
+Identity / Style DNA must preserve who the subject is and how they look.
+Do not ignore zone-fit instructions for the constrained primary actor.
+
+${strictPromptBase}`;
 
                 const refs: { url: string; label: string }[] = [];
                 refs.push({ url: anchorPlate, label: "ANCHOR_GUIDE" });
@@ -1318,7 +1655,7 @@ Output: environment plate only.
                     references.push({ url: safeCast[0].url, label: "Style Reference" });
                 }
 
-                const loosePromptText = buildLoosePrompt(
+                const loosePromptBase = buildLoosePrompt(
                     dnaForRender,
                     state.tokens,
                     state.annotations,
@@ -1327,6 +1664,14 @@ Output: environment plate only.
                     safeExtractedStyle,
                     bgPrompt
                 );
+
+                const loosePromptText = `${placementBlock}${zoneFitBlock}${identityBlock}ANCHOR GUIDE RULES:
+[ANCHOR_GUIDE] contains the hard placement boxes and foot-anchor points.
+Placement / Action directives must be obeyed before general scene styling.
+Identity / Style DNA must preserve who the subject is and how they look.
+Do not ignore zone-fit instructions for the constrained primary actor.
+
+${loosePromptBase}`;
 
                 let actualGenId = '';
                 const res = await GeminiService.generateImage(
@@ -2004,16 +2349,16 @@ Output: environment plate only.
         const slot = state.referenceSlots.find(s => s.index === inspectRefIndex);
         if (!slot || !slot.url) return;
         
-        if (!state.apiKey) {
-            dispatch({ type: 'ADD_LOG', payload: { message: 'API key required for AI Analysis.', type: 'error' } } as any);
-            return;
-        }
+        if (!ensureStagingAiAccess('Auto-Analyze DNA')) return;
 
         setAnalyzingTokenId('ref');
         setInspectAnalysis('Analyzing DNA...');
         
         try {
-            const text = await GeminiService.analyzeImage(refAnalysisPrompt, state.apiKey, state.model, slot.url);
+            const text = await GeminiService.analyzeImage(refAnalysisPrompt, state.apiKey, state.model, slot.url, {
+                billingMode: state.billingEntitlements?.effectiveBillingMode as 'hosted' | 'byok', 
+                entitlements: state.billingEntitlements
+            });
             setInspectAnalysis(text);
             dispatch({ type: 'ADD_LOG', payload: { message: 'DNA analysis complete.', type: 'success' } } as any);
         } catch (e: any) {
