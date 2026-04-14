@@ -853,7 +853,7 @@ export const GeminiService = {
     apiKey: string | null | undefined,
     model: string,
     referenceImages: { url: string; label: string }[] = [],
-    options: { aspectRatio?: string, billingMode?: 'hosted' | 'byok', entitlements?: any, expectedResponseType?: 'image' } = {}
+    options: { aspectRatio?: string, imageSize?: '1K' | '2K' | '4K', billingMode?: 'hosted' | 'byok', entitlements?: any, expectedResponseType?: 'image' } = {}
   ): Promise<string> {
     if (!apiKey && options.billingMode !== 'hosted') throw new Error("No API Key provided.");
     const effectiveKey = options.billingMode === 'hosted' ? 'HOSTED_MODE' : (apiKey || '');
@@ -920,7 +920,8 @@ Hard constraints:
             responseModalities: ["IMAGE"],
             candidateCount: 1,
             imageConfig: {
-                aspectRatio: finalAspectRatio
+                aspectRatio: finalAspectRatio,
+                ...(options.imageSize && { imageSize: options.imageSize })
             },
             temperature: 0.2
         }

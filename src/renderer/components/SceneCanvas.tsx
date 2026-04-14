@@ -2328,6 +2328,7 @@ ${loosePromptBase}`;
                     [],
                     { 
                         aspectRatio: state.director.aspectRatio,
+                        imageSize: state.imageResolution as '1K' | '2K' | '4K' | undefined,
                         billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', 
                         entitlements: state.billingEntitlements,
                         expectedResponseType: 'image'

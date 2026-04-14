@@ -1,5 +1,6 @@
 
 import { Settings as SettingsIcon } from 'lucide-react';
+import { useAppContext } from '../../context/AppContext';
 import { SidebarPanel } from '../ui/SidebarPanel';
 import type { DirectorAspectRatio } from '../../context/AppContext';
 
@@ -20,6 +21,8 @@ export const GlobalSpecsPanel = ({
  onDragStart,
  onDrop
 }: GlobalSpecsPanelProps) => {
+ const { dispatch } = useAppContext();
+
  return (
  <SidebarPanel
  key="specs"
@@ -33,35 +36,45 @@ export const GlobalSpecsPanel = ({
  onDrop={onDrop}
  >
  <div className="space-y-2 px-1">
- {/* Resolution Display - Slimmer */}
+ {/* Resolution Display */}
  <div className="flex items-center justify-between bg-[#18181b]/50 rounded-lg p-2 border border-[#27272a]">
  <div className="flex flex-col">
  <span className="text-[9px] font-bold uppercase tracking-widest text-gray-600">Resolution</span>
  <span className="text-sm font-mono text-cyan-400 font-bold tracking-tight">
- {typeof state.director?.resolution === 'object' ? `${state.director.resolution.width}x${state.director.resolution.height}` : state.director?.resolution}
+ {typeof state.director?.resolution === 'object'
+   ? `${state.director.resolution.width}x${state.director.resolution.height}`
+   : state.director?.resolution}
  </span>
  </div>
 
  <div className="flex gap-1">
  {[
- { label: 'HD', w: 1920, h: 1080 },
- { label: '4K', w: 4096, h: 2160 },
+   { label: 'HD', w: 1920, h: 1080, imageSize: '1K' as const },
+   { label: '2K', w: 2560, h: 1440, imageSize: '2K' as const },
+   { label: '4K', w: 4096, h: 2160, imageSize: '4K' as const },
  ].map((r) => {
- const currentW = typeof state.director.resolution === 'object' ? state.director.resolution.width : 1920;
- const isActive = currentW === r.w;
- return (
- <button
- key={r.label}
- onClick={() => setDirector({ resolution: { width: r.w, height: r.h } })}
- className={`px-2 py-1 rounded text-[9px] font-bold transition-colors uppercase border ${isActive
- ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/50'
- : 'bg-[#27272a] text-gray-400 border-transparent hover:text-white hover:bg-[#3f3f46]'
- }`}
- title={`Set resolution to ${r.label} (${r.w}x${r.h})`}
- >
- {r.label}
- </button>
- );
+   const currentW = typeof state.director.resolution === 'object'
+     ? state.director.resolution.width
+     : 1920;
+   const isActive = currentW === r.w;
+   return (
+   <button
+     key={r.label}
+     onClick={() => {
+       // Sync both display resolution and the API imageSize together
+       setDirector({ resolution: { width: r.w, height: r.h } });
+       dispatch({ type: 'SET_IMAGE_RESOLUTION', payload: r.imageSize });
+     }}
+     className={`px-2 py-1 rounded text-[9px] font-bold transition-colors uppercase border ${
+       isActive
+       ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/50'
+       : 'bg-[#27272a] text-gray-400 border-transparent hover:text-white hover:bg-[#3f3f46]'
+     }`}
+     title={`Set generation resolution to ${r.label} (${r.w}x${r.h})`}
+   >
+     {r.label}
+   </button>
+   );
  })}
  </div>
  </div>
@@ -69,21 +82,22 @@ export const GlobalSpecsPanel = ({
  <div className="space-y-1 mt-2">
  <label className="text-[9px] font-bold uppercase tracking-widest text-[#52525b]">Aspect Ratio</label>
  <div className="flex gap-1">
- {['16:9', '9:16', '1:1', '4:5'].map((ratio) => {
- const isActive = state.director.aspectRatio === ratio;
- return (
- <button
- key={ratio}
- onClick={() => setDirector({ aspectRatio: ratio as DirectorAspectRatio })}
- className={`flex-1 py-1.5 rounded text-[10px] font-bold transition-all uppercase border ${isActive
- ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/50'
- : 'bg-[#27272a] text-gray-500 border-transparent hover:text-white hover:bg-[#3f3f46]'
- }`}
- title={`Set aspect ratio to ${ratio}`}
- >
- {ratio}
- </button>
- );
+ {(['16:9', '9:16', '1:1', '4:5'] as const).map((ratio) => {
+   const isActive = state.director.aspectRatio === ratio;
+   return (
+   <button
+     key={ratio}
+     onClick={() => setDirector({ aspectRatio: ratio as DirectorAspectRatio })}
+     className={`flex-1 py-1.5 rounded text-[10px] font-bold transition-all uppercase border ${
+       isActive
+       ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/50'
+       : 'bg-[#27272a] text-gray-500 border-transparent hover:text-white hover:bg-[#3f3f46]'
+     }`}
+     title={`Set aspect ratio to ${ratio}`}
+   >
+     {ratio}
+   </button>
+   );
  })}
  </div>
  </div>
@@ -91,6 +105,3 @@ export const GlobalSpecsPanel = ({
  </SidebarPanel>
  );
 };
-
-
-
