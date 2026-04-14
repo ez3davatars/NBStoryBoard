@@ -14,6 +14,7 @@ import { DirectedShotCard } from './DirectedShotCard';
 import { useAppContext } from '../../context/AppContext';
 import { buildSceneTruthSnapshot } from '../../utils/sceneTruthHelpers';
 import { buildShotBlueprintImage } from '../../utils/shotBlueprintHelpers';
+import { computeImageSimilarity } from '../../utils/similarityHelpers';
 
 export type ShotsPanelProps = {
   sceneId: string;
@@ -31,6 +32,31 @@ export type ShotsPanelProps = {
   onUpdateSession: (sceneId: string, updater: (prev?: ShotSession) => ShotSession | undefined) => void;
   onToggleVariantSelected: (sceneId: string, variantId: string, selected: boolean) => void;
   onSaveVariant?: (url: string, prefix: string) => void;
+};
+
+const deriveShotsStyleLock = (qualityMode?: string): string => {
+  switch (qualityMode) {
+    case '3D Render':
+      return [
+        'Preserve the exact source render medium as stylized 3D CGI.',
+        'Keep the result in the same animated / digital 3D world.',
+        'Do not convert to live-action photography.',
+        'Do not generate realistic human skin, photographic pores, or real-camera film still aesthetics.',
+        'Do not reinterpret the source as photoreal cinema.'
+      ].join(' ');
+    case 'Stylized':
+      return [
+        'Preserve the exact stylized non-photographic render treatment of the source.',
+        'Do not convert to photorealism or live-action.'
+      ].join(' ');
+    case 'Raw Uncompressed':
+      return [
+        'Preserve the exact raw visual treatment of the source.',
+        'Do not change the source medium.'
+      ].join(' ');
+    default:
+      return 'Preserve the exact render medium and visual treatment of the source image. Do not change the source medium.';
+  }
 };
 
 export const ShotsPanel: React.FC<ShotsPanelProps> = ({
@@ -61,10 +87,31 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
     lighting: true,
   });
   
+  const [autoReroll, setAutoReroll] = useState<boolean>(() => {
+    if (typeof localStorage !== 'undefined') {
+       return localStorage.getItem('nano_shots_auto_reroll') !== 'false';
+    }
+    return true;
+  });
+
+  const toggleAutoReroll = () => {
+    setAutoReroll(prev => {
+        const next = !prev;
+        if (typeof localStorage !== 'undefined') localStorage.setItem('nano_shots_auto_reroll', String(next));
+        return next;
+    });
+  };
+
   const [isConfiguring, setIsConfiguring] = useState(!session || session.variants.length === 0);
   const [slots, setSlots] = useState<DirectedShotSlot[]>([]);
+  const sourceStyleLock = deriveShotsStyleLock(state.director?.qualityMode);
+  const [inspectVariantId, setInspectVariantId] = useState<string | null>(null);
+
+  // Responsive UI: Collapse config on smaller vertical screens (like 1080p laptops)
+  const [isConfigExpanded, setIsConfigExpanded] = useState(typeof window !== 'undefined' ? window.innerHeight > 1050 : true);
 
   const isGeneratingRef = useRef(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -138,9 +185,33 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
         }
     }
 
-    const invalidPair = slots.find(s => s.targetType === 'pair' && !s.secondaryActorId);
+    // Phase 1: Preflight Actor Binding
+    const preparedSlots = slots.map((slot) => {
+      if (slot.targetActorId || !slot.targetLabel) return slot;
+
+      const wanted = slot.targetLabel.trim().toLowerCase();
+      const match = shotsActorOptions.find((a) => {
+        const label = a.actorLabel?.trim().toLowerCase();
+        const role = a.targetInAnchorScene?.trim().toLowerCase();
+        return label === wanted || role === wanted;
+      });
+
+      return match ? { ...slot, targetActorId: match.actorId } : slot;
+    });
+
+    const invalidActor = preparedSlots.find(
+      s => s.targetType === 'actor' && !s.targetActorId
+    );
+    if (invalidActor) {
+       alert(`Shot ${invalidActor.index + 1} requires a primary actor but none was matched/selected.`);
+       return;
+    }
+
+    const invalidPair = preparedSlots.find(
+      s => s.targetType === 'pair' && (!s.targetActorId || !s.secondaryActorId)
+    );
     if (invalidPair) {
-       alert(`Shot ${invalidPair.index + 1} is a Pair shot but is missing a Secondary Actor selection.`);
+       alert(`Shot ${invalidPair.index + 1} is a Pair shot but is missing one or both actors.`);
        return;
     }
 
@@ -158,7 +229,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
         environmentText
       });
 
-      variants = slots.map((slot, idx) => {
+      variants = preparedSlots.map((slot, idx) => {
         const preset = SHOT_PRESETS[slot.shotType];
         const prompt = buildShotVariantPrompt({
           sourceResultUrl: effectiveResultImageUrl,
@@ -172,11 +243,14 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
           environmentText,
           subjectActionText: safeSubjectActionText,
           lightingText,
-          expectedActorCount
+          expectedActorCount,
+          sourceStyleLock
         });
 
         return {
           id: `shot-variant-${Date.now()}-${idx}`,
+          slotId: slot.id,
+          slotIndex: slot.index,
           presetId: slot.shotType,
           label: preset.label,
           description: preset.description,
@@ -188,7 +262,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
           coveragePurpose: slot.coveragePurpose,
           selected: false,
           status: 'queued'
-        };
+        } as unknown as ShotVariant;
       });
     } catch (compilationError: any) {
       console.error("[ShotsPanel] Failed to compile shot variants:", compilationError);
@@ -221,6 +295,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
 
     // Start Async Loop
     isGeneratingRef.current = true;
+    abortControllerRef.current = new AbortController();
 
     for (const variant of variants) {
       if (!isGeneratingRef.current) break; // User cancelled or component unmounted
@@ -235,7 +310,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
 
       try {
         const preset = SHOT_PRESETS[variant.presetId];
-        const directedSlot = slots.find(s => s.shotType === variant.presetId && s.cameraFlavor === variant.cameraFlavor);
+        const directedSlot = preparedSlots.find(s => s.id === (variant as any).slotId);
         
         const rawBlueprintUrl = await buildShotBlueprintImage({
             anchorImageUrl: effectiveResultImageUrl,
@@ -258,18 +333,101 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
             console.warn("Could not materialize blueprint for variant", variant.id, bpErr);
         }
 
-        const previewUrl = await GeminiService.generateShotPreview({
+        const previewBaseArgs = {
           anchorImageUrl: effectiveResultImageUrl,
-          shotBlueprintUrl: rawBlueprintUrl,
           actorIdentitySets,
           prompt: variant.prompt,
           apiKey,
           model,
-          sceneTruth,
-          presetId: variant.presetId,
-          hasSubjectStyleAnalysis: !!safeSubjectActionText,
-          options: { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements }
-        });
+          options: { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, signal: abortControllerRef.current?.signal }
+        };
+
+        const isHostedShots = state.billingEntitlements.effectiveBillingMode === 'hosted';
+        let previewUrl: string;
+
+        if (isHostedShots) {
+          // Thin payload only for hosted mode to avoid oversized Edge Function requests
+          previewUrl = await GeminiService.generateShotPreview(previewBaseArgs);
+        } else {
+          try {
+            previewUrl = await GeminiService.generateShotPreview({
+              ...previewBaseArgs,
+              shotBlueprintUrl: rawBlueprintUrl,
+              sceneTruth,
+              presetId: variant.presetId,
+              hasSubjectStyleAnalysis: !!safeSubjectActionText,
+            });
+          } catch (err: any) {
+            const msg = String(err?.message || err || '');
+            if (/400|Bad Request|413|Payload/i.test(msg)) {
+              console.warn('[ShotsPanel] Preview payload rejected. Original Error:', msg, 'Retrying thin payload for:', {
+                variantId: variant.id,
+                presetId: variant.presetId,
+              });
+              previewUrl = await GeminiService.generateShotPreview(previewBaseArgs);
+            } else {
+              throw err;
+            }
+          }
+        }
+
+        // Phase 7: Similarity Rejection
+        let attempts = 1;
+        let isDuplicate = false;
+        const SIMILARITY_THRESHOLD = 0.94; // If similarity >= 94%, it basically returned the anchor image or a trivial crop.
+        try {
+           let similarity = await computeImageSimilarity(effectiveResultImageUrl, previewUrl);
+           console.log(`[ShotsPanel] Shot ${variant.presetId} similarity check: ${(similarity*100).toFixed(1)}%`);
+           while (autoReroll && similarity >= SIMILARITY_THRESHOLD && attempts < 3) {
+              console.warn(`[ShotsPanel] Shot ${variant.presetId} rejected for duplicate framing (${(similarity*100).toFixed(1)}%). Auto-retrying...`);
+              
+              onUpdateSession(sceneId, prev => {
+                if (!prev) return prev;
+                return {
+                  ...prev,
+                  variants: prev.variants.map(v => v.id === variant.id ? { 
+                    ...v, 
+                    status: 'generating', 
+                    error: `Similar composition detected (${(similarity*100).toFixed(0)}%). Rerolling alternative angle (Try ${attempts+1}/3)...` 
+                  } : v)
+                };
+              });
+
+              attempts++;
+              const appendedPrompt = `${variant.prompt}\nCRITICAL: PREVIOUS ATTEMPT FAILED. YOU MUST MATERIALLY CHANGE THE CAMERA ANGLE AND CROP. DO NOT REPRODUCE THE SOURCE COMPOSITION.`;
+              
+              if (isHostedShots) {
+                  previewUrl = await GeminiService.generateShotPreview({
+                     anchorImageUrl: effectiveResultImageUrl,
+                     actorIdentitySets,
+                     prompt: appendedPrompt,
+                     apiKey,
+                     model,
+                     options: { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, signal: abortControllerRef.current?.signal }
+                  });
+              } else {
+                  previewUrl = await GeminiService.generateShotPreview({
+                     anchorImageUrl: effectiveResultImageUrl,
+                     shotBlueprintUrl: rawBlueprintUrl,
+                     actorIdentitySets,
+                     prompt: appendedPrompt,
+                     apiKey,
+                     model,
+                     sceneTruth,
+                     presetId: variant.presetId,
+                     hasSubjectStyleAnalysis: !!safeSubjectActionText,
+                     options: { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, signal: abortControllerRef.current?.signal }
+                  });
+              }
+              similarity = await computeImageSimilarity(effectiveResultImageUrl, previewUrl);
+              console.log(`[ShotsPanel] Shot ${variant.presetId} retry ${attempts} similarity check: ${(similarity*100).toFixed(1)}%`);
+           }
+           if (autoReroll && similarity >= SIMILARITY_THRESHOLD) {
+              isDuplicate = true; // Still a duplicate after max retries
+           }
+        } catch (simErr) {
+           console.error("[ShotsPanel] Failed to compute image similarity:", simErr);
+        }
 
         const materialized = await LocalAssetService.materializeImageAsset({
           sourceUrl: previewUrl,
@@ -277,6 +435,13 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
           variantId: variant.id,
           kind: 'preview',
           saveDirectoryPath: state.saveDirectoryPath
+        });
+
+        console.log("[ShotsPanel] Materialized preview asset:", {
+          variantId: variant.id,
+          displayUrl: materialized.displayUrl,
+          localPath: materialized.localPath,
+          sourcePreviewUrl: previewUrl
         });
 
         onUpdateSession(sceneId, prev => {
@@ -289,11 +454,13 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
               previewUrl: materialized.displayUrl,
               blueprintUrl: materializedBlueprintUrl,
               localPreviewPath: materialized.localPath || undefined,
-              sourcePreviewUrl: previewUrl
+              sourcePreviewUrl: previewUrl,
+              error: isDuplicate ? 'CRITICAL: Failed to materially change framing.' : undefined
             } : v)
           };
         });
       } catch (err: any) {
+        console.error("SHOTS PANEL FATAL:", err);
         onUpdateSession(sceneId, prev => {
           if (!prev) return prev;
           return {
@@ -316,6 +483,8 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
 
     const selectedVariants = session.variants.filter(v => v.selected && (v.status === 'done' || v.status === 'error'));
     if (selectedVariants.length === 0) return;
+
+    abortControllerRef.current = new AbortController();
 
     onUpdateSession(sceneId, prev => {
       if (!prev) return prev;
@@ -345,25 +514,47 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
           actorIdentitySets: session.actorIdentitySets,
           shotsActorOptions,
           presetId: variant.presetId,
-          directedSlot: session.directedShots?.find(s => s.shotType === variant.presetId && s.cameraFlavor === variant.cameraFlavor),
+          directedSlot: session.directedShots?.find(s => s.id === (variant as any).slotId),
           locks: { ...session.locks, identity: true },
           environmentText,
           subjectActionText: safeSubjectActionText,
           lightingText,
-          expectedActorCount
+          expectedActorCount,
+          sourceStyleLock
         });
 
-        const finalUrl = await GeminiService.rerenderShotFinal({
-          sourceResultUrl: effectiveResultImageUrl,
-          selectedShotPreviewUrl: variant.previewUrl,
-          actorIdentitySets: session.actorIdentitySets,
-          prompt: finalPrompt,
-          apiKey,
-          model,
-          sceneTruth: session.sceneTruth,
-          presetId: variant.presetId,
-          options: { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements }
-        });
+        let finalUrl: string | undefined;
+        let attempts = 0;
+        let lastErr: any;
+        
+        while (attempts < 3) {
+          try {
+            finalUrl = await GeminiService.rerenderShotFinal({
+              sourceResultUrl: effectiveResultImageUrl,
+              selectedShotPreviewUrl: variant.previewUrl!,
+              actorIdentitySets: session.actorIdentitySets,
+              prompt: finalPrompt,
+              apiKey,
+              model,
+              sceneTruth: session.sceneTruth,
+              presetId: variant.presetId,
+              options: { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, signal: abortControllerRef.current?.signal }
+            });
+            break; 
+          } catch (e: any) {
+            lastErr = e;
+            const msg = e.message.toLowerCase();
+            if (msg.includes('failed to fetch') || msg.includes('429') || msg.includes('timeout')) {
+              attempts++;
+              console.warn(`[ShotsPanel] 4K Render failed (network/rate limit). Retrying ${attempts}/3 in 6 seconds...`);
+              await new Promise(r => setTimeout(r, 6000));
+            } else {
+              throw e;
+            }
+          }
+        }
+        
+        if (!finalUrl) throw lastErr || new Error("Failed to render 4K after multiple attempts");
 
         const materialized = await LocalAssetService.materializeImageAsset({
           sourceUrl: finalUrl,
@@ -371,6 +562,13 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
           variantId: variant.id,
           kind: 'final',
           saveDirectoryPath: state.saveDirectoryPath
+        });
+
+        console.log("[ShotsPanel] Materialized final asset:", {
+          variantId: variant.id,
+          displayUrl: materialized.displayUrl,
+          localPath: materialized.localPath,
+          sourceFinalUrl: finalUrl
         });
 
         onUpdateSession(sceneId, prev => {
@@ -429,15 +627,112 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
       };
     });
 
+    abortControllerRef.current = new AbortController();
+
     try {
-      const previewUrl = await GeminiService.generateShotPreview({
+      const directedSlot = session.directedShots?.find(s => s.id === (variant as any).slotId);
+      const preset = SHOT_PRESETS[variant.presetId];
+      
+      let rawBlueprintUrl = variant.sourcePreviewUrl; // Fallback, will regenerate below if we can
+      if (directedSlot && preset) {
+         rawBlueprintUrl = await buildShotBlueprintImage({
+            anchorImageUrl: effectiveResultImageUrl,
+            preset,
+            directedSlot
+         });
+      }
+
+      const previewBaseArgs = {
         anchorImageUrl: effectiveResultImageUrl,
         actorIdentitySets: session.actorIdentitySets,
         prompt: variant.prompt,
         apiKey,
         model,
-        options: { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements }
-      });
+        options: { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, signal: abortControllerRef.current?.signal }
+      };
+
+      const isHostedShots = state.billingEntitlements.effectiveBillingMode === 'hosted';
+      let previewUrl: string;
+
+      if (isHostedShots) {
+        previewUrl = await GeminiService.generateShotPreview(previewBaseArgs);
+      } else {
+        try {
+          previewUrl = await GeminiService.generateShotPreview({
+            ...previewBaseArgs,
+            shotBlueprintUrl: rawBlueprintUrl,
+            sceneTruth: session.sceneTruth,
+            presetId: variant.presetId,
+            hasSubjectStyleAnalysis: false,
+          });
+        } catch (err: any) {
+          const msg = String(err?.message || err || '');
+          if (/400|Bad Request|413|Payload/i.test(msg)) {
+            console.warn('[ShotsPanel] Rich preview payload rejected; retrying thin payload', {
+              variantId: variant.id,
+              presetId: variant.presetId,
+            });
+            previewUrl = await GeminiService.generateShotPreview(previewBaseArgs);
+          } else {
+            throw err;
+          }
+        }
+      }
+
+      // Phase 7: Similarity Rejection
+      let attempts = 1;
+      let isDuplicate = false;
+      const SIMILARITY_THRESHOLD = 0.94;
+      try {
+         let similarity = await computeImageSimilarity(effectiveResultImageUrl, previewUrl);
+         console.log(`[ShotsPanel] Shot ${variant.presetId} similarity check: ${(similarity*100).toFixed(1)}%`);
+         while (autoReroll && similarity >= SIMILARITY_THRESHOLD && attempts < 3) {
+            console.warn(`[ShotsPanel] Shot ${variant.presetId} rejected for duplicate framing (${(similarity*100).toFixed(1)}%). Auto-retrying...`);
+            
+            onUpdateSession(sceneId, prev => {
+              if (!prev) return prev;
+              return {
+                ...prev,
+                variants: prev.variants.map(v => v.id === variantId ? { 
+                  ...v, 
+                  status: 'generating', 
+                  error: `Similar composition detected (${(similarity*100).toFixed(0)}%). Rerolling alternative angle (Try ${attempts+1}/3)...` 
+                } : v)
+              };
+            });
+
+            attempts++;
+            const appendedPrompt = `${variant.prompt}\nCRITICAL: PREVIOUS ATTEMPT FAILED. YOU MUST MATERIALLY CHANGE THE CAMERA ANGLE AND CROP. DO NOT REPRODUCE THE SOURCE COMPOSITION.`;
+            
+            if (isHostedShots) {
+                previewUrl = await GeminiService.generateShotPreview({
+                   anchorImageUrl: effectiveResultImageUrl,
+                   actorIdentitySets: session.actorIdentitySets,
+                   prompt: appendedPrompt,
+                   apiKey,
+                   model,
+                   options: { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, signal: abortControllerRef.current?.signal }
+                });
+            } else {
+                previewUrl = await GeminiService.generateShotPreview({
+                   anchorImageUrl: effectiveResultImageUrl,
+                   shotBlueprintUrl: rawBlueprintUrl,
+                   actorIdentitySets: session.actorIdentitySets,
+                   prompt: appendedPrompt,
+                   apiKey,
+                   model,
+                   sceneTruth: session.sceneTruth,
+                   presetId: variant.presetId,
+                   hasSubjectStyleAnalysis: false,
+                   options: { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, signal: abortControllerRef.current?.signal }
+                });
+            }
+            similarity = await computeImageSimilarity(effectiveResultImageUrl, previewUrl);
+         }
+         if (autoReroll && similarity >= SIMILARITY_THRESHOLD) isDuplicate = true;
+      } catch (simErr) {
+         console.error("[ShotsPanel] Failed to compute image similarity:", simErr);
+      }
 
       const materialized = await LocalAssetService.materializeImageAsset({
         sourceUrl: previewUrl,
@@ -455,8 +750,10 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
             ...v, 
             status: 'done', 
             previewUrl: materialized.displayUrl,
+            blueprintUrl: rawBlueprintUrl, // Fallback if no materialized one exists
             localPreviewPath: materialized.localPath || undefined,
-            sourcePreviewUrl: previewUrl
+            sourcePreviewUrl: previewUrl,
+            error: isDuplicate ? 'CRITICAL: Failed to materially change framing.' : undefined
           } : v)
         };
       });
@@ -477,21 +774,47 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
   const hasSelectedVariants = session?.variants.some(v => v.selected) || false;
 
   return (
-    <div ref={panelRef} className="flex flex-col w-full h-full bg-[#09090b] overflow-hidden text-gray-200">
+    <div ref={panelRef} className="flex flex-col w-full h-full min-w-0 bg-[#09090b] overflow-hidden text-gray-200">
       
       {/* Top Controls Bar */}
       <div className="flex flex-col w-full bg-[#18181b] border-b border-[#27272a] shrink-0">
 
-             <div className="flex flex-col p-2 gap-2">
+          {/* Accordion Toggle Header */}
+          <div 
+             className="flex flex-wrap justify-between items-center px-4 py-2 hover:bg-white/5 cursor-pointer select-none transition-colors"
+             onClick={() => setIsConfigExpanded(!isConfigExpanded)}
+          >
+               <div className="flex items-center gap-2 text-[11px] font-bold text-gray-300 uppercase tracking-widest shrink-0">
+                   <svg className={`w-4 h-4 text-gray-500 transition-transform ${isConfigExpanded ? 'rotate-90' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                   Shot Configuration
+               </div>
+               
+               {/* Mini Action Buttons always visible when collapsed */}
+               {!isConfigExpanded && (
+                   <div className="flex items-center gap-2">
+                        {hasResult && !isConfiguring && (
+                            <button onClick={(e) => { e.stopPropagation(); setIsConfigExpanded(true); setIsConfiguring(true); }} className="font-bold uppercase tracking-wider text-gray-400 hover:text-white bg-black border border-gray-800 hover:border-gray-600 rounded px-3 py-1 transition-colors text-[10px]">Config</button>
+                        )}
+                        <button onClick={(e) => { e.stopPropagation(); handleGenerateShots(); }} disabled={!hasResult || isGeneratingFull || isRerenderingFull || (isConfiguring && slots.length === 0)} className={`font-bold uppercase tracking-wider rounded transition-all border px-3 py-1 ${!hasResult || isGeneratingFull || isRerenderingFull ? 'bg-black border-gray-800 text-gray-600' : 'bg-green-600/10 border-green-500/30 text-green-500'} text-[10px]`}>
+                            {isGeneratingFull ? 'Generating...' : 'Generate'}
+                        </button>
+                        <button onClick={(e) => { e.stopPropagation(); handleRender4K(); }} disabled={!hasSelectedVariants || isGeneratingFull || isRerenderingFull} className={`font-bold uppercase tracking-wider rounded transition-all border px-3 py-1 ${!hasSelectedVariants || isGeneratingFull || isRerenderingFull ? 'bg-black border-gray-800 text-gray-600' : 'bg-indigo-950/40 border-indigo-500/30 text-indigo-400'} text-[10px]`}>
+                            {isRerenderingFull ? 'Rendering...' : 'Render 4K'}
+                        </button>
+                   </div>
+               )}
+          </div>
+
+          <div className={`flex-col p-2 gap-2 border-t border-[#27272a] ${isConfigExpanded ? 'flex' : 'hidden'}`}>
                  {/* Row 1: Left Dropdowns, Right Config Actions */}
-                 <div className="flex justify-between items-center w-full gap-2">
-                     <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide shrink-0">
+                 <div className="flex flex-wrap justify-between items-center w-full gap-2 min-w-0">
+                     <div className="flex flex-wrap items-center gap-2 min-w-0">
                          {/* Pack */}
                          <div className="flex items-center bg-black border border-gray-800 rounded pl-2 overflow-hidden shrink-0">
                              <span className="text-[8px] font-bold text-gray-500 uppercase tracking-widest mr-1.5 whitespace-nowrap">Pack</span>
                              <select 
                                value={packId} onChange={(e) => setPackId(e.target.value as ShotPackId)} disabled={isGeneratingFull || isRerenderingFull}
-                               className="bg-transparent text-[10px] text-gray-200 outline-none border-l border-gray-800 py-1 px-1.5 hover:bg-gray-900 cursor-pointer w-[140px]"
+                               className="bg-transparent text-[10px] text-gray-200 outline-none border-l border-gray-800 py-1 px-1.5 hover:bg-gray-900 cursor-pointer min-w-[120px] sm:min-w-[140px]"
                              >
                                <option value="auto" className="bg-[#18181b] text-gray-200">Auto (Scene-Aware)</option>
                                <option value="cinematic" className="bg-[#18181b] text-gray-200">Cinematic</option>
@@ -504,7 +827,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
                              <span className="text-[8px] font-bold text-gray-500 uppercase tracking-widest mr-1.5 whitespace-nowrap">Count</span>
                              <select 
                                value={count} onChange={(e) => setCount(Number(e.target.value) as 4|6|9)} disabled={isGeneratingFull || isRerenderingFull}
-                               className="bg-transparent text-[10px] text-gray-200 outline-none border-l border-gray-800 py-1 px-1.5 hover:bg-gray-900 cursor-pointer w-[110px]"
+                               className="bg-transparent text-[10px] text-gray-200 outline-none border-l border-gray-800 py-1 px-1.5 hover:bg-gray-900 cursor-pointer min-w-[96px] sm:min-w-[110px]"
                              >
                                <option value={4} className="bg-[#18181b] text-gray-200">4 Variants</option>
                                <option value={6} className="bg-[#18181b] text-gray-200">6 Variants</option>
@@ -517,6 +840,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
                          <button 
                              onClick={() => {
                                isGeneratingRef.current = false;
+                               abortControllerRef.current?.abort();
                                onUpdateSession(sceneId, prev => {
                                  if (!prev) return prev;
                                  return { ...prev, isGenerating: false, isRerenderingSelected: false, variants: [] };
@@ -528,8 +852,8 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
                  </div>
 
                  {/* Row 2: Locks and Generate */}
-                 <div className="flex justify-between items-center w-full gap-2 border-t border-[#27272a] pt-2">
-                     <div className="flex items-center gap-1.5 shrink-0 overflow-x-auto scrollbar-hide pr-2">
+                 <div className="flex flex-wrap justify-between items-center w-full gap-2 border-t border-[#27272a] pt-2 min-w-0">
+                     <div className="flex flex-wrap items-center gap-1.5 min-w-0 pr-2">
                          <span className="text-[8px] font-bold text-gray-500 uppercase tracking-widest mr-1 whitespace-nowrap hidden sm:block">Semantic Locks</span>
                          <div className="flex bg-black border border-gray-800 rounded p-0.5 gap-0.5 shadow-inner">
                              {(['identity', 'wardrobe', 'background', 'lighting'] as Array<keyof ShotLocks>).map(lockKey => (
@@ -540,21 +864,26 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
                                  >{lockKey}</button>
                              ))}
                          </div>
+                         <div className="ml-2 flex flex-col items-start justify-center">
+                             <label className="flex items-center gap-1.5 cursor-pointer text-gray-400 hover:text-gray-200 transition-colors" title="Automatically reroll shots that look completely identical to the source anchor (e.g. if the AI ignores the camera instruction)">
+                                 <input type="checkbox" className="form-checkbox w-3.5 h-3.5 bg-black border-gray-700 text-blue-500 rounded cursor-pointer" checked={autoReroll} onChange={toggleAutoReroll} disabled={isGeneratingFull || isRerenderingFull} />
+                                 <span className="text-[10px] font-bold uppercase tracking-widest select-none">Auto-Reroll</span>
+                             </label>
+                         </div>
                      </div>
-                     <div className="flex items-center gap-1.5 shrink-0">
+                     <div className="flex flex-wrap items-center gap-1.5 shrink-0 justify-end">
                           {hasResult && !isConfiguring && (
                               <button onClick={() => setIsConfiguring(true)} className="font-bold uppercase tracking-widest text-gray-400 hover:text-white bg-black border border-gray-800 hover:border-gray-600 rounded px-4 py-2 transition-colors" style={{ fontSize: '14.5px' }}>Config</button>
                           )}
-                          <button onClick={handleGenerateShots} disabled={!hasResult || isGeneratingFull || isRerenderingFull || (isConfiguring && slots.length === 0)} className={`font-bold uppercase tracking-widest rounded transition-all border px-4 py-2 ${!hasResult || isGeneratingFull || isRerenderingFull ? 'bg-black border-gray-800 text-gray-600 cursor-not-allowed' : 'bg-green-600/10 border-green-500/30 text-green-500 hover:bg-green-600/20 hover:border-green-400/50 shadow-[0_0_15px_rgba(34,197,94,0.1)]'}`} style={{ fontSize: '14.5px' }}>
-                              {isGeneratingFull ? 'Generating...' : 'Generate'}
+                          <button onClick={handleGenerateShots} disabled={!hasResult || isGeneratingFull || isRerenderingFull || (isConfiguring && slots.length === 0)} className={`font-bold uppercase tracking-widest rounded transition-all border px-4 py-2 ${(!hasResult && !isGeneratingFull) ? 'bg-black border-gray-800 text-gray-600 cursor-not-allowed' : (isGeneratingFull ? 'bg-green-600/30 border-green-500/80 text-green-400 cursor-not-allowed shadow-[0_0_20px_rgba(34,197,94,0.2)] animate-pulse' : 'bg-green-600/10 border-green-500/30 text-green-500 hover:bg-green-600/20 hover:border-green-400/50 shadow-[0_0_15px_rgba(34,197,94,0.1)]')}`} style={{ fontSize: '14.5px' }}>
+                              {isGeneratingFull ? 'GENERATING...' : 'GENERATE'}
                           </button>
-                          <button onClick={handleRender4K} disabled={!hasSelectedVariants || isGeneratingFull || isRerenderingFull} className={`font-bold uppercase tracking-widest rounded transition-all border px-4 py-2 ${!hasSelectedVariants || isGeneratingFull || isRerenderingFull ? 'bg-black border-gray-800 text-gray-600 cursor-not-allowed' : 'bg-indigo-950/40 border-indigo-500/30 text-indigo-400 hover:bg-indigo-900/60 shadow-[0_0_15px_rgba(99,102,241,0.1)]'}`} style={{ fontSize: '14.5px' }}>
-                              {isRerenderingFull ? 'Rendering...' : 'Render 4K'}
+                          <button onClick={handleRender4K} disabled={!hasSelectedVariants || isGeneratingFull || isRerenderingFull} className={`font-bold uppercase tracking-widest rounded transition-all border px-4 py-2 ${(!hasSelectedVariants && !isRerenderingFull) ? 'bg-black border-gray-800 text-gray-600 cursor-not-allowed' : (isRerenderingFull ? 'bg-indigo-600/30 border-indigo-400/80 text-indigo-300 cursor-not-allowed shadow-[0_0_20px_rgba(99,102,241,0.2)] animate-pulse' : 'bg-indigo-950/40 border-indigo-500/30 text-indigo-400 hover:bg-indigo-900/60 shadow-[0_0_15px_rgba(99,102,241,0.1)]')}`} style={{ fontSize: '14.5px' }}>
+                              {isRerenderingFull ? 'RENDERING 4K...' : 'RENDER 4K'}
                           </button>
                      </div>
                  </div>
-             </div>
-
+          </div>
       </div>
 
       <div className="px-4 py-1.5 bg-black/40 border-b border-[#27272a] text-[9px] text-gray-500 font-mono tracking-wider truncate shrink-0">
@@ -569,7 +898,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
           <p className="text-gray-500 max-w-md">Generate a composite, or select an uploaded image to use as the result source for SHOTS.</p>
         </div>
       ) : isConfiguring ? (
-        <div className="flex-grow overflow-y-auto p-4 flex flex-col gap-3 bg-gray-950">
+        <div className="flex-grow overflow-y-auto p-3 sm:p-4 flex flex-col gap-3 bg-gray-950 min-w-0">
           <div className="text-sm font-medium text-gray-400 mb-2">Directed Shot Plan ({count} shots)</div>
           {slots.map((slot, idx) => (
             <DirectedShotCard
@@ -586,12 +915,62 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
           ))}
         </div>
       ) : (
-        <ShotGrid 
-          variants={session?.variants || []} 
-          onToggleSelected={(id, val) => onToggleVariantSelected(sceneId, id, val)}
-          onSave={handleSaveVariant}
-          onRegenerateOne={handleRegenerateOne}
-        />
+        <div className="flex-grow min-h-0 overflow-hidden relative">
+          <ShotGrid 
+            variants={session?.variants || []} 
+            onToggleSelected={(id, val) => onToggleVariantSelected(sceneId, id, val)}
+            onSave={handleSaveVariant}
+            onRegenerateOne={handleRegenerateOne}
+            onInspect={setInspectVariantId}
+          />
+        </div>
+      )}
+
+      {/* Inspect Modal Overlay */}
+      {inspectVariantId && session?.variants && (
+        <div 
+          className="absolute inset-0 z-50 bg-black/90 flex flex-col items-center justify-center backdrop-blur-sm animate-in fade-in duration-200"
+          onClick={() => setInspectVariantId(null)}
+        >
+          {(() => {
+            const v = session.variants.find(vx => vx.id === inspectVariantId);
+            if (!v) return null;
+            const targetUrl = v.finalUrl || v.previewUrl;
+            return (
+              <div className="relative w-full h-full p-8 flex flex-col items-center justify-center cursor-pointer" onClick={(e) => e.stopPropagation()}>
+                <button 
+                  onClick={() => setInspectVariantId(null)}
+                  className="absolute top-4 right-4 text-gray-400 hover:text-white bg-black/50 hover:bg-black rounded-full p-2 transition-colors z-20"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+                {targetUrl ? (
+                  <>
+                    <img 
+                      src={targetUrl} 
+                      alt="Inspect" 
+                      className="max-w-full max-h-[85%] object-contain rounded shadow-2xl border border-gray-800"
+                    />
+                    <div className="mt-4 text-center">
+                      <h3 className="text-xl font-bold text-gray-100">{v.label}</h3>
+                      <p className="text-gray-400 mt-1 max-w-2xl">{v.description}</p>
+                    </div>
+                    {/* Add quick download to inspect view too */}
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleSaveVariant(v.id); }}
+                      className="absolute bottom-6 right-6 flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded shadow-lg border border-blue-400 transition-colors"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                      {v.finalUrl ? 'Download 4K' : 'Download Preview'}
+                    </button>
+                  </>
+                ) : (
+                  <div className="text-gray-500">Image is currently generating...</div>
+                )}
+              </div>
+            );
+          })()}
+        </div>
       )}
 
     </div>

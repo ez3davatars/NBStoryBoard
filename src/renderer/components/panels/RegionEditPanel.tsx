@@ -33,6 +33,7 @@ interface RegionEditPanelProps {
  setProtectStatus: (val: 'idle' | 'generating' | 'ready' | 'error') => void;
  isProcessing: boolean;
  apiKey: string;
+ billingMode?: string;
  collapsed: boolean;
  onToggle: (id: string) => void;
  onDragStart: (id: string) => void;
@@ -59,6 +60,7 @@ export const RegionEditPanel = ({
  setProtectStatus,
  isProcessing,
  apiKey,
+ billingMode = 'byok',
  collapsed,
  onToggle,
  onDragStart,
@@ -71,6 +73,7 @@ export const RegionEditPanel = ({
 }: RegionEditPanelProps) => {
  const layers = regionEdit?.layers || [];
  const activeLayer = layers.find(l => l.id === regionEdit?.activeLayerId);
+ const hasApiAccess = !!apiKey || billingMode === 'hosted';
 
  return (
  <SidebarPanel
@@ -216,14 +219,14 @@ export const RegionEditPanel = ({
  onChange={(e) => setProtectEnabled(e.target.checked)}
  className="w-4 h-4 accent-blue-500 rounded border-white/10 bg-black"
  />
- Protect Face/Hair
+ Protect Anatomy
  </label>
 
  <button
  onClick={generateFaceProtectionMask}
- disabled={!apiKey || protectStatus === 'generating'}
+ disabled={!hasApiAccess || protectStatus === 'generating'}
  className="px-3 py-1.5 rounded text-[9px] font-bold uppercase tracking-wider border transition-colors disabled:opacity-50 bg-[#18181b] border-[#27272a] text-yellow-500 hover:bg-[#27272a]"
- title="Generate a face/hair protection mask (white = protected)"
+ title="Generate an anatomy protection mask (white = protected)"
  >
  {protectStatus === 'generating' ? 'Generating…' : protectMaskUrl ? 'Regen' : 'Generate'}
  </button>
@@ -329,7 +332,7 @@ export const RegionEditPanel = ({
  <div className="flex gap-2 mt-3">
  <button
  onClick={applyRegionEditQueue}
- disabled={isProcessing || !apiKey || isRegionEditRunning}
+ disabled={isProcessing || !hasApiAccess || isRegionEditRunning}
  className="flex-1 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-black h-8 flex items-center justify-center uppercase tracking-[0.1em] rounded-md active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
  style={{ fontSize: '12px' }}
  >

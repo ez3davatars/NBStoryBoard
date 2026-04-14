@@ -986,7 +986,7 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                             </div>
 
                             {/* RIGHT: LARGE VIEWPORT */}
-                            <div className="flex-grow min-w-0 h-full bg-black rounded-2xl border border-gray-800 flex items-center justify-center overflow-hidden relative group bg-[url('https://www.transparenttextures.com/patterns/dark-matter.png')]">
+                            <div className="flex-grow min-w-0 h-full bg-black rounded-2xl border border-gray-800 flex items-center justify-center overflow-hidden relative group">
                                 {designerImage ? (
                                     <div className="relative w-full h-full">
                                         <img src={designerImage} className="w-full h-full object-contain" />

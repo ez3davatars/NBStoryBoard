@@ -169,7 +169,10 @@ const VeoPromptBuilderPanel = forwardRef<VeoPromptBuilderRef, VeoPromptBuilderPa
         if (!concept.trim()) return;
         setIsEnhancing(true);
         try {
-            const draft = await GeminiService.generateVeoFivePartDraft(concept, state.apiKey);
+            const draft = await GeminiService.generateVeoFivePartDraft(concept, state.apiKey, undefined, {
+                billingMode: state.billingEntitlements?.effectiveBillingMode as 'hosted' | 'byok',
+                entitlements: state.billingEntitlements
+            });
             if (draft.cinematography) setCinematography(draft.cinematography);
             if (draft.subject) setSubject(draft.subject);
             if (draft.action) setAction(draft.action);

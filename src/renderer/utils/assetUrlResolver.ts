@@ -35,12 +35,16 @@ export async function resolveDisplayUrl(input: ResolveAssetUrlInput): Promise<st
   if (candidatePath && window.electronAPI) {
       try {
         const cleanlyFormattedPath = candidatePath.startsWith('file://') ? candidatePath.slice(7) : candidatePath;
-        // The cleanlyFormattedPath is absolute natively (e.g. C:\... or /usr/...)
-        return `app:///${cleanlyFormattedPath.replace(/\\/g, '/')}`;
+        if (window.electronAPI.readFile) {
+            const base64Data = await window.electronAPI.readFile(cleanlyFormattedPath);
+            if (base64Data) {
+                return `data:image/png;base64,${base64Data}`;
+            }
+        }
       } catch (error) {
         // Suppress failure noise and fallback gracefully
       }
-    }
+  }
 
   // 3. Fallback to remote URLs
   if (input.sourceUrl && input.sourceUrl.startsWith('http')) return input.sourceUrl;

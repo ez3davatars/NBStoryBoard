@@ -1043,8 +1043,14 @@ const App = () => {
                     {state.billingEntitlements.effectiveBillingMode === "hosted" ? "HOSTED" : "BYOK"}
                   </span>
                   <div className="w-px h-[18px] bg-[#333]" />
-                  <span className="text-white text-[18px] font-semibold">
-                    {state.billingEntitlements.effectiveBillingMode === "byok" ? "—" : String(state.hostedCredits ?? "—")}
+                  <span className="text-white text-[18px] font-semibold flex items-center min-w-[24px] justify-center">
+                    {state.billingEntitlements.effectiveBillingMode === "byok" ? "—" : (
+                      state.billingEntitlements.effectiveBillingMode === "hosted" && state.hostedCredits === null ? (
+                        <div className="w-[18px] h-[18px] border-[2.5px] border-white/20 border-t-white rounded-full animate-spin" title="Loading credits..."></div>
+                      ) : (
+                        String(state.hostedCredits ?? "—")
+                      )
+                    )}
                   </span>
                 </div>
 

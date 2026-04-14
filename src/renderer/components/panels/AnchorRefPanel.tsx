@@ -66,7 +66,7 @@ export const AnchorRefPanel = ({
           kind: 'uploaded_result', 
           imageUrl: state.backgroundUrl, 
           sourceImageId: 'background',
-          visibleActorCount: state.tokens.filter((t: any) => t.type === 'actor').length
+          visibleActorCount: state.tokens.filter((t: any) => t.elementType === 'actor' || !t.elementType).length
         }
       }
     });

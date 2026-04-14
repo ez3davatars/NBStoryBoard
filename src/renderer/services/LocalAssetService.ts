@@ -45,12 +45,28 @@ async function materializeImageAsset(args: {
       const success = await window.electronAPI.writeFile(targetPath, uint8Array);
       
       if (success) {
-        // Re-read it for verified local displayUrl
-        const base64 = await window.electronAPI.readFile(targetPath);
-        const displayUrl = `data:image/png;base64,${base64}`;
+        let finalDisplayUrl = sourceUrl;
+        
+        // Attempt Native Local Protocol if implemented, otherwise fallback to reading Base64 via IPC to bypass Chromium file:// locks
+        if (window.electronAPI?.readFile) {
+           try {
+               const base64Data = await window.electronAPI.readFile(targetPath);
+               if (base64Data) {
+                   finalDisplayUrl = `data:image/png;base64,${base64Data}`;
+               }
+           } catch (readErr) {
+               console.warn('[LocalAssetService] Failed to generate data URL via IPC; falling back to source', readErr);
+           }
+        }
+
+        console.log('[LocalAssetService] Native materialized asset:', {
+          targetPath,
+          displayUrl: finalDisplayUrl.substring(0, 50) + '...'
+        });
+
         return {
           localPath: targetPath,
-          displayUrl,
+          displayUrl: finalDisplayUrl,
           sourceUrl,
           storageKind: 'native',
           filename

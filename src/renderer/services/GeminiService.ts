@@ -222,7 +222,8 @@ export const GeminiService = {
     options: {
       imageSize?: '1K' | '2K' | '4K',
       expectedResponseType?: 'image' | 'text' | 'json',
-      onJobAccepted?: (generationId: string, acceptedAt?: number) => void
+      onJobAccepted?: (generationId: string, acceptedAt?: number) => void,
+      signal?: AbortSignal
     } = {}
   ): Promise<string> {
     if ((window as any).electronAPI && typeof (window as any).electronAPI.getWorkerStatus === 'function') {
@@ -269,7 +270,8 @@ export const GeminiService = {
         payload: payloadBodyForEdge,
         options,
         executionFingerprint
-      })
+      }),
+      signal: options.signal
     });
 
     const responseText = await rawResponse.text();
@@ -286,12 +288,14 @@ export const GeminiService = {
       }
 
       let attempts = 0;
-      let MAX_ATTEMPTS = 45; // 1K default (90s)
-      if (options.imageSize === '2K') MAX_ATTEMPTS = 60; // 120s
-      if (options.imageSize === '4K') MAX_ATTEMPTS = 90; // 180s
+      let MAX_ATTEMPTS = 150; // 1K default (300s) to comfortably endure queuing delays
+      if (options.imageSize === '2K') MAX_ATTEMPTS = 180; // 360s
+      if (options.imageSize === '4K') MAX_ATTEMPTS = 240; // 480s
       
       while (attempts < MAX_ATTEMPTS) {
+        if (options.signal?.aborted) throw new Error("AbortError: Canceled by user");
         await new Promise(r => setTimeout(r, 2000));
+        if (options.signal?.aborted) throw new Error("AbortError: Canceled by user");
         attempts++;
         
         const { data: pollData, error: pollErr } = await supabase
@@ -337,9 +341,7 @@ export const GeminiService = {
     }
 
     if (!rawResponse.ok) {
-      let cleanMsg = responseText;
-      try { cleanMsg = JSON.parse(responseText).error || cleanMsg; } catch { }
-      throw new Error(`Hosted Orchestration Auth/Queue Error (${rawResponse.status}): ${cleanMsg}`);
+      throw new Error(`generate-image ${rawResponse.status}: ${responseText}`);
     }
 
     const data = JSON.parse(responseText);
@@ -513,13 +515,19 @@ export const GeminiService = {
       // (Gemini 3.1 Flash Image default is `minimal`; `high` usually helps with long, rule-heavy prompts.)
       const desiredThinkingLevel = rawThinking ?? (strictMode ? 'high' : undefined);
 
+      // Map extended UI aspect ratios to the strict subset supported natively by Gemini Image API
+      let finalAspectRatio = options.aspectRatio || "16:9";
+      if (finalAspectRatio === "4:5") finalAspectRatio = "3:4";
+      else if (finalAspectRatio === "3:2") finalAspectRatio = "4:3";
+      else if (finalAspectRatio === "21:9") finalAspectRatio = "16:9";
+
       const requestBody: any = {
         contents: [{ parts: contentsParts }],
         generationConfig: {
           responseModalities: ["IMAGE"],
           candidateCount: 1,
           imageConfig: {
-            aspectRatio: options.aspectRatio || "16:9",
+            aspectRatio: finalAspectRatio,
             ...(options.imageSize && { imageSize: options.imageSize })
           }
         },
@@ -874,29 +882,104 @@ export const GeminiService = {
 You are a precision image editor.
 
 [IMAGE 1] is the BASE IMAGE.
-[IMAGE 2] is the EDIT MASK (WHITE = allowed to change, BLACK = must not change).
+[IMAGE 2] is the EDIT MASK.
 
-Edit ONLY the WHITE regions. Preserve everything else exactly: identity, lighting, composition, camera, background, and unmasked pixels.
+MASK RULES:
+- WHITE = editable region
+- BLACK = locked region
+
+Perform the requested edit ONLY inside the white region.
+Preserve all black-region pixels exactly.
 
 Instruction: ${instruction}
 ${ar}
 
 Hard constraints:
-- No new objects outside the mask.
-- No morphing of faces/hair/body.
-- No style drift outside the mask.
-- No extra text/watermarks.
+- Remove only the targeted non-anatomical object or material inside the white region.
+- Preserve any nearby visible human anatomy exactly, including hands, fingers, face, hair, ears, neck, and exposed skin.
+- Do not delete, repaint, deform, shorten, merge, blur, or replace human anatomy adjacent to the mask.
+- If the masked object overlaps anatomy, remove the non-anatomical object only and reconstruct the obscured anatomy naturally.
+- Do not change composition.
+- Do not move or rescale subjects.
+- Do not alter any unmasked region.
+- Do not introduce new objects outside the white region.
+- Do not change identity, face, hair, wardrobe, or body unless explicitly requested inside the mask.
+- Match surrounding texture, lighting, and realism seamlessly.
+- No text, no watermark, no extra artifacts.
 `
     });
 
+    let finalAspectRatio = options.aspectRatio || "16:9";
+    if (finalAspectRatio === "4:5") finalAspectRatio = "3:4";
+    else if (finalAspectRatio === "3:2") finalAspectRatio = "4:3";
+    else if (finalAspectRatio === "21:9") finalAspectRatio = "16:9";
+
     const requestBody = {
         contents: [{ parts }],
-        generationConfig: { temperature: 0.2 }
+        generationConfig: {
+            responseModalities: ["IMAGE"],
+            candidateCount: 1,
+            imageConfig: {
+                aspectRatio: finalAspectRatio
+            },
+            temperature: 0.2
+        }
     };
 
     if (options.billingMode === 'hosted') {
-        const payload = await GeminiService._executeHostedRequest(model, requestBody, options);
-        return payload;
+        let payload = await GeminiService._executeHostedRequest(model, requestBody, options);
+
+        if (payload && typeof payload === 'object') {
+            try {
+                payload = JSON.stringify(payload);
+            } catch (e) {
+                throw new Error('Hosted payload failure: could not serialize non-string response.');
+            }
+        }
+
+        if (!payload || typeof payload !== 'string') {
+            throw new Error(`Hosted payload failure. Expected string, got ${typeof payload}`);
+        }
+
+        const trimmed = payload.trim();
+
+        // Case 1: Hosted worker already returned a usable image/data URL
+        if (
+            trimmed.startsWith('http://') ||
+            trimmed.startsWith('https://') ||
+            trimmed.startsWith('blob:') ||
+            trimmed.startsWith('data:image/')
+        ) {
+            return trimmed;
+        }
+
+        // Case 2: Hosted worker returned raw Gemini JSON instead of finalized asset URL
+        if (trimmed.startsWith('{')) {
+            try {
+                const parsed = JSON.parse(trimmed);
+                const extracted = parsed.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData)?.inlineData?.data;
+
+                if (extracted && typeof extracted === 'string' && extracted.length > 100) {
+                    return `data:image/png;base64,${extracted}`;
+                }
+
+                if (parsed.candidates?.[0]?.finishReason === 'SAFETY') {
+                    throw new Error('Gemini refused the edit region due to safety constraints.');
+                }
+
+                throw new Error('Completed, but payload JSON did not contain usable image data.');
+            } catch (e: any) {
+                throw new Error(`Failed to parse hosted edit payload JSON: ${e.message}`);
+            }
+        }
+
+        // Case 3: Raw base64
+        if (trimmed.length > 500) {
+            return `data:image/png;base64,${trimmed}`;
+        }
+
+        // Anything else is invalid and should never hit the UI
+        throw new Error(`Hosted payload failure. Received non-image text: ${trimmed}`);
     }
 
     const response = await fetch(`${baseUrl}?key=${effectiveKey}`, {
@@ -1214,16 +1297,28 @@ Return ONLY valid JSON without markdown formatting. Exact schema:
     return intent;
   },
 
-  async generateText(prompt: string, apiKey: string): Promise<string> {
-    if (!apiKey) throw new Error("No API Key provided.");
-    const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent`;
+  async generateText(prompt: string, apiKey: string, options: { billingMode?: 'hosted' | 'byok', entitlements?: any } = {}): Promise<string> {
+    if (!apiKey && options.billingMode !== 'hosted') throw new Error("No API Key provided.");
+    const effectiveKey = options.billingMode === 'hosted' ? 'HOSTED_MODE' : (apiKey || '');
+    const useModel = 'gemini-2.5-flash';
+    const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${useModel}:generateContent`;
 
-    const response = await fetch(`${baseUrl}?key=${apiKey}`, {
+    const requestBody = {
+      contents: [{ parts: [{ text: prompt }] }]
+    };
+
+    if (options.billingMode === 'hosted') {
+        const rawResultText = await GeminiService._executeHostedRequest(useModel, requestBody, { ...options, expectedResponseType: 'text' });
+        if (rawResultText && rawResultText.startsWith('data:application/json')) {
+            return decodeURIComponent(rawResultText.split(',')[1]);
+        }
+        return rawResultText;
+    }
+
+    const response = await fetch(`${baseUrl}?key=${effectiveKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }]
-      })
+      body: JSON.stringify(requestBody)
     });
 
     if (!response.ok) {
@@ -1239,10 +1334,10 @@ Return ONLY valid JSON without markdown formatting. Exact schema:
     return textOut;
   },
 
-  async generateJson<T>(prompt: string, apiKey: string): Promise<T> {
+  async generateJson<T>(prompt: string, apiKey: string, options: { billingMode?: 'hosted' | 'byok', entitlements?: any } = {}): Promise<T> {
     const strictPrompt = `${prompt}\n\nCRITICAL INSTRUCTION: Return ONLY valid JSON. No markdown formatting. No code fences. No commentary.`;
 
-    let rawText = await this.generateText(strictPrompt, apiKey);
+    let rawText = await this.generateText(strictPrompt, apiKey, options);
 
     const tryParse = (text: string) => {
       const cleaned = text.replace(/```json/gi, '').replace(/```/g, '').trim();
@@ -1257,7 +1352,7 @@ Return ONLY valid JSON without markdown formatting. Exact schema:
     } catch (e) {
       console.warn("First JSON parse failed, attempting repair... Raw text was:", rawText);
       const repairPrompt = `The following text was supposed to be valid JSON but failed to parse. Please fix it and return ONLY valid JSON.\n\n${rawText}`;
-      rawText = await this.generateText(repairPrompt, apiKey);
+      rawText = await this.generateText(repairPrompt, apiKey, options);
       try {
         return tryParse(rawText);
       } catch (e2) {
@@ -1266,8 +1361,8 @@ Return ONLY valid JSON without markdown formatting. Exact schema:
     }
   },
 
-  async generateVeoFivePartDraft(concept: string, apiKey: string, optionalContext?: string): Promise<VeoFivePartDraft & { audio?: VeoAudioBlock, negativePrompt?: string }> {
-    if (!apiKey) {
+  async generateVeoFivePartDraft(concept: string, apiKey: string, optionalContext?: string, options: { billingMode?: 'hosted' | 'byok', entitlements?: any } = {}): Promise<VeoFivePartDraft & { audio?: VeoAudioBlock, negativePrompt?: string }> {
+    if (!apiKey && options.billingMode !== 'hosted') {
       console.warn("No API Key. Returning mocked Veo prompt.");
       await new Promise(r => setTimeout(r, 1000));
       return {
@@ -1308,7 +1403,7 @@ Output a JSON object exactly matching this structure:
 Note: Leave audio fields out if not applicable. The core 5 parts are required.
 `;
 
-    return this.generateJson<any>(prompt, apiKey);
+    return await this.generateJson<any>(prompt, apiKey, options);
   },
 
   /**
@@ -1467,7 +1562,7 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
     sceneTruth?: import('../types/shots').SceneTruthSnapshot;
     presetId?: string;
     hasSubjectStyleAnalysis?: boolean;
-    options?: { billingMode?: 'hosted' | 'byok', entitlements?: any, onJobAccepted?: any, expectedResponseType?: 'image' | 'text' | 'json' };
+    options?: { billingMode?: 'hosted' | 'byok', entitlements?: any, onJobAccepted?: any, expectedResponseType?: 'image' | 'text' | 'json', signal?: AbortSignal };
   }): Promise<string> {
     const { anchorImageUrl, shotBlueprintUrl, actorIdentitySets = [], prompt, aspectRatio, apiKey, model, sceneTruth, presetId, hasSubjectStyleAnalysis } = args;
     
@@ -1503,7 +1598,13 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
         if (!hasStrongFaceAnchor(set)) {
             console.warn(`[IdentityLock] Missing face anchor for generation request`, { actorId: set.actorId, path: 'shots-preview' });
         }
-        const orderedUrls = buildOrderedActorIdentityInputs(set);
+        let orderedUrls = buildOrderedActorIdentityInputs(set);
+        
+        // Hard cap: aggressively limit actor references if hosted to avoid 502 oversized payload errors
+        if (args.options?.billingMode === 'hosted') {
+            orderedUrls = orderedUrls.slice(0, 1);
+        }
+
         for (let i = 0; i < orderedUrls.length; i++) {
             const ref = await GeminiService._resolveImageData(orderedUrls[i]);
             parts.push({ text: `[ACTOR REFERENCE ${i + 1}]` });
@@ -1527,6 +1628,9 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
     };
     
     if (args.options?.billingMode === 'hosted') {
+        const serialized = JSON.stringify(payload);
+        console.log("[generateShotPreview] payload bytes =", new Blob([serialized]).size);
+
         const hostedArgs = { ...args.options };
         if (!hostedArgs.expectedResponseType) hostedArgs.expectedResponseType = 'image';
         return await GeminiService._executeHostedRequest(model, payload, hostedArgs);
@@ -1535,7 +1639,8 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
     const response = await fetch(`${baseUrl}?key=${apiKey}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      signal: args.options?.signal
     });
     
     if (!response.ok) {
@@ -1565,7 +1670,7 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
     model: string;
     sceneTruth?: import('../types/shots').SceneTruthSnapshot;
     presetId?: string;
-    options?: { billingMode?: 'hosted' | 'byok', entitlements?: any, onJobAccepted?: any, expectedResponseType?: 'image' | 'text' | 'json' };
+    options?: { billingMode?: 'hosted' | 'byok', entitlements?: any, onJobAccepted?: any, expectedResponseType?: 'image' | 'text' | 'json', signal?: AbortSignal };
   }): Promise<string> {
     const { sourceResultUrl, selectedShotPreviewUrl, actorIdentitySets = [], prompt, aspectRatio, apiKey, model, sceneTruth, presetId, options } = args;
     
@@ -1630,7 +1735,8 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
     const response = await fetch(`${baseUrl}?key=${apiKey}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      signal: options?.signal
     });
     
     if (!response.ok) {

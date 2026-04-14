@@ -273,61 +273,46 @@ const SceneCanvas = () => {
         return () => obs.disconnect();
     }, []);
 
+    const cutoutInFlightRef = useRef<Set<string>>(new Set());
+
     useEffect(() => {
         if (!state.tokens || state.tokens.length === 0) return;
 
-        console.log('[CutoutTrigger] Evaluating tokens...', state.tokens.map(t => ({ id: t.id, tag: t.tag, type: t.elementType, hasUrl: !!t.url, cutout: !!t.cutoutUrl })));
-
-        state.tokens.forEach(async (t) => {
-            // Only process actors or newly dropped assets (we assume missing type is actor from CastingForge)
+        state.tokens.forEach((t) => {
             const isEligibleToken = t.elementType === 'actor' || t.elementType === 'prop' || !t.elementType;
-            
-            console.log(`[CutoutTrigger] Checking ${t.id} - isEligible: ${isEligibleToken}, hasUrl: ${!!t.url}, hasCutout: ${!!t.cutoutUrl}`);
-
-            if (!isEligibleToken || !t.url) return;
-            // If already has cutout, skip
-            if (t.cutoutUrl) return;
+            if (!isEligibleToken || !t.url || t.cutoutUrl) return;
 
             const jobKey = `${t.id}-${t.url}`;
-            // If currently processing or permanently failed for THIS exact image, skip
-            if (cutoutStatuses[jobKey]) {
-                console.log(`[CutoutTrigger] Skipping ${t.id} - status is already ${cutoutStatuses[jobKey]}`);
-                return;
-            }
+            if (cutoutInFlightRef.current.has(jobKey)) return;
 
-            console.log(`[CutoutTrigger] Starting cutout process for ${t.id} (${t.tag})`);
+            cutoutInFlightRef.current.add(jobKey);
             setCutoutStatuses(prev => ({ ...prev, [jobKey]: 'processing' }));
 
-            try {
-                // Generate Cutouts
-                const { cutoutUrl, alphaMaskUrl } = await CutoutService.processImage(t.url);
-                
-                console.log(`[CutoutTrigger] Success for ${t.id}`);
-                // Update Token cleanly preserving source
-                dispatch({
-                    type: 'UPDATE_TOKEN',
-                    payload: {
-                        id: t.id,
-                        cutoutUrl,
-                        alphaMaskUrl,
-                        sourceImageUrl: t.url // Preserve original as source
-                    }
-                });
-
-                setCutoutStatuses(prev => {
-                    const next = { ...prev };
-                    delete next[jobKey];
-                    return next;
-                });
-                
-                dispatch({ type: 'ADD_LOG', payload: { message: `Cutout ready for ${t.tag}`, type: 'success' } });
-
-            } catch (err) {
-                console.warn(`[CutoutTrigger] Failed for ${t.id}`, err);
-                setCutoutStatuses(prev => ({ ...prev, [jobKey]: 'failed' }));
-            }
+            (async () => {
+                try {
+                    const { cutoutUrl, alphaMaskUrl } = await CutoutService.processImage(t.url);
+                    dispatch({
+                        type: 'UPDATE_TOKEN',
+                        payload: {
+                            id: t.id,
+                            cutoutUrl,
+                            alphaMaskUrl,
+                            sourceImageUrl: t.url,
+                        },
+                    });
+                    setCutoutStatuses(prev => {
+                        const next = { ...prev };
+                        delete next[jobKey];
+                        return next;
+                    });
+                } catch {
+                    setCutoutStatuses(prev => ({ ...prev, [jobKey]: 'failed' }));
+                } finally {
+                    cutoutInFlightRef.current.delete(jobKey);
+                }
+            })();
         });
-    }, [state.tokens, cutoutStatuses, dispatch]);
+    }, [state.tokens, dispatch]);
     useEffect(() => {
         const store = useSceneSpec.getState();
         const currentActors = store.scene.actors;
@@ -729,9 +714,8 @@ Output: environment plate only.
             dispatch({ type: 'SET_BG', payload: img });
             dispatch({ type: 'ADD_LOG', payload: { message: `Environment plate generated successfully.`, type: 'success' } });
 
-            // Phase 4: Automatically trigger the composite pass to place the actor in the new environment
-            dispatch({ type: 'ADD_LOG', payload: { message: `Auto-starting composite pass...`, type: 'info' } });
-            generateBg(img);
+            // Auto-composite pass explicitly removed per user request. 
+            // The environment plate will stay pure until user manually triggers composite.
 
         } catch (err: any) {
             console.error("Style Extract / BG Gen Error", err);
@@ -1602,7 +1586,7 @@ ${strictPromptBase}`;
                     state.model,
                     limitedRefs,
                     { 
-                        aspectRatio: '16:9', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements,
+                        aspectRatio: state.director.aspectRatio, imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements,
                         onJobAccepted: (id) => {
                             actualGenId = id;
                             dispatch({ type: 'ADD_BACKGROUND_JOB', payload: { id, status: 'polling_foreground', context: 'scene_render', startedAt: Date.now() } });
@@ -1991,14 +1975,17 @@ ${loosePromptBase}`;
         if (!ensureStagingAiAccess('Protection Mask')) return;
         setProtectStatus('generating');
         try {
-            const captured = await captureSceneImage();
+            const captured = (viewMode === 'result' && state.resultImage)
+                ? state.resultImage 
+                : await captureSceneImage();
+
             if (!captured) throw new Error('Stage capture returned empty.');
 
             // Pick a Gemini image model for mask generation
             const maskModel = (state.model && String(state.model).includes('gemini')) ? state.model : 'gemini-2.5-flash-image';
 
             const prompt =
-                "FACE + HAIR PROTECTION MASK: Create a pure black & white segmentation mask where ONLY the subject's face and hair are PURE WHITE (#FFFFFF). Everything else MUST be PURE BLACK (#000000). No gray. No gradients. No background. Use clean edges.";
+                "VISIBLE HUMAN ANATOMY PROTECTION MASK: Create a pure black & white segmentation mask where ALL visible human anatomy is PURE WHITE (#FFFFFF): face, hair, ears, neck, hands, fingers, exposed skin, and any visible body parts belonging to the subject. Non-human objects, added fabric, head coverings, props, staffs, sky, rocks, and background must be PURE BLACK (#000000). No gray. No gradients. Clean edges.";
 
             const res = await GeminiService.generateImage(
                 prompt,
@@ -2181,16 +2168,23 @@ ${loosePromptBase}`;
         cancelRegionEditRef.current = false;
         setIsRegionEditRunning(true);
         dispatch({ type: 'SET_PROCESSING', payload: true } as any);
+        dispatch({ type: 'SET_PROGRESS', payload: { phase: 'Region Edit', percent: 5, text: 'Preparing composite state...' } } as any);
         try {
             const editModel = state.model === 'imagen-4.0-generate-001' ? 'gemini-2.5-flash-image' : state.model;
 
             const captured = await captureSceneImage();
-            if (!captured) throw new Error('Stage capture returned empty.');
+            const startingBase = (viewMode === 'result' && state.resultImage) ? state.resultImage : captured;
 
-            let base: string = captured;
+            if (!startingBase) {
+                throw new Error('No base image available for region edit.');
+            }
+
+            let base: string = startingBase;
 
             // 1. Process standard regions
-            const layers = (regionEdit.layers as any[]).filter((l: any) => l.enabled);
+            const layers = (regionEdit.layers as any[]).filter(
+                (l: any) => l.enabled && l.maskDataUrl && String(l.prompt || '').trim()
+            );
 
             // 2. Process intentional placements (Auto-Generated Region Edits)
             const intents = buildPlacementIntentsFromAnnotations(state.annotations as any, state.tokens as any);
@@ -2254,8 +2248,9 @@ ${loosePromptBase}`;
                     dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: layer.id, updates: { status: 'queued', lastError: null } } } as any);
                 }
             }
-
-            for (const layer of allLayers) {
+            const totalLayersTotal = allLayers.length;
+            for (let i = 0; i < allLayers.length; i++) {
+                const layer = allLayers[i];
                 if (cancelRegionEditRef.current) {
                     dispatch({ type: 'ADD_LOG', payload: { message: 'Region Edit cancelled.', type: 'info' } } as any);
                     break;
@@ -2274,10 +2269,54 @@ ${loosePromptBase}`;
                 }
 
                 dispatch({ type: 'ADD_LOG', payload: { message: `Applying ${layer.name}...`, type: 'info' } } as any);
+                
+                const percent = Math.round(((i) / totalLayersTotal) * 100) + 10;
+                dispatch({ 
+                    type: 'SET_PROGRESS', 
+                    payload: { phase: 'Region Edit', percent: Math.min(percent, 95), text: `Executing Mask: ${layer.name}` } 
+                } as any);
 
                 let maskToSend: string = mask;
                 if (protectEnabled && protectMaskUrl && !layer.id.startsWith('intent-')) { // intentional protects its own via depth
+                    dispatch({
+                        type: 'ADD_LOG',
+                        payload: {
+                            message: `Anatomy protection applied to ${layer.name}: preserving hands, skin, face, and hair outside the edit region.`,
+                            type: 'info'
+                        }
+                    } as any);
                     maskToSend = await subtractProtectionMask(mask, protectMaskUrl);
+                }
+
+                // Additional safety for removal edits near anatomy
+                if ((promptText || '').toLowerCase().includes('remove')) {
+                    dispatch({
+                        type: 'ADD_LOG',
+                        payload: {
+                            message: `Removal edit safety active: keeping mask tight and anatomy protected.`,
+                            type: 'info'
+                        }
+                    } as any);
+                }
+
+                // Get intrinsic dimensions of base to properly align resolution with the mask
+                // This prevents backend mapping failures or letterboxing offsets
+                const baseImgScale = await loadDataUrlImage(base);
+                const baseW = baseImgScale.width || 1;
+                const baseH = baseImgScale.height || 1;
+
+                if (maskToSend) {
+                    const maskImgScale = await loadDataUrlImage(maskToSend);
+                    const scaleCanvas = document.createElement('canvas');
+                    scaleCanvas.width = baseW;
+                    scaleCanvas.height = baseH;
+                    const scaleCtx = scaleCanvas.getContext('2d');
+                    if (scaleCtx) {
+                        scaleCtx.imageSmoothingEnabled = false; // Preserve hard edges for binary mask
+                        scaleCtx.clearRect(0, 0, baseW, baseH);
+                        scaleCtx.drawImage(maskImgScale, 0, 0, baseW, baseH);
+                        maskToSend = scaleCanvas.toDataURL('image/png');
+                    }
                 }
 
                 base = await GeminiService.editImageWithMask(
@@ -2287,15 +2326,37 @@ ${loosePromptBase}`;
                     state.apiKey,
                     editModel,
                     [],
-                    { aspectRatio: state.director.aspectRatio }
+                    { 
+                        aspectRatio: state.director.aspectRatio,
+                        billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', 
+                        entitlements: state.billingEntitlements,
+                        expectedResponseType: 'image'
+                    }
                 );
             }
 
-            dispatch({ type: 'SET_RESULT_IMAGE', payload: base } as any);
+            dispatch({ type: 'SET_PROGRESS', payload: null } as any);
+
+            // Critical: normalize the returned image before pushing it into UI state
+            const finalEditedUrl = await normalizeGeneratedImageUrl(base);
+
+            dispatch({ type: 'SET_RESULT_IMAGE', payload: finalEditedUrl } as any);
+            dispatch({
+                type: 'SET_COMPOSITE_METADATA',
+                payload: {
+                    latestCompositeSource: 'directorCanvas',
+                    latestCompositeResultUrl: finalEditedUrl
+                }
+            } as any);
+
+            // Show the edited result immediately
+            setViewMode('result');
+
             dispatch({ type: 'ADD_LOG', payload: { message: 'Region Edit complete.', type: 'success' } } as any);
         } catch (e: any) {
             dispatch({ type: 'ADD_LOG', payload: { message: `Region Edit failed: ${e?.message || e}`, type: 'error' } } as any);
         } finally {
+            dispatch({ type: 'SET_PROGRESS', payload: null } as any);
             setIsRegionEditRunning(false);
             dispatch({ type: 'SET_PROCESSING', payload: false } as any);
         }
@@ -4206,7 +4267,7 @@ ${loosePromptBase}`;
                 {/* 2. CENTER AREA: THE STAGE */}
                 <div
                     ref={centerPaneRef}
-                    className="flex-1 flex flex-col gap-2 min-w-0"
+                    className="flex-1 flex flex-col gap-2 min-w-0 min-h-0"
                 >
                     {renderCommandHeader()}
                     {/* --- END COMMAND HEADER --- */}
@@ -4218,20 +4279,20 @@ ${loosePromptBase}`;
                         let computedActorCount: number | undefined = undefined;
                         if (effectiveAnchor) {
                             if (effectiveAnchor.kind === 'generated_result') {
-                                computedActorCount = state.tokens.filter((t: any) => t.type === 'actor').length;
+                                computedActorCount = state.tokens.filter((t: any) => t.elementType === 'actor' || !t.elementType).length;
                             } else if (effectiveAnchor.kind === 'uploaded_result') {
                                 computedActorCount = effectiveAnchor.visibleActorCount;
                             }
                         }
 
                         return (
-                        <div className="flex-1 bg-[#09090b] border border-[#27272a] rounded-xl relative overflow-hidden">
+                        <div className="flex-1 min-h-0 bg-[#09090b] border border-[#27272a] rounded-xl relative overflow-hidden">
                            <ShotsPanel 
                               sceneId={state.activeShotId || 'default'} 
                               apiKey={state.apiKey!} 
                               model={state.model}
                               effectiveResultImageUrl={getEffectiveResultAnchorForScene(state, state.activeShotId || 'default')?.imageUrl}
-                              subjectActionText={bgPrompt}
+                              subjectActionText={sceneIntent?.action || sceneIntent?.summary || undefined}
                               environmentText={state.director?.environment}
                               lightingText={state.director?.lighting}
                               expectedActorCount={computedActorCount}
@@ -4283,6 +4344,13 @@ ${loosePromptBase}`;
                                     src={state.resultImage || activeShot?.latestCompositeResultUrl || undefined}
                                     alt="Generated Result"
                                     className="absolute inset-0 w-full h-full object-contain bg-black pointer-events-none z-[60]"
+                                    onError={() => {
+                                        console.error('[SceneCanvas] Result image failed to load:', state.resultImage || activeShot?.latestCompositeResultUrl);
+                                        dispatch({
+                                            type: 'ADD_LOG',
+                                            payload: { message: 'Result image failed to load. Invalid image payload reached UI.', type: 'error' }
+                                        });
+                                    }}
                                 />
                             ) : state.backgroundUrl ? (
                                 <img
@@ -4395,7 +4463,7 @@ ${loosePromptBase}`;
                             {(state as any).regionEdit?.isMaskMode && (
                                 <canvas
                                     ref={maskCanvasRef}
-                                    className="absolute inset-0 z-[55] opacity-40"
+                                    className="absolute inset-0 z-[65] opacity-50"
                                     style={{ pointerEvents: 'auto' }}
                                     onPointerDown={handleMaskPointerDown}
                                     onPointerMove={handleMaskPointerMove}
@@ -4818,6 +4886,7 @@ ${loosePromptBase}`;
                                             setProtectStatus={setProtectStatus as any}
                                             isProcessing={state.isProcessing ?? false}
                                             apiKey={state.apiKey || ''}
+                                            billingMode={state.billingEntitlements?.effectiveBillingMode || 'byok'}
                                             collapsed={collapsedPanels['region_edit']}
                                             onToggle={togglePanel}
                                             onDragStart={setDraggedPanelId}

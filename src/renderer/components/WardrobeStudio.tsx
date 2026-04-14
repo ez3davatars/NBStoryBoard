@@ -2196,7 +2196,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                             </div>
 
                             {/* RIGHT: LARGE VIEWPORT */}
-                            <div className="flex-grow min-w-0 h-full bg-black rounded-2xl border border-gray-800 flex items-center justify-center overflow-hidden relative group bg-[url('https://www.transparenttextures.com/patterns/dark-matter.png')]">
+                            <div className="flex-grow min-w-0 h-full bg-black rounded-2xl border border-gray-800 flex items-center justify-center overflow-hidden relative group">
                                 {designerImage && (
                                     <img ref={designerImgRef} src={designerImage} className="hidden" />
                                 )}

@@ -1,5 +1,5 @@
 import electron from 'electron';
-const { app, shell, BrowserWindow, ipcMain } = electron;
+const { app, shell, BrowserWindow, ipcMain, protocol, net } = electron;
 import { join } from 'path';
 import { electronApp, optimizer, is } from '@electron-toolkit/utils';
 import { config as dotenvConfig } from 'dotenv';
@@ -72,12 +72,52 @@ function createWindow(): void {
   }
 }
 
+// Register the 'app' scheme as secure and standard so the renderer accepts it in <img> tags
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, bypassCSP: true, corsEnabled: false } }
+]);
+
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.nanobanana.studio');
+
+  // Register native file protocol for memory-efficient asset loading
+  protocol.handle('app', (request) => {
+    let fileUrl = request.url;
+    console.log('[PROTOCOL] Intercepted protocol request for:', fileUrl);
+    // Map app://local/C:/foo to file:///C:/foo
+    // On Mac: app://local//var/foo to file:////var/foo (which handles as file:///var/foo)
+    if (fileUrl.startsWith('app://local/')) {
+      fileUrl = fileUrl.replace(/^app:\/\/local\//i, 'file:///');
+    } else {
+      // Fallback for older formats 
+      fileUrl = fileUrl.replace(/^app:\/\//i, 'file:///');
+    }
+    
+    // Attempt to salvage any mangled drive letters by Chrome standard url parser (e.g. file:///E/ -> file:///E:/)
+    fileUrl = fileUrl.replace(/^file:\/\/\/([a-zA-Z])\//, 'file:///$1:/');
+    
+    console.log('[PROTOCOL] Translated to fetch url:', fileUrl);
+    
+    return net.fetch(fileUrl).then(response => {
+      const newHeaders = new Headers(response.headers);
+      // Inject required headers to survive the app's Cross-Origin-Embedder-Policy: require-corp
+      newHeaders.set('Cross-Origin-Resource-Policy', 'cross-origin');
+      newHeaders.set('Access-Control-Allow-Origin', '*');
+      
+      return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: newHeaders
+      });
+    }).catch(err => {
+      console.error('[PROTOCOL] Fetch failed:', err);
+      return new Response('Not Found', { status: 404 });
+    });
+  });
 
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.

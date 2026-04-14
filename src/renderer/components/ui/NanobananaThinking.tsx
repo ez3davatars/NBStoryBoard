@@ -31,13 +31,13 @@ export const NanobananaThinking = ({ progress: localProgress }: { progress?: Pro
 
  {/* Text Terminal Indicator */}
  <div className="absolute -bottom-32 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 w-full text-center min-w-[300px]">
- <div className="flex items-center justify-center gap-3 w-full">
- <span className="h-[1px] flex-1 bg-gradient-to-r from-transparent to-yellow-500/50"></span>
- <p className="text-yellow-500 font-black tracking-[0.4em] uppercase text-[12px] animate-pulse whitespace-nowrap ">
- Nanobanana is thinking
- </p>
- <span className="h-[1px] flex-1 bg-gradient-to-l from-transparent to-yellow-500/50"></span>
- </div>
+        <div className="flex items-center justify-center gap-3 w-full">
+          <span className="h-[1px] flex-1 bg-gradient-to-r from-transparent to-yellow-500/50"></span>
+          <p className="text-yellow-500 font-black tracking-[0.3em] uppercase text-[12px] animate-pulse whitespace-nowrap drop-shadow-md">
+            {progress ? `${(progress as any).phase || 'PROCESSING'} - ${Math.round(progress.percent)}%` : 'Nanobanana is thinking'}
+          </p>
+          <span className="h-[1px] flex-1 bg-gradient-to-l from-transparent to-yellow-500/50"></span>
+        </div>
 
  {progress ? (
  <div className="flex flex-col items-center gap-2 w-full px-4">

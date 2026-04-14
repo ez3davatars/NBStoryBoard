@@ -17,6 +17,13 @@ const withTimeout = (promise: Promise<any>, ms: number, name: string) => {
     ]);
 };
 
+const decodeJwtPayload = (jwt: string) => {
+  const parts = jwt.split('.');
+  if (parts.length !== 3) throw new Error('Malformed JWT');
+  const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
+  return payload;
+};
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     const requestedHeaders = req.headers.get('Access-Control-Request-Headers');
@@ -35,42 +42,67 @@ serve(async (req) => {
     const authHeader = req.headers.get('Authorization');
     if (!authHeader) throw new Error('Missing Authorization header');
 
-    // Auth-derived client ONLY for auth.getUser()
-    const supabaseAuth = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-      { global: { headers: { Authorization: authHeader } } }
-    );
+    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
+    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
+    const supabaseServerKey =
+      Deno.env.get('SUPABASE_SECRET_KEY') ||
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ||
+      '';
+
+    if (!supabaseUrl || !supabaseAnonKey || !supabaseServerKey) {
+      throw new Error(
+        JSON.stringify({
+          message: 'Missing function Supabase credentials',
+          has_supabase_url: !!supabaseUrl,
+          has_anon_key: !!supabaseAnonKey,
+          has_secret_key: !!Deno.env.get('SUPABASE_SECRET_KEY'),
+          has_service_role_key: !!Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+        })
+      );
+    }
+
+    // Auth client ONLY
+    const supabaseAuth = createClient(supabaseUrl, supabaseAnonKey, {
+      global: {
+        headers: {
+          Authorization: authHeader
+        }
+      }
+    });
 
     const jwt = authHeader.replace(/^Bearer /i, '').trim();
-    const { data: userData, error: userError } = await withTimeout(supabaseAuth.auth.getUser(jwt), 5000, "auth.getUser");
-    
+
+    const { data: userData, error: userError } = await withTimeout(
+      supabaseAuth.auth.getUser(jwt),
+      5000,
+      "auth.getUser"
+    );
+
     if (userError || !userData?.user) {
       const debugInfo = {
-        has_supabase_url: !!Deno.env.get('SUPABASE_URL'),
-        has_anon_key: !!Deno.env.get('SUPABASE_ANON_KEY'),
-        url_preview: Deno.env.get('SUPABASE_URL')?.substring(0, 30),
+        has_supabase_url: !!supabaseUrl,
+        has_anon_key: !!supabaseAnonKey,
+        has_secret_key: !!Deno.env.get('SUPABASE_SECRET_KEY'),
+        has_service_role_key: !!Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'),
+        url_preview: supabaseUrl.substring(0, 30),
         auth_header_preview: authHeader.substring(0, 25) + '...',
-        jwt_segments: authHeader.replace(/^Bearer /i, '').split('.').length,
+        jwt_segments: jwt.split('.').length,
         userError_message: userError?.message || "User data missing"
       };
       console.log("[AUTH DEBUG]:", debugInfo);
       throw new Error(`Unauthorized. Debug: ${JSON.stringify(debugInfo)}`);
     }
 
-    // Service-role client for billing RPCs (Phase 1 security model)
-    supabaseService = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SECRET_KEY') ?? ''
-    );
+    // Service client ONLY
+    supabaseService = createClient(supabaseUrl, supabaseServerKey);
+    
+    const userId = userData.user.id;
 
-    const payloadRaw = await withTimeout(req.json(), 3000, "req.json");
+    const payloadRaw = await withTimeout(req.json(), 15000, "req.json");
     const { payload, options, executionFingerprint } = payloadRaw;
     
     const idempotencyKey = req.headers.get('x-idempotency-key');
     if (!idempotencyKey) throw new Error("Missing X-Idempotency-Key header");
-
-    const userId = userData.user.id;
 
     // 1. Transaction Lock / Ownership Handshake
     const { data: jobData, error: startErr } = await withTimeout(
@@ -88,7 +120,7 @@ serve(async (req) => {
     );
 
     if (startErr) throw new Error(`start_generation failed: ${startErr.message}`);
-    let job = jobData;
+    job = jobData;
 
     // 2. Ownership & Replay Check
     if (job.request_fingerprint !== executionFingerprint) {
@@ -132,13 +164,16 @@ serve(async (req) => {
     });
 
   } catch (err: any) {
-    console.error("Generate Image Orchestration Error:", err.message);
+    console.error("Generate Image Orchestration Error:", err.message, err.stack);
     
     let status = 400;
-    if (err.message?.includes('Unauthorized')) status = 403;
+    if (err.message?.includes('Unauthorized')) status = 401;
+    if (err.message && err.message.includes('Idempotency')) status = 409;
+    if (err.message && err.message.includes('Missing X-Idempotency-Key header')) status = 400;
+    if (err.message && err.message.includes('req.json')) status = 400; // Json parse timeouts/errors
 
     // fail_generation relies on generation payload isolation
-    return new Response(JSON.stringify({ error: err.message, code: 'INTERNAL_ERROR' }), {
+    return new Response(JSON.stringify({ error: err.message, code: 'INTERNAL_ERROR', stack: err.stack }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       status,
     });

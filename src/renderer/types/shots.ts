@@ -87,6 +87,8 @@ export type SceneTruthSnapshot = {
 
 export type ShotVariant = {
   id: string;
+  slotId: string;
+  slotIndex: number;
   presetId: ShotPresetId;
   label: string;
   description: string;

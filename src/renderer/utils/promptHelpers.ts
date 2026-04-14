@@ -813,6 +813,7 @@ export function buildStrictFaceIdentityLockBlock(args: BuildStrictFaceIdentityLo
     "No ethnicity-presenting facial drift.",
     "No trait borrowing between actors.",
     "No face changes caused by wardrobe changes.",
+    "No wardrobe invention, no accessory invention, and no headwear invention.",
   ];
 
   return [...base, ...biometricOverrides, ...actorSpecific, ...multi, ...negatives].join('\n');
@@ -884,49 +885,102 @@ export type BuildShotVariantPromptArgs = {
   sceneType?: string;
   directedSlot?: DirectedShotSlot;
   hasSubjectStyleAnalysis?: boolean;
+  sourceStyleLock?: string;
 };
+
+export function buildWardrobeAndPropContinuityLockBlock(): string {
+  return [
+    "WARDROBE & PROP CONTINUITY LOCK (HARD):",
+    "Preserve the exact same visible wardrobe, accessories, and props from the source result image.",
+    "Do not invent any new clothing items, garments, layers, accessories, or props that are not clearly present in the source anchor.",
+    "Do not add headwear of any kind unless it is clearly present in the source image.",
+    "This includes hats, hoods, veils, scarves, wraps, crowns, helmets, headbands, turbans, or any other head covering.",
+    "Do not add jewelry, necklaces, earrings, bracelets, rings, belts, sashes, capes, shawls, cloaks, gloves, or armor unless they are clearly present in the source image.",
+    "Do not add handheld props, staffs, weapons, tools, books, cups, bags, torches, or scene objects to the actor unless they are clearly present in the source image.",
+    "Do not restyle, embellish, upgrade, fantasy-ize, royal-ize, or accessorize the character.",
+    "If a wardrobe detail is not clearly visible in the source, do not invent it.",
+    "If the source character has no head covering, the generated shot must also have no head covering.",
+    "Preserve wardrobe ownership correctly. Do not transfer clothing or props from one actor to another.",
+    "No new costume layers. No added costume complexity. No decorative additions."
+  ].join('\n');
+}
+
+export function buildExactPoseLockBlock(): string {
+  return [
+    "EXACT POSE LOCK (HARD):",
+    "Preserve the exact same body pose from the source result image.",
+    "Do not reinterpret the performance.",
+    "Do not create a new gesture.",
+    "Do not change arm bend, elbow height, hand position, finger spread, shoulder raise, torso twist, hip angle, leg stance, foot planting, neck tilt, or head angle except for what is naturally hidden or revealed by the new camera viewpoint.",
+    "Do not re-pose the character to better fit the shot.",
+    "The only allowed change is camera position, lens, crop, and perspective.",
+    "Treat the source result as a frozen moment in time viewed from a different camera.",
+    "If a limb or hand is partially hidden in the anchor, infer only the hidden continuation of the same pose, not a new pose.",
+    "Do not convert a symmetrical pose into an asymmetrical one or vice versa.",
+    "Do not change weight distribution or balance.",
+    "No re-acting, no new animation beat, no new gesture."
+  ].join('\n');
+}
 
 export function buildShotVariantPrompt(args: BuildShotVariantPromptArgs): string {
     const preset = SHOT_PRESETS[args.presetId];
     
-    let p = `CRITICAL DIRECTIVE: Use the provided staged result image as the primary visual anchor.\n`;
+    let p = `OPERATION\n`;
+    p += `Create a NEW CAMERA SETUP of the same scene continuity using the staged result image as the primary visual anchor.\n`;
     p += `Recompose this image as a ${preset.label}.\n`;
     p += `${preset.shotInstruction}\n`;
     p += `Lens Note: ${preset.defaultLensNote}\n\n`;
 
-    p += `### PRESERVATION & REALISM GUARDRAILS\n`;
-    p += `Generate a new coherent camera framing rather than a simple crop.\n`;
-    p += `Preserve the same person/people, facial structure, hair, proportions, and key accessories.\n`;
-    p += `Do not change the character, outfit, scene logic, lighting logic, or realism level.\n`;
-    
-    if (args.locks.identity) p += `- Identity preservation is mandatory.\n`;
-    if (args.locks.wardrobe) p += `- Wardrobe and accessory continuity are mandatory.\n`;
-    if (args.locks.background) p += `- Maintain the same environment and set dressing continuity.\n`;
-    if (args.locks.lighting) p += `- Maintain the same lighting direction, tone, and exposure logic.\n`;
-    
-    if (args.environmentText) p += `- Environment context: ${args.environmentText}\n`;
-    if (args.subjectActionText) p += `- Action context: ${args.subjectActionText}\n`;
-    if (args.lightingText) p += `- Lighting context: ${args.lightingText}\n`;
+    p += `CHANGE\n`;
+    p += `- camera only, not body pose\n`;
+    p += `- camera angle\n`;
+    p += `- lens / focal length\n`;
+    p += `- crop / subject size in frame\n`;
+    p += `- screen position\n`;
+    p += `- headroom\n`;
+    p += `- perspective\n\n`;
 
-    p += `\n### SHOT BLUEPRINT RULES\n`;
-    p += `- Preserve the exact subject count from the anchor scene.\n`;
-    p += `- Preserve identity, wardrobe, environment, and scene continuity.\n`;
-    p += `- Follow the requested framing exactly: ${preset.framing.toUpperCase()}.\n`;
-    p += `- Follow the requested camera elevation exactly: ${preset.elevation.toUpperCase()}.\n`;
-    p += `- Follow the requested orbit exactly: ${preset.orbit.toUpperCase()}.\n`;
-    p += `- Follow the requested screen placement exactly: ${preset.placement.toUpperCase()}.\n`;
-    p += `- Do not collapse into a generic centered crop.\n`;
-    p += `- Do not produce an angle equivalent to another preset.\n`;
-    p += `- Do not invent a new composition class.\n`;
+    p += `KEEP\n`;
+    if (args.locks.identity) p += `- actor identity\n`;
+    if (args.locks.wardrobe) p += `- wardrobe / hair / makeup\n`;
+    if (args.locks.background) p += `- environment continuity\n`;
+    if (args.locks.background) p += `- prop continuity\n`;
+    if (args.locks.lighting) p += `- approximate lighting continuity\n`;
+    if (args.environmentText) p += `- Scene Environment context: ${args.environmentText}\n`;
+    if (args.subjectActionText) p += `- Scene Action context: ${args.subjectActionText}\n`;
+    if (args.lightingText) p += `- Scene Lighting context: ${args.lightingText}\n\n`;
 
-    p += `\n### NEGATIVE SHOT RULES\n`;
+    if (args.locks.wardrobe) {
+      p += `### WARDROBE & PROP LOCK\n`;
+      p += `${buildWardrobeAndPropContinuityLockBlock()}\n\n`;
+    }
+
+    if (args.sourceStyleLock) {
+      p += `- render medium continuity\n\n`;
+      p += `### RENDER MEDIUM LOCK\n`;
+      p += `${args.sourceStyleLock}\n`;
+      p += `If the source image is stylized 3D / CGI, the generated shot MUST remain stylized 3D / CGI.\n`;
+      p += `Do not convert the shot into live-action, photoreal film, realistic photography, or human realism.\n\n`;
+    }
+
+    p += `FORBIDDEN\n`;
+    p += `- do not change pose geometry\n`;
+    p += `- do not re-gesture the actor\n`;
+    p += `- do not alter arm spread, hand placement, torso bend, or head orientation\n`;
+    p += `- do not add headwear, crowns, hats, hoods, scarves, veils, wraps, or helmets\n`;
+    p += `- do not add jewelry, belts, sashes, capes, shawls, or extra costume layers\n`;
+    p += `- do not add props or handheld objects not present in the source anchor\n`;
+    p += `- do not invent wardrobe details that are not clearly visible in the source image\n`;
+    p += `- do not transfer props or wardrobe pieces between actors\n`;
+    p += `- do not reproduce the anchor framing\n`;
+    p += `- do not return the same crop as the source image\n`;
+    p += `- do not flatten back into the original source composition\n`;
+    p += `- do not output a contact sheet, grid, or collage\n`;
+    p += `- do not add cinematic black bars unless already present in the anchor\n`;
     preset.negatives.forEach(neg => {
         p += `- ${neg}\n`;
     });
     p += `- No text, no watermark, no duplicate subjects, no distorted anatomy, no unrealistic perspective warping.\n`;
-    p += `- Do not output a contact sheet, grid, or collage.\n`;
-    p += `- Do not turn this into a simple zoom or crop.\n`;
-    p += `- Do not add cinematic black bars unless already present in the anchor.\n`;
 
     if (args.actorIdentitySets && args.actorIdentitySets.length > 0) {
         p += `\n### ACTOR REFERENCE ANCHORS\n`;
@@ -958,6 +1012,7 @@ export function buildShotVariantPrompt(args: BuildShotVariantPromptArgs): string
     p += `\n### ENVIRONMENT & LAYOUT GUARDRAILS (REINFORCEMENTS)\n`;
     p += `${buildEnvironmentConsistencyLockBlock({})}\n`;
     p += `${buildSceneLayoutLockBlock({ expectedActorCount: args.sceneTruth.expectedActorCount })}\n`;
+    p += `${buildExactPoseLockBlock()}\n`;
     
     p += buildDirectedSlotBlock(args.directedSlot, args.shotsActorOptions, false);
 
@@ -1018,44 +1073,58 @@ export type BuildShotFinalRerenderPromptArgs = {
   sceneType?: string;
   directedSlot?: DirectedShotSlot;
   hasSubjectStyleAnalysis?: boolean;
+  sourceStyleLock?: string;
 };
 
 export function buildShotFinalRerenderPrompt(args: BuildShotFinalRerenderPromptArgs): string {
   const preset = SHOT_PRESETS[args.presetId];
 
-  let p = `CRITICAL DIRECTIVE: Use the selected shot image as the primary composition and framing anchor.\n`;
-  p += `Preserve the exact composition, camera angle, crop, subject placement, pose relationships, and scene arrangement from that selected shot.\n`;
-  p += `Use the original staged result image only as supporting scene continuity context.\n`;
-  
+  let p = `OPERATION\n`;
+  p += `Generate a higher-quality final render of the selected preview shot.\n`;
+  p += `Use the original staged result image only as supporting scene continuity context.\n\n`;
+
+  p += `CHANGE\n`;
+  p += `- Upscale and refine the detail\n\n`;
+
+  p += `KEEP\n`;
+  p += `- The exact composition, camera angle, crop, subject placement, and pose relationships from the preview shot\n`;
   if (args.actorIdentitySets && args.actorIdentitySets.length > 0) {
-      p += `Use actor reference images only to reinforce identity fidelity.\n`;
+      p += `- actor identity (use reference images to reinforce fidelity)\n`;
   }
-  
-  p += `Do not reinterpret the scene into a different shot.\n`;
-  p += `Do not change framing, subject positions, or camera relationship.\n`;
-  p += `Generate a higher-quality final render of this same shot.\n\n`;
+  if (args.locks.wardrobe) p += `- wardrobe / hair / makeup\n`;
+  if (args.locks.background) p += `- environment continuity\n`;
+  if (args.locks.background) p += `- prop continuity\n`;
+  if (args.locks.lighting) p += `- approximate lighting continuity\n\n`;
 
-  p += `### PRESERVATION & CONSTRAINTS\n`;
-  if (args.locks.identity) p += `- Identity preservation is mandatory.\n`;
-  if (args.locks.wardrobe) p += `- Wardrobe and accessory continuity are mandatory.\n`;
-  if (args.locks.background) p += `- Maintain the same environment and set dressing continuity.\n`;
-  if (args.locks.lighting) p += `- Maintain the same lighting direction, tone, and exposure logic.\n`;
+  if (args.locks.wardrobe) {
+    p += `### WARDROBE & PROP LOCK\n`;
+    p += `${buildWardrobeAndPropContinuityLockBlock()}\n\n`;
+  }
 
-  p += `\n### SHOT BLUEPRINT RULES\n`;
-  p += `- Follow the requested framing exactly: ${preset.framing.toUpperCase()}.\n`;
-  p += `- Follow the requested camera elevation exactly: ${preset.elevation.toUpperCase()}.\n`;
-  p += `- Follow the requested orbit exactly: ${preset.orbit.toUpperCase()}.\n`;
-  p += `- Follow the requested screen placement exactly: ${preset.placement.toUpperCase()}.\n`;
+  if (args.sourceStyleLock) {
+    p += `- render medium continuity\n\n`;
+    p += `### RENDER MEDIUM LOCK\n`;
+    p += `${args.sourceStyleLock}\n`;
+    p += `The final render must preserve the same stylized source medium exactly.\n`;
+    p += `Do not increase realism beyond the source medium.\n\n`;
+  }
 
-  p += `\n### NEGATIVE SHOT RULES\n`;
+  p += `FORBIDDEN\n`;
+  p += `- do not generate a new alternative shot\n`;
+  p += `- do not reinterpret the scene into a different shot\n`;
+  p += `- do not change framing, subject positions, or camera relationship\n`;
+  p += `- do not zoom or crop differently\n`;
+  p += `- do not rearrange subjects\n`;
+  p += `- do not duplicate subjects\n`;
+  p += `- do not add text or watermark\n`;
+  p += `- do not add headwear, crowns, hats, hoods, scarves, veils, wraps, or helmets\n`;
+  p += `- do not add jewelry, belts, sashes, capes, shawls, or extra costume layers\n`;
+  p += `- do not add props or handheld objects not present in the source anchor\n`;
+  p += `- do not invent wardrobe details that are not clearly visible in the source image\n`;
+  p += `- do not transfer props or wardrobe pieces between actors\n`;
   preset.negatives.forEach(neg => {
       p += `- ${neg}\n`;
   });
-  p += `- Do not generate a new alternative shot.\n`;
-  p += `- Do not zoom or crop differently.\n`;
-  p += `- Do not rearrange subjects.\n`;
-  p += `- Do not duplicate subjects.\n`;
-  p += `- Do not add text or watermark.\n`;
 
   const hasFaceAnchors = args.actorIdentitySets?.some(s => !!s.primaryFaceAnchor || s.angleFaceAnchors.length > 0) || false;
   const hasActorReferences = (args.actorIdentitySets?.length || 0) > 0;
@@ -1079,6 +1148,9 @@ export function buildShotFinalRerenderPrompt(args: BuildShotFinalRerenderPromptA
   p += `\n### ENVIRONMENT & LAYOUT GUARDRAILS (REINFORCEMENTS)\n`;
   p += `${buildEnvironmentConsistencyLockBlock({})}\n`;
   p += `${buildSceneLayoutLockBlock({ expectedActorCount: args.sceneTruth.expectedActorCount })}\n`;
+
+  p += `\n### EXACT POSE LOCK\n`;
+  p += `${buildExactPoseLockBlock()}\n`;
 
   p += buildDirectedSlotBlock(args.directedSlot, args.shotsActorOptions, true);
 

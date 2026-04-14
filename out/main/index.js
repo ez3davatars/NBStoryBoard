@@ -856,7 +856,7 @@ function registerDepthIpcHandlers() {
     }
   });
 }
-const { app, shell, BrowserWindow, ipcMain } = electron;
+const { app, shell, BrowserWindow, ipcMain, protocol, net } = electron;
 mainExports.config({ path: path.join(__dirname, "../../.env") });
 let isQuitting = false;
 let appCloseIpcRegistered = false;
@@ -907,8 +907,35 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"));
   }
 }
+protocol.registerSchemesAsPrivileged([
+  { scheme: "app", privileges: { standard: true, secure: true, supportFetchAPI: true, bypassCSP: true, corsEnabled: false } }
+]);
 app.whenReady().then(() => {
   electronApp.setAppUserModelId("com.nanobanana.studio");
+  protocol.handle("app", (request) => {
+    let fileUrl = request.url;
+    console.log("[PROTOCOL] Intercepted protocol request for:", fileUrl);
+    if (fileUrl.startsWith("app://local/")) {
+      fileUrl = fileUrl.replace(/^app:\/\/local\//i, "file:///");
+    } else {
+      fileUrl = fileUrl.replace(/^app:\/\//i, "file:///");
+    }
+    fileUrl = fileUrl.replace(/^file:\/\/\/([a-zA-Z])\//, "file:///$1:/");
+    console.log("[PROTOCOL] Translated to fetch url:", fileUrl);
+    return net.fetch(fileUrl).then((response) => {
+      const newHeaders = new Headers(response.headers);
+      newHeaders.set("Cross-Origin-Resource-Policy", "cross-origin");
+      newHeaders.set("Access-Control-Allow-Origin", "*");
+      return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: newHeaders
+      });
+    }).catch((err) => {
+      console.error("[PROTOCOL] Fetch failed:", err);
+      return new Response("Not Found", { status: 404 });
+    });
+  });
   app.on("browser-window-created", (_, window) => {
     optimizer.watchWindowShortcuts(window);
   });

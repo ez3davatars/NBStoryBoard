@@ -213,7 +213,7 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     id: 'overTheShoulder',
     label: 'Over-the-Shoulder',
     description: 'Looking past a foreground subject to focus on the target.',
-    shotInstruction: 'Recompose as an over-the-shoulder shot, placing one subject in the foreground blurring out slightly, focused on the main target.',
+    shotInstruction: 'Recompose as an over-the-shoulder shot, placing one subject as a soft foreground shoulder/head wedge while keeping the target subject in focus. Preserve the same stylized render medium, same character world, and same non-photoreal visual treatment as the source image.',
     defaultLensNote: 'Cinematic depth of field, natural perspective.',
     targetMode: 'pair',
     framing: 'mediumClose',
@@ -226,7 +226,10 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     negatives: [
       'Do not omit the foreground subject completely',
       'Do not place both subjects in perfect equal focus',
-      'Do not change total actor count'
+      'Do not change total actor count',
+      'Do not convert the image into live-action or photoreal cinema',
+      'Do not make skin, lighting, or materials photographic',
+      'Do not reinterpret the source as a real human film still'
     ]
   },
   twoShot: {
@@ -250,6 +253,21 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     ]
   }
 };
+
+// Dynamically inject exact pose lock negatives into all presets (Requested by Prompt Engineering)
+Object.values(SHOT_PRESETS).forEach(preset => {
+  preset.negatives.push('Do not alter the subject pose from the source anchor');
+  preset.negatives.push('Do not add new clothing, accessories, or props not present in the source anchor');
+  preset.negatives.push('Do not add any headwear if the source subject has no headwear');
+  preset.negatives.push('Do not embellish the costume with extra layers or decorative items');
+  preset.negatives.push('Do not invent jewelry, belts, wraps, shawls, capes, staffs, weapons, or handheld objects');
+
+  if (preset.targetMode === 'pair' || preset.id === 'overTheShoulder') {
+    preset.negatives.push('Do not change gesture timing or limb placement');
+    preset.negatives.push('Do not re-stage the actors');
+    preset.negatives.push('Do not transfer wardrobe pieces or props between actors');
+  }
+});
 
 export function buildShotPresetIdsForPack(packId: ShotPackId, count: 4 | 6 | 9): ShotPresetId[] {
   if (packId === 'cinematic') {
