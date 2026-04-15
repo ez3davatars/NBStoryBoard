@@ -1,10 +1,16 @@
 import { removeBackground } from "@imgly/background-removal";
 import type { Config } from "@imgly/background-removal";
-// Removed missing safeFetchBlob import
 
 export type CutoutResult = {
     cutoutUrl: string;
     alphaMaskUrl: string;
+};
+
+type BorderProfile = {
+    meanR: number;
+    meanG: number;
+    meanB: number;
+    maxStdDev: number;
 };
 
 export class CutoutService {
@@ -121,14 +127,17 @@ export class CutoutService {
      * Processes an image URL to remove its background.
      * Returns a transparent cutout PNG and an alpha mask PNG as Data URLs.
      */
-    static async processImage(imageUrl: string, onProgress?: (msg: string) => void): Promise<CutoutResult> {
+    static async processImage(
+        imageUrl: string,
+        onProgress?: (msg: string) => void,
+        onModelProgress?: (key: string, current: number, total: number) => void
+    ): Promise<CutoutResult> {
         try {
             if (onProgress) onProgress("Fetching image...");
             
             // 1. Fetch image as blob handle both local and remote URLs safely
-            let blob: Blob;
             const res = await fetch(imageUrl);
-            blob = await res.blob();
+            const blob = await res.blob();
             
             // 2. Check if already transparent to prevent artifacts from double-processing
             const isAlreadyTransparent = await this.hasTransparency(blob);
@@ -149,10 +158,11 @@ export class CutoutService {
 
             if (onProgress) onProgress("Running AI isolation...");
 
-            const config = await this.getImglyConfig();
+            const config = await this.getImglyConfig(onModelProgress);
             console.log(`[CutoutService] Booting imgly with resolved publicPath: "${config.publicPath}"`);
             
-            const blobResult = await removeBackground(blob, config);
+            const rawCutoutBlob = await removeBackground(blob, config);
+            const blobResult = await this.refineCutoutForForegroundPreservation(blob, rawCutoutBlob);
 
             // 3. Create Cutout URL
             const cutoutUrl = URL.createObjectURL(blobResult);
@@ -167,9 +177,201 @@ export class CutoutService {
                 alphaMaskUrl
             };
 
-        } catch (error: any) {
+        } catch (error: unknown) {
             console.error("[CutoutService] Failed to isolate subject:", error);
             throw error;
+        }
+    }
+
+    private static async blobToImage(blob: Blob): Promise<HTMLImageElement> {
+        return new Promise((resolve, reject) => {
+            const url = URL.createObjectURL(blob);
+            const img = new Image();
+            img.crossOrigin = "anonymous";
+            img.onload = () => {
+                URL.revokeObjectURL(url);
+                resolve(img);
+            };
+            img.onerror = () => {
+                URL.revokeObjectURL(url);
+                reject(new Error("Failed to decode blob as image"));
+            };
+            img.src = url;
+        });
+    }
+
+    private static computeBorderProfile(data: Uint8ClampedArray, width: number, height: number): BorderProfile {
+        const t = Math.max(2, Math.floor(Math.min(width, height) * 0.015));
+        let count = 0;
+        let sumR = 0, sumG = 0, sumB = 0;
+        let sumSqR = 0, sumSqG = 0, sumSqB = 0;
+
+        const addPixel = (x: number, y: number) => {
+            const i = (y * width + x) * 4;
+            const r = data[i];
+            const g = data[i + 1];
+            const b = data[i + 2];
+            count++;
+            sumR += r; sumG += g; sumB += b;
+            sumSqR += r * r; sumSqG += g * g; sumSqB += b * b;
+        };
+
+        for (let y = 0; y < t; y++) {
+            for (let x = 0; x < width; x++) addPixel(x, y);
+        }
+        for (let y = Math.max(t, height - t); y < height; y++) {
+            for (let x = 0; x < width; x++) addPixel(x, y);
+        }
+        for (let y = t; y < height - t; y++) {
+            for (let x = 0; x < t; x++) addPixel(x, y);
+            for (let x = Math.max(t, width - t); x < width; x++) addPixel(x, y);
+        }
+
+        if (count === 0) {
+            return { meanR: 0, meanG: 0, meanB: 0, maxStdDev: 0 };
+        }
+
+        const meanR = sumR / count;
+        const meanG = sumG / count;
+        const meanB = sumB / count;
+        const stdR = Math.sqrt(Math.max(0, (sumSqR / count) - meanR * meanR));
+        const stdG = Math.sqrt(Math.max(0, (sumSqG / count) - meanG * meanG));
+        const stdB = Math.sqrt(Math.max(0, (sumSqB / count) - meanB * meanB));
+        const maxStdDev = Math.max(stdR, stdG, stdB);
+
+        return { meanR, meanG, meanB, maxStdDev };
+    }
+
+    private static colorDistanceFromBorder(
+        r: number,
+        g: number,
+        b: number,
+        profile: BorderProfile
+    ): number {
+        const dr = r - profile.meanR;
+        const dg = g - profile.meanG;
+        const db = b - profile.meanB;
+        return Math.sqrt(dr * dr + dg * dg + db * db);
+    }
+
+    /**
+     * Conservative matte recovery pass:
+     * - Preserves confident model output.
+     * - Recovers edge pixels near confident foreground to reduce clipping.
+     * - If the background is near-uniform, rescues non-background colors that the model removed too aggressively.
+     */
+    private static async refineCutoutForForegroundPreservation(originalBlob: Blob, cutoutBlob: Blob): Promise<Blob> {
+        try {
+            const [originalImg, cutoutImg] = await Promise.all([
+                this.blobToImage(originalBlob),
+                this.blobToImage(cutoutBlob)
+            ]);
+
+            const width = Math.min(originalImg.width, cutoutImg.width);
+            const height = Math.min(originalImg.height, cutoutImg.height);
+            if (width <= 0 || height <= 0) return cutoutBlob;
+
+            const srcCanvas = document.createElement('canvas');
+            srcCanvas.width = width;
+            srcCanvas.height = height;
+            const srcCtx = srcCanvas.getContext('2d', { willReadFrequently: true });
+
+            const matteCanvas = document.createElement('canvas');
+            matteCanvas.width = width;
+            matteCanvas.height = height;
+            const matteCtx = matteCanvas.getContext('2d', { willReadFrequently: true });
+
+            if (!srcCtx || !matteCtx) return cutoutBlob;
+
+            srcCtx.drawImage(originalImg, 0, 0, width, height);
+            matteCtx.drawImage(cutoutImg, 0, 0, width, height);
+
+            const srcImage = srcCtx.getImageData(0, 0, width, height);
+            const matteImage = matteCtx.getImageData(0, 0, width, height);
+            const src = srcImage.data;
+            const matte = matteImage.data;
+
+            const profile = this.computeBorderProfile(src, width, height);
+            const isUniformBackground = profile.maxStdDev <= 20;
+            const softDistThreshold = Math.max(20, profile.maxStdDev * 2.2 + 16);
+            const hardDistThreshold = softDistThreshold + 18;
+
+            const out = new Uint8ClampedArray(src.length);
+            const maxX = width - 1;
+            const maxY = height - 1;
+
+            for (let y = 0; y < height; y++) {
+                for (let x = 0; x < width; x++) {
+                    const idx = (y * width + x) * 4;
+                    const rawAlpha = matte[idx + 3];
+                    let refinedAlpha = rawAlpha;
+
+                    if (rawAlpha < 220) {
+                        if (rawAlpha > 0 && rawAlpha < 170) {
+                            let maxNeighborAlpha = 0;
+                            const x0 = Math.max(0, x - 1);
+                            const y0 = Math.max(0, y - 1);
+                            const x1 = Math.min(maxX, x + 1);
+                            const y1 = Math.min(maxY, y + 1);
+
+                            for (let ny = y0; ny <= y1; ny++) {
+                                for (let nx = x0; nx <= x1; nx++) {
+                                    if (nx === x && ny === y) continue;
+                                    const nIdx = (ny * width + nx) * 4;
+                                    const nAlpha = matte[nIdx + 3];
+                                    if (nAlpha > maxNeighborAlpha) maxNeighborAlpha = nAlpha;
+                                }
+                            }
+
+                            if (maxNeighborAlpha >= 225) {
+                                refinedAlpha = Math.max(refinedAlpha, 165);
+                            }
+                        }
+
+                        if (isUniformBackground) {
+                            const dist = this.colorDistanceFromBorder(
+                                src[idx],
+                                src[idx + 1],
+                                src[idx + 2],
+                                profile
+                            );
+
+                            if (rawAlpha <= 40 && dist > hardDistThreshold) {
+                                refinedAlpha = Math.max(refinedAlpha, 220);
+                            } else if (rawAlpha <= 120 && dist > softDistThreshold) {
+                                refinedAlpha = Math.max(refinedAlpha, 175);
+                            } else if (rawAlpha <= 180 && dist > softDistThreshold + 8) {
+                                refinedAlpha = Math.max(refinedAlpha, 205);
+                            }
+                        }
+                    }
+
+                    out[idx] = src[idx];
+                    out[idx + 1] = src[idx + 1];
+                    out[idx + 2] = src[idx + 2];
+                    out[idx + 3] = refinedAlpha;
+                }
+            }
+
+            const outCanvas = document.createElement('canvas');
+            outCanvas.width = width;
+            outCanvas.height = height;
+            const outCtx = outCanvas.getContext('2d');
+            if (!outCtx) return cutoutBlob;
+
+            outCtx.putImageData(new ImageData(out, width, height), 0, 0);
+
+            const refinedBlob = await new Promise<Blob>((resolve, reject) => {
+                outCanvas.toBlob((b) => {
+                    if (b) resolve(b);
+                    else reject(new Error("Failed to encode refined cutout blob"));
+                }, "image/png");
+            });
+
+            return refinedBlob;
+        } catch (error) {
+            console.warn("[CutoutService] Conservative foreground recovery failed. Returning raw cutout.", error);
+            return cutoutBlob;
         }
     }
 

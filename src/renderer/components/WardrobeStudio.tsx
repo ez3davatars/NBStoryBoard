@@ -2686,6 +2686,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                                 <Download className="w-4 h-4" /> Save
                                             </button>
                                             <button onClick={() => {
+                                                setSelectedCostume(null);
                                                 updateState({
                                                     fittedImage: null,
                                                     tryOnMask: null,

@@ -11,7 +11,6 @@ import {
   Undo2, Redo2, Zap, Sliders, Clapperboard
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
-import { removeBackground } from "@imgly/background-removal";
 import { CutoutService } from "../services/CutoutService";
 import { GeminiService } from '../services/GeminiService';
 import HelpTooltip from './ui/HelpTooltip';
@@ -27,7 +26,7 @@ import {
   getStudioCoverFilename,
   verifyPermission
 } from '../utils/FileSystemAssets';
-import { isNativeParams, nativeLoadCover, nativeSaveCover, nativeWriteFile, nativeJoinPath, safeFetchBlob } from '../utils/NativeFileAssets';
+import { isNativeParams, nativeLoadCover, nativeSaveCover, nativeWriteFile, nativeJoinPath } from '../utils/NativeFileAssets';
 
 
 import coverRealism from '../assets/cover-realism.png';
@@ -94,6 +93,90 @@ elongated necks, stretched costume,
 floating heads, mannequins, text, watermarks.
 `;
 
+const REFERENCE_SHEET_GLOBAL_HARD_CONSTRAINTS = `
+ANATOMY INTEGRITY (NON-NEGOTIABLE):
+- Each full-body panel must contain exactly ONE complete subject.
+- Exactly ONE head and ONE neck per subject. Never two heads on one body.
+- Never create fused anatomy, conjoined silhouettes, duplicate torsos, ghost overlays, or extra limbs.
+- If uncertain, simplify to one clean subject and preserve identity rather than inventing parts.
+
+PANEL COMPLETENESS:
+- Fill every required slot exactly once.
+- Do not leave blank slots.
+- Do not overlap two camera views in one slot.
+`;
+
+const REFERENCE_SHEET_SPLIT_HARD_CONSTRAINTS = `
+SPLIT LAYOUT SLOT MAP (STRICT):
+- LEFT COLUMN (top to bottom, exactly 3 slots):
+  L1 = full body FRONT view
+  L2 = full body LEFT PROFILE view (single head, single neck)
+  L3 = full body BACK/REAR view
+
+- RIGHT GRID (2x2, exactly 4 slots):
+  R1 = headshot FRONT
+  R2 = headshot LEFT 3/4 or LEFT PROFILE
+  R3 = headshot RIGHT 3/4 or RIGHT PROFILE
+  R4 = headshot LOOKING UP (still same identity)
+
+HARD FAILURE CONDITIONS (MUST NOT OCCUR):
+- Two heads in one body slot
+- Mirrored twin-head body
+- Partial second body in any slot
+- Empty slot in the 7-slot sheet
+`;
+
+const REFERENCE_SHEET_FORM_HARD_CONSTRAINTS = `
+FORM LAYOUT SLOT MAP (STRICT):
+- TOP ROW (exactly 3 full-body slots):
+  T1 = FRONT
+  T2 = LEFT PROFILE
+  T3 = BACK/REAR
+
+- BOTTOM GRID (exactly 4 headshot slots):
+  B1 = FRONT
+  B2 = EXTREME LEFT PROFILE
+  B3 = EXTREME RIGHT PROFILE
+  B4 = LOOKING UP
+`;
+
+const REFERENCE_SHEET_FACE_HARD_CONSTRAINTS = `
+FACE LAYOUT SLOT MAP (STRICT):
+- TOP ROW (exactly 4 headshot slots):
+  T1 = FRONT
+  T2 = EXTREME LEFT PROFILE
+  T3 = EXTREME RIGHT PROFILE
+  T4 = LOOKING UP
+
+- BOTTOM ROW (exactly 3 full-body slots):
+  B1 = FRONT
+  B2 = LEFT PROFILE
+  B3 = BACK/REAR
+`;
+
+const REFERENCE_SHEET_UNIQUENESS_AUDIT = `
+ANGLE UNIQUENESS AUDIT (MANDATORY BEFORE FINAL OUTPUT):
+- Every full-body slot must belong to a different yaw bucket.
+- Do not repeat FRONT, BACK, LEFT PROFILE, or RIGHT PROFILE buckets.
+- FRONT signature: both eyes and chest are centered and symmetric.
+- LEFT PROFILE signature: one eye visible, muzzle points to viewer-right.
+- RIGHT PROFILE signature: one eye visible, muzzle points to viewer-left.
+- BACK signature: no muzzle visible, back-of-head and spine dominate.
+- If any slot duplicates another slot's yaw bucket, regenerate internally before returning.
+`;
+
+const REFERENCE_SHEET_DUPLICATE_SIMILARITY_THRESHOLD = 0.94;
+
+type RefSheetLayoutMode = 'form_focus' | 'face_focus' | 'split_focus';
+
+type SlotRect = {
+  label: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+};
+
 const STUDIO_FOLDERS = [
   { id: 'realism', label: 'Realism', description: "Photorealistic Portraiture & Raw Detail", image: libRealism, styles: ['exact_studio', 'photorealism', 'dslr_capture'] },
   { id: 'anim', label: 'Stylized Cartoon', description: "Modern 3D Animation & Soft Lighting", image: libAnim, styles: ['family_3d', 'pixar', 'claymation'] },
@@ -135,6 +218,133 @@ const resolveImageBlob = async (src: string): Promise<Blob> => {
   }
 
   throw new Error('Unsupported image source format: ' + src);
+};
+
+const loadImageElement = (src: string): Promise<HTMLImageElement> =>
+  new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Failed to load image for validation'));
+    img.src = src;
+  });
+
+const getFullBodySlotRects = (layout: RefSheetLayoutMode): SlotRect[] => {
+  if (layout === 'form_focus') {
+    const y = 0;
+    const h = 0.65;
+    return [
+      { label: 'T1_FRONT', x: 0, y, w: 1 / 3, h },
+      { label: 'T2_LEFT_PROFILE', x: 1 / 3, y, w: 1 / 3, h },
+      { label: 'T3_BACK_REAR', x: 2 / 3, y, w: 1 / 3, h }
+    ];
+  }
+
+  if (layout === 'face_focus') {
+    const y = 0.55;
+    const h = 0.45;
+    return [
+      { label: 'B1_FRONT', x: 0, y, w: 1 / 3, h },
+      { label: 'B2_LEFT_PROFILE', x: 1 / 3, y, w: 1 / 3, h },
+      { label: 'B3_BACK_REAR', x: 2 / 3, y, w: 1 / 3, h }
+    ];
+  }
+
+  const x = 0;
+  const w = 0.45;
+  return [
+    { label: 'L1_FRONT', x, y: 0, w, h: 1 / 3 },
+    { label: 'L2_LEFT_PROFILE', x, y: 1 / 3, w, h: 1 / 3 },
+    { label: 'L3_BACK_REAR', x, y: 2 / 3, w, h: 1 / 3 }
+  ];
+};
+
+const computeSlotSimilarity = (
+  sourceCanvas: HTMLCanvasElement,
+  a: SlotRect,
+  b: SlotRect
+): number => {
+  const SIZE = 64;
+  const width = sourceCanvas.width;
+  const height = sourceCanvas.height;
+
+  const toPixels = (r: SlotRect) => {
+    const sx = Math.max(0, Math.floor(r.x * width));
+    const sy = Math.max(0, Math.floor(r.y * height));
+    const sw = Math.max(1, Math.floor(r.w * width));
+    const sh = Math.max(1, Math.floor(r.h * height));
+    return { sx, sy, sw, sh };
+  };
+
+  const ca = document.createElement('canvas');
+  const cb = document.createElement('canvas');
+  ca.width = SIZE; ca.height = SIZE;
+  cb.width = SIZE; cb.height = SIZE;
+  const ctxA = ca.getContext('2d');
+  const ctxB = cb.getContext('2d');
+  if (!ctxA || !ctxB) return 0;
+
+  const pa = toPixels(a);
+  const pb = toPixels(b);
+  ctxA.drawImage(sourceCanvas, pa.sx, pa.sy, pa.sw, pa.sh, 0, 0, SIZE, SIZE);
+  ctxB.drawImage(sourceCanvas, pb.sx, pb.sy, pb.sw, pb.sh, 0, 0, SIZE, SIZE);
+
+  const dataA = ctxA.getImageData(0, 0, SIZE, SIZE).data;
+  const dataB = ctxB.getImageData(0, 0, SIZE, SIZE).data;
+
+  let sumSqrDiff = 0;
+  for (let i = 0; i < dataA.length; i += 4) {
+    const dR = dataA[i] - dataB[i];
+    const dG = dataA[i + 1] - dataB[i + 1];
+    const dB = dataA[i + 2] - dataB[i + 2];
+    sumSqrDiff += dR * dR + dG * dG + dB * dB;
+  }
+
+  const maxDiff = (255 * 255 * 3) * (SIZE * SIZE);
+  return 1 - (sumSqrDiff / maxDiff);
+};
+
+const detectDuplicateFullBodyAngles = async (
+  sheetUrl: string,
+  layout: RefSheetLayoutMode
+): Promise<{ hasDuplicate: boolean; maxSimilarity: number; pair: string | null }> => {
+  const sourceBlob = await resolveImageBlob(sheetUrl);
+  const tempUrl = URL.createObjectURL(sourceBlob);
+
+  try {
+    const img = await loadImageElement(tempUrl);
+    const sourceCanvas = document.createElement('canvas');
+    sourceCanvas.width = img.width;
+    sourceCanvas.height = img.height;
+    const ctx = sourceCanvas.getContext('2d');
+    if (!ctx) {
+      return { hasDuplicate: false, maxSimilarity: 0, pair: null };
+    }
+
+    ctx.drawImage(img, 0, 0);
+    const slots = getFullBodySlotRects(layout);
+
+    let maxSimilarity = 0;
+    let maxPair: string | null = null;
+
+    for (let i = 0; i < slots.length; i++) {
+      for (let j = i + 1; j < slots.length; j++) {
+        const similarity = computeSlotSimilarity(sourceCanvas, slots[i], slots[j]);
+        if (similarity > maxSimilarity) {
+          maxSimilarity = similarity;
+          maxPair = `${slots[i].label} vs ${slots[j].label}`;
+        }
+      }
+    }
+
+    return {
+      hasDuplicate: maxSimilarity >= REFERENCE_SHEET_DUPLICATE_SIMILARITY_THRESHOLD,
+      maxSimilarity,
+      pair: maxPair
+    };
+  } finally {
+    URL.revokeObjectURL(tempUrl);
+  }
 };
 
 async function materializeDisplayUrl(url: string | null | undefined): Promise<string> {
@@ -247,7 +457,7 @@ const CastingForge = () => {
 
   const [showRefSheet, setShowRefSheet] = useState(false);
   const [showSaveModal, setShowSaveModal] = useState(false);
-  const [refLayout, setRefLayout] = useState<'form_focus' | 'face_focus' | 'split_focus'>('form_focus');
+  const [refLayout, setRefLayout] = useState<RefSheetLayoutMode>('form_focus');
   const [fringeSize, setFringeSize] = useState(0); // 0-10 pixels
   const [isIsolating, setIsIsolating] = useState(false);
   const [isolationProgress, setIsolationProgress] = useState(0);
@@ -700,15 +910,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
 
         dispatch({ type: 'ADD_LOG', payload: { message: "Running local AI isolation...", type: 'info' } });
 
-        // Fetch the generated image as a blob (safeFetchBlob supports local paths)
-        const blob = await safeFetchBlob(safeResolvedUrl);
-
-        // Run @imgly/background-removal
-        // Note: The first run will download model assets (approx 40MB)
-        const config = await CutoutService.getImglyConfig();
-        const blobResult = await removeBackground(blob, config);
-
-        const cutoutUrl = URL.createObjectURL(blobResult);
+        const { cutoutUrl } = await CutoutService.processImage(safeResolvedUrl);
 
         if (generationIdRef.current === currentGenId) {
           dispatch({ type: 'SET_LAST_CASTED_MASK', payload: cutoutUrl });
@@ -1522,13 +1724,10 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
 
           try {
             dispatch({ type: 'ADD_LOG', payload: { message: "Isolating character silhouette locally...", type: 'info' } });
-            const blob = await safeFetchBlob(standardizedUrl);
-            const config = await CutoutService.getImglyConfig();
-            const maskResBlob = await removeBackground(blob, config);
-            const maskResDataUrl = URL.createObjectURL(maskResBlob);
+            const { cutoutUrl } = await CutoutService.processImage(standardizedUrl);
 
             if (generationIdRef.current === currentGenId) {
-              dispatch({ type: 'SET_LAST_CASTED_MASK', payload: maskResDataUrl });
+              dispatch({ type: 'SET_LAST_CASTED_MASK', payload: cutoutUrl });
               dispatch({ type: 'ADD_LOG', payload: { message: "Character silhouette isolated successfully", type: 'success' } });
             }
           } catch (err: any) {
@@ -1584,15 +1783,22 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
 
       if (refLayout === 'form_focus') {
         finalPrompt += " [LAYOUT A - CLASSIC]: Split canvas horizontally. Top 65% height: ROW OF EXACTLY 3 Full Body views with DISTINCT ANGLES (1. Front, 2. Side Profile, 3. Back). Bottom 35% height: Grid of EXACTLY 4 Headshots with VARIED ANGLES (Front, EXTREME LEFT PROFILE, EXTREME RIGHT PROFILE, Looking Up). Ensure headshots are MACRO-DETAILED and hyper-sharp.";
+        finalPrompt += REFERENCE_SHEET_FORM_HARD_CONSTRAINTS;
       } else if (refLayout === 'face_focus') {
         finalPrompt += " [LAYOUT B - FACE FIRST]: Split canvas horizontally. Top 55% height: Row of EXACTLY 4 Large Headshots showing VARIED ANGLES (Front, EXTREME LEFT PROFILE, EXTREME RIGHT PROFILE, Looking Up). Bottom 45% height: Row of EXACTLY 3 Full Body views with DISTINCT ANGLES (1. Front, 2. Side Profile, 3. Back). Headshots must maintain perfect identity.";
+        finalPrompt += REFERENCE_SHEET_FACE_HARD_CONSTRAINTS;
       } else if (refLayout === 'split_focus') {
         finalPrompt += " [LAYOUT C - STUDIO]: Split canvas vertically. Left 45% width: Vertical stack of EXACTLY 3 Full Body views with DISTINCT ANGLES (1. Front, 2. Side Profile, 3. Back). DO NOT ADD A FOURTH VIEW. Right 55% width: 2x2 Grid of Large Headshots with VARIED ANGLES (Front, EXTREME LEFT PROFILE, EXTREME RIGHT PROFILE, Looking Up). Highest possible facial resolution.";
+        finalPrompt += REFERENCE_SHEET_SPLIT_HARD_CONSTRAINTS;
       }
 
+      finalPrompt += REFERENCE_SHEET_GLOBAL_HARD_CONSTRAINTS;
+      finalPrompt += REFERENCE_SHEET_UNIQUENESS_AUDIT;
       finalPrompt += " EXCLUSION RULE: NEVER put two identical profile views next to each other. The Left Profile and Right Profile MUST face opposite directions.\n";
 
       finalPrompt += "\n\nCRITICAL ROTATION OVERRIDE: While the identity and costume must match the reference, YOU MUST NOT COPY THE CAMERA ANGLE OF THE REFERENCE IMAGE across all panels. You MUST dynamically rotate the character's head and body in 3D space to precisely match the requested viewpoints (Profile, 3/4, Back, etc) for each individual panel.\n\n";
+
+      finalPrompt += "\nSTRICT NEGATIVE ADDENDUM: double-head, two heads on one body, conjoined anatomy, fused torso, ghost body, mirrored twin body, duplicate neck, duplicate torso, extra body in slot, empty panel slot, panel overlap artifacts.\n";
 
       // BRANDING INJECTION
       const inputImages = [{ url: state.lastCastedImage, label: 'Character Reference' }];
@@ -1609,22 +1815,79 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
  - HEADSHOT EXCLUSION (CRITICAL): Do NOT spawn the logo floating in the background, on the neck, or on the face. If a panel is an extreme close-up or headshot where the ${logoPosition || "Chest/Torso"} is NOT naturally visible, OMIT THE LOGO ENTIRELY from that specific panel.`;
       }
 
-      const res = await GeminiService.generateImage(
-        finalPrompt,
-        state.apiKey,
-        state.model, // Use the user's selected model (consistent with main generator)
-        inputImages,
-        { aspectRatio: refLayout === 'split_focus' ? '16:9' : '1:1', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements }
-      );
+      // Split layout needs extra vertical room for 3 full-body slots to avoid panel collisions and fused anatomy artifacts.
+      const referenceSheetAspectRatio = refLayout === 'split_focus' ? '4:3' : '1:1';
 
-      let safeRefSheetUrl = res as string;
-      if (typeof safeRefSheetUrl === 'string' && safeRefSheetUrl.startsWith('http')) {
-        try {
-          const blob = await resolveImageBlob(safeRefSheetUrl);
-          safeRefSheetUrl = URL.createObjectURL(blob);
-        } catch (fetchErr) {
-          console.warn("Failed to materialize remote ref sheet:", fetchErr);
+      const generateRefSheetAttempt = async (promptText: string): Promise<string> => {
+        const res = await GeminiService.generateImage(
+          promptText,
+          state.apiKey,
+          state.model,
+          inputImages,
+          {
+            aspectRatio: referenceSheetAspectRatio,
+            imageSize: state.imageResolution,
+            thinkingLevel: state.enableImageThinking,
+            googleGrounding: false,
+            strictMode: true,
+            billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
+            entitlements: state.billingEntitlements
+          }
+        );
+
+        let safeRefUrl = res as string;
+        if (typeof safeRefUrl === 'string' && safeRefUrl.startsWith('http')) {
+          try {
+            const blob = await resolveImageBlob(safeRefUrl);
+            safeRefUrl = URL.createObjectURL(blob);
+          } catch (fetchErr) {
+            console.warn("Failed to materialize remote ref sheet:", fetchErr);
+          }
         }
+        return safeRefUrl;
+      };
+
+      let safeRefSheetUrl = await generateRefSheetAttempt(finalPrompt);
+
+      try {
+        const validation = await detectDuplicateFullBodyAngles(safeRefSheetUrl, refLayout);
+        if (validation.hasDuplicate) {
+          dispatch({
+            type: 'ADD_LOG',
+            payload: {
+              message: `Reference sheet duplicate angle detected (${validation.pair || 'unknown pair'}, ${(validation.maxSimilarity * 100).toFixed(1)}%). Running auto-correction pass...`,
+              type: 'info'
+            }
+          });
+
+          const retryPrompt = `${finalPrompt}
+
+DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
+- Previous output repeated one or more full-body angles.
+- Re-render now and force unique yaw buckets for all full-body slots.
+- Specifically ensure FRONT, LEFT PROFILE, and BACK/REAR are all different and visually non-overlapping in silhouette.
+- If one slot risks duplicating another, regenerate that slot internally before returning final image.`;
+
+          safeRefSheetUrl = await generateRefSheetAttempt(retryPrompt);
+
+          const secondValidation = await detectDuplicateFullBodyAngles(safeRefSheetUrl, refLayout);
+          if (secondValidation.hasDuplicate) {
+            dispatch({
+              type: 'ADD_LOG',
+              payload: {
+                message: `Reference sheet still shows possible duplicate full-body angles (${(secondValidation.maxSimilarity * 100).toFixed(1)}%).`,
+                type: 'error'
+              }
+            });
+          } else {
+            dispatch({
+              type: 'ADD_LOG',
+              payload: { message: "Auto-correction pass resolved duplicate angles.", type: 'success' }
+            });
+          }
+        }
+      } catch (validationErr) {
+        console.warn("Reference sheet uniqueness validation failed:", validationErr);
       }
 
       setRefSheetUrl(safeRefSheetUrl);
@@ -2740,15 +3003,14 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
                                   dispatch({ type: 'ADD_LOG', payload: { message: "Starting isolation...", type: 'info' } });
                                   setIsIsolating(true);
                                   setIsolationProgress(5);
-                                  const blob = await safeFetchBlob(state.lastCastedImage);
-                                  const config = await CutoutService.getImglyConfig(
+                                  const { cutoutUrl } = await CutoutService.processImage(
+                                    state.lastCastedImage,
+                                    undefined,
                                     (_key: string, current: number, total: number) => {
                                       if (total) setIsolationProgress(Math.round((current / total) * 100));
                                     }
                                   );
-                                  const res = await removeBackground(blob, config);
-                                  const url = URL.createObjectURL(res);
-                                  dispatch({ type: 'SET_LAST_CASTED_MASK', payload: url });
+                                  dispatch({ type: 'SET_LAST_CASTED_MASK', payload: cutoutUrl });
                                   dispatch({ type: 'ADD_LOG', payload: { message: "Isolation Complete", type: 'success' } });
                                   setRemoveBg(true);
                                 } catch (e: any) {
