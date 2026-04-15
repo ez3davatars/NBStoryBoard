@@ -1914,7 +1914,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                     <div className="flex gap-1.5">
                         <button onClick={() => document.getElementById('wardrobe-upload-input')?.click()} className="p-1.5 hover:bg-gray-700 rounded transition-colors text-gray-400" title="Upload Costume">
                             <Upload className="w-3.5 h-3.5" />
-                            <input id="wardrobe-upload-input" type="file" className="hidden" accept="image/*" onChange={handleUploadCostume} />
+                            <input id="wardrobe-upload-input" type="file" className="hidden" accept="image/*" onClick={(e) => { (e.target as HTMLInputElement).value = ''; }} onChange={handleUploadCostume} />
                         </button>
                         <button onClick={() => withLibraryTransition(scanWardrobe)} className="p-1.5 hover:bg-gray-700 rounded transition-colors text-gray-400" title="Scan Folder">
                             <RefreshCcw className="w-3.5 h-3.5" />
@@ -2077,6 +2077,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                                         type="file"
                                                         className="hidden"
                                                         accept="image/*"
+                                                        onClick={(e) => { (e.target as HTMLInputElement).value = ''; }}
                                                         onChange={handleUploadDesignerReference}
                                                     />
                                                 </label>
@@ -2150,6 +2151,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                                         type="file"
                                                         className="hidden"
                                                         accept="image/*"
+                                                        onClick={(e) => { (e.target as HTMLInputElement).value = ''; }}
                                                         onChange={(e) => {
                                                             const file = e.target.files?.[0];
                                                             if (file) {
@@ -2593,7 +2595,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
                                                         <label className="shrink-0 text-[9px] font-bold text-gray-200 hover:text-white cursor-pointer bg-white/5 hover:bg-white/10 px-2.5 py-1 rounded-lg border border-white/10 transition-colors flex items-center gap-1.5">
                                                             <Upload className="w-3.5 h-3.5" /> Upload
-                                                            <input type="file" className="hidden" accept="image/*" onChange={handleUploadTryOnCharacterSheet} />
+                                                            <input type="file" className="hidden" accept="image/*" onClick={(e) => { (e.target as HTMLInputElement).value = ''; }} onChange={handleUploadTryOnCharacterSheet} />
                                                         </label>
                                                     </div>
 

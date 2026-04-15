@@ -192,7 +192,7 @@ export default function VeoMonitorPanel() {
  </button>
  ) : (
  <label className="relative h-16 w-28 rounded-md border-2 border-dashed border-white/20 flex flex-col items-center justify-center cursor-pointer hover:border-blue-500/50 hover:bg-blue-500/10 transition-all group flex-shrink-0">
- <input type="file" className="hidden" accept="image/*" onChange={handleAddEndPlate} />
+ <input type="file" className="hidden" accept="image/*" onClick={(e) => { (e.target as HTMLInputElement).value = ''; }} onChange={handleAddEndPlate} />
  <Plus className="w-5 h-5 text-gray-400 group-hover:text-blue-400 mb-1" />
  <span className="text-[8px] font-black text-gray-500 group-hover:text-blue-400 uppercase tracking-widest text-center leading-[1.1]">
  Add End Plate<br />(Optional)

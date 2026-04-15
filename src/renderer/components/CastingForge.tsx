@@ -1495,32 +1495,21 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
         const rawDataUrl = ev.target?.result as string;
         const img = new Image();
         img.onload = async () => {
-          const w = img.width;
-          const h = img.height;
-          let targetRatio = 1;
-          const ratio = w / h;
-
-          if (Math.abs(ratio - 16 / 9) < 0.2) { targetRatio = 16 / 9; }
-          else if (Math.abs(ratio - 9 / 16) < 0.2) { targetRatio = 9 / 16; } // approximate portrait
-          else if (ratio > 1.2) { targetRatio = 16 / 9; }
-          else if (ratio < 0.8) { targetRatio = 9 / 16; }
-
-          let cropW = w;
-          let cropH = h;
-          if (ratio > targetRatio) {
-            cropW = h * targetRatio;
-          } else {
-            cropH = w / targetRatio;
+          // Preserve the full image – no forced aspect-ratio crop.
+          // Only downscale if either dimension exceeds 2048px for performance.
+          const MAX = 2048;
+          let w = img.width;
+          let h = img.height;
+          if (w > MAX || h > MAX) {
+            if (w >= h) { h = Math.round(h * MAX / w); w = MAX; }
+            else        { w = Math.round(w * MAX / h); h = MAX; }
           }
 
-          const cropX = (w - cropW) / 2;
-          const cropY = (h - cropH) / 2;
-
           const canvas = document.createElement('canvas');
-          canvas.width = cropW;
-          canvas.height = cropH;
+          canvas.width = w;
+          canvas.height = h;
           const ctx = canvas.getContext('2d');
-          ctx?.drawImage(img, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+          ctx?.drawImage(img, 0, 0, w, h);
           const standardizedUrl = canvas.toDataURL('image/png');
 
           dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: standardizedUrl });
@@ -2007,26 +1996,49 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
   const finalizeCrop = () => {
     if (!cropRect || !containerRef.current || cropRect.w < 10) return;
     const isUsingProcessedPreview = !!(processedPreviewUrl && previewImgRef.current);
-    const visualElement = isUsingProcessedPreview ? previewImgRef.current : imgRef.current;
-    if (!visualElement || !imgRef.current) return;
-
-    const visualRect = visualElement.getBoundingClientRect();
-    const containerRect = containerRef.current.getBoundingClientRect();
-    const offsetLeft = visualRect.left - containerRect.left;
-    const offsetTop = visualRect.y - containerRect.y;
-    const cropX_onVisual = cropRect.x - offsetLeft;
-    const cropY_onVisual = cropRect.y - offsetTop;
-
     const sourceElement = isUsingProcessedPreview ? previewImgRef.current : imgRef.current;
     if (!sourceElement) return;
 
-    const sourceFullWidth = sourceElement.naturalWidth;
-    const sourceFullHeight = sourceElement.naturalHeight;
+    const containerRect = containerRef.current.getBoundingClientRect();
+    const containerW = containerRect.width;
+    const containerH = containerRect.height;
 
-    const scaleX = sourceFullWidth / visualRect.width;
-    const scaleY = sourceFullHeight / visualRect.height;
-    const sourceX = Math.floor(cropX_onVisual * scaleX);
-    const sourceY = Math.floor(cropY_onVisual * scaleY);
+    const naturalW = sourceElement.naturalWidth;
+    const naturalH = sourceElement.naturalHeight;
+
+    // The <img> element fills the container (absolute inset-0 w-full h-full) but
+    // object-contain renders the image in a smaller letterboxed area within it.
+    // We must compute exactly where those pixels land, accounting for CSS padding.
+    const style = window.getComputedStyle(sourceElement);
+    const padLeft   = parseFloat(style.paddingLeft)   || 0;
+    const padTop    = parseFloat(style.paddingTop)    || 0;
+    const padRight  = parseFloat(style.paddingRight)  || 0;
+    const padBottom = parseFloat(style.paddingBottom) || 0;
+
+    const contentW = containerW - padLeft - padRight;
+    const contentH = containerH - padTop  - padBottom;
+
+    const imageAspect   = naturalW / naturalH;
+    const contentAspect = contentW / contentH;
+
+    let renderedW: number, renderedH: number;
+    if (imageAspect >= contentAspect) {
+      renderedW = contentW;
+      renderedH = contentW / imageAspect;
+    } else {
+      renderedH = contentH;
+      renderedW = contentH * imageAspect;
+    }
+
+    // Letterbox offsets: image is centered within the content area
+    const imgLeft = padLeft + (contentW - renderedW) / 2;
+    const imgTop  = padTop  + (contentH - renderedH) / 2;
+
+    // Map crop rect (container-relative coords) → image pixel coords
+    const scaleX = naturalW / renderedW;
+    const scaleY = naturalH / renderedH;
+    const sourceX = Math.floor((cropRect.x - imgLeft) * scaleX);
+    const sourceY = Math.floor((cropRect.y - imgTop)  * scaleY);
     const sourceW = Math.max(1, Math.floor(cropRect.w * scaleX));
     const sourceH = Math.max(1, Math.floor(cropRect.h * scaleY));
 
@@ -2034,8 +2046,8 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
     const safeSy = Math.max(0, sourceY);
     const safeDx = Math.max(0, -sourceX);
     const safeDy = Math.max(0, -sourceY);
-    const safeW = Math.max(0, Math.min(sourceFullWidth - safeSx, sourceW - safeDx));
-    const safeH = Math.max(0, Math.min(sourceFullHeight - safeSy, sourceH - safeDy));
+    const safeW = Math.max(0, Math.min(naturalW - safeSx, sourceW - safeDx));
+    const safeH = Math.max(0, Math.min(naturalH - safeSy, sourceH - safeDy));
 
     const canvas = document.createElement('canvas');
     canvas.width = sourceW;
@@ -2153,7 +2165,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
             <label className="flex items-center justify-center gap-2 bg-[#18181b] hover:bg-[#27272a] text-white py-3 rounded-xl text-[10px] font-black transition-all border border-white/10 hover:border-white/20 cursor-pointer uppercase tracking-[0.08em]">
               <Upload className="w-4 h-4 opacity-70" />
               Upload
-              <input ref={mainUploadRef} type="file" className="hidden" accept="image/*" onChange={handleUpload} />
+              <input ref={mainUploadRef} type="file" className="hidden" accept="image/*" onClick={(e) => { (e.target as HTMLInputElement).value = ''; }} onChange={handleUpload} />
             </label>
           </div>
         </div>
@@ -2215,6 +2227,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
                   type="file"
                   className="hidden"
                   accept="image/*"
+                  onClick={(e) => { (e.target as HTMLInputElement).value = ''; }}
                   onChange={(e) => {
                     const file = e.target.files?.[0];
                     if (file) {
@@ -3003,7 +3016,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
               ) : (
               // ROOT VIEW: HERO STUDIO CARDS
               <div className="flex flex-col gap-4 pb-20">
-                <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleCoverUpload} />
+                <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onClick={(e) => { (e.target as HTMLInputElement).value = ''; }} onChange={handleCoverUpload} />
 
                 {STUDIO_FOLDERS.map(folder => {
                   const count = state.actorLibrary.filter(a => {

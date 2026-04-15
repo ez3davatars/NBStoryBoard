@@ -156,7 +156,7 @@ const VeoGenerator = ({ smartAnalyze }: { smartAnalyze: any }) => {
  <span className="text-[8px] font-black uppercase tracking-widest text-center">Drop<br />Start</span>
  </div>
  )}
- <input type="file" onChange={(e) => handleUpload(e, 1)} className="absolute inset-0 opacity-0 cursor-pointer" accept="image/*" />
+ <input type="file" onClick={(e) => { (e.target as HTMLInputElement).value = ''; }} onChange={(e) => handleUpload(e, 1)} className="absolute inset-0 opacity-0 cursor-pointer" accept="image/*" />
  {state.storyboardSource && (
  <button
  onClick={(e) => { e.stopPropagation(); dispatch({ type: 'SET_STORYBOARD_SOURCE', payload: null }); }}
@@ -175,7 +175,7 @@ const VeoGenerator = ({ smartAnalyze }: { smartAnalyze: any }) => {
  <span className="text-[8px] font-black uppercase tracking-widest text-center">Drop<br />End</span>
  </div>
  )}
- <input type="file" onChange={(e) => handleUpload(e, 2)} className="absolute inset-0 opacity-0 cursor-pointer" accept="image/*" />
+ <input type="file" onClick={(e) => { (e.target as HTMLInputElement).value = ''; }} onChange={(e) => handleUpload(e, 2)} className="absolute inset-0 opacity-0 cursor-pointer" accept="image/*" />
  {state.storyboardEndSource && (
  <button
  onClick={(e) => { e.stopPropagation(); dispatch({ type: 'SET_STORYBOARD_END_SOURCE', payload: null }); }}

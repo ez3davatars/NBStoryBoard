@@ -899,6 +899,7 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                             ref={fileInputRef}
                             className="hidden"
                             accept="image/png,image/jpeg,image/webp"
+                            onClick={(e) => { (e.target as HTMLInputElement).value = ''; }}
                             onChange={handleUploadProp}
                         />
                         <button onClick={() => fileInputRef.current?.click()} className="p-1.5 hover:bg-gray-700 rounded transition-colors text-gray-400" title="Upload Prop">

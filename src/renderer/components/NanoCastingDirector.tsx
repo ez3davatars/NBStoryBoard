@@ -2725,6 +2725,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                                                 type="file"
                                                                 accept="image/*"
                                                                 className="absolute inset-0 opacity-0 cursor-pointer z-10"
+                                                                onClick={(e) => { (e.target as HTMLInputElement).value = ''; }}
                                                                 onChange={(e) => {
                                                                     const file = e.target.files?.[0];
                                                                     if (file) {
@@ -2812,7 +2813,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                                     <div className="flex gap-1.5">
                                                         <label className="p-1.5 hover:bg-surface-3 rounded transition-colors text-muted hover:text-white cursor-pointer" title="Upload Costume">
                                                             <Upload className="w-3.5 h-3.5" />
-                                                            <input type="file" className="hidden" accept="image/*" onChange={handleUploadCostume} />
+                                                            <input type="file" className="hidden" accept="image/*" onClick={(e) => { (e.target as HTMLInputElement).value = ''; }} onChange={handleUploadCostume} />
                                                         </label>
                                                         <button onClick={scanWardrobe} className="p-1.5 hover:bg-surface-3 rounded transition-colors text-muted hover:text-white" title="Scan Folder">
                                                             <RefreshCcw className="w-3.5 h-3.5" />
@@ -3083,6 +3084,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                                                 type="file"
                                                                 accept="image/*"
                                                                 className="hidden"
+                                                                onClick={(e) => { (e.target as HTMLInputElement).value = ''; }}
                                                                 onChange={(e) => {
                                                                     if (e.target.files?.[0]) handleFileUpload(angle, e.target.files[0]);
                                                                 }}
@@ -3222,11 +3224,11 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                                     id={`upload-${type.id}`}
                                                     className="hidden"
                                                     accept="image/*"
+                                                    onClick={(e) => { (e.target as HTMLInputElement).value = ''; e.stopPropagation(); }} // Reset value for re-upload + prevent card selection
                                                     onChange={(e) => {
                                                         const file = e.target.files?.[0];
                                                         if (file) handleArchetypeCoverUpload(storageKey, file);
                                                     }}
-                                                    onClick={(e) => e.stopPropagation()} // Prevent card selection
                                                 />
 
                                                 {/* Edit Button (Top Right) */}

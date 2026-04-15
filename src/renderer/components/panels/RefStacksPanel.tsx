@@ -95,6 +95,7 @@ export const RefStacksPanel = ({
  type="file"
  ref={el => { if (refFileInputs.current) refFileInputs.current[slot.index] = el; }}
  className="hidden"
+ onClick={(e) => { (e.target as HTMLInputElement).value = ''; }}
  onChange={(e) => e.target.files?.[0] && handleRefSlotFile(slot.index, e.target.files[0])}
  />
  </div>

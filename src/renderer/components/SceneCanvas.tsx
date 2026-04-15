@@ -4357,7 +4357,7 @@ ${loosePromptBase}`;
                                 <img
                                     src={state.backgroundUrl}
                                     alt="Stage Background"
-                                    className="absolute inset-0 w-full h-full object-cover pointer-events-none"
+                                    className="absolute inset-0 w-full h-full object-contain pointer-events-none"
                                 />
                             ) : (
                                 <div className="absolute inset-0 text-gray-800 flex flex-col items-center justify-center gap-4 opacity-20 bg-black/50">
