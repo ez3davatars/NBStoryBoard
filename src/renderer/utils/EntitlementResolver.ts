@@ -4,12 +4,26 @@ export interface Entitlements {
   effectiveBillingMode: 'hosted' | 'byok' | 'none';
 }
 
+type SessionLike = {
+  user?: {
+    app_metadata?: unknown;
+    user_metadata?: unknown;
+  } | null;
+};
+
+const readEntitlements = (metadata: unknown): string[] | null => {
+  if (!metadata || typeof metadata !== 'object') return null;
+  const record = metadata as Record<string, unknown>;
+  if (!Array.isArray(record.entitlements)) return null;
+  return record.entitlements.filter((value): value is string => typeof value === 'string');
+};
+
 export class EntitlementResolver {
   /**
    * Resolves entitlements from the authenticated session and local state.
    */
   static resolveEntitlements(
-    session: any | null,
+    session: SessionLike | null,
     localApiKey: string | null,
     isDev: boolean = false,
     devOverrideMode: 'hosted' | 'byok' | null = null
@@ -18,12 +32,11 @@ export class EntitlementResolver {
     let hasByokAccess = false;
 
     if (session && session.user) {
-      const appMetadata = session.user.app_metadata || {};
-      const userMetadata = session.user.user_metadata || {};
-      
-      const rawEntitlements = appMetadata.entitlements || userMetadata.entitlements;
-      
-      if (Array.isArray(rawEntitlements)) {
+      const rawEntitlements =
+        readEntitlements(session.user.app_metadata) ??
+        readEntitlements(session.user.user_metadata);
+
+      if (rawEntitlements) {
         hasHostedAccess = rawEntitlements.includes('hosted');
         hasByokAccess = rawEntitlements.includes('byok');
       }

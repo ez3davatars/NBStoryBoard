@@ -1,10 +1,15 @@
 import { useState } from 'react';
 import { Layers, Eye, EyeOff, GripVertical, UserPlus, StickyNote, BoxSelect, MoveUpRight, Trash2, ArrowUpToLine, ArrowUp, ArrowDown, ArrowDownToLine } from 'lucide-react';
 import { SidebarPanel } from '../ui/SidebarPanel';
+import type { Action, AppState, StageAnnotation, StageToken } from '../../context/AppContext';
+
+type LayerListItem =
+ | (StageToken & { layerType: 'token' })
+ | (StageAnnotation & { layerType: 'annotation'; subtype: StageAnnotation['type'] });
 
 interface StageLayersPanelProps {
- state: any;
- dispatch: (action: any) => void;
+ state: Pick<AppState, 'tokens' | 'annotations' | 'selection' | 'selectionType'>;
+ dispatch: (action: Action) => void;
  collapsed: boolean;
  onToggle: (id: string) => void;
  draggedLayerId: string | null;
@@ -26,6 +31,12 @@ export const StageLayersPanel = ({
  const stageItemsCount = state.tokens.length + state.annotations.length;
  const [editingId, setEditingId] = useState<string | null>(null);
  const [editValue, setEditValue] = useState("");
+ const layers: LayerListItem[] = [
+ ...state.tokens.map((t) => ({ ...t, layerType: 'token' as const })),
+ ...state.annotations.map((a) => ({ ...a, layerType: 'annotation' as const, subtype: a.type }))
+ ].sort((a, b) => b.zIndex - a.zIndex);
+ const getLayerLabel = (layer: LayerListItem): string =>
+ layer.layerType === 'token' ? layer.tag : (layer.text || layer.subtype);
 
  return (
  <SidebarPanel
@@ -41,9 +52,7 @@ export const StageLayersPanel = ({
  rightElement={<span className="text-[9px] text-gray-600 font-mono">{stageItemsCount} Items</span>}
  >
  <div className="space-y-1 max-h-[400px] overflow-y-auto custom-scrollbar pr-1">
- {[...state.tokens.map((t: any) => ({ ...t, type: 'token' })), ...state.annotations.map((a: any) => ({ ...a, type: 'annotation' }))]
- .sort((a: any, b: any) => b.zIndex - a.zIndex)
- .map((layer: any) => {
+ {layers.map((layer) => {
  const isSelected = state.selection === layer.id;
  const isDragging = draggedLayerId === layer.id;
  const isEditing = editingId === layer.id;
@@ -64,8 +73,7 @@ export const StageLayersPanel = ({
  e.preventDefault();
  if (!draggedLayerId || draggedLayerId === layer.id) return;
  // Capture current state of full list sorted by Z
- const allLayers = [...state.tokens.map((t: any) => ({ ...t, type: 'token' })), ...state.annotations.map((a: any) => ({ ...a, type: 'annotation' }))]
- .sort((a: any, b: any) => b.zIndex - a.zIndex);
+ const allLayers = [...layers];
  const fromIndex = allLayers.findIndex(l => l.id === draggedLayerId);
  const toIndex = allLayers.findIndex(l => l.id === layer.id);
  if (fromIndex === -1 || toIndex === -1) return;
@@ -78,7 +86,7 @@ export const StageLayersPanel = ({
  allLayers.forEach((l, idx) => {
  const newZ = maxZ - idx;
  if (l.zIndex !== newZ) {
- if (l.type === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: l.id, zIndex: newZ } });
+ if (l.layerType === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: l.id, zIndex: newZ } });
  else dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: l.id, zIndex: newZ } });
  }
  });
@@ -88,13 +96,13 @@ export const StageLayersPanel = ({
  className={`flex items-center gap-2 p-1.5 rounded border transition-colors cursor-grab active:cursor-grabbing group ${isSelected ? 'bg-orange-500/10 border-orange-500/50' : 'bg-[#18181b] border-[#27272a] hover:bg-[#27272a]'} ${isDragging ? 'opacity-40 border-dashed border-orange-500' : ''}`}
  onClick={(e) => {
  e.stopPropagation();
- dispatch({ type: 'SELECT_ITEM', payload: { id: layer.id, type: layer.type } });
+ dispatch({ type: 'SELECT_ITEM', payload: { id: layer.id, type: layer.layerType } });
  }}
  >
  <button
  onClick={(e) => {
  e.stopPropagation();
- if (layer.type === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: layer.id, visible: layer.visible === false } });
+ if (layer.layerType === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: layer.id, visible: layer.visible === false } });
  else dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: layer.id, visible: layer.visible === false } });
  }}
  className="p-1 text-gray-500 hover:text-white rounded hover:bg-white/10 transition-colors mr-1 cursor-pointer"
@@ -107,10 +115,10 @@ export const StageLayersPanel = ({
  <GripVertical className="w-3 h-3" />
  </div>
  <div className={`p-1 rounded ${isSelected ? 'bg-orange-500 text-black' : 'bg-gray-800 text-gray-400'}`}>
- {layer.type === 'token' && <UserPlus className="w-3 h-3" />}
- {layer.type === 'annotation' && layer.subtype === 'note' && <StickyNote className="w-3 h-3" />}
- {layer.type === 'annotation' && layer.subtype === 'zone' && <BoxSelect className="w-3 h-3" />}
- {layer.type === 'annotation' && layer.subtype === 'arrow' && <MoveUpRight className="w-3 h-3" />}
+ {layer.layerType === 'token' && <UserPlus className="w-3 h-3" />}
+ {layer.layerType === 'annotation' && layer.subtype === 'note' && <StickyNote className="w-3 h-3" />}
+ {layer.layerType === 'annotation' && layer.subtype === 'zone' && <BoxSelect className="w-3 h-3" />}
+ {layer.layerType === 'annotation' && layer.subtype === 'arrow' && <MoveUpRight className="w-3 h-3" />}
  </div>
  {isEditing ? (
  <input
@@ -119,8 +127,8 @@ export const StageLayersPanel = ({
  onChange={(e) => setEditValue(e.target.value)}
  onBlur={() => {
  setEditingId(null);
- if (editValue.trim() && editValue.trim() !== (layer.tag || layer.text || layer.type)) {
- if (layer.type === 'token') {
+ if (editValue.trim() && editValue.trim() !== getLayerLabel(layer)) {
+ if (layer.layerType === 'token') {
  dispatch({ type: 'UPDATE_TOKEN', payload: { id: layer.id, tag: editValue.trim() } });
  } else {
  dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: layer.id, text: editValue.trim() } });
@@ -143,12 +151,12 @@ export const StageLayersPanel = ({
  onDoubleClick={(e) => {
  e.stopPropagation();
  setEditingId(layer.id);
- setEditValue(layer.tag || layer.text || layer.type || '');
+ setEditValue(getLayerLabel(layer));
  }}
  className={`text-[9px] font-bold uppercase truncate flex-1 cursor-text select-text ${isSelected ? 'text-orange-400' : 'text-gray-400'}`}
  title="Double-click to rename"
  >
- {layer.tag || layer.text || layer.type}
+ {getLayerLabel(layer)}
  </span>
  )}
  <span className="text-[9px] font-mono text-gray-600 mr-2">Z:{layer.zIndex}</span>
@@ -158,7 +166,7 @@ export const StageLayersPanel = ({
  <button
  onClick={(e) => {
  e.stopPropagation();
- if (layer.type === 'token') {
+ if (layer.layerType === 'token') {
  dispatch({ type: 'REMOVE_TOKEN', payload: layer.id });
  dispatch({ type: 'ADD_LOG', payload: { message: "Token removed from Scene (Library Safe)", type: 'info' } });
  }

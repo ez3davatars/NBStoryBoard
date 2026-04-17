@@ -1,11 +1,28 @@
 import { useEffect, useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
 import {
  Trash2, MonitorPlay, Image as ImageIcon,
  X, Lock, Unlock, Sparkles, RotateCw, Film, Copy
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
+import type { Shot } from '../context/AppContext';
+import type { SmartAnalyzeOptions } from '../hooks/useVeoSmartAnalyze';
 
-const InspectorSection = ({ title, children, defaultOpen = true, titleAddon }: any) => (
+interface InspectorSectionProps {
+ title: string;
+ children: ReactNode;
+ defaultOpen?: boolean;
+ titleAddon?: ReactNode;
+}
+
+type SmartAnalyzeController = {
+ analysisResult: string;
+ isAnalyzing: boolean;
+ runSmartAnalyze: (options: SmartAnalyzeOptions) => Promise<void>;
+ setAnalysisResult: (value: string) => void;
+};
+
+const InspectorSection = ({ title, children, defaultOpen = true, titleAddon }: InspectorSectionProps) => (
  <details open={defaultOpen} className="group rounded-xl bg-white/5 border border-white/10 overflow-hidden shrink-0">
  <summary className="px-4 py-3 cursor-pointer list-none flex items-center justify-between text-[10px] font-black uppercase tracking-widest text-white/80 select-none bg-white/5 hover:bg-white/10 transition-colors">
  <div className="flex items-center gap-2">
@@ -22,7 +39,7 @@ const InspectorSection = ({ title, children, defaultOpen = true, titleAddon }: a
  </details>
 );
 
-const VeoGenerator = ({ smartAnalyze }: { smartAnalyze: any }) => {
+const VeoGenerator = ({ smartAnalyze }: { smartAnalyze: SmartAnalyzeController }) => {
  const { state, dispatch } = useAppContext();
  const { analysisResult, isAnalyzing, runSmartAnalyze: doSmartAnalyze, setAnalysisResult } = smartAnalyze;
  const [strictCharacterAds, setStrictCharacterAds] = useState(true);
@@ -33,18 +50,18 @@ const VeoGenerator = ({ smartAnalyze }: { smartAnalyze: any }) => {
 
 
  // --- Shot Sync (from AppContext Shot List) ---
- const activeShot = useMemo(() => {
- const shots = (state as any).shots as any[] | undefined;
- const activeShotId = (state as any).activeShotId as string | undefined;
+ const activeShot = useMemo<Shot | null>(() => {
+ const shots = state.shots;
+ const activeShotId = state.activeShotId;
  if (!shots || !activeShotId) return null;
  return shots.find((s) => s.id === activeShotId) || null;
- }, [state]);
+ }, [state.activeShotId, state.shots]);
 
  const loadFramesFromActiveShot = () => {
  if (!activeShot) return;
 
- const startUrl = activeShot.startFrameUrl as string | undefined;
- const endUrl = activeShot.endFrameUrl as string | undefined;
+ const startUrl = activeShot.startFrameUrl;
+ const endUrl = activeShot.endFrameUrl;
 
  if (startUrl) {
  dispatch({ type: 'SET_STORYBOARD_SOURCE', payload: { url: startUrl } });
@@ -67,8 +84,8 @@ const VeoGenerator = ({ smartAnalyze }: { smartAnalyze: any }) => {
  if (!activeShot) return;
  if (state.storyboardSource || state.storyboardEndSource) return;
 
- const startUrl = activeShot.startFrameUrl as string | undefined;
- const endUrl = activeShot.endFrameUrl as string | undefined;
+ const startUrl = activeShot.startFrameUrl;
+ const endUrl = activeShot.endFrameUrl;
 
  if (startUrl) dispatch({ type: 'SET_STORYBOARD_SOURCE', payload: { url: startUrl } });
  if (endUrl) dispatch({ type: 'SET_STORYBOARD_END_SOURCE', payload: { url: endUrl } });
@@ -90,8 +107,8 @@ const VeoGenerator = ({ smartAnalyze }: { smartAnalyze: any }) => {
  };
 
  const runSmartAnalyze = async () => {
-    const startUrl = (activeShot?.startFrameUrl as string | undefined) ?? state.storyboardSource?.url;
-    const endUrl = (activeShot?.endFrameUrl as string | undefined) ?? state.storyboardEndSource?.url;
+    const startUrl = activeShot?.startFrameUrl ?? state.storyboardSource?.url;
+    const endUrl = activeShot?.endFrameUrl ?? state.storyboardEndSource?.url;
     const draftSource = activeShot ? activeShot.veoPromptDraft : state.veoPromptDraft;
 
     await doSmartAnalyze({

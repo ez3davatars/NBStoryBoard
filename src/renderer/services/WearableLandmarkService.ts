@@ -124,87 +124,93 @@ function extractNonBlackBounds(
 
 export class WearableLandmarkService {
     static async detect(imageUrl: string): Promise<WearableLandmarks> {
-        return new Promise<WearableLandmarks>(async (resolve, reject) => {
-            try {
-                const img = await loadImageElement(imageUrl);
-                const w = img.naturalWidth || img.width;
-                const h = img.naturalHeight || img.height;
+        const img = await loadImageElement(imageUrl);
+        const w = img.naturalWidth || img.width;
+        const h = img.naturalHeight || img.height;
 
-                const baseLandmarks: WearableLandmarks = {
-                    imageWidth: w,
-                    imageHeight: h
-                };
+        const baseLandmarks: WearableLandmarks = {
+            imageWidth: w,
+            imageHeight: h
+        };
 
-                let faceMeshResolved = false;
+        return new Promise<WearableLandmarks>((resolve) => {
+            let faceMeshResolved = false;
+            let didResolve = false;
 
-                try {
-                    const faceMesh = await getFaceMeshInstance();
+            const resolveOnce = (val: WearableLandmarks) => {
+                if (didResolve) return;
+                didResolve = true;
+                resolve(val);
+            };
 
-                    faceMesh.onResults((results: Results) => {
-                        faceMeshResolved = true;
-                        if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
-                            const landmarks = results.multiFaceLandmarks[0];
-
-                            // Map MediaPipe landmarks (normalized 0-1) to pixel coordinates
-                            const pt = (index: number): Point2D => ({
-                                x: landmarks[index].x * w,
-                                y: landmarks[index].y * h
-                            });
-
-                            // standard IDs
-                            const noseBridge = pt(168);
-                            const chin = pt(152);
-                            const foreheadCenter = pt(10);
-                            const hairlineCenter = pt(10); // Approximation, usually 10 is high enough
-                            const leftEye = pt(159); // top of left eye
-                            const rightEye = pt(386); // top of right eye
-                            const leftEar = pt(234); // left cheek/ear edge
-                            const rightEar = pt(454); // right cheek/ear edge
-                            
-                            const faceWidthPx = Math.abs(rightEar.x - leftEar.x);
-                            const faceHeightPx = Math.abs(chin.y - foreheadCenter.y);
-
-                            resolve({
-                                ...baseLandmarks,
-                                faceCenter: { x: noseBridge.x, y: (noseBridge.y + chin.y) / 2 },
-                                foreheadCenter,
-                                hairlineCenter,
-                                leftEye,
-                                rightEye,
-                                noseBridge,
-                                chin,
-                                leftEar,
-                                rightEar,
-                                faceWidthPx,
-                                faceHeightPx,
-                                headWidthPx: faceWidthPx * 1.15, // Approximate skull width based on face width
-                                headHeightPx: faceHeightPx * 1.2
-                            });
-                        } else {
-                            // No faces found, fallback
-                            console.warn("WearableLandmarkService: No face detected. Using silhouette fallback.");
-                            resolve(WearableLandmarkService.fallbackSilhouetteDetection(img));
-                        }
-                    });
-
-                    await faceMesh.send({ image: img });
-
-                    // Set a timeout just in case it hangs
-                    setTimeout(() => {
-                        if (!faceMeshResolved) {
-                            console.warn("WearableLandmarkService: FaceMesh timed out. Using silhouette fallback.");
-                            resolve(WearableLandmarkService.fallbackSilhouetteDetection(img));
-                        }
-                    }, 3000);
-
-                } catch (fmError) {
-                    console.warn("WearableLandmarkService: FaceMesh failed to run. Using silhouette fallback.", fmError);
-                    resolve(WearableLandmarkService.fallbackSilhouetteDetection(img));
+            const fallback = (reason: string, err?: unknown) => {
+                if (err) {
+                    console.warn(`WearableLandmarkService: ${reason}. Using silhouette fallback.`, err);
+                } else {
+                    console.warn(`WearableLandmarkService: ${reason}. Using silhouette fallback.`);
                 }
+                resolveOnce(WearableLandmarkService.fallbackSilhouetteDetection(img));
+            };
 
-            } catch (err) {
-                reject(err);
-            }
+            getFaceMeshInstance().then((faceMesh) => {
+                faceMesh.onResults((results: Results) => {
+                    faceMeshResolved = true;
+                    if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+                        const landmarks = results.multiFaceLandmarks[0];
+
+                        // Map MediaPipe landmarks (normalized 0-1) to pixel coordinates
+                        const pt = (index: number): Point2D => ({
+                            x: landmarks[index].x * w,
+                            y: landmarks[index].y * h
+                        });
+
+                        // standard IDs
+                        const noseBridge = pt(168);
+                        const chin = pt(152);
+                        const foreheadCenter = pt(10);
+                        const hairlineCenter = pt(10); // Approximation, usually 10 is high enough
+                        const leftEye = pt(159); // top of left eye
+                        const rightEye = pt(386); // top of right eye
+                        const leftEar = pt(234); // left cheek/ear edge
+                        const rightEar = pt(454); // right cheek/ear edge
+
+                        const faceWidthPx = Math.abs(rightEar.x - leftEar.x);
+                        const faceHeightPx = Math.abs(chin.y - foreheadCenter.y);
+
+                        resolveOnce({
+                            ...baseLandmarks,
+                            faceCenter: { x: noseBridge.x, y: (noseBridge.y + chin.y) / 2 },
+                            foreheadCenter,
+                            hairlineCenter,
+                            leftEye,
+                            rightEye,
+                            noseBridge,
+                            chin,
+                            leftEar,
+                            rightEar,
+                            faceWidthPx,
+                            faceHeightPx,
+                            headWidthPx: faceWidthPx * 1.15, // Approximate skull width based on face width
+                            headHeightPx: faceHeightPx * 1.2
+                        });
+                    } else {
+                        fallback("No face detected");
+                    }
+                });
+
+                faceMesh.send({ image: img }).catch((fmError) => {
+                    fallback("FaceMesh failed to run", fmError);
+                });
+
+                // Set a timeout just in case it hangs
+                setTimeout(() => {
+                    if (!faceMeshResolved) {
+                        fallback("FaceMesh timed out");
+                    }
+                }, 3000);
+            }).catch((fmError) => {
+                fallback("FaceMesh failed to initialize", fmError);
+            });
         });
     }
 

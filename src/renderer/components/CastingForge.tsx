@@ -189,6 +189,7 @@ const STUDIO_FOLDERS = [
 const normalizeStyle = (s: string | undefined | null) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
 const isHttpUrl = (value?: string | null) => !!value && /^https?:\/\//i.test(value);
+const getErrorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 const dataUrlToBlob = (dataUrl: string): Blob => {
   const [meta, data] = dataUrl.split(',');
@@ -423,6 +424,8 @@ const CastingForge = () => {
 
   const mainUploadRef = useRef<HTMLInputElement>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
+  const activeProgressIntervalRef = useRef<number | null>(null);
+  const progressSessionRef = useRef(0);
 
   // ... (existing state) ...
 
@@ -433,6 +436,16 @@ const CastingForge = () => {
     setNotification(msg);
     setTimeout(() => setNotification(null), 3000);
   };
+
+  useEffect(() => {
+    return () => {
+      if (activeProgressIntervalRef.current !== null) {
+        window.clearInterval(activeProgressIntervalRef.current);
+        activeProgressIntervalRef.current = null;
+      }
+      progressSessionRef.current += 1;
+    };
+  }, []);
 
   // Crop & Edit State
   const [isCropping, setIsCropping] = useState(false);
@@ -642,9 +655,9 @@ const CastingForge = () => {
       };
       dispatch({ type: 'ADD_CAST', payload: newCast });
       dispatch({ type: 'ADD_LOG', payload: { message: "Added to Cast Assets", type: 'success' } });
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Add to Cast Failed:", err);
-      dispatch({ type: 'ADD_LOG', payload: { message: `Add to Cast Failed: ${err.message}`, type: 'error' } });
+      dispatch({ type: 'ADD_LOG', payload: { message: `Add to Cast Failed: ${getErrorMessage(err)}`, type: 'error' } });
     }
   };
 
@@ -723,9 +736,9 @@ const CastingForge = () => {
       dispatch({ type: 'ADD_LOG', payload: { message: `Saved to Library (${targetFolderId})`, type: 'success' } });
       setShowSaveModal(false);
       setPendingRefSheet(null);
-    } catch (e: any) {
-      console.error('Save Actor Failed', e);
-      dispatch({ type: 'ADD_LOG', payload: { message: `Save Failed: ${e.message}`, type: 'error' } });
+    } catch (error: unknown) {
+      console.error('Save Actor Failed', error);
+      dispatch({ type: 'ADD_LOG', payload: { message: `Save Failed: ${getErrorMessage(error)}`, type: 'error' } });
     }
   };
 
@@ -786,6 +799,11 @@ const CastingForge = () => {
     }
 
     dispatch({ type: 'SET_PROCESSING', payload: true });
+    const progressSessionId = ++progressSessionRef.current;
+    if (activeProgressIntervalRef.current !== null) {
+      window.clearInterval(activeProgressIntervalRef.current);
+      activeProgressIntervalRef.current = null;
+    }
 
     // --- TIMEOUT & ETA LOGIC ---
     const getEtaMs = () => state.imageResolution === '4K' ? 35000 : (state.imageResolution === '2K' ? 25000 : 15000);
@@ -800,6 +818,7 @@ const CastingForge = () => {
 
     // Using window.setInterval to avoid NodeJS Timeout typing issues in React/Vite
     const progressInterval = window.setInterval(() => {
+      if (progressSessionRef.current !== progressSessionId) return;
       currentPercent += increment;
       if (currentPercent > 95) currentPercent = 95; // Cap at 95% until complete
 
@@ -810,6 +829,7 @@ const CastingForge = () => {
 
       dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text } });
     }, updateMs);
+    activeProgressIntervalRef.current = progressInterval;
 
     dispatch({ type: 'SET_LAST_CASTED_MASK', payload: null });
     setProcessedPreviewUrl(null);
@@ -916,26 +936,32 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
           dispatch({ type: 'SET_LAST_CASTED_MASK', payload: cutoutUrl });
           dispatch({ type: 'ADD_LOG', payload: { message: "Subject Isolated Successfully", type: 'success' } });
         }
-      } catch (maskErr: any) {
+      } catch (maskErr: unknown) {
         console.error("Isolation Failed:", maskErr);
-        dispatch({ type: 'ADD_LOG', payload: { message: `Isolation Failed: ${maskErr.message}`, type: 'error' } });
+        dispatch({ type: 'ADD_LOG', payload: { message: `Isolation Failed: ${getErrorMessage(maskErr)}`, type: 'error' } });
       }
 
       const logMessage = state.lastCastedImage ? "Character stylized" : "Character generated";
       dispatch({ type: 'ADD_LOG', payload: { message: logMessage, type: 'success' } });
       dispatch({ type: 'SET_LAST_CASTED_PROMPT', payload: '' }); // Clear input as requested
-    } catch (e: any) {
-      const isTimeout = e.name === 'TimeoutError' || e.message?.includes('Pending');
-      if (isTimeout && e.generationId) {
-        dispatch({ type: 'UPDATE_BACKGROUND_JOB', payload: { id: e.generationId, updates: { status: 'pending_background' } } });
+    } catch (error: unknown) {
+      const typedError = (error instanceof Error ? error : new Error(String(error))) as Error & { generationId?: string };
+      const isTimeout = typedError.name === 'TimeoutError' || typedError.message.includes('Pending');
+      if (isTimeout && typedError.generationId) {
+        dispatch({ type: 'UPDATE_BACKGROUND_JOB', payload: { id: typedError.generationId, updates: { status: 'pending_background' } } });
         dispatch({ type: 'ADD_LOG', payload: { message: "Job shifted to background due to long queue.", type: 'info' } });
       } else {
-        dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });
+        dispatch({ type: 'ADD_LOG', payload: { message: typedError.message, type: 'error' } });
       }
     } finally {
       clearInterval(progressInterval);
-      dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
-      dispatch({ type: 'SET_PROCESSING', payload: false });
+      if (activeProgressIntervalRef.current === progressInterval) {
+        activeProgressIntervalRef.current = null;
+      }
+      if (progressSessionRef.current === progressSessionId) {
+        dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
+        dispatch({ type: 'SET_PROCESSING', payload: false });
+      }
     }
   };
 
@@ -964,7 +990,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
       dispatch({ type: 'REMOVE_CAST', payload: deleteTarget.payload });
       dispatch({ type: 'ADD_LOG', payload: { message: "Actor removed from Cast List", type: 'info' } });
     } else if (deleteTarget.type === 'cast_all') {
-      dispatch({ type: 'CLEAR_CAST' } as any);
+      dispatch({ type: 'CLEAR_CAST' });
       dispatch({ type: 'ADD_LOG', payload: { message: `Removed all ${state.cast.length} actors from Cast List`, type: 'info' } });
     } else {
       // Library Deletion with Disk Persistence
@@ -1028,10 +1054,10 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
             dispatch({ type: 'REMOVE_ACTOR_LIBRARY', payload: actorId });
             dispatch({ type: 'ADD_LOG', payload: { message: "Actor permanently removed", type: 'info' } });
 
-          } catch (e: any) {
-            console.error("Disk delete failed", e);
-            showToast(`Delete Error: ${e.message}`);
-            dispatch({ type: 'ADD_LOG', payload: { message: `Disk delete failed: ${e.message}`, type: 'error' } });
+          } catch (error: unknown) {
+            console.error("Disk delete failed", error);
+            showToast(`Delete Error: ${getErrorMessage(error)}`);
+            dispatch({ type: 'ADD_LOG', payload: { message: `Disk delete failed: ${getErrorMessage(error)}`, type: 'error' } });
             // Do NOT remove from memory if disk delete failed, prevents "zombie" confusion
           }
         } else {
@@ -1058,7 +1084,8 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
     // 1. SANITIZATION
     const rawName = options.newName ?? actor.name;
     // Trim, remove reserved chars prevent empty
-    let safeName = rawName.trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, '');
+    let safeName = rawName.trim().replace(/[<>:"/\\|?*]/g, '');
+    safeName = [...safeName].filter((ch) => ch.charCodeAt(0) >= 32).join('');
     if (!safeName) safeName = 'Unnamed Actor';
 
     // Prevent identical no-op
@@ -1143,10 +1170,10 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
 
       dispatch({ type: 'ADD_LOG', payload: { message: `Actor ${isMove ? 'organized' : 'renamed'} successfully`, type: 'success' } });
 
-    } catch (e: any) {
-      console.error("Rename/Move failed", e);
-      showToast(`Disk Update Failed: ${e.message}`);
-      dispatch({ type: 'ADD_LOG', payload: { message: `Actor update failed: ${e.message}`, type: 'error' } });
+    } catch (error: unknown) {
+      console.error("Rename/Move failed", error);
+      showToast(`Disk Update Failed: ${getErrorMessage(error)}`);
+      dispatch({ type: 'ADD_LOG', payload: { message: `Actor update failed: ${getErrorMessage(error)}`, type: 'error' } });
     }
   };
 
@@ -1263,7 +1290,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
         if (url) {
           loaded[folder.id] = url;
         }
-      } catch (e) {
+      } catch {
         // File likely doesn't exist
       }
     }
@@ -1271,11 +1298,11 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
     if (Object.keys(loaded).length > 0) {
       dispatch({ type: 'SET_CUSTOM_COVERS', payload: { ...state.customCovers, ...loaded } });
     }
-  }, [state.saveDirectoryHandle, state.saveDirectoryPath, dispatch]);
+  }, [state.customCovers, state.saveDirectoryHandle, state.saveDirectoryPath, dispatch]);
 
   useEffect(() => {
     loadDiskCovers(false);
-  }, []);
+  }, [loadDiskCovers]);
 
 
   const handleCoverUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1319,9 +1346,9 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
         dispatch({ type: 'SET_CUSTOM_COVERS', payload: { ...state.customCovers, [editingFolderId]: newUrl } });
         dispatch({ type: 'ADD_LOG', payload: { message: "Cover Saved to Disk", type: 'success' } });
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Save failed", err);
-      dispatch({ type: 'ADD_LOG', payload: { message: `Save Failed: ${err.message}`, type: 'error' } });
+      dispatch({ type: 'ADD_LOG', payload: { message: `Save Failed: ${getErrorMessage(err)}`, type: 'error' } });
     }
 
     e.target.value = ''; // Reset
@@ -1378,7 +1405,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
       } else {
         // Date (Default: Newest First)
         // Heuristic: Extract largest continuous sequence of numbers from ID, Name, URL, or Filename since format varies
-        const extractTimestamp = (actor: any) => {
+        const extractTimestamp = (actor: CastMember) => {
           const strToSearch = `${actor.id} ${actor.name} ${actor.url} ${actor.filename || ''}`;
           const matches = strToSearch.match(/\d{10,14}/);
           return matches ? parseInt(matches[0]) : 0;
@@ -1393,7 +1420,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
         return timeB - timeA;
       }
     });
-  }, [state.actorLibrary, librarySearch, sortOption, activeFolder]);
+  }, [state.actorLibrary, librarySearch, sortOption, activeFolder, knownStyles]);
 
   // --- 4. ISOLATION PROCESS (UPDATED for Imgly) ---
   // The 'mask' is now the isolated image URL itself.
@@ -1683,9 +1710,9 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
       setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
 
       dispatch({ type: 'ADD_LOG', payload: { message: 'Image downloaded.', type: 'info' } });
-    } catch (e: any) {
-      console.error('Download failed', e);
-      dispatch({ type: 'ADD_LOG', payload: { message: `Download failed: ${e.message}`, type: 'error' } });
+    } catch (error: unknown) {
+      console.error('Download failed', error);
+      dispatch({ type: 'ADD_LOG', payload: { message: `Download failed: ${getErrorMessage(error)}`, type: 'error' } });
     }
   };
 
@@ -1730,9 +1757,9 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
               dispatch({ type: 'SET_LAST_CASTED_MASK', payload: cutoutUrl });
               dispatch({ type: 'ADD_LOG', payload: { message: "Character silhouette isolated successfully", type: 'success' } });
             }
-          } catch (err: any) {
+          } catch (err: unknown) {
             if (generationIdRef.current === currentGenId) {
-              dispatch({ type: 'ADD_LOG', payload: { message: `Mask generation failed: ${err.message}`, type: 'error' } });
+              dispatch({ type: 'ADD_LOG', payload: { message: `Mask generation failed: ${getErrorMessage(err)}`, type: 'error' } });
             }
           }
         };
@@ -1752,6 +1779,11 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
     if (billingMode === "hosted" && !hasHosted) return;
     if (billingMode === "byok" && (!hasByok || !state.apiKey)) return;
     dispatch({ type: 'SET_PROCESSING', payload: true });
+    const progressSessionId = ++progressSessionRef.current;
+    if (activeProgressIntervalRef.current !== null) {
+      window.clearInterval(activeProgressIntervalRef.current);
+      activeProgressIntervalRef.current = null;
+    }
     dispatch({ type: 'ADD_LOG', payload: { message: "Generating Character Reference Sheet...", type: 'info' } });
 
     // --- TIMEOUT & ETA LOGIC ---
@@ -1765,7 +1797,8 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
     const updateMs = 1000;
     const increment = (updateMs / etaMs) * 100;
 
-    const progressInterval = setInterval(() => {
+    const progressInterval = window.setInterval(() => {
+      if (progressSessionRef.current !== progressSessionId) return;
       currentPercent += increment;
       if (currentPercent > 95) currentPercent = 95; // Cap at 95% until complete
 
@@ -1777,6 +1810,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
 
       dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text } });
     }, updateMs);
+    activeProgressIntervalRef.current = progressInterval;
 
     try {
       let finalPrompt = REFERENCE_SHEET_PROMPT;
@@ -1893,12 +1927,17 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
       setRefSheetUrl(safeRefSheetUrl);
       setShowRefSheet(true);
       dispatch({ type: 'ADD_LOG', payload: { message: "Reference Sheet Generated.", type: 'success' } });
-    } catch (e: any) {
-      dispatch({ type: 'ADD_LOG', payload: { message: `Ref Sheet failed: ${e.message}`, type: 'error' } });
+    } catch (error: unknown) {
+      dispatch({ type: 'ADD_LOG', payload: { message: `Ref Sheet failed: ${getErrorMessage(error)}`, type: 'error' } });
     } finally {
       clearInterval(progressInterval);
-      dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
-      dispatch({ type: 'SET_PROCESSING', payload: false });
+      if (activeProgressIntervalRef.current === progressInterval) {
+        activeProgressIntervalRef.current = null;
+      }
+      if (progressSessionRef.current === progressSessionId) {
+        dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
+        dispatch({ type: 'SET_PROCESSING', payload: false });
+      }
     }
   };
 
@@ -2450,14 +2489,14 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
           </h2>
 
           <div className="flex gap-2 mb-4">
-            {[
+            {([
               { id: 'form_focus', label: 'Form' },
               { id: 'face_focus', label: 'Face' },
               { id: 'split_focus', label: 'Split' }
-            ].map((l) => (
+            ] as Array<{ id: RefSheetLayoutMode; label: string }>).map((l) => (
               <button
                 key={l.id}
-                onClick={() => setRefLayout(l.id as any)}
+                onClick={() => setRefLayout(l.id)}
                 className={`flex-1 py-2 rounded text-[10px] font-bold uppercase transition-all border ${refLayout === l.id
                   ? 'bg-purple-900 border-purple-500 text-white -[0_0_10px_rgba(168,85,247,0.4)]'
                   : 'bg-black border-gray-700 text-gray-400 hover:border-gray-500'
@@ -2573,13 +2612,8 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
                     onClick={async () => {
                       if (state.saveDirectoryHandle) {
                         try {
-                          // @ts-ignore - Verify permission
-                          if ((await state.saveDirectoryHandle.queryPermission({ mode: 'readwrite' })) !== 'granted') {
-                            // @ts-ignore
-                            if ((await state.saveDirectoryHandle.requestPermission({ mode: 'readwrite' })) !== 'granted') {
-                              throw new Error("Permission denied");
-                            }
-                          }
+                          const hasPermission = await verifyPermission(state.saveDirectoryHandle, true);
+                          if (!hasPermission) throw new Error("Permission denied");
 
                           const root = await state.saveDirectoryHandle.getDirectoryHandle('ReferenceSheets', { create: true });
                           const filename = `RefSheet-${Date.now()}.png`;
@@ -2590,7 +2624,7 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
                           await writable.write(blob);
                           await writable.close();
                           showToast("Saved to ReferenceSheets/");
-                        } catch (e: any) {
+                        } catch {
                           showToast("Save failed. Downloading instead...");
                           // Fallback
                           const a = document.createElement('a');
@@ -2957,7 +2991,7 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
 
                   {cropRect.w > 20 && (
                     <div className={`absolute flex gap-1 pointer-events-auto z-40 ${tagsClass}`}>
-                      {['front', 'side', '3/4', 'back'].map((tag: any) => (
+                      {(['front', 'side', '3/4', 'back'] as const).map((tag) => (
                         <button key={tag} onMouseDown={(e) => { e.stopPropagation(); finalizeCrop(); }} className="bg-[#18181b] text-white text-[10px] px-2 py-1 rounded border border-gray-600 hover:bg-yellow-500 hover:text-black uppercase font-bold">
                           {tag}
                         </button>
@@ -3013,8 +3047,8 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
                                   dispatch({ type: 'SET_LAST_CASTED_MASK', payload: cutoutUrl });
                                   dispatch({ type: 'ADD_LOG', payload: { message: "Isolation Complete", type: 'success' } });
                                   setRemoveBg(true);
-                                } catch (e: any) {
-                                  dispatch({ type: 'ADD_LOG', payload: { message: "Isolation Error: " + e.message, type: 'error' } });
+                                } catch (error: unknown) {
+                                  dispatch({ type: 'ADD_LOG', payload: { message: "Isolation Error: " + getErrorMessage(error), type: 'error' } });
                                 } finally {
                                   setIsIsolating(false);
                                   setIsolationProgress(0);

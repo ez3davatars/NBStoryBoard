@@ -3,6 +3,26 @@ const depthCanvasCache: Record<string, HTMLCanvasElement> = {};
 const depthDataCache: Record<string, Uint8Array> = {}; // Synchronous access cache (Legacy)
 const depthImageCache = new Map<string, ImageData>();
 
+export interface DetectedFloorPlane {
+    depth: number;
+    confidence: 'high' | 'fallback';
+    computedAt: number;
+}
+
+export interface DetectedOccupiedVolume {
+    id: string;
+    footprint: {
+        x: number;
+        y: number;
+        w: number;
+        h: number;
+    };
+    minDepth: number;
+    maxDepth: number;
+    heightEstimate: number;
+    confidence: 'high' | 'approximate';
+}
+
 export function clearDepthCacheExcept(activeUrl?: string | null) {
     // Clear Canvas Cache
     Object.keys(depthCanvasCache).forEach(key => {
@@ -220,7 +240,6 @@ class DepthServiceBase {
         if (!ctx) return 0.5;
 
         // RENDERER GUARDRAIL: Ensure context is pristine for sampling
-        // @ts-ignore
         if (import.meta.env?.DEV) {
             if (ctx.filter !== 'none' || (ctx.getTransform && !ctx.getTransform().isIdentity)) {
                 throw new Error("DEPTH IMMUTABILITY VIOLATION: Attempted to sample depth through a modified or filtered context. Depth maps must be sampled as-is.");
@@ -272,7 +291,6 @@ class DepthServiceBase {
         if (!ctx) return { maskUrl: '', visibilityRatio: 1.0 };
 
         // RENDERER GUARDRAIL: Immutability Check
-        // @ts-ignore
         if (import.meta.env?.DEV && ctx.filter !== 'none') {
             throw new Error("DEPTH IMMUTABILITY VIOLATION: Derived occlusion masks must not apply filters to authoritative depth data.");
         }
@@ -328,7 +346,7 @@ class DepthServiceBase {
      * Identifies a stable floor depth using ROI sampling and histogram mode estimation.
      * V2+ Consideration: Support for multi-plane floor detection (stairs, platforms).
      */
-    async detectFloorPlane(depthMapUrl: string): Promise<any> {
+    async detectFloorPlane(depthMapUrl: string): Promise<DetectedFloorPlane | null> {
         const canvas = await getCachedCanvas(depthMapUrl);
         if (!canvas) return null;
 
@@ -400,7 +418,7 @@ class DepthServiceBase {
      * Detects large foreground regions above the floor plane.
      * V2+ Consideration: Semantic object labeling and AI-driven segmentation.
      */
-    async detectOccupiedVolumes(depthMapUrl: string, floorDepth: number): Promise<any[]> {
+    async detectOccupiedVolumes(depthMapUrl: string, floorDepth: number): Promise<DetectedOccupiedVolume[]> {
         const canvas = await getCachedCanvas(depthMapUrl);
         if (!canvas) return [];
 
@@ -428,7 +446,7 @@ class DepthServiceBase {
         }
 
         const visited = new Uint8Array(width * height);
-        const volumes: any[] = [];
+        const volumes: DetectedOccupiedVolume[] = [];
         const minArea = (width * height) * 0.01; // 1% of image area for filtering
 
         // Simple BFS for Connected Components
@@ -442,7 +460,6 @@ class DepthServiceBase {
                     visited[idx] = 1;
 
                     let minX = x, maxX = x, minY = y, maxY = y;
-                    let sumDepth = 0;
                     let minD = 255, maxD = 0;
 
                     while (queue.length > 0) {
@@ -461,8 +478,6 @@ class DepthServiceBase {
                         const dValue = data[curr * 4];
                         if (dValue < minD) minD = dValue;
                         if (dValue > maxD) maxD = dValue;
-                        sumDepth += dValue;
-
                         // Check 4-connected neighbors with step
                         const neighbors = [
                             { nx: cx + 4, ny: cy },
@@ -525,7 +540,6 @@ try {
     }
 } catch (e) {
     console.error("CRITICAL: DepthService Immutability Guard Failed!", e);
-    // @ts-ignore
     if (import.meta.env?.DEV) {
         throw new Error("FATAL: DepthService could not be locked for immutability. This is required for architectural safety.");
     }

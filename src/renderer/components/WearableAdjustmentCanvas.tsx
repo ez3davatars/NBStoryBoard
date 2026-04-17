@@ -230,7 +230,7 @@ export const WearableAdjustmentCanvas = ({ subjectUrl, propUrl, anchorContract, 
             {/* Content Split */}
             <div className="flex-grow flex min-h-0 relative z-10">
                 {/* Visual Canvas (takes majority) */}
-                <div className="flex-grow flex items-center justify-center p-8 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-gray-900/50 to-black overflow-hidden relative">
+                <div className="flex-grow min-w-0 flex items-center justify-center p-8 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-gray-900/50 to-black overflow-hidden relative">
                     
                     {/* CONFIRM MODE BADGE */}
                     <div className="absolute top-4 left-4 bg-purple-600/90 text-white px-4 py-2 rounded-lg font-black text-xs tracking-widest uppercase z-50 shadow-[0_0_15px_rgba(147,51,234,0.5)] border border-purple-400/50 pointer-events-none">
@@ -247,7 +247,7 @@ export const WearableAdjustmentCanvas = ({ subjectUrl, propUrl, anchorContract, 
                             ref={canvasRef}
                             className="max-w-full max-h-full object-contain pointer-events-none drop-shadow-2xl"
                                 style={{ 
-                                    imageRendering: 'high-quality' as any,
+                                    imageRendering: 'auto',
                                     filter: 'drop-shadow(0 0 20px rgba(0,0,0,0.8))'
                                 }}
                         />
@@ -255,7 +255,7 @@ export const WearableAdjustmentCanvas = ({ subjectUrl, propUrl, anchorContract, 
                 </div>
 
                 {/* Right Panel: Controls */}
-                <div className="w-80 shrink-0 bg-[#09090b] border-l border-gray-800 flex flex-col p-6 space-y-8 shadow-[inset_1px_0_10px_rgba(0,0,0,0.5)] z-20">
+                <div className="w-[22rem] xl:w-96 shrink-0 bg-[#09090b] border-l border-gray-800 flex flex-col p-6 space-y-8 shadow-[inset_1px_0_10px_rgba(0,0,0,0.5)] z-20 overflow-y-auto overflow-x-hidden">
                     <div>
                         <h3 className="text-xs font-black text-gray-400 uppercase mb-6 tracking-widest">Adjust Anchors</h3>
                         

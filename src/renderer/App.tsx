@@ -46,28 +46,30 @@ import { NanobananaThinking } from './components/ui/NanobananaThinking';
 const ImageInspector = () => {
   const { state, dispatch } = useAppContext();
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
-  const [resolvedDisplay, setResolvedDisplay] = useState<string | null>(null);
+  const [resolvedDisplay, setResolvedDisplay] = useState<{ source: string; url: string } | null>(null);
 
   useEffect(() => {
-    if (!state.inspectImage) {
-      setResolvedDisplay(null);
-      return;
-    }
+    if (!state.inspectImage) return;
 
     let isMounted = true;
+    const sourceImage = state.inspectImage;
     resolveDisplayUrl({
       localPath: state.inspectImageLocalPath,
       sourceUrl: state.inspectImageSourceUrl,
-      localUrl: state.inspectImage,
-      remoteUrl: state.inspectImage.startsWith('http') ? state.inspectImage : null
+      localUrl: sourceImage,
+      remoteUrl: sourceImage.startsWith('http') ? sourceImage : null
     }).then(resolved => {
-      if (isMounted) setResolvedDisplay(resolved || state.inspectImage!);
+      if (isMounted) {
+        setResolvedDisplay({ source: sourceImage, url: resolved || sourceImage });
+      }
     });
 
     return () => { isMounted = false; };
   }, [state.inspectImage, state.inspectImageLocalPath, state.inspectImageSourceUrl]);
 
   if (!state.inspectImage) return null;
+  const effectiveInspectImage =
+    resolvedDisplay?.source === state.inspectImage ? resolvedDisplay.url : state.inspectImage;
 
   const closeInspector = () => {
     dispatch({ type: 'SET_INSPECT_IMAGE', payload: null });
@@ -91,7 +93,7 @@ const ImageInspector = () => {
           <div className="w-full md:flex-1 flex flex-col items-center min-w-0">
             <span className="text-[10px] items-center gap-2 mb-2 font-black uppercase tracking-[0.3em] text-white/50 bg-white/5 px-3 py-1 rounded-full border border-white/10 backdrop-blur-md">Original Content</span>
             <img
-              src={resolvedDisplay || state.inspectImage}
+              src={effectiveInspectImage}
               className="max-w-full max-h-[calc(100dvh-16rem)] sm:max-h-[70vh] object-contain rounded-xl -[0_0_150px_rgba(0,0,0,1)] animate-in zoom-in duration-500 cursor-default ring-1 ring-white/10"
               onClick={(e) => e.stopPropagation()}
             />
@@ -195,9 +197,9 @@ const ImageInspector = () => {
                   setShowSaveConfirm(true);
                   setTimeout(() => setShowSaveConfirm(false), 2000);
                   dispatch({ type: 'ADD_LOG', payload: { message: `Saved to Actors/${filename}`, type: 'success' } });
-                } catch (err: any) {
+                } catch (err: unknown) {
                   console.error("Save failed", err);
-                  dispatch({ type: 'ADD_LOG', payload: { message: `Save failed: ${err.message}`, type: 'error' } });
+                  dispatch({ type: 'ADD_LOG', payload: { message: `Save failed: ${err instanceof Error ? err.message : String(err)}`, type: 'error' } });
                 }
               } else {
                 const link = document.createElement('a');
@@ -230,7 +232,7 @@ const ImageInspector = () => {
 
 // --- ERROR BOUNDARY ---
 class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean, error: Error | null }> {
-  constructor(props: any) {
+  constructor(props: { children: ReactNode }) {
     super(props);
     this.state = { hasError: false, error: null };
   }
@@ -312,7 +314,11 @@ const App = () => {
 
   // Track previous credits locally for debug metrics without breaking useEffect dependencies
   const prevCreditsRef = useRef(state.hostedCredits);
-  const debounceTimerRef = useRef<any>(null);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const getErrorMessage = (error: unknown): string => {
+    if (error instanceof Error) return error.message;
+    return String(error);
+  };
   
   useEffect(() => { prevCreditsRef.current = state.hostedCredits; }, [state.hostedCredits]);
 
@@ -402,7 +408,11 @@ const App = () => {
         if (data) {
           if (data.status === 'COMPLETED') {
             const observedCompletedAt = Date.now();
-            const t = job.timing || {} as any;
+            const t = (job.timing ?? {}) as Partial<{
+              edgeAcceptedAt: number;
+              submittedAt: number;
+              clientTimeoutAt: number;
+            }>;
             const db = data.timing_metrics || {};
 
             let finalAssetUrl = data.asset_url;
@@ -445,7 +455,7 @@ const App = () => {
 
   // Sync Supabase Hosted Auth Session
   useEffect(() => {
-    const checkJwtDebug = async (session: any) => {
+    const checkJwtDebug = async (session: unknown) => {
       if (session) {
         try {
           const jwt = await SupabaseAuth.getValidJwt();
@@ -600,8 +610,8 @@ const App = () => {
       const { error } = await SupabaseAuth.signIn(authEmail, authPass);
       if (error) throw error;
       dispatch({ type: 'ADD_LOG', payload: { message: "Signed in successfully", type: 'success' } });
-    } catch (e: any) {
-      dispatch({ type: 'ADD_LOG', payload: { message: `Sign In Failed: ${e.message}`, type: 'error' } });
+    } catch (e: unknown) {
+      dispatch({ type: 'ADD_LOG', payload: { message: `Sign In Failed: ${getErrorMessage(e)}`, type: 'error' } });
     } finally {
       setIsAuthLoading(false);
     }
@@ -612,8 +622,8 @@ const App = () => {
     try {
       await SupabaseAuth.signOut();
       dispatch({ type: 'ADD_LOG', payload: { message: "Signed out successfully", type: 'info' } });
-    } catch (e: any) {
-      dispatch({ type: 'ADD_LOG', payload: { message: `Sign Out Failed: ${e.message}`, type: 'error' } });
+    } catch (e: unknown) {
+      dispatch({ type: 'ADD_LOG', payload: { message: `Sign Out Failed: ${getErrorMessage(e)}`, type: 'error' } });
     } finally {
       setIsAuthLoading(false);
     }
@@ -626,8 +636,13 @@ const App = () => {
       // In Native Electron mode, ignore Web Handlers to avoid double-sync or conflicts
       if (window.electronAPI || !state.saveDirectoryHandle) return;
 
-      // @ts-ignore
-      if ((await state.saveDirectoryHandle.queryPermission({ mode: 'read' })) !== 'granted') return;
+      const permissionQueryHandle = state.saveDirectoryHandle as FileSystemDirectoryHandle & {
+        queryPermission?: (descriptor?: { mode: 'read' | 'readwrite' }) => Promise<PermissionState>;
+      };
+      if (permissionQueryHandle.queryPermission) {
+        const permission = await permissionQueryHandle.queryPermission({ mode: 'read' });
+        if (permission !== 'granted') return;
+      }
 
       try {
         // dispatch({ type: 'ADD_LOG', payload: { message: "Scanning external actors folder...", type: 'info' } });
@@ -635,15 +650,17 @@ const App = () => {
         let actorsDir;
         try {
           actorsDir = await state.saveDirectoryHandle.getDirectoryHandle('Actors', { create: false });
-        } catch (e) {
+        } catch {
           // Actors dir doesn't exist yet, nothing to sync
           return;
         }
 
         const externalActors: CastMember[] = [];
         // Iterate files
-        // @ts-ignore - FileSystemDirectoryHandle is iterable in modern browsers
-        for await (const entry of actorsDir.values()) {
+        const iterableActorsDir = actorsDir as FileSystemDirectoryHandle & {
+          values: () => AsyncIterable<FileSystemHandle>;
+        };
+        for await (const entry of iterableActorsDir.values()) {
           if (entry.kind === 'file' && entry.name.toLowerCase().endsWith('.png')) {
             try {
               // Parse filename: Actor-{index}-{safename}.png
@@ -663,7 +680,7 @@ const App = () => {
               // However, we can't easily check state inside async loop without updated ref or dependency
               // We'll filter later or hope state is fresh enough on mount
 
-              const file = await entry.getFile();
+              const file = await (entry as FileSystemFileHandle).getFile();
               // Read as DataURL
               const reader = new FileReader();
               const dataUrl = await new Promise<string>((resolve) => {
@@ -761,9 +778,9 @@ const App = () => {
             dispatch({ type: 'ADD_LOG', payload: { message: `Synced ${externalActors.length} actors from disk.`, type: 'success' } });
           }
         }
-      } catch (e: any) {
+      } catch (e: unknown) {
         console.error("Disk sync error:", e);
-        dispatch({ type: 'ADD_LOG', payload: { message: `Disk scan failed: ${e.message}`, type: 'error' } });
+        dispatch({ type: 'ADD_LOG', payload: { message: `Disk scan failed: ${getErrorMessage(e)}`, type: 'error' } });
       }
     };
 
@@ -778,9 +795,13 @@ const App = () => {
     const rehydrateLibraryThumbnails = async () => {
       if (window.electronAPI || !state.saveDirectoryHandle || state.actorLibrary.length === 0) return;
 
-      // @ts-ignore
-      const permission = await state.saveDirectoryHandle.queryPermission({ mode: 'read' });
-      if (permission !== 'granted') return;
+      const permissionQueryHandle = state.saveDirectoryHandle as FileSystemDirectoryHandle & {
+        queryPermission?: (descriptor?: { mode: 'read' | 'readwrite' }) => Promise<PermissionState>;
+      };
+      if (permissionQueryHandle.queryPermission) {
+        const permission = await permissionQueryHandle.queryPermission({ mode: 'read' });
+        if (permission !== 'granted') return;
+      }
 
       const needsHydration = state.actorLibrary.filter(
         a => !a.previewUrl && a.localPath && !a.localPath.startsWith('app://') && !a.localPath.startsWith('file://')
@@ -811,7 +832,7 @@ const App = () => {
             updatedActors[index] = { ...updatedActors[index], previewUrl: blobUrl, url: blobUrl };
             hasChanges = true;
           }
-        } catch (err) {
+        } catch {
           // Gracefully skip missing WebFS files
         }
       }
@@ -822,7 +843,7 @@ const App = () => {
     };
 
     rehydrateLibraryThumbnails();
-  }, [state.saveDirectoryHandle, state.actorLibrary]);
+  }, [dispatch, state.saveDirectoryHandle, state.actorLibrary]);
 
   // --- NATIVE DISK SYNC (Electron) ---
   useEffect(() => {
@@ -1307,15 +1328,19 @@ const App = () => {
 
                               // WEB MODE
                               console.log("Requesting directory handle...");
-                              const handle = await (window as any).showDirectoryPicker();
+                              const fsWindow = window as Window & {
+                                showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle>;
+                              };
+                              if (!fsWindow.showDirectoryPicker) throw new Error('Directory picker API unavailable in this environment.');
+                              const handle = await fsWindow.showDirectoryPicker();
                               console.log("Directory handle received:", handle);
                               dispatch({ type: 'SET_SAVE_DIRECTORY', payload: handle });
                               await StorageService.save('nano_save_handle', handle);
                               dispatch({ type: 'ADD_LOG', payload: { message: `Save folder set: ${handle.name}`, type: 'success' } });
-                            } catch (e: any) {
+                            } catch (e: unknown) {
                               console.error("Directory picker error:", e);
-                              if (e.name !== 'AbortError') {
-                                dispatch({ type: 'ADD_LOG', payload: { message: `Failed to set folder: ${e.message}`, type: 'error' } });
+                              if (!(e instanceof DOMException && e.name === 'AbortError')) {
+                                dispatch({ type: 'ADD_LOG', payload: { message: `Failed to set folder: ${getErrorMessage(e)}`, type: 'error' } });
                               }
                             }
                           }}
@@ -1356,7 +1381,7 @@ const App = () => {
                         ].map(m => (
                           <button
                             key={m.id}
-                            onClick={() => setTempModel(m.id as any)}
+                            onClick={() => setTempModel(m.id as AppState['model'])}
                             className={`text-left p-3 rounded-lg border transition-all ${tempModel === m.id ? 'bg-yellow-500/10 border-yellow-500 ' : 'bg-[#09090b] border-[#27272a] hover:border-gray-600'}`}
                           >
                             <div className="flex justify-between items-center mb-1">
@@ -1426,6 +1451,23 @@ const App = () => {
                             className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${state.enableGoogleGrounding ? 'translate-x-5' : 'translate-x-1'}`}
                           />
                         </button>
+                      </div>
+
+                      <div className="pt-2">
+                        <div className="flex items-center justify-between">
+                          <label className="block text-xs font-bold text-gray-500 uppercase">Nano Scan SFX Volume</label>
+                          <span className="text-[10px] text-yellow-500 font-mono">{state.scanSfxVolume}%</span>
+                        </div>
+                        <p className="text-[9px] text-gray-500 mb-2">Controls capture confirmation sound volume in Nano Cast biometric acquisition.</p>
+                        <input
+                          type="range"
+                          min={0}
+                          max={100}
+                          step={1}
+                          value={state.scanSfxVolume}
+                          onChange={(e) => dispatch({ type: 'SET_SCAN_SFX_VOLUME', payload: Number(e.target.value) })}
+                          className="w-full h-1 bg-[#27272a] rounded-lg appearance-none cursor-pointer accent-yellow-500"
+                        />
                       </div>
 
                       {/* VEO STORYBOARD TOGGLE */}

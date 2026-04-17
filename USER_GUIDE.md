@@ -75,19 +75,52 @@ The app may support different generation modes depending on your account setup. 
 - **Hosted Mode:** Uses your account entitlements and generation credits. Hosted users should monitor their available credits in the account area or wherever credit visibility exists in the current build.
 - **BYOK Mode:** Bring Your Own Key. Uses your own connected AI provider API workflow to process images.
 
+Hosted setup (step-by-step):
+1. Open **Settings**.
+2. In **Hosted Cloud Authentication**, sign in with your Hosted account credentials.
+3. Confirm the authentication state shows as signed in.
+4. Set Billing Mode to **Hosted Cloud**.
+5. Click **Save Config**.
+6. Verify the mode badge shows **HOSTED** and confirm credits are visible before running large jobs.
+
+BYOK setup (step-by-step):
+1. Open **Settings**.
+2. Set Billing Mode to **Bring Your Own Key**.
+3. Paste your Gemini API key in the **Gemini API Key** field.
+4. Click **Save Config**.
+5. Verify the mode badge shows **BYOK**.
+6. Run one small generation test before starting a large workflow.
+
+### Step 2D: Expected Render Times (1G Baseline)
+These ETAs are baseline averages assuming approximately **1 Gbps internet speed**. Actual times can vary based on server load, concurrency, and prompt complexity.
+
+- **Nano Neuro Link (1K):** 26-30 seconds (average from 3 test runs)
+- **Nano Neuro Link (2K):** 33-38 seconds (average from 3 test runs)
+- **Nano Neuro Link (4K):** 45-57 seconds (average from 5 test runs)
+- **Reference Sheets:** 70-90 seconds
+
 ### Step 2C: Saved Assets vs Temporary Results
 As you generate images across the studio, many results remain temporary until you actively save them.
 - A generated result is often just a temporary preview; it may not persist across clears, screen refreshes, or session changes.
 - If you want to reuse an actor, prop, or outfit result later, **you must explicitly save it** to the proper library using the available save actions.
 - Refreshing or rescanning your library view may be needed after save or delete actions to securely confirm long-term storage updates.
 
+Recommended save verification flow:
+1. Generate your result.
+2. Click the relevant save action (**Save Character**, **Save to Wardrobe**, **Save to Library**, etc.).
+3. Use the scan/refresh control in that library panel.
+4. Confirm the item appears in the library list/grid.
+5. If needed, switch tabs and return to confirm it still appears (durable save check).
+
 ### Step 3: Complete a First 5-Minute Workflow
 A simple first pass:
 1. Go to **CAST** and generate a character.
 2. Save the character to your library.
-3. Open **WARDROBE** and apply a costume.
-4. Open **STAGE [PREVIEW]** and place the character on a background.
-5. Click **Generate Composite**.
+3. Refresh the actor library view once so the saved actor is visible.
+4. Open **WARDROBE** and apply a costume.
+5. Save the fitted output.
+6. Open **STAGE [PREVIEW]** and place the character on a background.
+7. Click **Generate Composite**.
 
 That gives you a fast end-to-end understanding of the studio.
 
@@ -104,7 +137,8 @@ Use this path if you do not already have a face or identity reference.
 2. Choose a visual style.
 3. Generate the actor.
 4. Save them to the library.
-5. Optionally send them to **Portrait** or **Nano Cast** for refinement.
+5. Refresh/scan library if the actor list has not updated yet.
+6. Optionally send them to **Portrait** or **Nano Cast** for refinement.
 
 ### Build a Character from a Photo or Real Person
 Use this when you want strong identity preservation.
@@ -116,6 +150,7 @@ Use this when you want strong identity preservation.
 3. Adjust likeness fidelity.
 4. Refine age, hair, or surface details if needed.
 5. Save the result to the library.
+6. Refresh/scan library and confirm the saved character is visible before moving to styling or staging.
 
 ### Style a Character with Clothing, Branding, or Visual Identity
 Use this when the face already exists and the next step is styling.
@@ -127,6 +162,7 @@ Use this when the face already exists and the next step is styling.
 3. Apply branding/logo placement if needed.
 4. Run virtual try-on.
 5. Save the clean result for staging.
+6. Refresh the relevant library panel and confirm the saved wardrobe result appears.
 
 ### Create Props and Reusable Assets
 Use this for objects, handheld items, set dressing, or visual accessories.
@@ -137,7 +173,8 @@ Use this for objects, handheld items, set dressing, or visual accessories.
 2. Remove the background.
 3. Refine edges if needed.
 4. Save the isolated prop to the library.
-5. Bring it into **STAGE [PREVIEW]** later.
+5. Refresh/scan the props list and confirm the prop is present.
+6. Bring it into **STAGE [PREVIEW]** later.
 
 ### Build a Staged Scene
 Use this when you already have actors, wardrobe, and optionally props.
@@ -232,7 +269,12 @@ Reference-based builds are best when facial identity needs to stay more consiste
    - Center
    - Left
    - Right
-3. Build the biometric matrix.
+   - Up
+   - Down
+3. For **Left** and **Right**, start around a **45-degree** head turn, then hold steady.
+4. Listen for the camera shutter confirmation sound after each successful capture.
+5. If you do **not** hear the shutter for an angle, keep your head in that same direction and make small adjustments until the shutter plays.
+6. Build the biometric matrix.
 
 ### Director Console
 Use these controls to refine the output:
@@ -271,6 +313,21 @@ Key tools:
 - **FRONT View**
 - **TURNAROUND View**
 - **Execute Virtual Try-On**
+
+Recommended Virtual Try-On flow:
+1. Select a subject character in **Selected Subject**.
+2. Select a wardrobe item in **Selected Wardrobe**.
+3. Optionally upload **Character Sheet (Identity Anchor)** for stronger identity consistency.
+4. Choose output view mode (**FRONT** or **TURNAROUND**).
+5. Add fitting notes if needed.
+6. Click **Execute Virtual Try-On**.
+7. Review output and save to library if successful.
+
+Clear behavior (clean slate):
+1. Click **CLEAR** in the Virtual Try-On controls.
+2. Confirm the try-on output is cleared.
+3. Confirm **Selected Wardrobe** is cleared (no costume should remain selected).
+4. If any stale preview remains visible, run one folder scan/refresh.
 
 ### Part C: Cleanup Tools
 - **Remove Background**
@@ -361,6 +418,14 @@ Use it for:
 ### Reference Stack Workflow
 Use this if you want the AI to place actors based on named references and directional notes rather than canvas positioning alone.
 
+Step-by-step:
+1. Open **Reference Stacks** in STAGE.
+2. Add images into reference slots by click-upload or drag-drop.
+3. Enable the slots you want the model to honor for the current composite.
+4. In Scene Director notes, name each reference target clearly (for example: "Actor A from Ref 1 at front left").
+5. Generate a composite and review placement behavior.
+6. Clear individual slots (or **Clear All**) when switching to a new reference set.
+
 ### SHOTS: Multi-Angle Cinematic Generation
 The **SHOTS** tab allows you to generate a consistent "pack" of camera angles from a single staged scene. This is a powerful way to create a cinematic sequence or coverage for a story directly derived from the scene geometry.
 
@@ -379,7 +444,9 @@ The **Directed Shot Plan** is where you define the specific angles and actions f
 1. Click the green **GENERATE** button to render low-resolution previews for the entire pack.
 2. Review the results in the **Shot Grid**.
 3. **Semantic Locks**: Use these to toggle which parts of the scene (Identity, Wardrobe, Background, Lighting) should remain strictly locked to the "Scene Truth" during generation.
-4. **Final Render**: Select your favorite previews and click **RENDER 4K** to generate high-fidelity, production-ready cinematic shots.
+4. Select the preview cards you want to keep.
+5. **Final Render**: Click **RENDER 4K** to generate high-fidelity, production-ready cinematic shots for selected previews.
+6. Save/download final shots from the grid or inspect view.
 
 ### When to Use STAGE
 Use STAGE when your actors and props already exist and the next step is composition, direction, and final composite generation.
@@ -396,6 +463,17 @@ Use STAGE when your actors and props already exist and the next step is composit
 - **Protect Face/Hair**
 - **Layer Instruction + Remove / Replace / Relight**
 - **Apply Enabled Layers**
+
+Recommended Region Edit sequence:
+1. Enable **Mask ON**.
+2. Select the target layer (A, B, or C).
+3. Choose **Paint** (add mask) or **Erase** (remove mask).
+4. Paint the exact area to change.
+5. Write a clear instruction for that layer (remove, replace, relight, etc.).
+6. Repeat for additional layers if needed and toggle each layer ON/OFF.
+7. Optionally generate and enable protection mask before apply.
+8. Click **Apply Enabled Layers**.
+9. If results drift, clear only the problematic mask layer and rerun.
 
 ### When to Use It
 Use REGION EDIT when the overall image works but one section needs cleanup, replacement, or relighting.
@@ -432,13 +510,16 @@ Use **REGION EDIT / POST-PRODUCTION** to fix local mistakes or make targeted cha
 
 | Issue | Solution |
 | :--- | :--- |
-| **"Not Linked" Status** | Go to Settings and re-select your Save Folder. |
-| **Credit / Generation Mode Confusion** | Ensure your generation mode (Hosted vs BYOK) in the Settings properly aligns with your intent. |
-| **Library Not Updating / Stuck Views** | After saving or deleting, use the scan/refresh control to force a folder re-read to display changes properly. |
+| **"Not Linked" Status** | 1) Open Settings. 2) Re-select **Render Save Folder**. 3) Save config and confirm status returns to connected. |
+| **Credit / Generation Mode Confusion** | 1) Open Settings. 2) Confirm active mode (Hosted or BYOK). 3) If BYOK, verify API key is present. 4) Save config and retry generation. |
+| **Hosted credits exhausted** | 1) Switch to BYOK if available, or 2) add/restore Hosted credits, then 3) retry with a small test generation first. |
+| **BYOK key missing/invalid** | 1) Open Settings. 2) Paste valid Gemini API key. 3) Save config. 4) Run a simple generation to validate access. |
+| **Library Not Updating / Stuck Views** | 1) Use scan/refresh in the affected panel. 2) Switch tabs and return. 3) If still stale, reopen workspace and rescan. |
 | **Portrait Details Return After Clearing** | Clearing should permanently erase a portrait from memory. If it returns visually, click the Clear button again to lock it down durably. |
+| **Try-On clear did not fully reset workspace** | Click **CLEAR** in Virtual Try-On, confirm output and selected wardrobe are empty, then perform one scan/refresh if a stale preview persists. |
 | **Prop Still Appearing After Removal** | Ensure the selected prop slot appears visually empty. If a ghost prop persists, a fast refresh or workspace re-open will force the interface to acknowledge the clean slate. |
 | **Staging feels inconsistent** | Remember that STAGE is currently a preview-tier system. Use it for concepting, selective production, and shot planning. |
-| **Download or save issues** | Confirm your save folder is linked and that permissions are still granted. |
+| **Download or save issues** | 1) Confirm save folder is linked. 2) Confirm folder permissions are still granted. 3) Save again and run scan/refresh to verify persistence. |
 
 ---
 

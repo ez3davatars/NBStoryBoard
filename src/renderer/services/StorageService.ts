@@ -18,7 +18,7 @@ export const StorageService = {
     });
   },
 
-  async save(key: string, data: any): Promise<void> {
+  async save(key: string, data: unknown): Promise<void> {
     const db = await this._getDb();
     const tx = db.transaction(this.storeName, 'readwrite');
     const store = tx.objectStore(this.storeName);

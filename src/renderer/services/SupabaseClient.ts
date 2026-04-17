@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import type { AuthChangeEvent, Session } from '@supabase/supabase-js';
 
 // Env variables exposed by Vite will be available here
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
@@ -48,7 +49,7 @@ export const SupabaseAuth = {
     return await supabase.auth.getSession();
   },
 
-  onAuthStateChange: (callback: (event: string, session: any) => void) => {
+  onAuthStateChange: (callback: (event: AuthChangeEvent, session: Session | null) => void) => {
     if (!supabase) return { data: { subscription: { unsubscribe: () => {} } } };
     return supabase.auth.onAuthStateChange(callback);
   },

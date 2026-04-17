@@ -1,6 +1,3 @@
-// @ts-nocheck
-// Disables IDE Node.js compiler errors for Deno-specific globals (Deno, https imports)
-
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 
@@ -10,21 +7,46 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-idempotency-key',
 };
 
-const withTimeout = (promise: Promise<any>, ms: number, name: string) => {
+const withTimeout = async <T>(promise: PromiseLike<T>, ms: number, name: string): Promise<T> => {
     return Promise.race([
         promise,
         new Promise((_, reject) => setTimeout(() => reject(new Error(`DIAGNOSTIC HANG DETECTED: [${name}] timed out after ${ms}ms`)), ms))
-    ]);
+    ]) as Promise<T>;
 };
 
-const decodeJwtPayload = (jwt: string) => {
-  const parts = jwt.split('.');
-  if (parts.length !== 3) throw new Error('Malformed JWT');
-  const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
-  return payload;
+type GenerationJobStatus = 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'CANCELED' | string;
+
+type GenerationJob = {
+  id: string;
+  status: GenerationJobStatus;
+  request_fingerprint: string;
+  asset_url?: string | null;
 };
 
-serve(async (req) => {
+type RpcResponse<T> = {
+  data: T;
+  error: { message: string } | null;
+};
+
+type GenerateImageRequest = {
+  payload: {
+    model: string;
+    requestBody: unknown;
+  };
+  executionFingerprint: string;
+};
+
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  return String(error);
+};
+
+const getErrorStack = (error: unknown): string | null => {
+  if (error instanceof Error && error.stack) return error.stack;
+  return null;
+};
+
+serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     const requestedHeaders = req.headers.get('Access-Control-Request-Headers');
     return new Response('ok', { 
@@ -35,8 +57,7 @@ serve(async (req) => {
     });
   }
 
-  let job: any = null;
-  let supabaseService: any = null;
+  let job: GenerationJob | null = null;
 
   try {
     const authHeader = req.headers.get('Authorization');
@@ -94,19 +115,18 @@ serve(async (req) => {
     }
 
     // Service client ONLY
-    supabaseService = createClient(supabaseUrl, supabaseServerKey);
+    const supabaseService = createClient(supabaseUrl, supabaseServerKey);
     
     const userId = userData.user.id;
 
     const payloadRaw = await withTimeout(req.json(), 15000, "req.json");
-    const { payload, options, executionFingerprint } = payloadRaw;
+    const { payload, executionFingerprint } = payloadRaw as GenerateImageRequest;
     
     const idempotencyKey = req.headers.get('x-idempotency-key');
     if (!idempotencyKey) throw new Error("Missing X-Idempotency-Key header");
 
     // 1. Transaction Lock / Ownership Handshake
-    const { data: jobData, error: startErr } = await withTimeout(
-        supabaseService.rpc('start_generation', {
+    const startGenerationPromise = supabaseService.rpc('start_generation', {
             p_user_id: userId,
             p_request_idempotency_key: idempotencyKey,
             p_request_fingerprint: executionFingerprint,
@@ -115,12 +135,16 @@ serve(async (req) => {
             p_is_byok: false,
             p_provider: 'gemini',
             p_provider_model: payload.model
-        }),
-        10000, "start_generation_rpc"
+        }) as unknown as Promise<RpcResponse<GenerationJob>>;
+
+    const { data: jobData, error: startErr } = await withTimeout(
+      startGenerationPromise,
+      10000,
+      "start_generation_rpc"
     );
 
     if (startErr) throw new Error(`start_generation failed: ${startErr.message}`);
-    job = jobData;
+    job = jobData as GenerationJob;
 
     // 2. Ownership & Replay Check
     if (job.request_fingerprint !== executionFingerprint) {
@@ -163,17 +187,19 @@ serve(async (req) => {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     });
 
-  } catch (err: any) {
-    console.error("Generate Image Orchestration Error:", err.message, err.stack);
+  } catch (err: unknown) {
+    const message = getErrorMessage(err);
+    const stack = getErrorStack(err);
+    console.error("Generate Image Orchestration Error:", message, stack);
     
     let status = 400;
-    if (err.message?.includes('Unauthorized')) status = 401;
-    if (err.message && err.message.includes('Idempotency')) status = 409;
-    if (err.message && err.message.includes('Missing X-Idempotency-Key header')) status = 400;
-    if (err.message && err.message.includes('req.json')) status = 400; // Json parse timeouts/errors
+    if (message.includes('Unauthorized')) status = 401;
+    if (message.includes('Idempotency')) status = 409;
+    if (message.includes('Missing X-Idempotency-Key header')) status = 400;
+    if (message.includes('req.json')) status = 400; // Json parse timeouts/errors
 
     // fail_generation relies on generation payload isolation
-    return new Response(JSON.stringify({ error: err.message, code: 'INTERNAL_ERROR', stack: err.stack }), {
+    return new Response(JSON.stringify({ error: message, code: 'INTERNAL_ERROR', stack }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       status,
     });

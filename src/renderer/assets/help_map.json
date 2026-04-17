@@ -43,6 +43,18 @@
             }
         },
         "nanoCast": {
+            "directorModeToggle": {
+                "type": "tooltip",
+                "text": "Switch between Director controls and Wardrobe tools for Nano Cast output shaping."
+            },
+            "promptInput": {
+                "type": "inline",
+                "text": "Use concise, production-safe notes to refine style and costume behavior."
+            },
+            "cameraControl": {
+                "type": "tooltip",
+                "text": "Enable or disable live camera capture for biometric scan acquisition."
+            },
             "cameraToggle": {
                 "type": "tooltip",
                 "text": "Enables live capture for biometric acquisition."

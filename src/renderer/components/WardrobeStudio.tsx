@@ -1,5 +1,5 @@
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Upload, RefreshCcw, Maximize, Shirt, Sparkles, Download,
@@ -27,8 +27,10 @@ async function materializeDisplayUrl(url: string | null | undefined): Promise<st
     if (url.startsWith('blob:') || url.startsWith('data:')) return url;
 
     if (/^https?:\/\//i.test(url)) {
+        const controller = new AbortController();
+        const timeoutId = window.setTimeout(() => controller.abort(), 15000);
         try {
-            const res = await fetch(url, { mode: 'cors' });
+            const res = await fetch(url, { mode: 'cors', signal: controller.signal });
             if (!res.ok) throw new Error(`Failed to fetch remote display asset: ${res.status}`);
             const fetchedBlob = await res.blob();
             
@@ -42,10 +44,25 @@ async function materializeDisplayUrl(url: string | null | undefined): Promise<st
         } catch (e) {
             console.warn(`Failed to materialize remote display asset to base64:`, e);
             return url;
+        } finally {
+            window.clearTimeout(timeoutId);
         }
     }
 
     return url;
+}
+
+function getErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+}
+
+function extractGeneratedAssetUrl(result: unknown): string {
+    if (typeof result === 'string') return result;
+    if (result && typeof result === 'object' && 'asset_url' in result) {
+        const candidate = (result as { asset_url?: unknown }).asset_url;
+        if (typeof candidate === 'string') return candidate;
+    }
+    return '';
 }
 
 const WardrobeLibrarySkeletonCard = () => (
@@ -72,29 +89,29 @@ const WardrobeStudio = () => {
     } = state.wardrobeState;
 
     // Local Helper to update global state
-    const updateState = (updates: Partial<WardrobeState>) => {
+    const updateState = useCallback((updates: Partial<WardrobeState>) => {
         dispatch({ type: 'SET_WARDROBE_STATE', payload: updates });
-    };
+    }, [dispatch]);
 
     // Alias for setters (to minimize code churn)
-    const setFittedImage = (val: string | null) => updateState({ fittedImage: val });
-    const setTryOnMask = (val: string | null) => updateState({ tryOnMask: val });
-    const setRestorationLayer = (val: string | null) => updateState({ restorationLayer: val });
-    const setRemoveTryOnBg = (val: boolean) => updateState({ removeBg: val });
-    const setFringeSize = (val: number) => updateState({ fringeSize: val });
-    const setBrushSize = (val: number) => updateState({ brushSize: val });
-    const setHistory = (val: string[]) => updateState({ history: val });
-    const setHistoryIndex = (val: number) => updateState({ historyIndex: val });
-    const setIsBrushActive = (val: boolean) => updateState({ isBrushActive: val });
-    const setTryOnNote = (val: string) => updateState({ tryOnNote: val });
-    const setProcessedTryOnUrl = (val: string | null) => updateState({ processedTryOnUrl: val });
-    const setBrandingLogo = (val: string | null) => updateState({ brandingLogo: val });
-    const setLogoPosition = (val: string) => updateState({ logoPosition: val });
-    const setTryOnOutputMode = (val: 'front' | 'turnaround') => updateState({ tryOnOutputMode: val });
-    const setTryOnViews = (val: Record<'front' | 'back' | 'left' | 'right', string> | null) => updateState({ tryOnViews: val });
-    const setTryOnSheetFB = (val: string | null) => updateState({ tryOnSheetFB: val });
-    const setTryOnSheetLR = (val: string | null) => updateState({ tryOnSheetLR: val });
-    const setActiveTryOnView = (val: 'front' | 'back' | 'left' | 'right' | 'sheetFB' | 'sheetLR') => updateState({ activeTryOnView: val });
+    const setFittedImage = useCallback((val: string | null) => updateState({ fittedImage: val }), [updateState]);
+    const setTryOnMask = useCallback((val: string | null) => updateState({ tryOnMask: val }), [updateState]);
+    const setRestorationLayer = useCallback((val: string | null) => updateState({ restorationLayer: val }), [updateState]);
+    const setRemoveTryOnBg = useCallback((val: boolean) => updateState({ removeBg: val }), [updateState]);
+    const setFringeSize = useCallback((val: number) => updateState({ fringeSize: val }), [updateState]);
+    const setBrushSize = useCallback((val: number) => updateState({ brushSize: val }), [updateState]);
+    const setHistory = useCallback((val: string[]) => updateState({ history: val }), [updateState]);
+    const setHistoryIndex = useCallback((val: number) => updateState({ historyIndex: val }), [updateState]);
+    const setIsBrushActive = useCallback((val: boolean) => updateState({ isBrushActive: val }), [updateState]);
+    const setTryOnNote = useCallback((val: string) => updateState({ tryOnNote: val }), [updateState]);
+    const setProcessedTryOnUrl = useCallback((val: string | null) => updateState({ processedTryOnUrl: val }), [updateState]);
+    const setBrandingLogo = useCallback((val: string | null) => updateState({ brandingLogo: val }), [updateState]);
+    const setLogoPosition = useCallback((val: string) => updateState({ logoPosition: val }), [updateState]);
+    const setTryOnOutputMode = useCallback((val: 'front' | 'turnaround') => updateState({ tryOnOutputMode: val }), [updateState]);
+    const setTryOnViews = useCallback((val: Record<'front' | 'back' | 'left' | 'right', string> | null) => updateState({ tryOnViews: val }), [updateState]);
+    const setTryOnSheetFB = useCallback((val: string | null) => updateState({ tryOnSheetFB: val }), [updateState]);
+    const setTryOnSheetLR = useCallback((val: string | null) => updateState({ tryOnSheetLR: val }), [updateState]);
+    const setActiveTryOnView = useCallback((val: 'front' | 'back' | 'left' | 'right' | 'sheetFB' | 'sheetLR') => updateState({ activeTryOnView: val }), [updateState]);
 
     // Use global isBrushActive
     const isBrushActive = globalIsBrushActive;
@@ -132,11 +149,23 @@ const WardrobeStudio = () => {
     const [isIsolating, setIsIsolating] = useState(false);
     const [isolationProgress, setIsolationProgress] = useState(0);
     const [notification, setNotification] = useState<string | null>(null);
+    const activeProgressIntervalRef = useRef<number | null>(null);
+    const progressSessionRef = useRef(0);
 
     const showToast = (msg: string) => {
         setNotification(msg);
         setTimeout(() => setNotification(null), 3000);
     };
+
+    useEffect(() => {
+        return () => {
+            if (activeProgressIntervalRef.current !== null) {
+                window.clearInterval(activeProgressIntervalRef.current);
+                activeProgressIntervalRef.current = null;
+            }
+            progressSessionRef.current += 1;
+        };
+    }, []);
 
     // --- FILE/IMAGE HELPERS ---
     const fileToDataUrl = (file: Blob) =>
@@ -201,6 +230,26 @@ const WardrobeStudio = () => {
         setDesignerRefName('');
         setDesignerImage(null);
         setDesignerMask(null);
+    };
+
+    const clearTryOnWorkspace = () => {
+        setSelectedCostume(null);
+        updateState({
+            fittedImage: null,
+            tryOnMask: null,
+            restorationLayer: null,
+            removeBg: false,
+            history: [],
+            historyIndex: -1,
+            processedTryOnUrl: null,
+            selectedCostume: null,
+            tryOnViews: null,
+            tryOnSheetFB: null,
+            tryOnSheetLR: null,
+            activeTryOnView: 'front',
+            tryOnOutputMode: 'front',
+            tryOnNote: ''
+        });
     };
 
 
@@ -324,9 +373,9 @@ const WardrobeStudio = () => {
             setShowSaveModal(false);
             dispatch({ type: 'ADD_LOG', payload: { message: `Saved Actor: ${mat.filename || "Storage"}`, type: 'success' } });
 
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error("Save Failed:", err);
-            dispatch({ type: 'ADD_LOG', payload: { message: `Save Failed: ${err.message}`, type: 'error' } });
+            dispatch({ type: 'ADD_LOG', payload: { message: `Save Failed: ${getErrorMessage(err)}`, type: 'error' } });
         }
     };
     const uiCanvasRef = useRef<HTMLCanvasElement>(null); // For Brush Cursor
@@ -536,7 +585,7 @@ const WardrobeStudio = () => {
             const ctx = restorationCanvasRef.current.getContext('2d');
             ctx?.clearRect(0, 0, restorationCanvasRef.current.width, restorationCanvasRef.current.height);
         }
-    }, [fittedImage]);
+    }, [fittedImage, setRestorationLayer, setRemoveTryOnBg, setIsBrushActive, setHistory, setHistoryIndex]);
 
     // EFFECT 1.5: Preload/Cache Static Images
     useEffect(() => {
@@ -593,7 +642,7 @@ const WardrobeStudio = () => {
         composite();
 
         return () => { active = false; };
-    }, [erodedUrl, tryOnMask, restorationLayer, removeTryOnBg, fittedImage]);
+    }, [erodedUrl, tryOnMask, restorationLayer, removeTryOnBg, fittedImage, setProcessedTryOnUrl]);
 
     // Simplified Isolation (Just triggers Img.ly and sets mask)
     const runTryOnIsolation = async (): Promise<string | null> => {
@@ -990,7 +1039,7 @@ const WardrobeStudio = () => {
         }
     }, [isBrushActive]);
 
-    const scanWardrobe = async () => {
+    const scanWardrobe = useCallback(async () => {
         // 1. Native Mode
         if (state.saveDirectoryPath) {
             try {
@@ -1029,19 +1078,25 @@ const WardrobeStudio = () => {
 
         if (!state.saveDirectoryHandle) return;
         try {
-            // @ts-ignore
-            if ((await state.saveDirectoryHandle.queryPermission({ mode: 'read' })) !== 'granted') return;
+            const permissionAwareHandle = state.saveDirectoryHandle as FileSystemDirectoryHandle & {
+                queryPermission?: (descriptor?: { mode: 'read' | 'readwrite' }) => Promise<PermissionState>;
+            };
+            if (permissionAwareHandle.queryPermission) {
+                const permission = await permissionAwareHandle.queryPermission({ mode: 'read' });
+                if (permission !== 'granted') return;
+            }
 
             const wardrobeHandle = await state.saveDirectoryHandle.getDirectoryHandle('wardrobe', { create: true });
             const items: WardrobeItem[] = [];
-            // @ts-ignore
-            // @ts-ignore
-            for await (const entry of (wardrobeHandle as any).values()) {
+            const iterableWardrobeHandle = wardrobeHandle as FileSystemDirectoryHandle & {
+                values: () => AsyncIterable<FileSystemHandle>;
+            };
+            for await (const entry of iterableWardrobeHandle.values()) {
                 if (entry.kind === 'file' && /\.(png|jpg|jpeg|webp)$/i.test(entry.name)) {
                     // Skip ComfyUI Designer sketches from polluting the library
                     if (entry.name.toLowerCase().includes('_designer_')) continue;
 
-                    const file = await entry.getFile();
+                    const file = await (entry as FileSystemFileHandle).getFile();
                     const reader = new FileReader();
                     const dataUrl = await new Promise<string>((resolve) => {
                         reader.onload = () => resolve(reader.result as string);
@@ -1059,10 +1114,10 @@ const WardrobeStudio = () => {
                 }
             }
             dispatch({ type: 'SET_WARDROBE_ITEMS', payload: items.sort((a, b) => b.timestamp - a.timestamp) });
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Wardrobe scan failed: ${e.message} `, type: 'error' } });
+        } catch (e: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Wardrobe scan failed: ${getErrorMessage(e)} `, type: 'error' } });
         }
-    };
+    }, [dispatch, state.saveDirectoryHandle, state.saveDirectoryPath]);
 
     const withLibraryTransition = (work: () => void | Promise<void>, minMs = 180) => {
         setLibraryLoading(true);
@@ -1077,7 +1132,7 @@ const WardrobeStudio = () => {
 
     useEffect(() => {
         scanWardrobe();
-    }, [state.saveDirectoryHandle]);
+    }, [scanWardrobe]);
 
     const saveToWardrobe = async (imageUrl: string, prompt: string) => {
         const hasStorage = !!state.saveDirectoryHandle || !!state.saveDirectoryPath;
@@ -1104,8 +1159,8 @@ const WardrobeStudio = () => {
 
             dispatch({ type: 'ADD_WARDROBE_ITEM', payload: newItem });
             dispatch({ type: 'ADD_LOG', payload: { message: `Costume saved to wardrobe: ${mat.filename || 'local storage'}`, type: 'success' } });
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Failed to save wardrobe item: ${e.message}`, type: 'error' } });
+        } catch (e: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Failed to save wardrobe item: ${getErrorMessage(e)}`, type: 'error' } });
         }
     };
 
@@ -1140,6 +1195,13 @@ const WardrobeStudio = () => {
 
         setDesignerMask(null);
         dispatch({ type: 'SET_PROCESSING', payload: true });
+        const progressSessionId = ++progressSessionRef.current;
+        const progressOwner = `wardrobe_designer_${progressSessionId}`;
+        let progressSequence = 0;
+        if (activeProgressIntervalRef.current !== null) {
+            window.clearInterval(activeProgressIntervalRef.current);
+            activeProgressIntervalRef.current = null;
+        }
 
         // --- TIMEOUT & ETA LOGIC ---
         const getEtaMs = () => state.imageResolution === '4K' ? 35000 : (state.imageResolution === '2K' ? 25000 : 15000);
@@ -1147,13 +1209,17 @@ const WardrobeStudio = () => {
 
         // --- PROGRESS SIMULATION TIMER ---
         let currentPercent = 5;
-        dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text: "Designing Garment" } });
+        dispatch({
+            type: 'SET_GLOBAL_PROGRESS',
+            payload: { percent: currentPercent, text: "Designing Garment", owner: progressOwner, sequence: ++progressSequence }
+        });
 
         const updateMs = 1000;
         const increment = (updateMs / etaMs) * 100;
 
         // Using window.setInterval to avoid NodeJS Timeout typing issues in React/Vite
         const progressInterval = window.setInterval(() => {
+            if (progressSessionRef.current !== progressSessionId) return;
             currentPercent += increment;
             if (currentPercent > 95) currentPercent = 95; // Cap at 95% until complete
 
@@ -1163,8 +1229,12 @@ const WardrobeStudio = () => {
             if (currentPercent > 80) text = "Finalizing Render...";
             if (currentPercent >= 95) text = "Finalizing Render... (Still working, please wait)";
 
-            dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text } });
+            dispatch({
+                type: 'SET_GLOBAL_PROGRESS',
+                payload: { percent: currentPercent, text, owner: progressOwner, sequence: ++progressSequence }
+            });
         }, updateMs);
+        activeProgressIntervalRef.current = progressInterval;
 
         try {
             const refs: { url: string; label: string }[] = [];
@@ -1237,10 +1307,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
             if (actualGenId) dispatch({ type: 'REMOVE_BACKGROUND_JOB', payload: actualGenId });
 
-            const rawUrl =
-                typeof res === 'string'
-                    ? res
-                    : (res && typeof res === 'object' ? (res as any).asset_url || '' : '');
+            const rawUrl = extractGeneratedAssetUrl(res);
 
             let safeUrl = rawUrl;
             try {
@@ -1251,18 +1318,24 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
             setDesignerImage(safeUrl);
             dispatch({ type: 'ADD_LOG', payload: { message: "Costume generated (Costume Designer).", type: 'success' } });
-        } catch (e: any) {
-            const isTimeout = e.name === 'TimeoutError' || e.message?.includes('Pending');
-            if (isTimeout && e.generationId) {
-                dispatch({ type: 'UPDATE_BACKGROUND_JOB', payload: { id: e.generationId, updates: { status: 'pending_background' } } });
+        } catch (e: unknown) {
+            const err = e as { name?: string; message?: string; generationId?: string };
+            const isTimeout = err.name === 'TimeoutError' || (err.message?.includes('Pending') ?? false);
+            if (isTimeout && err.generationId) {
+                dispatch({ type: 'UPDATE_BACKGROUND_JOB', payload: { id: err.generationId, updates: { status: 'pending_background' } } });
                 dispatch({ type: 'ADD_LOG', payload: { message: "Job shifted to background due to long queue.", type: 'info' } });
             } else {
-                dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });
+                dispatch({ type: 'ADD_LOG', payload: { message: getErrorMessage(e), type: 'error' } });
             }
         } finally {
             clearInterval(progressInterval);
-            dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
-            dispatch({ type: 'SET_PROCESSING', payload: false });
+            if (activeProgressIntervalRef.current === progressInterval) {
+                activeProgressIntervalRef.current = null;
+            }
+            if (progressSessionRef.current === progressSessionId) {
+                dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
+                dispatch({ type: 'SET_PROCESSING', payload: false });
+            }
         }
     };
 
@@ -1315,8 +1388,8 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
             };
             reader.readAsDataURL(file);
 
-        } catch (err: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Upload failed: ${err.message} `, type: 'error' } });
+        } catch (err: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Upload failed: ${getErrorMessage(err)} `, type: 'error' } });
         }
     };
 
@@ -1348,11 +1421,14 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
             const newItems = state.wardrobeItems.filter(i => i.id !== item.id);
             dispatch({ type: 'SET_WARDROBE_ITEMS', payload: newItems });
-            if (selectedCostume?.id === item.id) setSelectedCostume(null);
+            if (selectedCostume?.id === item.id) {
+                setSelectedCostume(null);
+                updateState({ selectedCostume: null });
+            }
             dispatch({ type: 'ADD_LOG', payload: { message: `Deleted costume: ${item.name} | ${diag}`, type: 'success' } });
 
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Delete failed: ${e.message}`, type: 'error' } });
+        } catch (e: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Delete failed: ${getErrorMessage(e)}`, type: 'error' } });
         } finally {
             setConfirmDelete(null);
         }
@@ -1408,6 +1484,13 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
         purgeRestorationState();
         dispatch({ type: 'SET_PROCESSING', payload: true });
+        const progressSessionId = ++progressSessionRef.current;
+        const progressOwner = `wardrobe_tryon_${progressSessionId}`;
+        let progressSequence = 0;
+        if (activeProgressIntervalRef.current !== null) {
+            window.clearInterval(activeProgressIntervalRef.current);
+            activeProgressIntervalRef.current = null;
+        }
 
         const getEtaMs = () =>
             tryOnOutputMode === 'turnaround'
@@ -1417,12 +1500,19 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
         const etaMs = getEtaMs();
 
         let currentPercent = 5;
-        dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text: "Initiating Try-On Protocol" } });
+        const pushProgress = (percent: number, text: string) => {
+            dispatch({
+                type: 'SET_GLOBAL_PROGRESS',
+                payload: { percent, text, owner: progressOwner, sequence: ++progressSequence }
+            });
+        };
+        pushProgress(currentPercent, "Initiating Try-On Protocol");
 
         const updateMs = 1000;
         const increment = (updateMs / etaMs) * 100;
 
         const progressInterval = window.setInterval(() => {
+            if (progressSessionRef.current !== progressSessionId) return;
             currentPercent += increment;
             if (currentPercent > 95) currentPercent = 95;
 
@@ -1432,8 +1522,9 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
             if (currentPercent > 75) text = "Finalizing Output...";
             if (currentPercent >= 95) text = "Finalizing Output... (Still working, please wait)";
 
-            dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text } });
+            pushProgress(currentPercent, text);
         }, updateMs);
+        activeProgressIntervalRef.current = progressInterval;
 
         try {
             const subjectStyle = selectedCharacter.profile?.style || "Matching Style";
@@ -1501,7 +1592,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
             const effectiveTryOnNote = isEnclosureCostume
                 ? `${tryOnNote ? `${tryOnNote}. ` : ''}Preserve the costume exactly. If the design has a dedicated face window, keep that opening exactly as shown and place the subject's face only there. Do not use any other cavity or decorative opening as the face opening.`
-                : (tryOnNote || "Transfer the garment exactly and preserve the visible design.");
+                : `${tryOnNote ? `${tryOnNote}. ` : ''}Transfer the garment exactly and preserve the visible design. If any reference is cropped or missing limbs, complete full anatomy with both hands/fingers and both feet. If footwear is unclear or missing, add clean outfit-matching shoes/sneakers unless the source clearly indicates a barefoot look.`;
 
             const sourceAppearanceContinuityBlock = `
  SOURCE APPEARANCE CONTINUITY LOCK (CRITICAL)
@@ -1607,14 +1698,12 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                         imageSize: state.imageResolution,
                         thinkingLevel: state.enableImageThinking,
                         googleGrounding: state.enableGoogleGrounding,
+                        strictMode: false,
                         billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements
                     }
                 );
 
-                const rawUrl =
-                    typeof res === 'string'
-                        ? res
-                        : (res && typeof res === 'object' ? (res as any).asset_url || '' : '');
+                const rawUrl = extractGeneratedAssetUrl(res);
 
                 let safeUrl = rawUrl;
                 try {
@@ -1638,9 +1727,10 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  - Same solid black background (#000000) and consistent studio lighting in both panels.
  - Full body visible in both panels (no cropping head/feet).
  - FOOTWEAR CONSISTENCY (CRITICAL): The subject must have the EXACT SAME footwear (or lack thereof) in both panels.
- - No text, no labels, no watermarks.
- `;
+  - No text, no labels, no watermarks.
+  `;
 
+            pushProgress(18, "Processing Front/Back Sheet...");
             const fbSheet = await GeminiService.generateImage(
                 `Professional virtual try-on TURNAROUND SHEET.
 
@@ -1704,9 +1794,11 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                     imageSize: state.imageResolution,
                     thinkingLevel: state.enableImageThinking,
                     googleGrounding: state.enableGoogleGrounding,
+                    strictMode: false,
                     billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements
                 }
             );
+            pushProgress(56, "Processing Left/Right Sheet...");
 
             const lrImages: { url: string; label: string }[] = [
                 ...subjectRefs,
@@ -1753,10 +1845,15 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  PANELS
  - LEFT PANEL: LEFT profile view (90 degrees), facing Viewer's LEFT.
  - RIGHT PANEL: RIGHT profile view (90 degrees), facing Viewer's RIGHT.
+ - LEFT PANEL direction vector: nose/chin/chest/hip line and front shoe toe must point toward the LEFT EDGE of the image.
+ - RIGHT PANEL direction vector: nose/chin/chest/hip line and front shoe toe must point toward the RIGHT EDGE of the image.
+ - LEFT and RIGHT panels must be opposite-facing views. They must NEVER face the same direction.
 
  PROFILE RULE
  - Left and right panels must be profile rotations of the already-established costume.
  - Do NOT introduce new arm, hand, leg, ankle, head, glove, or sleeve construction details not already established by the Canonical Front/Back Sheet.
+ - Do NOT mirror-copy one side to make the other side.
+ - Keep stance anatomically plausible: hips, knees, ankles, and both feet must follow one coherent body orientation per panel.
 
  FOOTWEAR (CRITICAL LOCK & CONTEXTUAL MATCH)
  - The exact boot, sandal, or shoe design from the Canonical Front/Back Sheet MUST be preserved identically.
@@ -1764,6 +1861,12 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  - If the subject has simple sandals in the Front/Back Sheet, do NOT upgrade them to armored boots or add greaves in the side view.
  - If the subject is barefoot in the Front/Back Sheet, they MUST be barefoot in both profile views. NO EXCEPTIONS. Do NOT add shoes if they are barefoot.
  - Do NOT hallucinate different shoes for the profile view.
+ - Shoe/toe direction must match panel direction: LEFT panel toes face left, RIGHT panel toes face right.
+ - Do NOT point shoes inward, backward, or opposite the panel-facing direction.
+ - FAR-FOOT PLACEMENT LOCK: The foot farther from camera must read as a natural trailing support foot behind the near foot, not a separate side protrusion.
+ - FAR-FOOT VISIBILITY LOCK: If a long garment/hem occludes legs, keep far-foot visibility minimal and physically consistent (small partial reveal or fully occluded), not exaggerated.
+ - Keep both feet planted on the same floor plane with natural contact shadows; no floating, detached, or twisted ankle geometry.
+ - Do NOT splay the far foot outward away from body direction or place it crossing unnaturally in front of the near foot.
 
  ${brandingInstructionLR}
 
@@ -1774,7 +1877,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  redesigned face hole, widened face window, shrunken face window, moved face window, broken face-window border,
  extra limbs, duplicate arms, duplicate sleeves, duplicate gloves, extra costume appendages, invented openings, exposed neck when not shown, exposed wrists when not shown, exposed ankles when not shown,
  exposed hands when not shown, exposed feet when not shown, anatomy contouring, body-hugging reinterpretation, bodysuit reinterpretation,
- costume redesign, side-view reinterpretation, outfit mismatch,
+ costume redesign, side-view reinterpretation, outfit mismatch, both panels facing same direction, duplicate profile direction, mirrored duplicate side view, left panel facing right, right panel facing left, inward-pointing shoes, backward-pointing shoes, shoe direction mismatch, far-foot side protrusion, detached trailing foot, floating rear foot, twisted rear ankle, crossed-feet artifact, exaggerated far-foot visibility under long hem, rear-foot orientation mismatch,
  missing worn accessory, removed accessory, dropped headwear, missing jewelry, removed jewelry, missing eyewear, removed eyewear, missing veil, removed veil, missing hood, removed hood, missing scarf, removed scarf, missing glove, removed glove, missing footwear, removed footwear, missing adornment, simplified adornment, omitted source appearance element, restyled hair, bun hairstyle, updo, tied-back hair, ponytail, braid, pinned hair, shorter hair, different hair volume, different hair silhouette,
  altered costume colors, shifted palette, desaturated costume, brighter costume, darker costume, material reinterpretation,
  text, watermark.`,
@@ -1786,13 +1889,26 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                     imageSize: state.imageResolution,
                     thinkingLevel: state.enableImageThinking,
                     googleGrounding: state.enableGoogleGrounding,
+                    strictMode: false,
                     billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements
                 }
             );
+            pushProgress(84, "Extracting Turnaround Views...");
 
             // Extract exact view frames from turnaround sheets using offscreen canvas logic
             const extractPanel = (sourceUrl: string, isRightPanel: boolean): Promise<string> => {
                 return new Promise((resolve) => {
+                    let settled = false;
+                    const settle = (value: string) => {
+                        if (settled) return;
+                        settled = true;
+                        window.clearTimeout(watchdogId);
+                        resolve(value);
+                    };
+                    const watchdogId = window.setTimeout(() => {
+                        console.warn("Turnaround panel extraction timed out; using fallback source panel.");
+                        settle(sourceUrl);
+                    }, 12000);
                     const img = new Image();
                     img.crossOrigin = "anonymous";
                     img.onload = () => {
@@ -1801,15 +1917,15 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                         canvas.height = img.height;
                         const ctx = canvas.getContext("2d");
                         if (!ctx) {
-                            resolve(sourceUrl);
+                            settle(sourceUrl);
                             return;
                         }
 
                         const srcX = isRightPanel ? img.width / 2 : 0;
                         ctx.drawImage(img, srcX, 0, img.width / 2, img.height, 0, 0, canvas.width, canvas.height);
-                        resolve(canvas.toDataURL("image/webp", 1.0));
+                        settle(canvas.toDataURL("image/webp", 1.0));
                     };
-                    img.onerror = () => resolve(sourceUrl);
+                    img.onerror = () => settle(sourceUrl);
                     img.src = sourceUrl;
                 });
             };
@@ -1847,15 +1963,22 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
             setFittedImage(safeFbSheet);
             setActiveTryOnView('sheetFB');
+            pushProgress(95, "Finalizing Output...");
 
             dispatch({ type: 'ADD_LOG', payload: { message: "Turnaround complete (2 sheets generated: FB + LR).", type: 'success' } });
-        } catch (e: any) {
-            const isTimeout = e.name === 'TimeoutError' || e.message?.includes('Pending');
-            dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: isTimeout ? 'info' : 'error' } });
+        } catch (e: unknown) {
+            const err = e as { name?: string; message?: string };
+            const isTimeout = err.name === 'TimeoutError' || (err.message?.includes('Pending') ?? false);
+            dispatch({ type: 'ADD_LOG', payload: { message: getErrorMessage(e), type: isTimeout ? 'info' : 'error' } });
         } finally {
             clearInterval(progressInterval);
-            dispatch({ type: 'SET_PROCESSING', payload: false });
-            dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: 0, text: '' } });
+            if (activeProgressIntervalRef.current === progressInterval) {
+                activeProgressIntervalRef.current = null;
+            }
+            if (progressSessionRef.current === progressSessionId) {
+                dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
+                dispatch({ type: 'SET_PROCESSING', payload: false });
+            }
         }
     };
 
@@ -1940,7 +2063,10 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                             state.wardrobeItems.map(item => (
                                 <div
                                     key={item.id}
-                                    onClick={() => setSelectedCostume(item)}
+                                    onClick={() => {
+                                        setSelectedCostume(item);
+                                        updateState({ selectedCostume: item });
+                                    }}
                                     className={`aspect-square rounded-lg border overflow-hidden transition-all group relative cursor-pointer ${selectedCostume?.id === item.id ? 'border-yellow-500 border-2' : 'border-gray-800 hover:border-gray-600'}`}
                                 >
                                     <img src={item.url} className="w-full h-full transition-transform group-hover:scale-110 object-contain" />
@@ -2298,7 +2424,10 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                                 {state.cast.map(c => (
                                                     <button
                                                         key={c.id}
-                                                        onClick={() => setSelectedCharacter(c)}
+                                                        onClick={() => {
+                                                            setSelectedCharacter(c);
+                                                            updateState({ selectedCharacter: c });
+                                                        }}
                                                         className={`aspect-square rounded border transition-all overflow-hidden ${selectedCharacter?.id === c.id ? 'border-green-500 ring-1 ring-green-500' : 'border-gray-800 hover:border-gray-600'}`}
                                                     >
                                                         <img src={c.previewUrl || c.url} className="w-full h-full object-cover" />
@@ -2685,18 +2814,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                             <button onClick={() => downloadImage(processedTryOnUrl || fittedImage!, `fitted-${selectedCharacter?.name || 'character'}.png`)} className="w-full bg-blue-600/10 hover:bg-blue-600 text-blue-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-blue-500/20 hover:-[0_0_15px_rgba(37,99,235,0.4)] text-[10px] font-black uppercase tracking-wider" title="Download">
                                                 <Download className="w-4 h-4" /> Save
                                             </button>
-                                            <button onClick={() => {
-                                                setSelectedCostume(null);
-                                                updateState({
-                                                    fittedImage: null,
-                                                    tryOnMask: null,
-                                                    restorationLayer: null,
-                                                    removeBg: false,
-                                                    history: [],
-                                                    historyIndex: -1,
-                                                    processedTryOnUrl: null
-                                                });
-                                            }} className="w-full bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-red-500/20 hover:-[0_0_15px_rgba(239,68,68,0.4)] text-[10px] font-black uppercase tracking-wider" title="Clear/Discard">
+                                            <button onClick={clearTryOnWorkspace} className="w-full bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-red-500/20 hover:-[0_0_15px_rgba(239,68,68,0.4)] text-[10px] font-black uppercase tracking-wider" title="Clear/Discard">
                                                 <X className="w-4 h-4" /> Clear
                                             </button>
                                         </div>

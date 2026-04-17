@@ -1,12 +1,13 @@
 import { SidebarPanel } from '../ui/SidebarPanel';
 import { Sparkles, RefreshCcw } from 'lucide-react';
 import { GeminiService } from '../../services/GeminiService';
-import type { GroundingAudit } from '../../context/AppContext';
+import type { CSSProperties, Dispatch } from 'react';
+import type { Action, AppState, GroundingAudit } from '../../context/AppContext';
 import { DebouncedTextarea } from '../ui/DebouncedTextarea';
 
 interface ActorIntelligencePanelProps {
-    state: any;
-    dispatch: (action: any) => void;
+    state: AppState;
+    dispatch: Dispatch<Action>;
     authorityStatus: string;
     analyzingTokenId: string | null;
     setAnalyzingTokenId: (id: string | null) => void;
@@ -25,7 +26,7 @@ interface ActorIntelligencePanelProps {
     onDragStart: (id: string) => void;
     onDrop: (targetId: string) => void;
     onRefreshSpatialData: () => void;
-    style?: React.CSSProperties;
+    style?: CSSProperties;
 }
 
 export const ActorIntelligencePanel = ({
@@ -146,7 +147,7 @@ export const ActorIntelligencePanel = ({
                         No actors on stage.
                     </div>
                 ) : (
-                    state.tokens.map((token: any) => (
+                    state.tokens.map((token) => (
                         <div key={token.id} className="bg-[#18181b] border border-[#27272a] rounded-lg p-3 group">
                             <div className="flex items-center justify-between mb-2">
                                 <span className="text-[11px] font-bold text-white uppercase">{token.tag}</span>

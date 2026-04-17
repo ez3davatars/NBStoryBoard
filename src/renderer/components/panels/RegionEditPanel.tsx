@@ -1,26 +1,10 @@
 import { Sparkles, X, RotateCw } from 'lucide-react';
 import { SidebarPanel } from '../ui/SidebarPanel';
-
-interface RegionLayer {
- id: string;
- name: string;
- maskDataUrl?: string;
- prompt?: string;
- enabled: boolean;
-}
-
-interface RegionEditState {
- isMaskMode: boolean;
- mode: 'paint' | 'erase';
- layers: RegionLayer[];
- activeLayerId: string | null;
- brushSize: number;
- brushSoftness: number;
-}
+import type { Action, RegionEditState } from '../../context/AppContext';
 
 interface RegionEditPanelProps {
  regionEdit: RegionEditState;
- dispatch: (action: any) => void;
+ dispatch: (action: Action) => void;
  protectEnabled: boolean;
  setProtectEnabled: (val: boolean) => void;
  protectStatus: 'idle' | 'generating' | 'ready' | 'error';
@@ -95,7 +79,7 @@ export const RegionEditPanel = ({
  >
  <div className="flex items-center gap-2 mb-3">
  <button
- onClick={() => dispatch({ type: 'SET_REGION_EDIT', payload: { isMaskMode: !regionEdit?.isMaskMode } } as any)}
+ onClick={() => dispatch({ type: 'SET_REGION_EDIT', payload: { isMaskMode: !regionEdit?.isMaskMode } })}
  className={`flex-1 py-1.5 rounded text-[9px] font-bold uppercase tracking-wider border transition-all duration-300 ${regionEdit?.isMaskMode
  ? 'bg-green-600 border-green-500 text-white -[0_0_15px_rgba(34,197,94,0.6)]'
  : 'bg-[#18181b] border-[#27272a] text-gray-500 hover:text-white hover:border-gray-600'
@@ -105,7 +89,7 @@ export const RegionEditPanel = ({
  {regionEdit?.isMaskMode ? 'Mask ON' : 'Mask OFF'}
  </button>
  <button
- onClick={() => dispatch({ type: 'CLEAR_ALL_REGION_MASKS' } as any)}
+ onClick={() => dispatch({ type: 'CLEAR_ALL_REGION_MASKS' })}
  className="px-3 py-1.5 bg-[#18181b] hover:bg-red-500/20 border border-[#27272a] text-gray-500 hover:text-red-400 rounded text-[9px] font-bold uppercase transition-colors"
  title="Clear all painted masks"
  >
@@ -115,7 +99,7 @@ export const RegionEditPanel = ({
 
  <div className="flex items-center gap-2 mb-3">
  <button
- onClick={() => dispatch({ type: 'SET_REGION_EDIT', payload: { mode: 'paint' } } as any)}
+ onClick={() => dispatch({ type: 'SET_REGION_EDIT', payload: { mode: 'paint' } })}
  className={`flex-1 py-2 rounded text-[10px] font-bold uppercase border ${regionEdit?.mode === 'paint'
  ? 'bg-blue-600 text-white border-blue-600'
  : 'bg-[#18181b] text-accent border-[#27272a] hover:bg-[#27272a]'
@@ -124,7 +108,7 @@ export const RegionEditPanel = ({
  Paint
  </button>
  <button
- onClick={() => dispatch({ type: 'SET_REGION_EDIT', payload: { mode: 'erase' } } as any)}
+ onClick={() => dispatch({ type: 'SET_REGION_EDIT', payload: { mode: 'erase' } })}
  className={`flex-1 py-2 rounded text-[10px] font-bold uppercase border ${regionEdit?.mode === 'erase'
  ? 'bg-blue-600 text-white border-blue-600'
  : 'bg-[#18181b] text-accent border-[#27272a] hover:bg-[#27272a]'
@@ -146,7 +130,7 @@ export const RegionEditPanel = ({
  >
  <button
  className="flex-1 text-left"
- onClick={() => dispatch({ type: 'SET_REGION_ACTIVE_LAYER', payload: { id: l.id } } as any)}
+ onClick={() => dispatch({ type: 'SET_REGION_ACTIVE_LAYER', payload: { id: l.id } })}
  title="Select layer to paint"
  >
  <div className="text-[10px] font-bold text-gray-200">{l.name}</div>
@@ -157,7 +141,7 @@ export const RegionEditPanel = ({
 
  <button
  onClick={() =>
- dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: l.id, updates: { enabled: !l.enabled } } } as any)
+ dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: l.id, updates: { enabled: !l.enabled } } })
  }
  className={`px-2 py-1 rounded text-[9px] font-bold uppercase border ${l.enabled ? 'bg-emerald-500/20 border-emerald-500/30 text-emerald-300' : 'bg-[#18181b] border-[#27272a] text-gray-400'
  }`}
@@ -167,7 +151,7 @@ export const RegionEditPanel = ({
  </button>
 
  <button
- onClick={() => dispatch({ type: 'CLEAR_REGION_LAYER_MASK', payload: l.id } as any)}
+ onClick={() => dispatch({ type: 'CLEAR_REGION_LAYER_MASK', payload: l.id })}
  className="p-1.5 bg-black/30 hover:bg-red-500/20 rounded text-gray-400 hover:text-red-400 transition-colors"
  title="Clear this mask"
  >
@@ -189,7 +173,7 @@ export const RegionEditPanel = ({
  min={5}
  max={200}
  value={regionEdit?.brushSize ?? 40}
- onChange={(e) => dispatch({ type: 'SET_REGION_EDIT', payload: { brushSize: parseInt(e.target.value) } } as any)}
+ onChange={(e) => dispatch({ type: 'SET_REGION_EDIT', payload: { brushSize: parseInt(e.target.value) } })}
  className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
  />
 
@@ -203,7 +187,7 @@ export const RegionEditPanel = ({
  max={1}
  step={0.05}
  value={regionEdit?.brushSoftness ?? 0.35}
- onChange={(e) => dispatch({ type: 'SET_REGION_EDIT', payload: { brushSoftness: parseFloat(e.target.value) } } as any)}
+ onChange={(e) => dispatch({ type: 'SET_REGION_EDIT', payload: { brushSoftness: parseFloat(e.target.value) } })}
  className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
  />
  </div>
@@ -281,7 +265,7 @@ export const RegionEditPanel = ({
  value={activeLayer?.prompt || ''}
  onChange={(e) =>
  activeLayer &&
- dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: activeLayer.id, updates: { prompt: e.target.value } } } as any)
+ dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: activeLayer.id, updates: { prompt: e.target.value } } })
  }
  className="w-full bg-[#18181b] border border-[#27272a] rounded p-2 text-[10px] text-gray-300 resize-none focus:border-blue-500 outline-none"
  rows={3}
@@ -300,7 +284,7 @@ export const RegionEditPanel = ({
  dispatch({
  type: 'UPDATE_REGION_LAYER',
  payload: { id: activeLayer.id, updates: { prompt: (activeLayer.prompt || '') ? `${activeLayer.prompt}\n${p.text}` : p.text } },
- } as any)
+ })
  }
  className="bg-[#18181b] border border-[#27272a] hover:bg-[#27272a] text-gray-300 h-6 flex items-center justify-center rounded uppercase font-bold tracking-wider transition-colors"
  style={{ fontSize: '11px' }}
@@ -321,7 +305,7 @@ export const RegionEditPanel = ({
  Clear Active
  </button>
  <button
- onClick={() => dispatch({ type: 'CLEAR_ALL_REGION_MASKS' } as any)}
+ onClick={() => dispatch({ type: 'CLEAR_ALL_REGION_MASKS' })}
  className="flex-1 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] text-gray-300 hover:text-white h-6 flex items-center justify-center rounded font-bold uppercase tracking-wider transition-colors"
  style={{ fontSize: '11px' }}
  >

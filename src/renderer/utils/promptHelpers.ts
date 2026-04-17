@@ -5,6 +5,7 @@ import type { ExtractedStyle, SceneIntent } from '../services/GeminiService';
 import type { ShotPackId, ShotPresetId, ShotLocks, DirectedShotSlot } from '../types/shots';
 import type { ActorIdentityReferenceSet, ShotsActorOption } from '../context/AppContext';
 import { SHOT_PRESETS } from './shotsPresets';
+import type { ShotPresetDefinition } from './shotsPresets';
 import { buildSceneTruthSnapshotBlock } from './sceneTruthHelpers';
 
 export const SCENE_LOCK_NEGATIVE_TOKENS = "scene alteration, background change, lighting shift, camera angle change, style deviation, new composition, structural change, reimagined scene, time of day shift, seasonal change, architectural alteration, furniture movement, lens flares, color grading shift, original studio background, white backgrounds showing through gaps";
@@ -77,6 +78,16 @@ const formatNegativesForGemini = (merged: string, maxItems = 18): string => {
   return lines.join('\n');
 };
 
+const BACKGROUND_UNIQUENESS_LOCK_BLOCK = [
+  "BACKGROUND UNIQUENESS LOCK (NON-NEGOTIABLE):",
+  "- Every visible person in the scene must be a unique individual.",
+  "- Do not duplicate or clone background people.",
+  "- Do not mirror-copy crowd groups from left to right.",
+  "- Do not repeat the same face, beard, hair silhouette, clothing silhouette, or pose across multiple extras.",
+  "- Avoid tiled or stamped crowd patterns.",
+  "- Keep natural variation in gesture timing, head turn, body angle, spacing, and costume details while preserving era/style continuity."
+].join('\n');
+
 export const getActiveReferenceSlots = (slots: ReferenceSlot[]) => {
   return slots
     .filter(s => !!s.url && s.active)
@@ -127,6 +138,7 @@ export const compileV3DirectorPrompt = (director: DirectorSettings, slots: Refer
       `- Do NOT reinterpret spatial layout.\n` +
       `- Lighting must respect layer separation.`
   );
+  segments.push(BACKGROUND_UNIQUENESS_LOCK_BLOCK);
 
   // 3) Replacement / Mapping priority: Marker > Spatial > Replace
   if (director.markerType) {
@@ -204,8 +216,8 @@ export const compileV3DirectorPrompt = (director: DirectorSettings, slots: Refer
   }
 
   // RESOLVE PRESETS for Lighting and Camera
-  const resolvedLighting = LIGHTING_PRESETS.find((p: any) => p.key === director.lighting)?.prompt || director.lighting?.trim() || '';
-  const resolvedCamera = CAMERA_PRESETS.find((p: any) => p.key === director.camera)?.prompt || director.camera?.trim() || '';
+  const resolvedLighting = LIGHTING_PRESETS.find((p) => p.key === director.lighting)?.prompt || director.lighting?.trim() || '';
+  const resolvedCamera = CAMERA_PRESETS.find((p) => p.key === director.camera)?.prompt || director.camera?.trim() || '';
 
   // 2.5) Actor Intelligence (Pose, Lighting interaction per actor & Spatial Enforcement)
   tokens.forEach(token => {
@@ -386,8 +398,17 @@ export const buildPlacementPrompt = (
 import { buildHumanPlacementIntents, formatPlacementIntents } from './placementHelpers';
 
 export const buildStrictPrompt = (
-    plan: any[], 
-    dnaForRender: any, 
+    plan: Array<{
+      region: number | string;
+      actorLabel: string;
+      token: StageToken;
+      profile?: unknown;
+    }>,
+    dnaForRender: {
+      environment?: string;
+      lighting?: string;
+      camera?: string;
+    },
     notes: string, 
     tokens: StageToken[], 
     annotations: StageAnnotation[],
@@ -396,6 +417,14 @@ export const buildStrictPrompt = (
     extractedStyle?: ExtractedStyle | null
 ) => {
     const tech = buildMasterStyleKeywords(director);
+    const styleSignature = `${extractedStyle?.medium || ''} ${extractedStyle?.renderStyle || ''} ${extractedStyle?.styleSummary || ''}`.toLowerCase();
+    const requestsStylizedMedium =
+        /3d|cgi|stylized|illustration|anime|toon|cartoon|digital art|painted|painterly|render/.test(styleSignature) ||
+        director.qualityMode === '3D Render' ||
+        director.qualityMode === 'Stylized';
+    const frameStyleDirective = requestsStylizedMedium
+        ? "- STYLE-CONSISTENT OUTPUT: The final image must be a single clean cinematic frame in the requested stylized medium. Do NOT force live-action photorealism when stylization is requested."
+        : "- REALISM OUTPUT: The final image should read as a natural photograph or movie frame unless explicitly stylized.";
 
     const dnaBlock = [
         (director.environment || dnaForRender.environment) ? `Environment Match: ${director.environment || dnaForRender.environment}` : '',
@@ -436,8 +465,10 @@ export const buildStrictPrompt = (
         "- SEAMLESS BLENDING: The ANCHOR_GUIDE contains a rough composite of the characters. Your job is to blend them naturally into the scene. Match the lighting, shadows, and color grading of the background.",
         "- LIGHTING OVERRIDE: Absolutely DO NOT carry over the original lighting from the character references. You MUST re-light the characters entirely from scratch to naturally match the environment's ambient light and the specified Cinematography lighting.",
         "- NEGATIVE SPACE: Ignore any solid or white studio backgrounds present in the REGION_REFS. Treat flat white areas (such as inside a hollow helmet, or between arms and torso) as transparent, and fill them perfectly with the scene environment.",
-        "- NO OUTLINES: Do NOT draw any boxes, boundaries, or outlines around the characters. The final image must look like a natural photograph or movie frame.",
+        "- NO OUTLINES: Do NOT draw any boxes, boundaries, or outlines around the characters.",
+        frameStyleDirective,
         "- NO Hallucinations: Do not add any extra objects, people, or details not requested in the Director Brief or Region Plan.",
+        `### ${BACKGROUND_UNIQUENESS_LOCK_BLOCK}`,
         "- ASPECT RATIO LOCK: DO NOT STRETCH OR SQUASH. If a character cutout does not perfectly fill its assigned BBOX_ABS, DO NOT distort the character. Maintain natural proportions and fill any remainder with pixels from the CLEAN_BG_PLATE.",
         "- OVERLAP LOCK: If the ANCHOR_GUIDE shows subjects overlapping, maintain that exact occlusion.",
         "",
@@ -547,17 +578,26 @@ CRITICAL: You are compositing these characters into the provided background anch
 - DO NOT duplicate furniture. The characters must sit on or interact with the chairs/seating ALREADY PRESENT in the background image. DO NOT generate new chairs cutting through the existing ones.
 - Seamlessly wrap the characters into the existing environment physics.
 
+### BACKGROUND UNIQUENESS LOCK
+- Every visible background person must be unique.
+- Do not duplicate or mirror-copy crowd members.
+- Do not reuse the same cheering extra (same face + same pose + same outfit) on both sides of frame.
+- Keep extras varied in gesture timing, head angle, torso angle, and silhouette.
+
 ### ANATOMY & REALISM GUARDRAIL
 CRITICAL NEGATIVE PROMPT: You MUST NOT generate extra limbs, extra legs, phantom body parts, or disembodied characters. Ensure perfect anatomical structure. Characters must have exactly two legs and two arms. No floating legs under tables or detached hands.\n`;
 
     if (extractedStyle) {
+        const looseStyleSignature = `${extractedStyle.medium || ''} ${extractedStyle.renderStyle || ''} ${extractedStyle.styleSummary || ''}`.toLowerCase();
+        const nonPhotorealRequested = /3d|cgi|stylized|illustration|anime|toon|cartoon|digital art|painted|painterly|render/.test(looseStyleSignature);
         p += `\n### STYLE ENVELOPE (VISUAL TREATMENT ONLY):
 - Artistic Medium: ${extractedStyle.medium}
 - Render Style: ${extractedStyle.renderStyle}
 - Color Palette: ${extractedStyle.palette}
 - Mood/Vibe: ${extractedStyle.mood}
 
-ANTI-STYLE-DRIFT GUARDRAIL: This style envelope MUST ONLY affect the rendering look, colors, and visual treatment. It MUST NOT reinterpret or replace the requested location, scene category, furniture, props, or world (e.g., do not turn a modern office into a fantasy tavern). The core scene nouns remain mandatory and primary.\n`;
+ANTI-STYLE-DRIFT GUARDRAIL: This style envelope MUST ONLY affect the rendering look, colors, and visual treatment. It MUST NOT reinterpret or replace the requested location, scene category, furniture, props, or world (e.g., do not turn a modern office into a fantasy tavern). The core scene nouns remain mandatory and primary.
+STYLE LOCK: Keep the final output in the extracted medium/render style. ${nonPhotorealRequested ? 'Do NOT force live-action photorealism; maintain stylized/CG treatment.' : 'Use natural cinematic realism unless another style directive is given.'}\n`;
     }
 
     p += `\n### SCENE LIGHTING PROTOCOL:\n${lightingProtocol}\n`;
@@ -826,7 +866,8 @@ export type BuildEnvironmentConsistencyLockBlockArgs = {
   preserveSetDressing?: boolean;
 };
 
-export function buildEnvironmentConsistencyLockBlock(_args: BuildEnvironmentConsistencyLockBlockArgs): string {
+export function buildEnvironmentConsistencyLockBlock(args: BuildEnvironmentConsistencyLockBlockArgs): string {
+  void args;
   return [
     "Preserve the exact same room, architecture, layout, and set dressing as shown in the scene anchor.",
     "Maintain the same wall positions, window arrangement, ceiling lines, lighting fixture placement, glass partition layout, furniture placement, and overall spatial proportions.",
@@ -846,24 +887,37 @@ export type BuildSceneLayoutLockBlockArgs = {
   preserveRelativePositions?: boolean;
   preserveSpacing?: boolean;
   preservePoseRoles?: boolean;
+  isShotVariant?: boolean;
 };
 
 export function buildSceneLayoutLockBlock(args: BuildSceneLayoutLockBlockArgs): string {
   const base = [
-    "Preserve the exact same scene layout and blocking shown in the source anchor.",
+    args.isShotVariant ? "TRUTH LOCK: Preserve the underlying layout and blocking of the scene." : "Preserve the exact same scene layout and blocking shown in the source anchor.",
     "Keep the same people in the same absolute geographical positions.",
     "CAMERA PIVOT RULE: To change a camera angle, you must physically move the camera around the subjects, revealing the appropriate new background area. DO NOT rotate the subjects in place to face the camera. The subjects' physical orientation relative to the room MUST remain permanently locked.",
-    "CRITICAL HEIGHT & SCALE LOCK: Maintain the exact relative height differences, body scale, and physical build between all subjects. Taller actors must remain strictly taller, shorter actors must remain strictly shorter.",
+    "PARALLAX REQUIREMENT: Camera-angle presets must show real 3D viewpoint change (foreground/background overlap shifts, different wall or column reveals, and perspective depth changes) proving the camera moved in space.",
+    "CRITICAL HEIGHT & SCALE LOCK: Maintain the exact relative height differences, body scale, and physical build between all subjects.",
     "Maintain the same left-to-right ordering, seating/standing roles, spacing, and subject-to-room relationships.",
     "Only change the camera framing and viewpoint.",
     "Do not add, remove, duplicate, merge, or invent any additional people.",
+    "CROWD UNIQUENESS LOCK: Background extras must remain unique individuals. Do not mirror-copy or stamp repeated crowd figures on opposite sides of frame.",
     "BACKGROUND CHARACTER LOCK: You MUST preserve the exact physical appearance, hair color, and clothing of any background characters (e.g., judges, extras). Do not alter their outfits, hair, or ethnicity.",
-    "No shifting actor positions, no swapping left/right ordering.",
-    "CRITICAL POSTURE LOCK: Do NOT change a standing subject into a seated subject. Do NOT change a seated subject into a standing subject. They MUST retain their original anchor posture.",
-    "No moving subjects closer or farther unless caused only by camera reframing."
+    "No shifting actor positions, no swapping left/right ordering."
   ];
+
+  if (!args.isShotVariant) {
+    base.push("CRITICAL POSTURE LOCK: Do NOT change a standing subject into a seated subject. Do NOT change a seated subject into a standing subject. They MUST retain their original anchor posture.");
+    base.push("No moving subjects closer or farther unless caused only by camera reframing.");
+  } else {
+    base.push("CINEMATIC CONTINUITY: Preserve exact crop centering and micro-composition continuity when possible, but allow perspective shift required by the requested camera view as long as it does not break anatomy.");
+  }
+
   if (args.expectedActorCount !== undefined) {
-    base.push(`CRITICAL DIRECTIVE: The scene must contain exactly ${args.expectedActorCount} visible person(s). Do not hallucinate crowds.`);
+    if (args.expectedActorCount > 0) {
+      base.push(`CRITICAL DIRECTIVE: The scene must contain exactly ${args.expectedActorCount} visible person(s). Do not hallucinate crowds.`);
+    } else {
+      base.push(`CRITICAL DIRECTIVE: The scene must preserve ALL visible people already present in the anchor image. Do not hallucinate extra crowds or remove existing subjects.`);
+    }
   }
   return base.join('\n');
 }
@@ -880,6 +934,8 @@ export type BuildShotVariantPromptArgs = {
   subjectActionText?: string;
   lightingText?: string;
   expectedActorCount?: number;
+  tokensCount?: number;
+  sceneId?: string;
   coveragePurpose?: string;
   targetRole?: string;
   sceneType?: string;
@@ -905,16 +961,28 @@ export function buildWardrobeAndPropContinuityLockBlock(): string {
   ].join('\n');
 }
 
-export function buildExactPoseLockBlock(): string {
+export function buildExactPoseLockBlock(isShotVariant?: boolean): string {
+  if (isShotVariant) {
+    return [
+      "CINEMATIC POSE CONTINUITY:",
+      "Preserve the underlying body pose, gesture timing, and exact anatomical proportions from the source result image.",
+      "Preserve the performance beat and pose logic. Allow limbs to be naturally occluded or revealed based on the new camera geometry.",
+      "Do not shrink the head. Do not widen the shoulders. Do not mutate the face or hair structure.",
+      "Do not reinterpret the performance. Treat the source result as a frozen moment in time viewed from a different camera."
+    ].join('\n');
+  }
+
   return [
     "EXACT POSE LOCK (HARD):",
     "Preserve the exact same body pose from the source result image.",
     "Do not reinterpret the performance.",
     "Do not create a new gesture.",
-    "Do not change arm bend, elbow height, hand position, finger spread, shoulder raise, torso twist, hip angle, leg stance, foot planting, neck tilt, or head angle except for what is naturally hidden or revealed by the new camera viewpoint.",
+    "Preserve the performance beat and pose logic. Allow limbs/hands to be naturally hidden or revealed by the new camera viewpoint without forcing them to remain artificially visible.",
     "Do not re-pose the character to better fit the shot.",
     "The only allowed change is camera position, lens, crop, and perspective.",
     "Treat the source result as a frozen moment in time viewed from a different camera.",
+    "In close-up framing, preserve the same facial expression, gaze direction, head angle, and shoulder tension implied by the source pose.",
+    "If limbs are cropped out by framing, crop naturally without inventing a new gesture or relaxed replacement pose.",
     "If a limb or hand is partially hidden in the anchor, infer only the hidden continuation of the same pose, not a new pose.",
     "Do not convert a symmetrical pose into an asymmetrical one or vice versa.",
     "Do not change weight distribution or balance.",
@@ -922,14 +990,116 @@ export function buildExactPoseLockBlock(): string {
   ].join('\n');
 }
 
+function buildShotFramingLockBlock(preset: ShotPresetDefinition): string {
+  const base = [
+    `Target preset: ${preset.label}.`,
+    `Framing class: ${preset.framing}. Elevation: ${preset.elevation}. Orbit: ${preset.orbit}. Placement: ${preset.placement}.`,
+    "Do not collapse this preset into another preset's framing class.",
+    "This preset must be visually and geometrically distinct from the other coverage presets in the set."
+  ];
+
+  switch (preset.id) {
+    case 'closeup':
+      base.push(
+        "Subject coverage target: approximately 78-92% of frame height.",
+        "Keep both shoulders and neck tension consistent with the source pose when visible.",
+        "Close-up crop preference: avoid showing wrists/hands at frame edges; crop cleanly before elbows when possible.",
+        "Do not reframe as medium/full-body."
+      );
+      break;
+    case 'mediumClose':
+      base.push(
+        "Subject coverage target: approximately 55-72% of frame height.",
+        "Chest-up or upper-torso framing. Not face-only and not full-body.",
+        "Keep visible negative space around the head and shoulders so this does not read as a close-up."
+      );
+      break;
+    case 'medium':
+      base.push(
+        "Subject coverage target: approximately 40-58% of frame height.",
+        "Waist-up/hip-up framing with clear environment around the subject.",
+        "This must read as a balanced mid-shot, not chest-up coverage and not a wide master."
+      );
+      break;
+    case 'wide':
+      base.push(
+        "Subject coverage target: approximately 18-36% of frame height.",
+        "Show substantial architecture and scene context beyond the subject.",
+        "The room and blocking must dominate more strongly than in every other preset."
+      );
+      break;
+    case 'lowAngleHero':
+      base.push(
+        "Low-angle requirement: camera is physically lower than subject chest level and tilts upward.",
+        "Subject coverage target: approximately 40-65% of frame height.",
+        "Do not render as neutral eye-level framing."
+      );
+      break;
+    case 'highAngle':
+      base.push(
+        "High-angle requirement: camera is physically above the subject and tilts downward.",
+        "Reveal more top planes and floor/desk/surface visibility than eye-level shots.",
+        "Do not render as neutral eye-level framing."
+      );
+      break;
+    case 'threeQuarterLeft':
+      base.push(
+        "Left-orbit requirement: the camera must move to the subject's left side, producing a true three-quarter-left face view.",
+        "One cheek must dominate and the far side of the face must visibly recede. Do not cheat back toward frontal."
+      );
+      break;
+    case 'threeQuarterRight':
+      base.push(
+        "Right-orbit requirement: the camera must move to the subject's right side, producing a true three-quarter-right face view.",
+        "One cheek must dominate and the far side of the face must visibly recede. Do not cheat back toward frontal."
+      );
+      break;
+    case 'profile':
+      base.push(
+        "Profile requirement: this must be a strict side-view silhouette with only one eye readable or implied.",
+        "Do not soften the face into a three-quarter portrait."
+      );
+      break;
+    case 'overTheShoulder':
+      base.push(
+        "Over-the-shoulder requirement: preserve a large blurred foreground shoulder/head wedge occupying one edge of frame.",
+        "The target subject must remain the focal plane beyond that foreground wedge."
+      );
+      break;
+    case 'twoShot':
+      base.push(
+        "Two-shot requirement: keep both subjects clearly readable in the same frame with shared visual importance.",
+        "Do not collapse into single-subject coverage."
+      );
+      break;
+    default:
+      break;
+  }
+
+  return base.join('\n');
+}
+
 export function buildShotVariantPrompt(args: BuildShotVariantPromptArgs): string {
     const preset = SHOT_PRESETS[args.presetId];
     
     let p = `OPERATION\n`;
-    p += `Create a NEW CAMERA SETUP of the same scene continuity using the staged result image as the primary visual anchor.\n`;
+    p += `DIFFERENTIATION MANDATE: This output MUST be materially different in framing from the other requested shots.\n`;
+    p += `Obey the requested preset geometry: ${preset.label}.\n`;
+    p += `CAMERA PIVOT RULE: Move the camera viewpoint around the subject/scene as requested. Do NOT simulate a new shot by reusing the same camera and cropping differently.\n`;
+    p += `Do NOT merely crop the original composition.\n\n`;
+
+    p += `CAMERA BLUEPRINT AUTHORITY (COMPOSITION)\n`;
+    p += `The camera instruction blueprint controls framing, orbit, elevation, and target occupancy.\n`;
+    p += `This overrides the scene anchor's original framing.\n\n`;
+
+    p += `Create a NEW CAMERA SETUP of the same scene continuity using the staged result image as the primary visual anchor for content truth.\n`;
     p += `Recompose this image as a ${preset.label}.\n`;
     p += `${preset.shotInstruction}\n`;
-    p += `Lens Note: ${preset.defaultLensNote}\n\n`;
+    p += `Lens Note: ${preset.defaultLensNote}\n`;
+    if (preset.opticalIntent) {
+        p += `Optical Intent: ${preset.opticalIntent}\n`;
+    }
+    p += `\n### SHOT FRAMING LOCK\n${buildShotFramingLockBlock(preset)}\n\n`;
 
     p += `CHANGE\n`;
     p += `- camera only, not body pose\n`;
@@ -939,6 +1109,7 @@ export function buildShotVariantPrompt(args: BuildShotVariantPromptArgs): string
     p += `- screen position\n`;
     p += `- headroom\n`;
     p += `- perspective\n\n`;
+    p += `- physically plausible parallax from the new camera position\n\n`;
 
     p += `KEEP\n`;
     if (args.locks.identity) p += `- actor identity\n`;
@@ -964,9 +1135,8 @@ export function buildShotVariantPrompt(args: BuildShotVariantPromptArgs): string
     }
 
     p += `FORBIDDEN\n`;
-    p += `- do not change pose geometry\n`;
-    p += `- do not re-gesture the actor\n`;
-    p += `- do not alter arm spread, hand placement, torso bend, or head orientation\n`;
+    p += `- do not change the core pose geometry or performance intent\n`;
+    p += `- do not re-gesture the actor into a new action\n`;
     p += `- do not add headwear, crowns, hats, hoods, scarves, veils, wraps, or helmets\n`;
     p += `- do not add jewelry, belts, sashes, capes, shawls, or extra costume layers\n`;
     p += `- do not add props or handheld objects not present in the source anchor\n`;
@@ -975,8 +1145,12 @@ export function buildShotVariantPrompt(args: BuildShotVariantPromptArgs): string
     p += `- do not reproduce the anchor framing\n`;
     p += `- do not return the same crop as the source image\n`;
     p += `- do not flatten back into the original source composition\n`;
+    p += `- do not duplicate crowd extras or stamp repeated background people\n`;
+    p += `- do not mirror-copy the same cheering/background group on left and right sides\n`;
     p += `- do not output a contact sheet, grid, or collage\n`;
     p += `- do not add cinematic black bars unless already present in the anchor\n`;
+    p += `- do not output malformed hands, fused fingers, extra digits, or broken wrists\n`;
+    p += `- if hand anatomy is uncertain at frame edges, crop cleanly instead of generating partial fists/hands\n`;
     preset.negatives.forEach(neg => {
         p += `- ${neg}\n`;
     });
@@ -1007,12 +1181,23 @@ export function buildShotVariantPrompt(args: BuildShotVariantPromptArgs): string
     };
     p += `\n### FACE IDENTITY LOCK\n${buildStrictFaceIdentityLockBlock(identityArgs)}\n`;
     
+    p += `\n### DIAGNOSTICS_TEMP_ACTOR_TRACE\n`;
+    p += `- expectedActorCount (prop): ${args.expectedActorCount}\n`;
+    p += `- tokens.length (state): ${args.tokensCount}\n`;
+    p += `- actorIdentitySets.length: ${args.actorIdentitySets?.length || 0}\n`;
+    p += `- final resolved visibleActorCount: ${args.sceneTruth.expectedActorCount}\n`;
+    p += `- sceneId: ${args.sceneId}\n`;
+    p += `- slotId: ${args.directedSlot?.id || 'none'}\n`;
+    p += `- presetId: ${args.presetId}\n`;
+
     p += `\n${buildSceneTruthSnapshotBlock(args.sceneTruth)}\n`;
     
-    p += `\n### ENVIRONMENT & LAYOUT GUARDRAILS (REINFORCEMENTS)\n`;
+    p += `\n### ENVIRONMENT & LAYOUT TRUTH (IMMUTABLE)\n`;
     p += `${buildEnvironmentConsistencyLockBlock({})}\n`;
-    p += `${buildSceneLayoutLockBlock({ expectedActorCount: args.sceneTruth.expectedActorCount })}\n`;
-    p += `${buildExactPoseLockBlock()}\n`;
+    p += `${buildSceneLayoutLockBlock({ expectedActorCount: args.sceneTruth.expectedActorCount, isShotVariant: true })}\n`;
+    
+    p += `\n### CINEMATIC CONTINUITY (FLEXIBLE)\n`;
+    p += `${buildExactPoseLockBlock(true)}\n`;
     
     p += buildDirectedSlotBlock(args.directedSlot, args.shotsActorOptions, false);
 
@@ -1047,8 +1232,9 @@ export function buildDirectedSlotBlock(slot?: DirectedShotSlot, actorOptions?: S
 
   if (!isFinalRerender) {
     let differentiation = `DIFFERENTIATION MANDATE: This shot is part of a professional coverage set. `;
-    differentiation += `You must uniquely compose this shot according to the directed slot plan (focusing on ${targetDisplay}) while strictly obeying all scene truth and identity locks.`;
+    differentiation += `You must uniquely compose this shot according to the directed slot plan (focusing on ${targetDisplay}) while obeying scene truth.`;
     lines.push(differentiation);
+    lines.push(`SET UNIQUENESS RULE: This shot must be materially different from the other selected presets in camera height, orbit, crop scale, or foreground/background relationship.`);
   } else {
     lines.push(`COVERAGE REINFORCEMENT: Ensure the final render faithfully captures the directed slot purpose of the preview.`);
   }
@@ -1116,6 +1302,8 @@ export function buildShotFinalRerenderPrompt(args: BuildShotFinalRerenderPromptA
   p += `- do not zoom or crop differently\n`;
   p += `- do not rearrange subjects\n`;
   p += `- do not duplicate subjects\n`;
+  p += `- do not duplicate crowd extras or repeat the same background person multiple times\n`;
+  p += `- do not mirror-copy the same background group on opposite sides of frame\n`;
   p += `- do not add text or watermark\n`;
   p += `- do not add headwear, crowns, hats, hoods, scarves, veils, wraps, or helmets\n`;
   p += `- do not add jewelry, belts, sashes, capes, shawls, or extra costume layers\n`;
@@ -1150,7 +1338,7 @@ export function buildShotFinalRerenderPrompt(args: BuildShotFinalRerenderPromptA
   p += `${buildSceneLayoutLockBlock({ expectedActorCount: args.sceneTruth.expectedActorCount })}\n`;
 
   p += `\n### EXACT POSE LOCK\n`;
-  p += `${buildExactPoseLockBlock()}\n`;
+  p += `${buildExactPoseLockBlock(false)}\n`;
 
   p += buildDirectedSlotBlock(args.directedSlot, args.shotsActorOptions, true);
 

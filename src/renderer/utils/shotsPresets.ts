@@ -22,6 +22,7 @@ export type ShotPresetDefinition = {
   lensClass: ShotLensClass;
 
   cropRule: string;
+  opticalIntent: string;
   uniquenessKey: string;
   negatives: string[];
 };
@@ -31,7 +32,7 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     id: 'closeup',
     label: 'Close-Up',
     description: 'Tight facial framing with strong identity clarity.',
-    shotInstruction: 'Recompose as a cinematic close-up centered on the primary subject’s face and upper shoulders.',
+    shotInstruction: 'Recompose as a cinematic close-up centered on the primary subject\'s face and upper shoulders while preserving the same performance moment (no re-posed portrait behavior). Prefer to keep forearms/hands out of frame in this preset.',
     defaultLensNote: 'Natural portrait perspective with clean facial proportions.',
     targetMode: 'single',
     framing: 'closeup',
@@ -39,12 +40,14 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     orbit: 'front',
     placement: 'center',
     lensClass: 'portrait',
-    cropRule: 'Face and upper shoulders only. Do not drift into medium framing.',
+    cropRule: 'Face and upper shoulders dominant. Crop before elbows/wrists where possible to avoid edge-limb artifacts. Do not drift into medium/full-body framing.',
+    opticalIntent: 'Extremely shallow depth of field. Background should be heavily blurred/bokeh. High focal compression drawing maximum attention to facial features and eyes.',
     uniquenessKey: 'front_close_identity',
     negatives: [
-      'Do not widen to medium shot',
+      'Do not widen to medium-close or medium shot',
       'Do not convert to three-quarter orbit',
       'Do not recenter as a full-scene shot',
+      'Do not show cropped fists or partial hands at frame edges',
       'Do not change actor count'
     ]
   },
@@ -61,10 +64,12 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     placement: 'center',
     lensClass: 'normal',
     cropRule: 'Head and torso, chest up. Tighter than medium but looser than closeup.',
+    opticalIntent: 'Shallow depth of field with soft background blur. Ensure the subject clearly pops from the environment without dissolving background shapes completely.',
     uniquenessKey: 'front_medclose',
     negatives: [
-      'Do not widen to wide shot',
-      'Do not crop strictly to the face',
+      'Do not widen to medium or wide shot',
+      'Do not crop strictly to the face (do not behave like a close-up)',
+      'Do not drift to waist-up medium',
       'Do not change actor count'
     ]
   },
@@ -72,7 +77,7 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     id: 'medium',
     label: 'Medium Shot',
     description: 'Balanced subject and environment relationship.',
-    shotInstruction: 'Recompose as a cinematic medium shot preserving posture and environment context.',
+    shotInstruction: 'Recompose as a cinematic medium shot preserving posture while showing a balanced subject-to-environment relationship.',
     defaultLensNote: 'Balanced field of view.',
     targetMode: 'single',
     framing: 'medium',
@@ -80,11 +85,13 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     orbit: 'front',
     placement: 'center',
     lensClass: 'normal',
-    cropRule: 'Waist-up or hip-up framing preserving actor gestures.',
+    cropRule: 'Waist-up or hip-up framing. Must be clearly wider than mediumClose and clearly tighter than wide.',
+    opticalIntent: 'Moderate depth of field. Background is readable but slightly out of focus, allowing structural context while favoring the subject.',
     uniquenessKey: 'front_medium',
     negatives: [
-      'Do not crop to face only',
+      'Do not crop to face only or medium-close',
       'Do not widen to full room view losing actor focus',
+      'Do not behave like a wide/master',
       'Do not change actor count'
     ]
   },
@@ -92,7 +99,7 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     id: 'wide',
     label: 'Wide Shot',
     description: 'Subject and environment coverage with scene context.',
-    shotInstruction: 'Recompose as a cinematic wide shot showing the subject within the environment.',
+    shotInstruction: 'Recompose as a cinematic wide shot where environment context is a major part of the frame.',
     defaultLensNote: 'Wide framing without fisheye distortion.',
     targetMode: 'scene',
     framing: 'wide',
@@ -100,10 +107,11 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     orbit: 'front',
     placement: 'center',
     lensClass: 'mildWide',
-    cropRule: 'Preserve scene context. Do not collapse into portrait or medium crop.',
+    cropRule: 'Environment-forward framing with substantial architecture visible. Do not collapse into portrait/medium crop.',
+    opticalIntent: 'Deep focus (large depth of field). Background and environment should be sharp and readable. Minimal lens compression.',
     uniquenessKey: 'scene_wide_master',
     negatives: [
-      'Do not crop to head-and-torso',
+      'Do not crop to medium or medium-close',
       'Do not behave like a close-up',
       'Do not remove environmental context',
       'Do not change actor count'
@@ -113,7 +121,7 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     id: 'lowAngleHero',
     label: 'Low-Angle Hero',
     description: 'Subtle low-angle power framing.',
-    shotInstruction: 'Recompose from a subtle low-angle hero perspective while preserving realism and proportions.',
+    shotInstruction: 'Recompose from a clear low-angle hero perspective (camera physically below subject chest level) while preserving realism and proportions.',
     defaultLensNote: 'Cinematic low-angle perspective, no exaggerated warping.',
     targetMode: 'single',
     framing: 'medium',
@@ -122,11 +130,13 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     placement: 'center',
     lensClass: 'mildWide',
     cropRule: 'Subtle up-angle. Subject placed slightly higher in frame.',
+    opticalIntent: 'Clear focal separation drawing the eye to the subject, but preserving strong perspective lines from the ground pushing upwards.',
     uniquenessKey: 'front_low_power',
     negatives: [
       'Do not shoot from eye-level',
       'Do not exaggerate fisheye distortion',
-      'Do not crop the head completely off'
+      'Do not crop the head completely off',
+      'Do not flatten into neutral coverage'
     ]
   },
   highAngle: {
@@ -142,10 +152,12 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     placement: 'center',
     lensClass: 'mildWide',
     cropRule: 'Look down from elevated position. Subject placed slightly lower in frame.',
+    opticalIntent: 'Deep focus pushing down into the floor. Foreground structural elements (desks, ground) should feel grounded with readable depth.',
     uniquenessKey: 'scene_high_elevated',
     negatives: [
-      'Do not shoot from ground level',
+      'Do not shoot from ground level or eye-level',
       'Do not crop into close-up',
+      'Do not collapse into neutral coverage',
       'Do not change actor count'
     ]
   },
@@ -153,7 +165,7 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     id: 'threeQuarterLeft',
     label: '3/4 Left',
     description: 'Three-quarter framing from the left side.',
-    shotInstruction: 'Recompose as a cinematic three-quarter-left camera angle, preserving identity and continuity.',
+    shotInstruction: 'Recompose as a cinematic three-quarter-left camera angle, preserving identity and continuity. Perform a true camera orbit revealing the correct new asymmetrical background space; do NOT just rotate the subject in place.',
     defaultLensNote: 'Natural perspective with clear facial consistency.',
     targetMode: 'single',
     framing: 'mediumClose',
@@ -162,18 +174,22 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     placement: 'rightThird',
     lensClass: 'normal',
     cropRule: 'Camera from the left, subject typically favored on the right third looking left.',
+    opticalIntent: 'Soft depth of field focusing on the near-plane of the face. Far shoulder/background should softly fall off in focus.',
     uniquenessKey: 'left_34_angle',
     negatives: [
-      'Do not compose face-front',
-      'Do not compose a pure profile',
-      'Do not forget directional lighting changes based on rotation'
+      'Do not drift to frontal or face-front',
+      'Do not drift to pure profile',
+      'Do not forget directional lighting changes based on rotation',
+      'Do not preserve frontal symmetry from the anchor',
+      'Do not keep both side columns or walls revealed in the same balanced way as the source',
+      'Do not fake a camera move by just rotating the subject in place'
     ]
   },
   threeQuarterRight: {
     id: 'threeQuarterRight',
     label: '3/4 Right',
     description: 'Three-quarter framing from the right side.',
-    shotInstruction: 'Recompose as a cinematic three-quarter-right camera angle, preserving identity and continuity.',
+    shotInstruction: 'Recompose as a cinematic three-quarter-right camera angle, preserving identity and continuity. Perform a true camera orbit revealing the correct new asymmetrical background space; do NOT just rotate the subject in place.',
     defaultLensNote: 'Natural perspective with clear facial consistency.',
     targetMode: 'single',
     framing: 'mediumClose',
@@ -182,31 +198,42 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     placement: 'leftThird',
     lensClass: 'normal',
     cropRule: 'Camera from the right, subject typically favored on the left third looking right.',
+    opticalIntent: 'Soft depth of field focusing on the near-plane of the face. Far shoulder/background should softly fall off in focus.',
     uniquenessKey: 'right_34_angle',
     negatives: [
-      'Do not compose face-front',
-      'Do not compose a pure profile',
-      'Do not forget directional lighting changes based on rotation'
+      'Do not drift to frontal or face-front',
+      'Do not drift to pure profile',
+      'Do not forget directional lighting changes based on rotation',
+      'Do not preserve frontal symmetry from the anchor',
+      'Do not keep both side columns or walls revealed in the same balanced way as the source',
+      'Do not fake a camera move by just rotating the subject in place'
     ]
   },
   profile: {
     id: 'profile',
     label: 'Profile Emphasis',
-    description: 'Profile-oriented composition with side-view emphasis.',
-    shotInstruction: 'Recompose with a strong profile emphasis while preserving subject identity and scene logic.',
+    description: 'Profile-oriented composition with tight side-view silhouette emphasis.',
+    shotInstruction: 'Recompose with a strong profile silhouette while preserving subject identity and scene logic. Perform a true camera orbit revealing the correct new asymmetrical background space; do NOT just rotate the subject in place.',
     defaultLensNote: 'Natural side-view framing, no facial drift.',
     targetMode: 'single',
-    framing: 'mediumClose',
+    framing: 'closeup',
     elevation: 'eye',
     orbit: 'profileLeft',
     placement: 'center',
     lensClass: 'portrait',
-    cropRule: 'Strict 90-degree profile. No full frontal face.',
+    cropRule: 'Extremely tight crop. Shoulders and head only. NO full body context. Strict 90-degree profile. Focus purely on one-eye side silhouette.',
+    opticalIntent: 'Strong background blur to perfectly silhouette and separate the harsh profile line from the environment.',
     uniquenessKey: 'side_profile_strict',
     negatives: [
       'Do not reveal both eyes',
-      'Do not revert to 3/4 or front facing',
-      'Do not change actor count'
+      'Do not revert to three-quarter or near-frontal facing',
+      'Do not drift to 3/4',
+      'Do not change actor count',
+      'Do not preserve frontal symmetry from the anchor',
+      'Do not keep both side columns or walls revealed in the same balanced way as the source',
+      'Do not fake a camera move by just rotating the subject in place',
+      'Do not show the opposite side of the body',
+      'Do not render as wide or full-body coverage'
     ]
   },
   overTheShoulder: {
@@ -222,10 +249,12 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     placement: 'leftThird',
     lensClass: 'normal',
     cropRule: 'Foreground out of focus shoulder/head wedge, revealing target subject prominently.',
+    opticalIntent: 'Extreme depth stratification: foreground shoulder must be heavily blurred (bokeh), target subject perfectly sharp, and background softly blurred.',
     uniquenessKey: 'pair_ots_depth',
     negatives: [
-      'Do not omit the foreground subject completely',
+      'Do not omit the foreground shoulder layer',
       'Do not place both subjects in perfect equal focus',
+      'Do not behave like a standard single coverage shot',
       'Do not change total actor count',
       'Do not convert the image into live-action or photoreal cinema',
       'Do not make skin, lighting, or materials photographic',
@@ -245,11 +274,13 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     placement: 'center',
     lensClass: 'mildWide',
     cropRule: 'Wide enough to include both interacting subjects clearly.',
+    opticalIntent: 'Split diopter or sufficient depth of field to keep both subjects sharp and clearly readable, while the background remains softly separated.',
     uniquenessKey: 'pair_twoshot_balanced',
     negatives: [
-      'Do not crop to a single subject',
+      'Do not isolate only one subject',
       'Do not heavily obscure one subject with OTS blurring',
-      'Do not place one subject extremely far in the background'
+      'Do not place one subject extremely far in the background',
+      'Do not behave like a single coverage shot'
     ]
   }
 };
@@ -268,6 +299,44 @@ Object.values(SHOT_PRESETS).forEach(preset => {
     preset.negatives.push('Do not transfer wardrobe pieces or props between actors');
   }
 });
+
+export const getDefaultCameraFlavorForPreset = (presetId: ShotPresetId): import('../types/shots').CameraFlavor => {
+  switch (presetId) {
+    case 'closeup':
+      return 'intimate';
+    default:
+      return 'neutral';
+  }
+};
+
+export const getDefaultShotNotesForPreset = (presetId: ShotPresetId): string | undefined => {
+  switch (presetId) {
+    case 'closeup':
+      return 'Tight face-dominant framing. Fill the frame with the subject and avoid reading as a medium-close shot.';
+    case 'mediumClose':
+      return 'Frame from roughly chest-to-head. Keep it clearly wider than a close-up and tighter than a medium shot.';
+    case 'medium':
+      return 'Frame from roughly waist-up. Do not crop so tight that it resembles a medium-close shot.';
+    case 'wide':
+      return 'Play as a true master/wide shot. Hold meaningful environment and spatial context around the subject.';
+    case 'lowAngleHero':
+      return 'Use a clearly low camera height looking upward. Do not render as neutral eye-level framing.';
+    case 'highAngle':
+      return 'Use a clearly elevated camera looking downward. Do not render as neutral eye-level framing.';
+    case 'threeQuarterLeft':
+      return 'Favor a left three-quarter view with the subject presented from the left-oblique side, not frontal.';
+    case 'threeQuarterRight':
+      return 'Favor a right three-quarter view with the subject presented from the right-oblique side, not frontal.';
+    case 'profile':
+      return 'Render as a strong side profile. Avoid slipping back toward a frontal or three-quarter view.';
+    case 'overTheShoulder':
+      return 'Compose as a true over-the-shoulder shot with a readable foreground shoulder framing the target.';
+    case 'twoShot':
+      return 'Compose both primary subjects clearly in frame as a balanced shared-coverage two-shot.';
+    default:
+      return undefined;
+  }
+};
 
 export function buildShotPresetIdsForPack(packId: ShotPackId, count: 4 | 6 | 9): ShotPresetId[] {
   if (packId === 'cinematic') {

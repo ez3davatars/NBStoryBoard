@@ -24,10 +24,16 @@ export function stripIdentityOverridingAnalysis(text: string | undefined): strin
   return sanitized.replace(/\s{2,}/g, ' ').trim();
 }
 
+type SanitizableStyle = {
+  mood?: string;
+  subject?: unknown;
+  [key: string]: unknown;
+};
+
 /**
  * Helper to safely demote extracted styles if strict actors are present.
  */
-export function sanitizeStyleForStrictIdentity(styleObj: any): any {
+export function sanitizeStyleForStrictIdentity<T extends SanitizableStyle | null | undefined>(styleObj: T): T {
   if (!styleObj) return styleObj;
   
   // We preserve the environment/cinematic styling, but we scrub the summary/mood if it describes the human.
@@ -36,5 +42,5 @@ export function sanitizeStyleForStrictIdentity(styleObj: any): any {
     mood: stripIdentityOverridingAnalysis(styleObj.mood),
     // We explicitly clear any 'subject' field if the backend passed one
     subject: undefined 
-  };
+  } as T;
 }

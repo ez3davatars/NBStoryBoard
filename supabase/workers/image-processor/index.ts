@@ -59,7 +59,33 @@ type GenerationFailureCode =
 type JobRecord = {
   id: string;
   provider_model: string;
-  request_payload: any;
+  request_payload: unknown;
+};
+
+type GeminiPart = {
+  text?: string;
+  inlineData?: { mimeType?: string; data?: string };
+  fileData?: unknown;
+  hosted_reference_path?: string;
+  mimeType?: string;
+  [key: string]: unknown;
+};
+
+type GeminiContent = {
+  role?: string;
+  parts?: GeminiPart[];
+  [key: string]: unknown;
+};
+
+type GeminiPayload = {
+  prompt?: string;
+  contents?: GeminiContent[];
+  [key: string]: unknown;
+};
+
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  return String(error);
 };
 
 console.log(`[Worker ${WORKER_ID}] Booted & listening for generation jobs...`);
@@ -67,22 +93,23 @@ console.log(`[Worker ${WORKER_ID}] Booted & listening for generation jobs...`);
 // ==========================================
 // HELPERS
 // ==========================================
-function normalizeGeminiPayload(raw: any) {
+function normalizeGeminiPayload(raw: unknown): GeminiPayload {
   if (!raw || typeof raw !== 'object') {
     throw new Error('VALIDATION_ERROR: request_payload is missing or malformed.');
   }
+  const payload = raw as GeminiPayload;
 
-  if (Array.isArray(raw.contents) && raw.contents.length > 0) {
-    return raw;
+  if (Array.isArray(payload.contents) && payload.contents.length > 0) {
+    return payload;
   }
 
-  if (typeof raw.prompt === 'string' && raw.prompt.trim()) {
+  if (typeof payload.prompt === 'string' && payload.prompt.trim()) {
     return {
-      ...raw,
+      ...payload,
       contents: [
         {
           role: 'user',
-          parts: [{ text: raw.prompt.trim() }],
+          parts: [{ text: payload.prompt.trim() }],
         },
       ],
     };
@@ -91,10 +118,10 @@ function normalizeGeminiPayload(raw: any) {
   throw new Error('VALIDATION_ERROR: Gemini payload must include contents[].');
 }
 
-function extractClaimedJob(data: any): JobRecord | null {
+function extractClaimedJob(data: unknown): JobRecord | null {
   if (!data) return null;
-  if (Array.isArray(data)) return data[0] ?? null;
-  return data;
+  if (Array.isArray(data)) return (data[0] as JobRecord) ?? null;
+  return data as JobRecord;
 }
 
 function classifyProviderFailure(status: number, bodyText: string): GenerationFailureCode {
@@ -157,8 +184,8 @@ async function pollForJobs() {
     if (job) {
       await executeJob(job);
     }
-  } catch (err: any) {
-    console.error(`[Worker ${WORKER_ID}] Polling error: ${err?.message || String(err)}`);
+  } catch (err: unknown) {
+    console.error(`[Worker ${WORKER_ID}] Polling error: ${getErrorMessage(err)}`);
   } finally {
     setTimeout(pollForJobs, 3000 + Math.random() * 1000);
   }
@@ -233,7 +260,7 @@ async function executeJob(job: JobRecord) {
        }
     }
 
-    console.log(`[Worker ${WORKER_ID}] Preflight payload shape:`, JSON.stringify(payload?.contents?.[0]?.parts?.map((p: any) => ({ ...p, inlineData: p.inlineData ? '<base64 omitted>' : undefined }))));
+    console.log(`[Worker ${WORKER_ID}] Preflight payload shape:`, JSON.stringify(payload?.contents?.[0]?.parts?.map((p: GeminiPart) => ({ ...p, inlineData: p.inlineData ? '<base64 omitted>' : undefined }))));
     console.log(`[Worker ${WORKER_ID}] Executing Gemini API call...`);
     const provider_started_at = Date.now();
     const providerResponse = await fetch(`${baseUrl}?key=${GEMINI_API_KEY}`, {
@@ -251,11 +278,11 @@ async function executeJob(job: JobRecord) {
 
     const result = await providerResponse.json();
     const imgData = result?.candidates?.[0]?.content?.parts?.find(
-      (p: any) => p?.inlineData?.data
+      (p: GeminiPart) => p?.inlineData?.data
     )?.inlineData?.data;
 
     const textData = result?.candidates?.[0]?.content?.parts?.find(
-      (p: any) => p?.text
+      (p: GeminiPart) => p?.text
     )?.text;
 
     if (!imgData && !textData) {
@@ -274,9 +301,9 @@ async function executeJob(job: JobRecord) {
           const upload = await uploadToR2(job.id, imgData);
           fileKey = upload.fileKey;
           publicUrl = upload.publicUrl;
-        } catch (uploadErr: any) {
+        } catch (uploadErr: unknown) {
           failCode = 'STORAGE_ERROR';
-          throw new Error(`STORAGE_ERROR: R2 upload failed: ${uploadErr?.message || String(uploadErr)}`);
+          throw new Error(`STORAGE_ERROR: R2 upload failed: ${getErrorMessage(uploadErr)}`);
         }
         r2_finished_at = Date.now();
     } else if (textData) {
@@ -325,8 +352,8 @@ async function executeJob(job: JobRecord) {
     console.log(
       `[Worker ${WORKER_ID}] Job ${job.id} COMPLETED. publicUrl=${publicUrl ?? 'not-set'}`
     );
-  } catch (err: any) {
-    const message = err?.message || String(err);
+  } catch (err: unknown) {
+    const message = getErrorMessage(err);
     console.error(`[Worker ${WORKER_ID}] Job ${job.id} FAILED: ${message}`);
     await failJob(job.id, failCode, message);
   } finally {

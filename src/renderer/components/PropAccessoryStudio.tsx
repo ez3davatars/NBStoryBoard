@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import {
     Package, RefreshCcw, Maximize, Sparkles,
     Download, X, Save, Upload, Trash2, ArrowRight
@@ -14,7 +14,7 @@ import { WearableAnchorEngine } from '../services/WearableAnchorEngine';
 import { WearableOverlayComposer } from '../services/WearableOverlayComposer';
 import { WearableRefinementValidator } from '../services/WearableRefinementValidator';
 import { WearableAdjustmentCanvas } from './WearableAdjustmentCanvas';
-import type { WearableAnchorContract, WearablePlacement } from '../services/WearableAnchorEngine';
+import type { WearableAnchorContract, WearablePlacement, WearableClass } from '../services/WearableAnchorEngine';
 
 async function materializeDisplayUrl(url: string | null | undefined): Promise<string> {
     if (!url) return '';
@@ -42,6 +42,19 @@ async function materializeDisplayUrl(url: string | null | undefined): Promise<st
     return url;
 }
 
+function getErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+}
+
+function extractGeneratedAssetUrl(result: unknown): string {
+    if (typeof result === 'string') return result;
+    if (result && typeof result === 'object' && 'asset_url' in result) {
+        const candidate = (result as { asset_url?: unknown }).asset_url;
+        if (typeof candidate === 'string') return candidate;
+    }
+    return '';
+}
+
 const PropLibrarySkeletonCard = () => (
     <div className="aspect-square rounded-lg border border-gray-800 overflow-hidden bg-black/40 relative">
         <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent animate-[shimmer_1.8s_linear_infinite]" />
@@ -56,13 +69,12 @@ const PropAccessoryStudio = () => {
     const [adjustmentState, setAdjustmentState] = useState<{
         subjectUrl: string;
         propUrl: string;
-        fitClass: string;
+        fitClass: WearableClass;
         anchorContract: WearableAnchorContract;
         initialOffsetX?: number;
         initialOffsetY?: number;
         initialScale?: number;
     } | null>(null);
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const [lastConfirmedPlacement, setLastConfirmedPlacement] = useState<{
         placement: WearablePlacement;
         precompositeUrl: string;
@@ -94,6 +106,8 @@ const PropAccessoryStudio = () => {
     const setApplyNote = (val: string) => setPropState({ applyNote: val });
 
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const activeProgressIntervalRef = useRef<number | null>(null);
+    const progressSessionRef = useRef(0);
 
 
 
@@ -108,7 +122,17 @@ const PropAccessoryStudio = () => {
         });
     };
 
-    const scanProps = async () => {
+    useEffect(() => {
+        return () => {
+            if (activeProgressIntervalRef.current !== null) {
+                window.clearInterval(activeProgressIntervalRef.current);
+                activeProgressIntervalRef.current = null;
+            }
+            progressSessionRef.current += 1;
+        };
+    }, []);
+
+    const scanProps = useCallback(async () => {
         // 1. NATIVE MODE
         if (isNativeParams() && state.saveDirectoryPath) {
             try {
@@ -134,7 +158,7 @@ const PropAccessoryStudio = () => {
                     }
                 }
                 dispatch({ type: 'SET_PROP_ITEMS', payload: items.sort((a, b) => b.timestamp - a.timestamp) });
-            } catch (e) {
+            } catch {
                 // Folder might not exist yet, which is fine
             }
             return;
@@ -143,15 +167,22 @@ const PropAccessoryStudio = () => {
         // 2. WEB MODE
         if (!state.saveDirectoryHandle) return;
         try {
-            // @ts-ignore
-            if ((await state.saveDirectoryHandle.queryPermission({ mode: 'read' })) !== 'granted') return;
+            const permissionAwareHandle = state.saveDirectoryHandle as FileSystemDirectoryHandle & {
+                queryPermission?: (descriptor?: { mode: 'read' | 'readwrite' }) => Promise<PermissionState>;
+            };
+            if (permissionAwareHandle.queryPermission) {
+                const permission = await permissionAwareHandle.queryPermission({ mode: 'read' });
+                if (permission !== 'granted') return;
+            }
 
             const propsHandle = await state.saveDirectoryHandle.getDirectoryHandle('props', { create: true });
             const items: PropItem[] = [];
-            // @ts-ignore
-            for await (const entry of (propsHandle as any).values()) {
+            const iterablePropsHandle = propsHandle as FileSystemDirectoryHandle & {
+                values: () => AsyncIterable<FileSystemHandle>;
+            };
+            for await (const entry of iterablePropsHandle.values()) {
                 if (entry.kind === 'file' && /\.(png|jpg|jpeg|webp)$/i.test(entry.name)) {
-                    const file = await entry.getFile();
+                    const file = await (entry as FileSystemFileHandle).getFile();
                     const reader = new FileReader();
                     const dataUrl = await new Promise<string>((resolve) => {
                         reader.onload = () => resolve(reader.result as string);
@@ -167,10 +198,10 @@ const PropAccessoryStudio = () => {
                 }
             }
             dispatch({ type: 'SET_PROP_ITEMS', payload: items.sort((a, b) => b.timestamp - a.timestamp) });
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Props scan failed: ${e.message}`, type: 'error' } });
+        } catch (e: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Props scan failed: ${getErrorMessage(e)}`, type: 'error' } });
         }
-    };
+    }, [dispatch, state.saveDirectoryHandle, state.saveDirectoryPath]);
 
 
 
@@ -201,8 +232,8 @@ const PropAccessoryStudio = () => {
             if (selectedProp?.id === item.id) setSelectedProp(null);
             dispatch({ type: 'ADD_LOG', payload: { message: `Deleted prop: ${item.name}`, type: 'success' } });
 
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Delete failed: ${e.message}`, type: 'error' } });
+        } catch (e: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Delete failed: ${getErrorMessage(e)}`, type: 'error' } });
         } finally {
             setConfirmDelete(null);
         }
@@ -270,8 +301,8 @@ const PropAccessoryStudio = () => {
             };
             reader.readAsDataURL(file);
 
-        } catch (err: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Upload failed: ${err.message}`, type: 'error' } });
+        } catch (err: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Upload failed: ${getErrorMessage(err)}`, type: 'error' } });
         } finally {
             // Reset input
             if (fileInputRef.current) fileInputRef.current.value = '';
@@ -280,10 +311,10 @@ const PropAccessoryStudio = () => {
 
     useEffect(() => {
         scanProps();
-    }, [state.saveDirectoryHandle, state.saveDirectoryPath]); // Add path dep
+    }, [scanProps]);
     // --- Reference Slot quick-bind (Shift+Click power-user shortcut) ---
     const bindToFirstEmptyRefSlot = (url: string, name: string) => {
-        const slots: any[] = (state as any).referenceSlots || [];
+        const slots = state.referenceSlots || [];
         if (!slots.length) {
             dispatch({ type: 'ADD_LOG', payload: { message: 'No reference slots available to bind.', type: 'error' } });
             return;
@@ -336,8 +367,8 @@ const PropAccessoryStudio = () => {
             // Immediate local pivot
             if (mat.url) setDesignerImage(mat.url);
             dispatch({ type: 'ADD_LOG', payload: { message: `Prop saved to library: ${mat.filename || "Storage"}`, type: 'success' } });
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Failed to save prop: ${e.message}`, type: 'error' } });
+        } catch (e: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Failed to save prop: ${getErrorMessage(e)}`, type: 'error' } });
         }
     };
 
@@ -377,12 +408,18 @@ const PropAccessoryStudio = () => {
         }
 
         dispatch({ type: 'SET_PROCESSING', payload: true });
+        const progressSessionId = ++progressSessionRef.current;
+        if (activeProgressIntervalRef.current !== null) {
+            window.clearInterval(activeProgressIntervalRef.current);
+            activeProgressIntervalRef.current = null;
+        }
 
         let currentPercent = 5;
         dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text: "Designing Prop" } });
         const etaMs = state.imageResolution === '4K' ? 35000 : (state.imageResolution === '2K' ? 25000 : 15000);
         const increment = (1000 / etaMs) * 100;
         const progressInterval = window.setInterval(() => {
+            if (progressSessionRef.current !== progressSessionId) return;
             currentPercent += increment;
             if (currentPercent > 95) currentPercent = 95;
 
@@ -394,6 +431,7 @@ const PropAccessoryStudio = () => {
 
             dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text } });
         }, 1000);
+        activeProgressIntervalRef.current = progressInterval;
 
         const submittedAt = Date.now();
         let actualAcceptedAt = 0;
@@ -432,10 +470,7 @@ extra objects, duplicate prop, altered proportions, floating parts, text, label,
 
             if (actualGenId) dispatch({ type: 'REMOVE_BACKGROUND_JOB', payload: actualGenId });
 
-            const rawUrl =
-                typeof res === 'string'
-                    ? res
-                    : (res && typeof res === 'object' ? (res as any).asset_url || '' : '');
+            const rawUrl = extractGeneratedAssetUrl(res);
 
             let safeUrl = rawUrl;
             try {
@@ -446,24 +481,30 @@ extra objects, duplicate prop, altered proportions, floating parts, text, label,
 
             setDesignerImage(safeUrl);
             dispatch({ type: 'ADD_LOG', payload: { message: "Prop generated on black studio background.", type: 'success' } });
-        } catch (e: any) {
-            const isTimeout = e.name === 'TimeoutError' || e.message?.includes('Pending');
-            if (isTimeout && e.generationId) {
-                dispatch({ type: 'UPDATE_BACKGROUND_JOB', payload: { id: e.generationId, updates: { status: 'pending_background', timing: { submittedAt, edgeAcceptedAt: actualAcceptedAt, clientTimeoutAt: Date.now() } } } });
+        } catch (e: unknown) {
+            const err = e as { name?: string; message?: string; generationId?: string };
+            const isTimeout = err.name === 'TimeoutError' || (err.message?.includes('Pending') ?? false);
+            if (isTimeout && err.generationId) {
+                dispatch({ type: 'UPDATE_BACKGROUND_JOB', payload: { id: err.generationId, updates: { status: 'pending_background', timing: { submittedAt, edgeAcceptedAt: actualAcceptedAt, clientTimeoutAt: Date.now() } } } });
                 dispatch({ type: 'ADD_LOG', payload: { message: "Job shifted to background due to long queue.", type: 'info' } });
             } else {
-                dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });
+                dispatch({ type: 'ADD_LOG', payload: { message: getErrorMessage(e), type: 'error' } });
             }
         } finally {
             clearInterval(progressInterval);
-            dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
-            dispatch({ type: 'SET_PROCESSING', payload: false });
+            if (activeProgressIntervalRef.current === progressInterval) {
+                activeProgressIntervalRef.current = null;
+            }
+            if (progressSessionRef.current === progressSessionId) {
+                dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
+                dispatch({ type: 'SET_PROCESSING', payload: false });
+            }
         }
     };
 
 
 
-    const executeRefinement = async (fitClass: string, subjectUrl: string, propUrl: string, lockedPlacement: WearablePlacement, precompositeUrl: string) => {
+    const executeRefinement = async (fitClass: WearableClass, subjectUrl: string, propUrl: string, lockedPlacement: WearablePlacement, precompositeUrl: string) => {
         console.warn(`[DEBUG_PATH] executeRefinement called for ${fitClass}`);
         let finalUrl = precompositeUrl;
         let refinementAccepted = false;
@@ -517,7 +558,7 @@ oversized wearable, resized wearable, moved wearable, floating wearable, theatri
             const refinedRes = await GeminiService.generateImage(
                 lockedRefinementPrompt,
                 state.apiKey,
-                state.model as any,
+                state.model,
                 [
                     { url: subjectUrl, label: 'Subject Reference' },
                     { url: propUrl, label: `${fitClass} Reference` },
@@ -534,16 +575,14 @@ oversized wearable, resized wearable, moved wearable, floating wearable, theatri
                 }
             );
 
-            const refinedRaw = typeof refinedRes === 'string'
-                ? refinedRes
-                : (refinedRes && typeof refinedRes === 'object' ? (refinedRes as any).asset_url || '' : '');
+            const refinedRaw = extractGeneratedAssetUrl(refinedRes);
 
             if (refinedRaw) {
                 const materializedRefined = await materializeDisplayUrl(refinedRaw);
                 const isValid = await WearableRefinementValidator.validate({
                     refinedUrl: materializedRefined,
                     lockedPlacement,
-                    fitClass: fitClass as any
+                    fitClass
                 });
 
                 if (isValid) {
@@ -589,13 +628,20 @@ oversized wearable, resized wearable, moved wearable, floating wearable, theatri
         });
 
         dispatch({ type: 'SET_PROCESSING', payload: true });
+        const progressSessionId = ++progressSessionRef.current;
+        if (activeProgressIntervalRef.current !== null) {
+            window.clearInterval(activeProgressIntervalRef.current);
+            activeProgressIntervalRef.current = null;
+        }
         let currentPercent = 5;
         dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text: "Integrating Prop" } });
         const progressInterval = window.setInterval(() => {
+            if (progressSessionRef.current !== progressSessionId) return;
             currentPercent += 20;
             if (currentPercent > 95) currentPercent = 95;
             dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text: "Finalizing Output..." } });
         }, 1000);
+        activeProgressIntervalRef.current = progressInterval;
 
         try {
             if (fitClass === 'headwear') {
@@ -608,12 +654,17 @@ oversized wearable, resized wearable, moved wearable, floating wearable, theatri
             } else {
                 await executeRefinement(fitClass, subjectUrl, propUrl, placement, precompositeUrl);
             }
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });
+        } catch (e: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: getErrorMessage(e), type: 'error' } });
         } finally {
             clearInterval(progressInterval);
-            dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
-            dispatch({ type: 'SET_PROCESSING', payload: false });
+            if (activeProgressIntervalRef.current === progressInterval) {
+                activeProgressIntervalRef.current = null;
+            }
+            if (progressSessionRef.current === progressSessionId) {
+                dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
+                dispatch({ type: 'SET_PROCESSING', payload: false });
+            }
         }
     };
 
@@ -663,12 +714,18 @@ oversized wearable, resized wearable, moved wearable, floating wearable, theatri
 
 
         dispatch({ type: 'SET_PROCESSING', payload: true });
+        const progressSessionId = ++progressSessionRef.current;
+        if (activeProgressIntervalRef.current !== null) {
+            window.clearInterval(activeProgressIntervalRef.current);
+            activeProgressIntervalRef.current = null;
+        }
 
         let currentPercent = 5;
         dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text: "Integrating Prop" } });
         const etaMs = state.imageResolution === '4K' ? 35000 : (state.imageResolution === '2K' ? 25000 : 15000);
         const increment = (1000 / etaMs) * 100;
         const progressInterval = window.setInterval(() => {
+            if (progressSessionRef.current !== progressSessionId) return;
             currentPercent += increment;
             if (currentPercent > 95) currentPercent = 95;
 
@@ -680,6 +737,7 @@ oversized wearable, resized wearable, moved wearable, floating wearable, theatri
 
             dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text } });
         }, 1000);
+        activeProgressIntervalRef.current = progressInterval;
 
         const submittedAt = Date.now();
         let actualAcceptedAt = 0;
@@ -721,10 +779,6 @@ oversized wearable, resized wearable, moved wearable, floating wearable, theatri
                         initialScale: reuseOffsets?.scaleMultiplier
                     });
                     console.warn(`[DEBUG_PATH] adjustmentState set`);
-                    
-                    clearInterval(progressInterval);
-                    dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
-                    dispatch({ type: 'SET_PROCESSING', payload: false });
                     console.warn(`[DEBUG_PATH] early return executed for confirm mode`);
                     return;
                 }
@@ -808,10 +862,7 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
 
                 if (actualGenId) dispatch({ type: 'REMOVE_BACKGROUND_JOB', payload: actualGenId });
 
-                const rawUrl =
-                    typeof res === 'string'
-                        ? res
-                        : (res && typeof res === 'object' ? (res as any).asset_url || '' : '');
+                const rawUrl = extractGeneratedAssetUrl(res);
 
                 let safeUrl = rawUrl;
                 try {
@@ -824,18 +875,24 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                 dispatch({ type: 'ADD_LOG', payload: { message: "Prop integrated.", type: 'info' } });
             }
 
-        } catch (e: any) {
-            const isTimeout = e.name === 'TimeoutError' || e.message?.includes('Pending');
-            if (isTimeout && e.generationId) {
-                dispatch({ type: 'UPDATE_BACKGROUND_JOB', payload: { id: e.generationId, updates: { status: 'pending_background', timing: { submittedAt, edgeAcceptedAt: actualAcceptedAt, clientTimeoutAt: Date.now() } } } });
+        } catch (e: unknown) {
+            const err = e as { name?: string; message?: string; generationId?: string };
+            const isTimeout = err.name === 'TimeoutError' || (err.message?.includes('Pending') ?? false);
+            if (isTimeout && err.generationId) {
+                dispatch({ type: 'UPDATE_BACKGROUND_JOB', payload: { id: err.generationId, updates: { status: 'pending_background', timing: { submittedAt, edgeAcceptedAt: actualAcceptedAt, clientTimeoutAt: Date.now() } } } });
                 dispatch({ type: 'ADD_LOG', payload: { message: "Job shifted to background due to long queue.", type: 'info' } });
             } else {
-                dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });
+                dispatch({ type: 'ADD_LOG', payload: { message: getErrorMessage(e), type: 'error' } });
             }
         } finally {
             clearInterval(progressInterval);
-            dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
-            dispatch({ type: 'SET_PROCESSING', payload: false });
+            if (activeProgressIntervalRef.current === progressInterval) {
+                activeProgressIntervalRef.current = null;
+            }
+            if (progressSessionRef.current === progressSessionId) {
+                dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
+                dispatch({ type: 'SET_PROCESSING', payload: false });
+            }
         }
     };
 
@@ -883,8 +940,8 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
             if (mat.previewUrl) setAppliedImage(mat.previewUrl);
             
             dispatch({ type: 'ADD_LOG', payload: { message: `Saved to Actors Library: ${mat.filename || "Storage"}`, type: 'success' } });
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Failed to save actor: ${e.message}`, type: 'error' } });
+        } catch (e: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Failed to save actor: ${getErrorMessage(e)}`, type: 'error' } });
         }
     };
 
@@ -921,7 +978,7 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                             <div
                                 key={item.id}
                                 onClick={(e) => {
-                                    if ((e as any).shiftKey) {
+                                    if (e.shiftKey) {
                                         bindToFirstEmptyRefSlot(item.url, item.name || 'Prop');
                                         return;
                                     }
@@ -1081,7 +1138,7 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                                         {appliedImage && (
                                             <div className="flex items-center gap-2 animate-in fade-in duration-300">
                                                 <button onClick={(e) => {
-                                                    if ((e as any).shiftKey) {
+                                                    if (e.shiftKey) {
                                                         const finalUrl = appliedImage;
                                                         if (finalUrl) bindToFirstEmptyRefSlot(finalUrl, `${selectedCharacter?.name || 'Subject'} + Prop Result`);
                                                         return;

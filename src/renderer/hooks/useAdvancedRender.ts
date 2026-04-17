@@ -2,6 +2,12 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import type { AppState, Action, StageToken, WhitelistProfile } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
 
+const safeRecord = (value: unknown): Record<string, unknown> | null =>
+    typeof value === 'object' && value !== null ? value as Record<string, unknown> : null;
+
+const getErrorMessage = (error: unknown): string =>
+    error instanceof Error ? error.message : String(error);
+
 export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Action>) => {
     const [strictMode, setStrictMode] = useState(true);
     const [autoAnchorDNA, setAutoAnchorDNA] = useState(true);
@@ -15,10 +21,10 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
         camera: state.director?.camera || '',
     };
 
-    const safeParseJson = (raw: string): any | null => {
+    const safeParseJson = (raw: string): Record<string, unknown> | null => {
         try {
             const cleaned = raw.replace(/```json/g, '').replace(/```/g, '').trim();
-            return JSON.parse(cleaned);
+            return safeRecord(JSON.parse(cleaned) as unknown);
         } catch {
             return null;
         }
@@ -69,12 +75,12 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
 
             dispatch({ type: 'ADD_LOG', payload: { message: "Anchor DNA extracted.", type: 'success' } });
             return dna;
-        } catch (e: any) {
+        } catch (error: unknown) {
             setDnaStatus('error');
-            dispatch({ type: 'ADD_LOG', payload: { message: e.message || "DNA analysis failed", type: 'error' } });
+            dispatch({ type: 'ADD_LOG', payload: { message: getErrorMessage(error) || "DNA analysis failed", type: 'error' } });
             return null;
         }
-    }, [state.backgroundUrl, state.apiKey, state.model, dispatch]);
+    }, [state.backgroundUrl, state.apiKey, state.model, state.billingEntitlements.effectiveBillingMode, state.billingEntitlements.hasByokAccess, dispatch]);
 
     // Auto DNA on background change
     useEffect(() => {
@@ -136,8 +142,8 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
 
                 overrides.set(t.id, prof);
                 dispatch({ type: 'UPDATE_TOKEN', payload: { id: t.id, profile: prof } });
-            } catch (e: any) {
-                dispatch({ type: 'ADD_LOG', payload: { message: `Token profile failed: ${e.message || t.id}`, type: 'error' } });
+            } catch (error: unknown) {
+                dispatch({ type: 'ADD_LOG', payload: { message: `Token profile failed: ${getErrorMessage(error) || t.id}`, type: 'error' } });
             }
         }
 
@@ -159,7 +165,7 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
         }
     };
 
-    const tokenProfilesReady = state.tokens.filter((t: any) => !!t.profile).length;
+    const tokenProfilesReady = state.tokens.filter((t) => !!t.profile).length;
     const tokenProfilesTotal = state.tokens.length;
 
     return {

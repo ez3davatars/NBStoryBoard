@@ -9,6 +9,7 @@ import { resolveDisplayUrl } from '../utils/assetUrlResolver';
 import type { VeoFivePartDraft, VeoAudioBlock, VeoTimestampBeat } from '../promptEngine/veoFivePart';
 import type { ShotSession, ShotActorReferenceInput } from '../types/shots';
 import { EntitlementResolver, type Entitlements } from '../utils/EntitlementResolver';
+import type { Session } from '@supabase/supabase-js';
 
 export const APP_SCHEMA_VERSION = 5; // bump when persisted state shape changes
 // --- SHARED TYPES ---
@@ -312,16 +313,17 @@ export interface RegionEditState {
 export const smartClone = <T,>(v: T): T => {
     if (v === null || typeof v !== 'object') return v;
     if (Array.isArray(v)) {
-        return v.map(smartClone) as any;
+        return v.map((item) => smartClone(item)) as unknown as T;
     }
     // OOM Guard: Prevent deep cloning native binary objects which freezes the V8 thread
     if (ArrayBuffer.isView(v) || v instanceof ArrayBuffer) {
         return v;
     }
-    const cloned = {} as any;
-    for (const key in v) {
-        if (Object.prototype.hasOwnProperty.call(v, key)) {
-            const val = (v as any)[key];
+    const source = v as Record<string, unknown>;
+    const cloned: Record<string, unknown> = {};
+    for (const key in source) {
+        if (Object.prototype.hasOwnProperty.call(source, key)) {
+            const val = source[key];
             // Critical OOM Guard: Pass massive base64 URIs by reference instead of deep copying into V8 heap
             if (typeof val === 'string' && val.length > 500 && (key.toLowerCase().includes('url') || val.startsWith('data:'))) {
                 cloned[key] = val;
@@ -330,7 +332,7 @@ export const smartClone = <T,>(v: T): T => {
             }
         }
     }
-    return cloned;
+    return cloned as T;
 };
 
 export type SceneResultAnchor = {
@@ -406,6 +408,13 @@ export type LiveStatusMessage = {
   createdAt: number;
 };
 
+export type GlobalProgressState = {
+    percent: number;
+    text: string;
+    owner?: string;
+    sequence?: number;
+};
+
 export interface BackgroundJob {
     id: string;
     status: 'polling_foreground' | 'pending_background' | 'completed' | 'failed';
@@ -420,6 +429,8 @@ export interface BackgroundJob {
     assetUrl?: string;
     errorMessage?: string | null;
 }
+
+type HostedSession = Session | null;
 
 export interface AppState {
     apiKey: string;
@@ -480,6 +491,7 @@ export interface AppState {
     imageResolution: '1K' | '2K' | '4K';
     enableImageThinking: boolean;
     enableGoogleGrounding: boolean;
+    scanSfxVolume: number; // 0-100
 
     // Director Canvas Refinement Tracking
     latestCompositeSource?: 'directorCanvas' | 'legacy';
@@ -498,7 +510,7 @@ export interface AppState {
     // PROP STUDIO PERSISTENCE
     propStudioState: PropAccessoryState;
 
-    globalProgress?: { percent: number; text: string };
+    globalProgress?: GlobalProgressState;
     sessionName: string | null;
     sessionFilePath: string | null;
 
@@ -508,7 +520,7 @@ export interface AppState {
     // BILLING & AUTH
     billingMode: 'hosted' | 'byok';
     billingEntitlements: Entitlements;
-    hostedSession: any | null;
+    hostedSession: HostedSession;
     hostedCredits: number | null;
     showCreditModal: boolean;
 
@@ -612,7 +624,7 @@ export type Action =
     | { type: 'SET_COMPOSITE_METADATA'; payload: { latestCompositeSource?: 'directorCanvas' | 'legacy'; latestCompositeResultUrl?: string } }
     | { type: 'ADD_LOG'; payload: Omit<LogEntry, 'id' | 'timestamp'> }
     | { type: 'SET_PROCESSING'; payload: boolean }
-    | { type: 'SET_GLOBAL_PROGRESS'; payload: { percent: number; text: string } | null }
+    | { type: 'SET_GLOBAL_PROGRESS'; payload: GlobalProgressState | null }
     | { type: 'SET_SAVE_DIRECTORY'; payload: FileSystemDirectoryHandle | null }
     | { type: 'SET_SAVE_PATH'; payload: string | null }
     | { type: 'ADD_WARDROBE_ITEM'; payload: WardrobeItem }
@@ -676,6 +688,7 @@ export type Action =
     | { type: 'SET_IMAGE_RESOLUTION'; payload: '1K' | '2K' | '4K' }
     | { type: 'SET_ENABLE_IMAGE_THINKING'; payload: boolean }
     | { type: 'SET_ENABLE_GOOGLE_GROUNDING'; payload: boolean }
+    | { type: 'SET_SCAN_SFX_VOLUME'; payload: number }
     | { type: 'SET_TOKENS'; payload: StageToken[] }
     | { type: 'SET_ANNOTATIONS'; payload: StageAnnotation[] }
     | { type: 'SYNC_SPATIAL_DESCRIPTORS' }
@@ -685,7 +698,7 @@ export type Action =
     | { type: 'SET_TEMPLATE_NOTES'; payload: { activeTemplateId?: string; templateNotes?: string } }
     | { type: 'SET_BILLING_MODE'; payload: 'hosted' | 'byok' }
     | { type: 'SET_BILLING_ENTITLEMENTS'; payload: Entitlements }
-    | { type: 'SET_HOSTED_SESSION'; payload: any | null }
+    | { type: 'SET_HOSTED_SESSION'; payload: HostedSession }
     | { type: 'SET_HOSTED_CREDITS'; payload: number | null }
     | { type: 'SET_CREDIT_MODAL'; payload: boolean }
     | { type: 'ADD_BACKGROUND_JOB'; payload: BackgroundJob }
@@ -714,7 +727,7 @@ const loadJson = <T,>(key: string, fallback: T): T => {
 
         // Objects: merge only when both are plain-ish objects
         if (typeof fallback === 'object' && fallback !== null && typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
-            return { ...(fallback as any), ...(parsed as any) } as T;
+            return { ...(fallback as Record<string, unknown>), ...(parsed as Record<string, unknown>) } as T;
         }
 
         // Primitives / fallback=null cases: return parsed as-is
@@ -858,7 +871,7 @@ const getInitialModel = (): AppState['model'] => {
         'gemini-2.5-flash-image',
         'gemini-3.1-flash-image-preview',
     ];
-    if (saved && valid.includes(saved as any)) return saved as AppState['model'];
+    if (saved && valid.some((model) => model === saved)) return saved as AppState['model'];
     return 'gemini-3.1-flash-image-preview';
 };
 
@@ -921,6 +934,7 @@ export const initialState: AppState = {
     imageResolution: loadJson<'1K' | '2K' | '4K'>('nano_image_resolution', '2K'),
     enableImageThinking: localStorage.getItem('nano_enable_image_thinking') !== 'false',
     enableGoogleGrounding: localStorage.getItem('nano_enable_google_grounding') === 'true' ? true : false,
+    scanSfxVolume: loadJson<number>('nano_scan_sfx_volume', 80),
     floorPlane: loadJson<FloorPlane | null>('nano_floor_plane', null),
     occupiedVolumes: loadJson<OccupiedVolume[]>('nano_occupied_volumes', []),
     isDepthProcessing: false,
@@ -1344,7 +1358,36 @@ export const reducer = (state: AppState, action: Action): AppState => {
                 globalProgress: action.payload ? state.globalProgress : undefined,
             };
         case 'SET_GLOBAL_PROGRESS':
-            return { ...state, globalProgress: action.payload || undefined };
+            if (!action.payload) {
+                return { ...state, globalProgress: undefined };
+            }
+
+            const prev = state.globalProgress;
+            const incoming = action.payload;
+            const prevOwner = prev?.owner;
+            const incomingOwner = incoming.owner;
+
+            // While an owned operation is active, ignore unowned writers.
+            if (prevOwner && !incomingOwner) {
+                return state;
+            }
+
+            // Different owner may only take over at bootstrap percent.
+            if (prevOwner && incomingOwner && prevOwner !== incomingOwner && incoming.percent > 12) {
+                return state;
+            }
+
+            const clampedPercent = Math.max(0, Math.min(100, incoming.percent));
+            if (prev && prevOwner && incomingOwner && prevOwner === incomingOwner) {
+                const prevSeq = prev.sequence ?? 0;
+                const nextSeq = incoming.sequence ?? (prevSeq + 1);
+                if (nextSeq < prevSeq) {
+                    return state;
+                }
+                return { ...state, globalProgress: { ...incoming, percent: clampedPercent, sequence: nextSeq } };
+            }
+
+            return { ...state, globalProgress: { ...incoming, percent: clampedPercent } };
         case 'SET_DEPTH_PROCESSING':
             return { ...state, isDepthProcessing: action.payload };
         case 'SET_GLOBAL_VEO_DRAFT':
@@ -1433,7 +1476,7 @@ export const reducer = (state: AppState, action: Action): AppState => {
                     ...smartClone(DEFAULT_REGION_EDIT),
                     ...(loaded.regionEdit || {}),
                     layers: loaded.regionEdit?.layers
-                        ? loaded.regionEdit.layers.map((layer: any, index: number) => ({
+                        ? loaded.regionEdit.layers.map((layer: RegionEditLayer, index: number) => ({
                             ...smartClone(DEFAULT_REGION_EDIT.layers[index] || DEFAULT_REGION_EDIT.layers[0]),
                             ...layer
                         }))
@@ -1496,6 +1539,8 @@ export const reducer = (state: AppState, action: Action): AppState => {
             return { ...state, enableImageThinking: action.payload };
         case 'SET_ENABLE_GOOGLE_GROUNDING':
             return { ...state, enableGoogleGrounding: action.payload };
+        case 'SET_SCAN_SFX_VOLUME':
+            return { ...state, scanSfxVolume: Math.max(0, Math.min(100, Math.round(action.payload))) };
         case 'SET_SAVE_PATH':
             localStorage.setItem('nano_save_path', action.payload || '');
             return { ...state, saveDirectoryPath: action.payload };
@@ -1713,7 +1758,8 @@ export const reducer = (state: AppState, action: Action): AppState => {
             };
         }
         case 'CLEAR_SHOT_SESSION': {
-            const { [action.payload.sceneId]: _, ...rest } = state.shotSessionsBySceneId;
+            const rest = { ...state.shotSessionsBySceneId };
+            delete rest[action.payload.sceneId];
             return { ...state, shotSessionsBySceneId: rest };
         }
         case 'SET_SHOTS':
@@ -2140,10 +2186,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
         const migrateOrLoad = async <T,>(
             key: string,
-            sanitize?: (v: any) => any
+            sanitize?: (value: unknown) => T
         ): Promise<T | null> => {
             // 1) try IndexedDB
-            const fromDb = await StorageService.load<T>(key, null as any);
+            const fromDb = await StorageService.load<T | null>(key, null);
             if (fromDb != null) {
                 // ✅ cleanup legacy localStorage regardless
                 if (localStorage.getItem(key) != null) localStorage.removeItem(key);
@@ -2168,9 +2214,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
         const restore = async () => {
             try {
-                const [_tokens, _annotations, rawActors, rawWardrobe, rawProps] = await Promise.all([
-                    migrateOrLoad<StageToken[]>('nano_tokens', sanitizeTokens),
-                    migrateOrLoad<StageAnnotation[]>('nano_annotations', sanitizeAnnotations),
+                const [, , rawActors, rawWardrobe, rawProps] = await Promise.all([
+                    migrateOrLoad<StageToken[]>('nano_tokens', (value) => sanitizeTokens(value as StageToken[])),
+                    migrateOrLoad<StageAnnotation[]>('nano_annotations', (value) => sanitizeAnnotations(value as StageAnnotation[])),
                     StorageService.load<CastMember[]>('nano_actors', []),
                     StorageService.load<WardrobeItem[]>('nano_wardrobe', []),
                     StorageService.load<PropItem[]>('nano_props', []),
@@ -2191,9 +2237,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                         let finalDisplayUrl: string | null = null;
 
                         // Native mode: rebuild thumbnail directly from disk into a data URL
-                        if (isNativeParams() && resolvedPath && (window as any).electronAPI?.readFile) {
+                        if (isNativeParams() && resolvedPath && window.electronAPI?.readFile) {
                             try {
-                                const base64 = await (window as any).electronAPI.readFile(resolvedPath);
+                                const base64 = await window.electronAPI.readFile(resolvedPath);
                                 if (base64) {
                                     finalDisplayUrl = `data:image/png;base64,${base64}`;
                                 }
@@ -2251,13 +2297,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                             resolvedPath = await nativeJoinPath(savePath, 'wardrobe', item.filename);
                         }
                         
-                        if (isNativeParams() && resolvedPath && (window as any).electronAPI?.readFile) {
+                        if (isNativeParams() && resolvedPath && window.electronAPI?.readFile) {
                             try {
-                                const base64 = await (window as any).electronAPI.readFile(resolvedPath);
+                                const base64 = await window.electronAPI.readFile(resolvedPath);
                                 if (base64) {
                                     return { ...item, localPath: resolvedPath, url: `data:image/png;base64,${base64}` };
                                 }
-                            } catch {}
+                            } catch (readErr) {
+                                console.warn("Failed to hydrate wardrobe asset from disk path", readErr);
+                            }
                         }
                         
                         const finalDisplayUrl = await resolveDisplayUrl({
@@ -2266,7 +2314,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                             previewUrl: item.url
                         });
                         return { ...item, localPath: resolvedPath, url: finalDisplayUrl || item.url };
-                    } catch (e) {
+                    } catch {
                         return item;
                     }
                 }));
@@ -2280,13 +2328,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                             resolvedPath = await nativeJoinPath(savePath, 'props', item.filename);
                         }
                         
-                        if (isNativeParams() && resolvedPath && (window as any).electronAPI?.readFile) {
+                        if (isNativeParams() && resolvedPath && window.electronAPI?.readFile) {
                             try {
-                                const base64 = await (window as any).electronAPI.readFile(resolvedPath);
+                                const base64 = await window.electronAPI.readFile(resolvedPath);
                                 if (base64) {
                                     return { ...item, localPath: resolvedPath, url: `data:image/png;base64,${base64}` };
                                 }
-                            } catch {}
+                            } catch (readErr) {
+                                console.warn("Failed to hydrate prop asset from disk path", readErr);
+                            }
                         }
                         
                         const finalDisplayUrl = await resolveDisplayUrl({
@@ -2295,7 +2345,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                             previewUrl: item.url
                         });
                         return { ...item, localPath: resolvedPath, url: finalDisplayUrl || item.url };
-                    } catch (e) {
+                    } catch {
                         return item;
                     }
                 }));
@@ -2354,6 +2404,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             localStorage.setItem('nano_image_resolution', JSON.stringify(state.imageResolution));
             localStorage.setItem('nano_enable_image_thinking', JSON.stringify(state.enableImageThinking));
             localStorage.setItem('nano_enable_google_grounding', JSON.stringify(state.enableGoogleGrounding));
+            localStorage.setItem('nano_scan_sfx_volume', JSON.stringify(state.scanSfxVolume));
             localStorage.setItem('nano_billing_mode', JSON.stringify(state.billingMode));
         } catch (e) {
             console.warn('Config persistence failed', e);
@@ -2373,6 +2424,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         state.imageResolution,
         state.enableImageThinking,
         state.enableGoogleGrounding,
+        state.scanSfxVolume,
         state.billingMode
     ]);
 
@@ -2465,14 +2517,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const activeBlobsRef = useRef<Set<string>>(new Set());
 
     useEffect(() => {
-        const extractBlobs = (obj: any, blobs: Set<string>) => {
+        const extractBlobs = (obj: unknown, blobs: Set<string>) => {
             if (!obj) return;
             if (typeof obj === 'string') {
                 if (obj.startsWith('blob:')) blobs.add(obj);
             } else if (Array.isArray(obj)) {
-                obj.forEach(item => extractBlobs(item, blobs));
+                obj.forEach((item) => extractBlobs(item, blobs));
             } else if (typeof obj === 'object') {
-                Object.values(obj).forEach(val => extractBlobs(val, blobs));
+                Object.values(obj).forEach((value) => extractBlobs(value, blobs));
             }
         };
 

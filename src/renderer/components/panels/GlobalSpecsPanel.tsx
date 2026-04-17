@@ -2,11 +2,11 @@
 import { Settings as SettingsIcon } from 'lucide-react';
 import { useAppContext } from '../../context/AppContext';
 import { SidebarPanel } from '../ui/SidebarPanel';
-import type { DirectorAspectRatio } from '../../context/AppContext';
+import type { AppState, DirectorAspectRatio } from '../../context/AppContext';
 
 interface GlobalSpecsPanelProps {
- state: any;
- setDirector: (updates: any) => void;
+ state: AppState;
+ setDirector: (updates: Partial<AppState['director']>) => void;
  collapsed: boolean;
  onToggle: (id: string) => void;
  onDragStart: (id: string) => void;

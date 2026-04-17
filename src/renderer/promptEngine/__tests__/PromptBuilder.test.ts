@@ -32,18 +32,26 @@ describe('PromptBuilder', () => {
         };
 
         const result = buildVeo31Prompt(spec);
+        const result2 = buildVeo31Prompt(spec);
 
-        console.log(result.prompt); // Inspect manually if needed
+        expect(result.prompt).toContain("VEO 3.1 DIRECTOR SPEC (STRICT):");
+        expect(result.prompt).toContain("CONTINUITY LOCK (HARD):");
+        expect(result.prompt).toContain("CHARACTER BIBLE:");
+        expect(result.prompt).toContain("- Identity: A pirate captain");
+        expect(result.prompt).toContain("- Wardrobe: Red coat");
+        expect(result.prompt).toContain("- Locked Traits: Hook hand, Eyepatch");
+        expect(result.prompt).toContain("ENVIRONMENT BIBLE:");
+        expect(result.prompt).toContain("- Locked Elements: Mast position");
+        expect(result.prompt).toContain("STYLE BIBLE:");
+        expect(result.prompt).toContain("MOTION DELTA:");
+        expect(result.prompt).toContain("FRAME 1 DESCRIPTION:");
+        expect(result.prompt).toContain("FRAME 2 DESCRIPTION:");
+        expect(result.prompt).toContain("OUTPUT: Generate a coherent video that matches the bibles above.");
 
-        expect(result.prompt).toContain("**1. SHARED VISUAL DNA (LOCKED):**");
-        expect(result.prompt).toContain("**Identity:** A pirate captain. Red coat.");
-        expect(result.prompt).toContain("**Locked Traits:** Hook hand, Eyepatch.");
-        expect(result.prompt).toContain("**Locked Elements:** Mast position.");
-        expect(result.prompt).toContain("[VEO 3.1 TEMPORAL INTERPOLATION]");
-        expect(result.prompt).toContain("GENERATE VEO VIDEO.");
-        
         // Assert Negatives
         expect(result.negatives).toContain("cartoon"); // Because style is Cinematic
         expect(result.negatives).toContain("morphing");
+        expect(result.prompt).toEqual(result2.prompt);
+        expect(result.negatives).toEqual(result2.negatives);
     });
 });

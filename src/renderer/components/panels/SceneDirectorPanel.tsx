@@ -5,13 +5,13 @@ import { Dropdown } from '../ui/Dropdown';
 import type { DropdownOption } from '../ui/Dropdown';
 import { DebouncedTextarea } from '../ui/DebouncedTextarea';
 import HelpTooltip from '../ui/HelpTooltip';
-import type { DirectorSpatialLayout } from '../../context/AppContext';
+import type { AppState, DirectorSpatialLayout } from '../../context/AppContext';
 import { SHOT_TYPES } from '../veo/cinematographyOptions';
 import { LIGHTING_PRESETS } from '../../../prompts/portraitPrompts';
 
 const lightingOptions: DropdownOption[] = [
  { type: 'option', label: 'Default / Auto', value: '' },
- ...LIGHTING_PRESETS.map((p: any) => p.disabled
+ ...LIGHTING_PRESETS.map((p) => p.disabled
  ? { type: 'group' as const, label: p.label }
  : { type: 'option' as const, label: p.label, value: p.key }
  )
@@ -23,8 +23,8 @@ const cameraOptions: DropdownOption[] = [
 ];
 
 interface SceneDirectorPanelProps {
- state: any;
- setDirector: (updates: any) => void;
+ state: AppState;
+ setDirector: (updates: Partial<AppState['director']>) => void;
  collapsed: boolean;
  onToggle: (id: string) => void;
  onDragStart: (id: string) => void;
@@ -57,7 +57,7 @@ export const SceneDirectorPanel = ({
  <PropertyField
  label="Subject / Action"
  value={state.director.subject}
- onChange={(v: any) => setDirector({ subject: v })}
+ onChange={(v: string) => setDirector({ subject: v })}
  placeholder="Describe the main action..."
  type="textarea"
  />

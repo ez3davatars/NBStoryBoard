@@ -38,33 +38,31 @@ export const RefInspectorModal = ({
  isAnalyzing
 }: RefInspectorModalProps) => {
  const slot = referenceSlots.find(s => s.index === inspectRefIndex);
- const [displayUrl, setDisplayUrl] = useState<string | null>(null);
+ const [displayUrl, setDisplayUrl] = useState<{ source: string; url: string } | null>(null);
 
  useEffect(() => {
-   if (!slot?.url) {
-     setDisplayUrl(null);
-     return;
-   }
+   if (!slot?.url) return;
    
    let isMounted = true;
+   const sourceUrl = slot.url;
    const isLocalSafe = slot.url.startsWith('blob:') || slot.url.startsWith('data:');
    
    resolveDisplayUrl({
      localPath: slot.localPath,
      sourceUrl: slot.sourceUrl,
-     localUrl: isLocalSafe ? slot.url : null,
-     remoteUrl: !isLocalSafe && slot.url && slot.url.startsWith('http') ? slot.url : null
+     localUrl: isLocalSafe ? sourceUrl : null,
+     remoteUrl: !isLocalSafe && sourceUrl && sourceUrl.startsWith('http') ? sourceUrl : null
    }).then(resolved => {
      if (isMounted && resolved) {
-       setDisplayUrl(resolved);
+       setDisplayUrl({ source: sourceUrl, url: resolved });
      }
    });
 
    return () => { isMounted = false; };
- }, [slot?.url]);
+ }, [slot?.url, slot?.localPath, slot?.sourceUrl]);
 
  if (!slot || !slot.url) return null;
- const effectiveUrl = displayUrl || slot.url;
+ const effectiveUrl = displayUrl?.source === slot.url ? displayUrl.url : slot.url;
 
  return (
  <div className="fixed inset-0 z-[100] flex items-center justify-center p-8 bg-black/95 backdrop-blur-md">

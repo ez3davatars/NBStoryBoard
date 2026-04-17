@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useAppContext } from '../../context/AppContext';
+import type { Shot } from '../../context/AppContext';
 import { Search, Film, Image as ImageIcon, Plus, Trash2 } from 'lucide-react';
 import ConfirmDialog from '../ui/ConfirmDialog';
 
@@ -7,7 +8,7 @@ export default function StoryboardShotRail() {
   const { state, dispatch } = useAppContext();
   const [searchQuery, setSearchQuery] = useState("");
   const [showClearConfirm, setShowClearConfirm] = useState(false);
-  const [shotToDelete, setShotToDelete] = useState<any>(null);
+  const [shotToDelete, setShotToDelete] = useState<Shot | null>(null);
 
   const filteredShots = useMemo(() => {
     if (!searchQuery) return state.shots;
@@ -18,7 +19,7 @@ export default function StoryboardShotRail() {
     );
   }, [state.shots, searchQuery]);
 
-  const handleShotClick = (shot: any) => {
+  const handleShotClick = (shot: Shot) => {
     dispatch({ type: 'SET_ACTIVE_SHOT', payload: { id: shot.id } });
 
     // Auto-sync frames to the active storyboard slots
@@ -53,7 +54,7 @@ export default function StoryboardShotRail() {
               <Trash2 className="w-4 h-4" />
             </button>
             <button
-              onClick={() => dispatch({ type: 'ADD_SHOT_FROM_STAGE', payload: {} } as any)}
+              onClick={() => dispatch({ type: 'ADD_SHOT_FROM_STAGE', payload: {} })}
               className="p-1 rounded bg-white/5 hover:bg-yellow-500/20 text-gray-400 hover:text-yellow-500 transition-colors"
               title="Create new shot from current stage"
             >
@@ -140,7 +141,7 @@ export default function StoryboardShotRail() {
             <Film className="w-8 h-8 mb-3 opacity-20" />
             <p className="text-[10px] uppercase font-bold tracking-widest mb-3">No shots found</p>
             <button
-              onClick={() => dispatch({ type: 'ADD_SHOT_FROM_STAGE', payload: {} } as any)}
+              onClick={() => dispatch({ type: 'ADD_SHOT_FROM_STAGE', payload: {} })}
               className="bg-yellow-500/20 text-yellow-500 hover:bg-yellow-500/40 px-4 py-2 rounded-md text-[10px] font-black uppercase tracking-wider transition-colors border border-yellow-500/30"
             >
               Create First Shot
@@ -153,7 +154,7 @@ export default function StoryboardShotRail() {
         isOpen={showClearConfirm}
         onClose={() => setShowClearConfirm(false)}
         onConfirm={() => {
-          dispatch({ type: 'CLEAR_SHOTS' } as any);
+          dispatch({ type: 'CLEAR_SHOTS' });
           setShowClearConfirm(false);
         }}
         title="Clear All Shots"
@@ -167,7 +168,7 @@ export default function StoryboardShotRail() {
         onClose={() => setShotToDelete(null)}
         onConfirm={() => {
           if (shotToDelete) {
-            dispatch({ type: 'REMOVE_SHOT', payload: { id: shotToDelete.id } } as any);
+            dispatch({ type: 'REMOVE_SHOT', payload: { id: shotToDelete.id } });
           }
           setShotToDelete(null);
         }}

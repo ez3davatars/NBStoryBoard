@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { X, BookOpen } from 'lucide-react';
@@ -12,13 +12,11 @@ interface GuideViewerModalProps {
 }
 
 export const GuideViewerModal: React.FC<GuideViewerModalProps> = ({ isOpen, onClose }) => {
-    const [content, setContent] = useState<string>('');
-
-    useEffect(() => {
-        if (isOpen) {
-            setContent(guideContentRaw);
-        }
-    }, [isOpen]);
+    const withoutNode = <T extends { node?: unknown }>(props: T): Omit<T, 'node'> => {
+        const { node, ...rest } = props;
+        void node;
+        return rest;
+    };
 
     if (!isOpen) return null;
 
@@ -45,23 +43,23 @@ export const GuideViewerModal: React.FC<GuideViewerModalProps> = ({ isOpen, onCl
                         <ReactMarkdown 
                             remarkPlugins={[remarkGfm]}
                             components={{
-                                h1: ({node, ...props}) => <h1 className="text-3xl font-black text-white border-b border-white/10 pb-4 mb-6" {...props} />,
-                                h2: ({node, ...props}) => <h2 className="text-2xl font-bold text-yellow-500 mt-10 mb-4" {...props} />,
-                                h3: ({node, ...props}) => <h3 className="text-xl font-bold text-gray-200 mt-8 mb-3" {...props} />,
-                                p: ({node, ...props}) => <p className="text-gray-300 leading-relaxed mb-4" {...props} />,
-                                ul: ({node, ...props}) => <ul className="list-disc list-inside space-y-2 mb-4 text-gray-300" {...props} />,
-                                ol: ({node, ...props}) => <ol className="list-decimal list-inside space-y-2 mb-4 text-gray-300" {...props} />,
-                                li: ({node, ...props}) => <li className="text-gray-300" {...props} />,
-                                a: ({node, ...props}) => <a className="text-blue-400 hover:text-blue-300 underline" {...props} />,
-                                blockquote: ({node, ...props}) => <blockquote className="border-l-4 border-yellow-500/50 bg-yellow-500/5 pl-4 py-2 my-4 text-gray-400 italic" {...props} />,
-                                table: ({node, ...props}) => <div className="overflow-x-auto mb-6"><table className="w-full text-left border-collapse" {...props} /></div>,
-                                th: ({node, ...props}) => <th className="border-b border-gray-700 py-3 px-4 font-bold text-white bg-white/5" {...props} />,
-                                td: ({node, ...props}) => <td className="border-b border-gray-800 py-3 px-4 text-gray-300" {...props} />,
-                                strong: ({node, ...props}) => <strong className="font-bold text-white" {...props} />,
-                                hr: ({node, ...props}) => <hr className="border-gray-800 my-8" {...props} />
+                                h1: (props) => <h1 className="text-3xl font-black text-white border-b border-white/10 pb-4 mb-6" {...withoutNode(props)} />,
+                                h2: (props) => <h2 className="text-2xl font-bold text-yellow-500 mt-10 mb-4" {...withoutNode(props)} />,
+                                h3: (props) => <h3 className="text-xl font-bold text-gray-200 mt-8 mb-3" {...withoutNode(props)} />,
+                                p: (props) => <p className="text-gray-300 leading-relaxed mb-4" {...withoutNode(props)} />,
+                                ul: (props) => <ul className="list-disc list-inside space-y-2 mb-4 text-gray-300" {...withoutNode(props)} />,
+                                ol: (props) => <ol className="list-decimal list-inside space-y-2 mb-4 text-gray-300" {...withoutNode(props)} />,
+                                li: (props) => <li className="text-gray-300" {...withoutNode(props)} />,
+                                a: (props) => <a className="text-blue-400 hover:text-blue-300 underline" {...withoutNode(props)} />,
+                                blockquote: (props) => <blockquote className="border-l-4 border-yellow-500/50 bg-yellow-500/5 pl-4 py-2 my-4 text-gray-400 italic" {...withoutNode(props)} />,
+                                table: (props) => <div className="overflow-x-auto mb-6"><table className="w-full text-left border-collapse" {...withoutNode(props)} /></div>,
+                                th: (props) => <th className="border-b border-gray-700 py-3 px-4 font-bold text-white bg-white/5" {...withoutNode(props)} />,
+                                td: (props) => <td className="border-b border-gray-800 py-3 px-4 text-gray-300" {...withoutNode(props)} />,
+                                strong: (props) => <strong className="font-bold text-white" {...withoutNode(props)} />,
+                                hr: (props) => <hr className="border-gray-800 my-8" {...withoutNode(props)} />
                             }}
                         >
-                            {content}
+                            {guideContentRaw}
                         </ReactMarkdown>
                     </div>
                 </div>

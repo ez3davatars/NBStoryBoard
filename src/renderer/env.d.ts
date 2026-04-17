@@ -45,8 +45,8 @@ interface ElectronAPI {
   confirmDiscardSession?: () => void;
   onRequestAppClose?: (callback: () => void) => void;
   confirmClose?: () => void;
-  showSaveDialog?: (options: any) => Promise<string | null>;
-  showOpenDialog?: (options: any) => Promise<string[] | null>;
+  showSaveDialog?: (options: Record<string, unknown>) => Promise<string | null>;
+  showOpenDialog?: (options: Record<string, unknown>) => Promise<string[] | null>;
   deleteFile?: (path: string) => Promise<boolean>;
   renameFile?: (oldPath: string, newPath: string) => Promise<boolean>;
 }

@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { nativeJoinPath, nativeListFiles, nativeReadFile } from '../utils/NativeFileAssets';
 import { nativeSelectFolder } from '../utils/NativeFileAssets';
-import type { CastMember } from '../context/AppContext';
+import type { CastMember, WardrobeItem } from '../context/AppContext';
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
 import { resolveDisplayUrl } from '../utils/assetUrlResolver';
@@ -145,6 +145,48 @@ const SCOPE_COST: Record<BodyScope, { gpu: string; note: string }> = {
 
 // Types for Phases
 type Phase = 1 | 2 | 3 | 4 | 5;
+type MorphVariant = 'masc' | 'fem' | 'youth_masc' | 'youth_fem';
+type RefLayout = 'form_focus' | 'face_focus' | 'split_focus';
+type FaceMeshLandmark = { x: number; y: number };
+type FaceMeshResultsLike = { multiFaceLandmarks?: FaceMeshLandmark[][] };
+type ActorMetadata = { id?: string; name?: string; style?: string };
+type DirectoryHandleWithValues = FileSystemDirectoryHandle & {
+    values?: () => AsyncIterable<FileSystemHandle>;
+};
+type RenderResolution = '1K' | '2K' | '4K';
+
+const NEURO_LINK_ETA_BASELINE_NOTE = 'ETA baseline assumes ~1 Gbps internet speed.';
+const NANO_NEURO_LINK_ETA: Record<RenderResolution, { range: string; sampleRuns: number; progressMs: number }> = {
+    '1K': { range: '26-30 seconds', sampleRuns: 3, progressMs: 30000 },
+    '2K': { range: '33-38 seconds', sampleRuns: 3, progressMs: 38000 },
+    '4K': { range: '45-57 seconds', sampleRuns: 5, progressMs: 57000 }
+};
+const REFERENCE_SHEET_ETA_RANGE = '70-90 seconds';
+
+const getNeuroEtaDescriptor = (resolution: RenderResolution) => {
+    const cfg = NANO_NEURO_LINK_ETA[resolution];
+    return `ETA (1G): ${cfg.range} avg (${cfg.sampleRuns} test runs). ${NEURO_LINK_ETA_BASELINE_NOTE}`;
+};
+
+const getNeuroProgressDetail = (prefix: string, resolution: RenderResolution) =>
+    `${prefix} ${getNeuroEtaDescriptor(resolution)}`;
+
+const getReferenceSheetEtaDescriptor = () =>
+    `ETA (1G): ${REFERENCE_SHEET_ETA_RANGE}. ${NEURO_LINK_ETA_BASELINE_NOTE}`;
+
+const getErrorMessage = (error: unknown): string => {
+    if (error instanceof Error) return error.message;
+    return String(error);
+};
+
+const extractAssetUrl = (value: unknown): string => {
+    if (typeof value === 'string') return value;
+    if (value && typeof value === 'object' && 'asset_url' in value) {
+        const assetUrl = (value as { asset_url?: unknown }).asset_url;
+        return typeof assetUrl === 'string' ? assetUrl : '';
+    }
+    return '';
+};
 
 const formatHeight = (inches: number) => {
     const ft = Math.floor(inches / 12);
@@ -185,7 +227,7 @@ const NanoCastingDirector = () => {
     const [phase, setPhase] = useState<Phase>(1);
 
     // --- WARDROBE LIBRARY HANDLERS ---
-    const [confirmDelete, setConfirmDelete] = useState<any | null>(null);
+    const [confirmDelete, setConfirmDelete] = useState<WardrobeItem | null>(null);
     const [showCoverDeleteConfirm, setShowCoverDeleteConfirm] = useState<string | null>(null);
     const [localBiometricSheetUrl, setLocalBiometricSheetUrl] = useState<string | null>(null);
 
@@ -195,7 +237,7 @@ const NanoCastingDirector = () => {
             try {
                 const wardrobePath = await nativeJoinPath(state.saveDirectoryPath, 'wardrobe');
                 const files = await nativeListFiles(wardrobePath);
-                const items: any[] = []; // Type as WardrobeItem if available
+                const items: WardrobeItem[] = [];
 
                 for (const file of files) {
                     if (/\.(png|jpg|jpeg|webp)$/i.test(file)) {
@@ -226,15 +268,16 @@ const NanoCastingDirector = () => {
 
         if (!state.saveDirectoryHandle) return;
         try {
-            // @ts-ignore
-            if ((await state.saveDirectoryHandle.queryPermission({ mode: 'read' })) !== 'granted') return;
+            const hasPermission = await verifyPermission(state.saveDirectoryHandle, false);
+            if (!hasPermission) return;
 
             const wardrobeHandle = await state.saveDirectoryHandle.getDirectoryHandle('wardrobe', { create: true });
-            const items: any[] = [];
-            // @ts-ignore
-            for await (const entry of (wardrobeHandle as any).values()) {
+            const iterableWardrobeHandle = wardrobeHandle as DirectoryHandleWithValues;
+            if (!iterableWardrobeHandle.values) return;
+            const items: WardrobeItem[] = [];
+            for await (const entry of iterableWardrobeHandle.values()) {
                 if (entry.kind === 'file' && /\.(png|jpg|jpeg|webp)$/i.test(entry.name)) {
-                    const file = await entry.getFile();
+                    const file = await (entry as FileSystemFileHandle).getFile();
                     const reader = new FileReader();
                     const dataUrl = await new Promise<string>((resolve) => {
                         reader.onload = () => resolve(reader.result as string);
@@ -253,13 +296,13 @@ const NanoCastingDirector = () => {
             }
             dispatch({ type: 'SET_WARDROBE_ITEMS', payload: items.sort((a, b) => b.timestamp - a.timestamp) });
             dispatch({ type: 'ADD_LOG', payload: { message: "Wardrobe Library Refreshed", type: 'success' } });
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Wardrobe scan failed: ${e.message}`, type: 'error' } });
+        } catch (e: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Wardrobe scan failed: ${getErrorMessage(e)}`, type: 'error' } });
         }
     };
 
     // --- ACTOR LIBRARY SCANNER (NATIVE) ---
-    const scanActorLibrary = async () => {
+    const scanActorLibrary = useCallback(async () => {
         if (!state.saveDirectoryPath) return;
 
         try {
@@ -292,7 +335,7 @@ const NanoCastingDirector = () => {
 
                         // Check for Sidecar JSON
                         const jsonName = `${baseName}.json`;
-                        let metadata: any = null;
+                        let metadata: ActorMetadata | null = null;
 
                         if (files.includes(jsonName)) {
                             const jsonPath = await nativeJoinPath(catPath, jsonName);
@@ -309,7 +352,7 @@ const NanoCastingDirector = () => {
                                         jsonStr = atob(base64);
                                     }
                                     metadata = JSON.parse(jsonStr);
-                                } catch (e) {
+                                } catch {
                                     console.warn("Invalid JSON for actor:", baseName);
                                 }
                             }
@@ -347,7 +390,7 @@ const NanoCastingDirector = () => {
         } catch (err) {
             console.error("Failed to scan native Actor Library:", err);
         }
-    };
+    }, [dispatch, state.saveDirectoryPath]);
 
     // Auto-Scan on Mount / Path Change (Legacy Fallback Only)
     useEffect(() => {
@@ -355,7 +398,7 @@ const NanoCastingDirector = () => {
         if (state.saveDirectoryPath && state.actorLibrary.length === 0) {
             scanActorLibrary();
         }
-    }, [state.saveDirectoryPath, state.actorLibrary.length]);
+    }, [state.saveDirectoryPath, state.actorLibrary.length, scanActorLibrary]);
 
     const handleUploadCostume = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (!e.target.files || e.target.files.length === 0 || !state.saveDirectoryHandle) return;
@@ -363,7 +406,7 @@ const NanoCastingDirector = () => {
 
         try {
             // DUPLICATE CHECK
-            if (state.wardrobeItems.some((i: any) => i.id.includes(file.name) || i.name === file.name.split('.')[0])) {
+            if (state.wardrobeItems.some((i) => i.id.includes(file.name) || i.name === file.name.split('.')[0])) {
                 showToast("Item already exists in library.");
                 return;
             }
@@ -396,8 +439,8 @@ const NanoCastingDirector = () => {
             };
             reader.readAsDataURL(file);
 
-        } catch (err: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Upload failed: ${err.message}`, type: 'error' } });
+        } catch (err: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Upload failed: ${getErrorMessage(err)}`, type: 'error' } });
         }
     };
 
@@ -420,13 +463,13 @@ const NanoCastingDirector = () => {
 
             if (!deleted) throw new Error("File deletion failed or permission denied on disk.");
 
-            const newItems = state.wardrobeItems.filter((i: any) => i.id !== item.id);
+            const newItems = state.wardrobeItems.filter((i) => i.id !== item.id);
             dispatch({ type: 'SET_WARDROBE_ITEMS', payload: newItems });
             if (selectedWardrobeItem?.id === item.id) setSelectedWardrobeItem(null);
             dispatch({ type: 'ADD_LOG', payload: { message: `Deleted costume: ${item.name}`, type: 'success' } });
 
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Delete failed: ${e.message}`, type: 'error' } });
+        } catch (e: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Delete failed: ${getErrorMessage(e)}`, type: 'error' } });
         } finally {
             setConfirmDelete(null);
         }
@@ -434,7 +477,7 @@ const NanoCastingDirector = () => {
 
     // --- PHASE 2: BODY ARCHETYPE STATE ---
     const [selectedBody, setSelectedBody] = useState<string | null>(null);
-    const [morphVariant, setMorphVariant] = useState<'masc' | 'fem' | 'youth_masc' | 'youth_fem'>('masc');
+    const [morphVariant, setMorphVariant] = useState<MorphVariant>('masc');
 
     // --- CUSTOM COVERS STATE ---
     const [customArchetypeCovers, setCustomArchetypeCovers] = useState<Record<string, string>>({});
@@ -442,12 +485,16 @@ const NanoCastingDirector = () => {
 
     // Load covers from IndexedDB on mount
     // Load covers from Disk on mount/change
+    const customArchetypeCoversRef = useRef(customArchetypeCovers);
     useEffect(() => {
-        // Revoke old URLs to prevent memory leaks
+        customArchetypeCoversRef.current = customArchetypeCovers;
+    }, [customArchetypeCovers]);
+    useEffect(() => {
+        // Revoke old URLs to prevent memory leaks on unmount.
         return () => {
-            Object.values(customArchetypeCovers).forEach(url => URL.revokeObjectURL(url));
+            Object.values(customArchetypeCoversRef.current).forEach(url => URL.revokeObjectURL(url));
         };
-    }, []);
+    }, [dispatch]);
 
     useEffect(() => {
         const loadCovers = async () => {
@@ -542,7 +589,7 @@ const NanoCastingDirector = () => {
         }
     };
 
-    const getArchetypes = (variant: 'masc' | 'fem' | 'youth_masc' | 'youth_fem') => {
+    const getArchetypes = (variant: MorphVariant) => {
         switch (variant) {
             case 'fem': return [
                 { id: 'titan', name: 'The Amazon', desc: 'Tall, athletic strength, powerful feminine build', icon: Zap, defaultImage: titanFem },
@@ -604,7 +651,7 @@ const NanoCastingDirector = () => {
     }, [selectedStyle, bodyScope]);
 
     // --- STYLE CONFIGURATION BY CATEGORY ---
-    const getStyleMatrix = (_variant: 'masc' | 'fem' | 'youth_masc' | 'youth_fem') => {
+    const getStyleMatrix = () => {
         // Unified active images mapping
         const activeImages = {
             pixar: coverPixar,
@@ -655,7 +702,7 @@ const NanoCastingDirector = () => {
         };
     };
 
-    const styleMatrix = getStyleMatrix(morphVariant);
+    const styleMatrix = getStyleMatrix();
 
     // --- PHASE 4 & 5: STATE ---
     const [isProcessing, setIsProcessing] = useState(false);
@@ -666,7 +713,7 @@ const NanoCastingDirector = () => {
     // --- REF SHEET GENERATOR STATE ---
     const [showRefSheet, setShowRefSheet] = useState(false);
     const [refSheetUrl, setRefSheetUrl] = useState<string | null>(null);
-    const [refLayout, setRefLayout] = useState<'form_focus' | 'face_focus' | 'split_focus'>('form_focus');
+    const [refLayout, setRefLayout] = useState<RefLayout>('form_focus');
     const [refStyle, setRefStyle] = useState<keyof typeof REF_SHEET_STYLES>('family_3d');
 
     // Inherit the style choice from Phase 3 (Style Synthesis)
@@ -743,16 +790,163 @@ const NanoCastingDirector = () => {
         up: null,
         down: null
     });
+    const capturedAnglesRef = useRef(capturedAngles);
+    const captureAudioCtxRef = useRef<AudioContext | null>(null);
+    type CaptureAngle = keyof typeof capturedAngles;
+    const cameraShutterBufferRef = useRef<AudioBuffer | null>(null);
+    const cameraShutterLoadAttemptedRef = useRef(false);
+    const cameraShutterAngleBuffersRef = useRef<Partial<Record<CaptureAngle, AudioBuffer>>>({});
+    const cameraShutterAngleLoadAttemptedRef = useRef<Partial<Record<CaptureAngle, boolean>>>({});
+
+    const loadCameraShutterBuffer = useCallback(async (ctx: AudioContext): Promise<AudioBuffer | null> => {
+        if (cameraShutterBufferRef.current) return cameraShutterBufferRef.current;
+        if (cameraShutterLoadAttemptedRef.current) return null;
+        cameraShutterLoadAttemptedRef.current = true;
+
+        const candidates = [
+            '/sounds/camera-shutter.mp3',
+            '/sounds/camera-shutter.wav',
+            '/sounds/camera-shutter.ogg'
+        ];
+
+        for (const url of candidates) {
+            try {
+                const res = await fetch(url, { cache: 'force-cache' });
+                if (!res.ok) continue;
+                const encoded = await res.arrayBuffer();
+                const decoded = await ctx.decodeAudioData(encoded.slice(0));
+                cameraShutterBufferRef.current = decoded;
+                return decoded;
+            } catch {
+                // Try next candidate.
+            }
+        }
+
+        return null;
+    }, []);
+
+    const loadAngleCameraShutterBuffer = useCallback(async (ctx: AudioContext, angle: CaptureAngle): Promise<AudioBuffer | null> => {
+        const fromCache = cameraShutterAngleBuffersRef.current[angle];
+        if (fromCache) return fromCache;
+        if (cameraShutterAngleLoadAttemptedRef.current[angle]) return null;
+        cameraShutterAngleLoadAttemptedRef.current[angle] = true;
+
+        const candidates = [
+            `/sounds/camera-shutter-${angle}.mp3`,
+            `/sounds/camera-shutter-${angle}.wav`,
+            `/sounds/camera-shutter-${angle}.ogg`
+        ];
+
+        for (const url of candidates) {
+            try {
+                const res = await fetch(url, { cache: 'force-cache' });
+                if (!res.ok) continue;
+                const encoded = await res.arrayBuffer();
+                const decoded = await ctx.decodeAudioData(encoded.slice(0));
+                cameraShutterAngleBuffersRef.current[angle] = decoded;
+                return decoded;
+            } catch {
+                // Try next candidate.
+            }
+        }
+
+        return null;
+    }, []);
+
+    const playCaptureConfirmationTone = useCallback(async (angle: CaptureAngle) => {
+        try {
+            const audioWindow = window as unknown as { AudioContext?: typeof AudioContext; webkitAudioContext?: typeof AudioContext };
+            const AudioCtor = audioWindow.AudioContext || audioWindow.webkitAudioContext;
+            if (!AudioCtor) return;
+
+            if (!captureAudioCtxRef.current) {
+                captureAudioCtxRef.current = new AudioCtor();
+            }
+
+            const ctx = captureAudioCtxRef.current;
+            if (!ctx) return;
+            if (ctx.state === 'suspended') {
+                await ctx.resume();
+            }
+            const sfxVolume = Math.max(0, Math.min(1, (state.scanSfxVolume ?? 80) / 100));
+
+            // Per-angle custom SFX takes priority if present.
+            const angleShutterBuffer = await loadAngleCameraShutterBuffer(ctx, angle);
+            if (angleShutterBuffer) {
+                const source = ctx.createBufferSource();
+                const sfxGain = ctx.createGain();
+                source.buffer = angleShutterBuffer;
+                sfxGain.gain.setValueAtTime(0.95 * sfxVolume, ctx.currentTime);
+                source.connect(sfxGain);
+                sfxGain.connect(ctx.destination);
+                source.start();
+                return;
+            }
+
+            // Prefer real shutter SFX if available in /public/sounds/.
+            const shutterBuffer = await loadCameraShutterBuffer(ctx);
+            if (shutterBuffer) {
+                const source = ctx.createBufferSource();
+                const sfxGain = ctx.createGain();
+                source.buffer = shutterBuffer;
+                sfxGain.gain.setValueAtTime(0.95 * sfxVolume, ctx.currentTime);
+                source.connect(sfxGain);
+                sfxGain.connect(ctx.destination);
+                source.start();
+                return;
+            }
+
+            const now = ctx.currentTime;
+            const baseFreqByAngle: Record<keyof typeof capturedAngles, number> = {
+                center: 1046, // C6
+                left: 988,    // B5
+                right: 1174,  // D6
+                up: 1318,     // E6
+                down: 880     // A5
+            };
+            const baseFreq = baseFreqByAngle[angle] || 1046;
+
+            const toneGain = ctx.createGain();
+            const main = ctx.createOscillator();
+            const shimmer = ctx.createOscillator();
+
+            // Softer confirmation: one clean ding, still audible.
+            main.type = 'triangle';
+            shimmer.type = 'sine';
+
+            main.frequency.setValueAtTime(baseFreq * 1.12, now);
+            main.frequency.exponentialRampToValueAtTime(baseFreq * 0.96, now + 0.14);
+
+            shimmer.frequency.setValueAtTime(baseFreq * 1.9, now);
+            shimmer.frequency.exponentialRampToValueAtTime(baseFreq * 1.55, now + 0.14);
+
+            toneGain.gain.setValueAtTime(0.0001, now);
+            toneGain.gain.exponentialRampToValueAtTime(0.15 * sfxVolume, now + 0.012);
+            toneGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.16);
+
+            main.connect(toneGain);
+            shimmer.connect(toneGain);
+            toneGain.connect(ctx.destination);
+
+            main.start(now);
+            shimmer.start(now);
+            main.stop(now + 0.16);
+            shimmer.stop(now + 0.16);
+        } catch {
+            // Audio feedback is non-critical; fail silently if unavailable.
+        }
+    }, [loadAngleCameraShutterBuffer, loadCameraShutterBuffer, state.scanSfxVolume]);
 
 
     // --- LIVE PROGRESS SIMULATION ---
+    // Keep this for non-Neuro-Link synthesis flows. Phase 4 has its own dedicated
+    // interval inside handleOrchestration; running both creates jitter.
     useEffect(() => {
         let interval: NodeJS.Timeout;
-        if (isProcessing && progress.phase === 'synthesis') {
+        if (isProcessing && progress.phase === 'synthesis' && phase !== 4) {
             const getEta = () => {
-                if (state.imageResolution === '4K') return 90000; // 90s ETA for 4K
-                if (state.imageResolution === '2K') return 45000; // 45s ETA for 2K
-                return 20000; // 20s ETA for 1K
+                const cfg = NANO_NEURO_LINK_ETA[state.imageResolution as RenderResolution];
+                return cfg?.progressMs ?? 38000;
             };
             const eta = getEta();
             const updateMs = 1000; // Update every second
@@ -768,21 +962,26 @@ const NanoCastingDirector = () => {
             }, updateMs);
         }
         return () => clearInterval(interval);
-    }, [isProcessing, progress.phase, state.imageResolution]);
+    }, [isProcessing, progress.phase, state.imageResolution, phase]);
 
     // Explicit setter to handle cleanup
-    const setAngle = (angle: keyof typeof capturedAngles, url: string | null) => {
-        setCapturedAngles(prev => {
-            const oldUrl = prev[angle];
-            if (oldUrl && oldUrl !== url) {
-                URL.revokeObjectURL(oldUrl);
-            }
-            return { ...prev, [angle]: url };
-        });
-    };
+    const setAngle = useCallback((angle: CaptureAngle, url: string | null) => {
+        const prevAngles = capturedAnglesRef.current;
+        const oldUrl = prevAngles[angle];
+        if (oldUrl && oldUrl !== url) {
+            URL.revokeObjectURL(oldUrl);
+        }
+
+        const nextAngles = { ...prevAngles, [angle]: url };
+        capturedAnglesRef.current = nextAngles;
+        setCapturedAngles(nextAngles);
+
+        if (!!url && oldUrl !== url) {
+            void playCaptureConfirmationTone(angle);
+        }
+    }, [playCaptureConfirmationTone]);
 
     // Refs for stable access inside callbacks without re-triggering
-    const capturedAnglesRef = useRef(capturedAngles);
     const [yaw, setYaw] = useState(0);
     const [pitch, setPitch] = useState(0);
     const [activeSector, setActiveSector] = useState<'center' | 'left' | 'right' | 'up' | 'down' | null>(null);
@@ -801,11 +1000,12 @@ const NanoCastingDirector = () => {
     const sectorStableFramesRef = useRef(0);
     const scanCooldownRef = useRef(false);
     const lastUpdateRef = useRef(0);
+    const captureCurrentFrameRef = useRef<(sector: keyof typeof capturedAngles) => void>(() => { });
     const STABILITY_THRESHOLD = 15; // Frames to hold steady
     const SCAN_COOLDOWN_MS = 1500;
 
     // Helper: Convert Base64 to Blob URL for memory efficiency
-    const base64ToBlobUrl = (base64: string) => {
+    const base64ToBlobUrl = useCallback((base64: string) => {
         const byteString = atob(base64.split(',')[1]);
         const mimeString = base64.split(',')[0].split(':')[1].split(';')[0];
         const ab = new ArrayBuffer(byteString.length);
@@ -815,7 +1015,7 @@ const NanoCastingDirector = () => {
         }
         const blob = new Blob([ab], { type: mimeString });
         return URL.createObjectURL(blob);
-    };
+    }, []);
 
     // Fix for Stale State in Closures
     const stateRef = useRef(state);
@@ -826,8 +1026,16 @@ const NanoCastingDirector = () => {
         capturedAnglesRef.current = capturedAngles;
     }, [capturedAngles]);
 
+    useEffect(() => {
+        return () => {
+            if (captureAudioCtxRef.current && captureAudioCtxRef.current.state !== 'closed') {
+                void captureAudioCtxRef.current.close();
+            }
+        };
+    }, []);
+
     // FaceMesh Setup
-    const onResults = useCallback((results: any) => {
+    const onResults = useCallback((results: FaceMeshResultsLike) => {
         // Throttle updates to ~10fps to reduce React render load
         const now = Date.now();
         if (now - lastUpdateRef.current < 100) return;
@@ -905,7 +1113,7 @@ const NanoCastingDirector = () => {
             setStabilityProgress(progress);
 
             if (sectorStableFramesRef.current > STABILITY_THRESHOLD) {
-                captureCurrentFrame(currentSector);
+                captureCurrentFrameRef.current(currentSector);
             }
         } else {
             // Reset stability if lost sector
@@ -914,7 +1122,7 @@ const NanoCastingDirector = () => {
         }
     }, []);
 
-    const captureCurrentFrame = async (sector: keyof typeof capturedAngles) => {
+    const captureCurrentFrame = useCallback(async (sector: keyof typeof capturedAngles) => {
         console.log("Attempting Capture:", sector);
         if (!webcamRef.current) { console.log("No Webcam Ref"); return; }
         const imageSrc = webcamRef.current.getScreenshot();
@@ -938,12 +1146,9 @@ const NanoCastingDirector = () => {
             // Auto-Save Logic (Async)
             if (stateRef.current.saveDirectoryHandle) {
                 try {
-                    // @ts-ignore - File System Access API
                     const scansDir = await stateRef.current.saveDirectoryHandle.getDirectoryHandle('Scans', { create: true });
                     const filename = `Scan_${sector.toUpperCase()}_${Date.now()}.png`;
-                    // @ts-ignore
                     const fileHandle = await scansDir.getFileHandle(filename, { create: true });
-                    // @ts-ignore
                     const writable = await fileHandle.createWritable();
 
                     // Convert Base64 to Blob
@@ -964,7 +1169,13 @@ const NanoCastingDirector = () => {
                 // dispatch({ type: 'ADD_LOG', payload: { message: "Scan not saved: No save folder set in Settings.", type: 'error' } });
             }
         }
-    };
+    }, [base64ToBlobUrl, setAngle]);
+
+    useEffect(() => {
+        captureCurrentFrameRef.current = (sector) => {
+            void captureCurrentFrame(sector);
+        };
+    }, [captureCurrentFrame]);
 
     useEffect(() => {
         let camera: Camera | null = null;
@@ -1063,8 +1274,8 @@ const NanoCastingDirector = () => {
 
             dispatch({ type: 'ADD_ACTOR_LIBRARY', payload: newActor });
             dispatch({ type: 'ADD_LOG', payload: { message: `Saved to Actors: ${mat.filename || "Storage"}`, type: 'success' } });
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Actor save failed: ${e.message}`, type: 'error' } });
+        } catch (e: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Actor save failed: ${getErrorMessage(e)}`, type: 'error' } });
         }
     };
 
@@ -1080,7 +1291,7 @@ const NanoCastingDirector = () => {
                 prompt: "Generated from NanoCasting"
             });
 
-            const newItem = {
+            const newItem: WardrobeItem = {
                 id: mat.filename || `WARDROBE-${Date.now()}.png`,
                 url: mat.url,
                 localPath: mat.localPath || undefined,
@@ -1092,11 +1303,10 @@ const NanoCastingDirector = () => {
                 timestamp: Date.now()
             };
 
-            // @ts-ignore
             dispatch({ type: 'ADD_WARDROBE_ITEM', payload: newItem });
             dispatch({ type: 'ADD_LOG', payload: { message: `Saved to Wardrobe: ${mat.filename || "Storage"}`, type: 'success' } });
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Wardrobe save failed: ${e.message}`, type: 'error' } });
+        } catch (e: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Wardrobe save failed: ${getErrorMessage(e)}`, type: 'error' } });
         }
     };
 
@@ -1187,11 +1397,13 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                     timeoutPromise(getTimeoutMs())
                 ]);
 
-                const rawFittedUrl = typeof fitted === 'string' ? fitted : (fitted && typeof fitted === 'object' ? (fitted as any).asset_url || '' : '');
+                const rawFittedUrl = extractAssetUrl(fitted);
                 let safeFittedUrl = rawFittedUrl;
                 try {
                     safeFittedUrl = await materializeDisplayUrl(rawFittedUrl);
-                } catch(e) {}
+                } catch (e) {
+                    console.warn("Failed to materialize fitted URL for display; using raw URL fallback.", e);
+                }
                 setFinalCharacterUrl(prev => {
                     if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev);
                     return safeFittedUrl;
@@ -1199,8 +1411,8 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                 dispatch({ type: 'ADD_LOG', payload: { message: "Virtual fitting complete.", type: 'success' } });
             }
 
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });
+        } catch (e: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: getErrorMessage(e), type: 'error' } });
         } finally {
             setIsProcessing(false);
             setProgress({ phase: '', percent: 0, detail: "" });
@@ -1213,7 +1425,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
 
     // New: Pack Mode State
     const [generatePackMode] = useState(true);
-    const [selectedWardrobeItem, setSelectedWardrobeItem] = useState<any | null>(null);
+    const [selectedWardrobeItem, setSelectedWardrobeItem] = useState<WardrobeItem | null>(null);
 
     // --- TOAST NOTIFICATIONS ---
     const [notification, setNotification] = useState<string | null>(null);
@@ -1223,17 +1435,17 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
     };
 
     const handleOrchestration = async () => {
-        if (state.billingEntitlements.effectiveBillingMode === 'hosted' && state.hostedCredits === 0) {
+        const billingMode = state.billingEntitlements.effectiveBillingMode;
+        if (billingMode === "hosted" && !state.billingEntitlements.hasHostedAccess) {
+            dispatch({ type: 'ADD_LOG', payload: { message: "Hosted Cloud access required for generation.", type: 'error' } });
+            return;
+        }
+        if (billingMode === 'hosted' && state.hostedCredits === 0) {
             dispatch({ type: 'ADD_LOG', payload: { message: "Generation blocked: Insufficient credits", type: 'error' } });
             dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
             return;
         }
-        if (state.billingEntitlements.effectiveBillingMode === "hosted") {
-            dispatch({ type: 'ADD_LOG', payload: { message: "This feature is currently BYOK-only. Please configure an API Key.", type: 'error' } });
-            showToast("Feature requires BYOK settings");
-            return;
-        }
-        if (state.billingEntitlements.effectiveBillingMode === "byok" && (!state.billingEntitlements.hasByokAccess || !state.apiKey)) {
+        if (billingMode === "byok" && (!state.billingEntitlements.hasByokAccess || !state.apiKey)) {
             dispatch({ type: 'ADD_LOG', payload: { message: "API Key required for BYOK generation.", type: 'error' } });
             return;
         }
@@ -1410,19 +1622,27 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
             addLog("TRANSMITTING TO NANO BANANA 2 CLUSTER...");
 
             // 3. Call Gemini
-            setProgress({ phase: 'synthesis', percent: 5, detail: "Generative Matrix Active..." });
+            const resolutionForEta = state.imageResolution as RenderResolution;
+            addLog(`PERFORMANCE BASELINE: ${getNeuroEtaDescriptor(resolutionForEta)}`);
+            setProgress({ phase: 'synthesis', percent: 5, detail: getNeuroProgressDetail("Generative Matrix Active...", resolutionForEta) });
 
             const timeoutPromise = (ms: number) => new Promise<string>((_, reject) => setTimeout(() => reject(new Error('Generation request timed out')), ms));
-            const getTimeoutMs = () => state.imageResolution === '4K' ? 120000 : (state.imageResolution === '2K' ? 90000 : 45000);
+            const getTimeoutMs = () => {
+                const base = state.imageResolution === '4K' ? 240000 : (state.imageResolution === '2K' ? 180000 : 120000);
+                const extraRefs = Math.max(0, referenceImages.length - 3);
+                const refPenalty = Math.min(90000, extraRefs * 15000);
+                return base + refPenalty;
+            };
 
             let synthPercent = 5;
-            const synthEtaMs = state.imageResolution === '4K' ? 35000 : 15000;
+            const synthEtaMs = NANO_NEURO_LINK_ETA[resolutionForEta].progressMs;
             const synthInc = (1000 / synthEtaMs) * 100;
             const synthInterval = setInterval(() => {
                 synthPercent = Math.min(95, synthPercent + synthInc);
-                let detail = "Generative Matrix Active...";
-                if (synthPercent > 50) detail = "Synthesizing Attributes...";
-                if (synthPercent >= 95) detail = "Finalizing Render... (Still working, please wait)";
+                let detailPrefix = "Generative Matrix Active...";
+                if (synthPercent > 50) detailPrefix = "Synthesizing Attributes...";
+                if (synthPercent >= 95) detailPrefix = "Finalizing Render... (Still working, please wait)";
+                const detail = getNeuroProgressDetail(detailPrefix, resolutionForEta);
                 setProgress({ phase: 'synthesis', percent: synthPercent, detail });
             }, 1000);
 
@@ -1433,7 +1653,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                     GeminiService.generateImage(prompt, state.apiKey, state.model, referenceImages, { imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements }),
                     timeoutPromise(getTimeoutMs())
                 ]);
-                resultUrl = typeof res === 'string' ? res : (res && typeof res === 'object' ? (res as any).asset_url || '' : '');
+                resultUrl = extractAssetUrl(res);
             } finally {
                 clearInterval(synthInterval);
             }
@@ -1442,7 +1662,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                 throw new Error("Generation aborted by user");
             }
 
-            setProgress({ phase: 'refinement', percent: 90, detail: "Finalizing Render..." });
+            setProgress({ phase: 'refinement', percent: 90, detail: getNeuroProgressDetail("Finalizing Render...", resolutionForEta) });
             addLog("ASSET GENERATED. DECODING...");
             await new Promise(r => setTimeout(r, 500));
 
@@ -1472,17 +1692,17 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
     };
 
     const handleRegenerate = async () => {
-        if (state.billingEntitlements.effectiveBillingMode === 'hosted' && state.hostedCredits === 0) {
+        const billingMode = state.billingEntitlements.effectiveBillingMode;
+        if (billingMode === "hosted" && !state.billingEntitlements.hasHostedAccess) {
+            dispatch({ type: 'ADD_LOG', payload: { message: "Hosted Cloud access required for generation.", type: 'error' } });
+            return;
+        }
+        if (billingMode === 'hosted' && state.hostedCredits === 0) {
             dispatch({ type: 'ADD_LOG', payload: { message: "Generation blocked: Insufficient credits", type: 'error' } });
             dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
             return;
         }
-        if (state.billingEntitlements.effectiveBillingMode === "hosted") {
-            dispatch({ type: 'ADD_LOG', payload: { message: "This feature is currently BYOK-only. Please configure an API Key.", type: 'error' } });
-            showToast("Feature requires BYOK settings");
-            return;
-        }
-        if (state.billingEntitlements.effectiveBillingMode === "byok" && (!state.billingEntitlements.hasByokAccess || !state.apiKey)) {
+        if (billingMode === "byok" && (!state.billingEntitlements.hasByokAccess || !state.apiKey)) {
             dispatch({ type: 'ADD_LOG', payload: { message: "API Key required for BYOK generation.", type: 'error' } });
             return;
         }
@@ -1596,7 +1816,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                 category: targetCategory
             });
 
-            const newActor = {
+            const newActor: CastMember = {
                 id: crypto.randomUUID(),
                 name: targetName || `Actor-${Date.now()}`,
                 url: mat.previewUrl,
@@ -1613,7 +1833,6 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                 }
             };
             
-            // @ts-ignore
             dispatch({ type: 'ADD_ACTOR_LIBRARY', payload: newActor });
 
             if (mat.previewUrl) {
@@ -1628,9 +1847,9 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
             setShowSaveModal(false);
             if (saveMode === 'ref_sheet') setShowRefSheet(false);
 
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error("Save to Library Failed:", err);
-            showToast("Save Failed: " + err.message);
+            showToast("Save Failed: " + getErrorMessage(err));
         }
     };
 
@@ -1699,7 +1918,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
             console.error("Failed to load nano_refsheet_handoff", e);
             localStorage.removeItem("nano_refsheet_handoff");
         }
-    }, []);
+    }, [dispatch]);
 
     const generateLocalBiometricSheet = async () => {
         dispatch({ type: 'SET_PROCESSING', payload: true });
@@ -1778,10 +1997,10 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                 if (blobUrl) {
                     try {
                         const img = await loadImage(blobUrl);
-                        let sW = img.width;
-                        let sH = img.height;
-                        let tW = w;
-                        let tH = h;
+                        const sW = img.width;
+                        const sH = img.height;
+                        const tW = w;
+                        const tH = h;
 
                         let cW = sW;
                         let cH = sW * (tH/tW);
@@ -1789,8 +2008,8 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                             cH = sH;
                             cW = sH * (tW/tH);
                         }
-                        let cX = (sW - cW) / 2;
-                        let cY = (sH - cH) / 2;
+                        const cX = (sW - cW) / 2;
+                        const cY = (sH - cH) / 2;
 
                         ctx.drawImage(img, cX, cY, cW, cH, box.x, box.y, tW, tH);
                     } catch (e) {
@@ -1828,7 +2047,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
         }
 
         dispatch({ type: 'SET_PROCESSING', payload: true });
-        dispatch({ type: 'ADD_LOG', payload: { message: "Generating Premium Forensic Biometric Sheet...", type: 'info' } });
+        dispatch({ type: 'ADD_LOG', payload: { message: `Generating Premium Forensic Biometric Sheet... ${getReferenceSheetEtaDescriptor()}`, type: 'info' } });
 
         try {
             // Validate Credits Here (assuming logic exists elsewhere, or warn)
@@ -1881,7 +2100,7 @@ NEGATIVE CONSTRAINTS:
 stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, dramatic shadows, costumes, logos, text, watermarks, deformed, asymmetrical, duplicate angles.
 `;
 
-            dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: 10, text: "Forensic Synthesis Initiated" } });
+            dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: 10, text: `Forensic Synthesis Initiated (${getReferenceSheetEtaDescriptor()})` } });
             
             let res = null;
             let currentPercent = 10;
@@ -1890,7 +2109,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
             const increment = (updateMs / etaMs) * 100;
             const progressInterval = setInterval(() => {
                 currentPercent = Math.min(95, currentPercent + increment);
-                dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text: "Reconstructing Biometric Mesh..." } });
+                dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text: `Reconstructing Biometric Mesh... (${getReferenceSheetEtaDescriptor()})` } });
             }, updateMs);
 
             try {
@@ -1901,7 +2120,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
 
             if (res) {
                 dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: 100, text: "Forensic Matrix Complete" } });
-                const rawUrl = typeof res === 'string' ? res : (res && typeof res === 'object' ? (res as any).asset_url || '' : '');
+                const rawUrl = extractAssetUrl(res);
                 let safeUrl = rawUrl;
                 try {
                     safeUrl = await materializeDisplayUrl(rawUrl);
@@ -1926,10 +2145,10 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                 throw new Error("No image data returned from Nano-Engine.");
             }
 
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error(err);
             showToast("Forensic Generation Failed.");
-            dispatch({ type: 'ADD_LOG', payload: { message: `Generation failed: ${err.message}`, type: 'error' } });
+            dispatch({ type: 'ADD_LOG', payload: { message: `Generation failed: ${getErrorMessage(err)}`, type: 'error' } });
         } finally {
             dispatch({ type: 'SET_PROCESSING', payload: false });
         }
@@ -1971,7 +2190,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
 
 
         dispatch({ type: 'SET_PROCESSING', payload: true });
-        dispatch({ type: 'ADD_LOG', payload: { message: "Generating Character Reference Sheet...", type: 'info' } });
+        dispatch({ type: 'ADD_LOG', payload: { message: `Generating Character Reference Sheet... ${getReferenceSheetEtaDescriptor()}`, type: 'info' } });
 
         try {
 
@@ -2184,7 +2403,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
 
             // --- C. BODY & STYLE ---
             // --- C. BODY & STYLE ---
-            const isRealisticMode = ['premium_cg', 'exact_studio'].includes(targetStyleKey as any);
+            const isRealisticMode = ['premium_cg', 'exact_studio'].includes(targetStyleKey);
             const isPhotoMode = targetStyleKey === 'exact_studio'; // Strict Photography
             const isCGMode = targetStyleKey === 'premium_cg'; // High-End 3D
 
@@ -2323,8 +2542,8 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
             const maxRetries = 3;
 
             // --- TIMEOUT & ETA LOGIC ---
-            const getEtaMs = () => state.imageResolution === '4K' ? 90000 : (state.imageResolution === '2K' ? 45000 : 20000);
-            const getTimeoutMs = () => state.imageResolution === '4K' ? 120000 : (state.imageResolution === '2K' ? 90000 : 45000);
+            const getEtaMs = () => 80000; // Reference sheets average 70-90s on 1G baseline.
+            const getTimeoutMs = () => state.imageResolution === '4K' ? 240000 : 180000;
 
             const etaMs = getEtaMs();
             const timeoutMs = getTimeoutMs();
@@ -2334,17 +2553,16 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
 
             // --- PROGRESS SIMULATION TIMER ---
             let currentPercent = 5;
-            dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text: "Synthesizing Reference Sheet" } });
+            dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text: `Synthesizing Reference Sheet (${getReferenceSheetEtaDescriptor()})` } });
 
             const updateMs = 1000;
             const increment = (updateMs / etaMs) * 100;
 
-            let progressInterval: NodeJS.Timeout | undefined;
-            progressInterval = setInterval(() => {
+            const progressInterval = setInterval(() => {
                 currentPercent = Math.min(95, currentPercent + increment);
-                let text = "Neural Matrix Synthesizing";
-                if (currentPercent > 50) text = "Arranging Panel Layouts...";
-                if (currentPercent >= 95) text = "Finalizing Render... (Still working, please wait)";
+                let text = `Neural Matrix Synthesizing (${getReferenceSheetEtaDescriptor()})`;
+                if (currentPercent > 50) text = `Arranging Panel Layouts... (${getReferenceSheetEtaDescriptor()})`;
+                if (currentPercent >= 95) text = `Finalizing Render... (Still working, please wait) (${getReferenceSheetEtaDescriptor()})`;
                 dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text } });
             }, updateMs);
 
@@ -2361,9 +2579,10 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                         timeoutPromise(timeoutMs) // Dynamic Timeout
                     ]);
                     break; // Success
-                } catch (err: any) {
-                    const isTimeout = err.message?.includes('timed out');
-                    const isOverloaded = err.message?.includes('503') || err.message?.includes('overloaded');
+                } catch (err: unknown) {
+                    const errorText = getErrorMessage(err).toLowerCase();
+                    const isTimeout = errorText.includes('timed out');
+                    const isOverloaded = errorText.includes('503') || errorText.includes('overloaded');
                     if ((isTimeout || isOverloaded) && attempts < maxRetries) {
                         attempts++;
                         const reason = isTimeout ? "Request Packet Dropped (Timeout)" : "Server Overloaded (503)";
@@ -2377,11 +2596,11 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                 }
             }
 
-            if (progressInterval) clearInterval(progressInterval);
+            clearInterval(progressInterval);
             dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: 100, text: "Decoding Cast Sheet" } });
             await new Promise(r => setTimeout(r, 500));
 
-            const rawUrl = typeof res === 'string' ? res : (res && typeof res === 'object' ? (res as any).asset_url || '' : '');
+            const rawUrl = extractAssetUrl(res);
             let safeRefSheetUrl = rawUrl;
             try {
                 safeRefSheetUrl = await materializeDisplayUrl(rawUrl);
@@ -2395,8 +2614,8 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
             });
             setShowRefSheet(true);
             dispatch({ type: 'ADD_LOG', payload: { message: "Reference Sheet Generated.", type: 'success' } });
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Ref Sheet failed: ${e.message}`, type: 'error' } });
+        } catch (e: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Ref Sheet failed: ${getErrorMessage(e)}`, type: 'error' } });
         } finally {
             dispatch({ type: 'SET_PROCESSING', payload: false });
             dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
@@ -2462,7 +2681,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
     };
 
     return (
-        <div className="flex h-full bg-bg text-fg overflow-hidden relative font-sans select-none">
+        <div className="flex h-full min-h-0 min-w-0 bg-bg text-fg overflow-hidden relative font-sans select-none">
             {/* Background Grid - Subtle */}
             <div className="absolute inset-0 z-0 pointer-events-none opacity-[0.05]"
                 style={{
@@ -2472,7 +2691,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
             </div>
 
             {/* SIDEBAR */}
-            <div className="w-64 border-r border-border bg-surface/90 backdrop-blur-md z-10 flex flex-col">
+            <div className="w-56 lg:w-64 shrink-0 border-r border-border bg-surface/90 backdrop-blur-md z-10 flex flex-col">
                 <div className="p-6 border-b border-border">
                     <h1 className="text-2xl font-black tracking-tighter text-fg flex items-center gap-2">
                         <Target className="text-accent w-6 h-6 animate-pulse" />
@@ -2516,19 +2735,19 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
             </div>
 
             {/* MAIN CONTENT */}
-            <div className="flex-1 flex flex-col z-10 relative">
-                <header className="h-16 border-b border-border flex items-center justify-between px-8 bg-bg/80 backdrop-blur">
-                    <div className="flex items-center gap-4">
+            <div className="flex-1 min-w-0 min-h-0 flex flex-col z-10 relative">
+                <header className="h-16 border-b border-border flex items-center justify-between px-4 sm:px-6 lg:px-8 bg-bg/80 backdrop-blur gap-4">
+                    <div className="flex items-center gap-3 min-w-0">
                         <div className="w-2 h-2 bg-accent rounded-full animate-ping"></div>
-                        <h2 className="text-lg font-bold text-fg uppercase tracking-wider">
+                        <h2 className="text-sm sm:text-base lg:text-lg font-bold text-fg uppercase tracking-wider truncate">
                             {getPhaseTitle(phase)}
                             {phase >= 3 && bodyScope && <span className="text-accent ml-2 opacity-70"> // {bodyScope}</span>}
                         </h2>
                     </div>
-                    <div className="flex items-center gap-6 text-sm text-muted font-bold tracking-widest">
+                    <div className="flex items-center gap-3 sm:gap-6 text-xs sm:text-sm text-muted font-bold tracking-widest shrink-0">
                         <div className="flex items-center gap-2">
                             <Scan className="w-4 h-4" />
-                            <span>SENSOR: {webcamRef.current ? "ONLINE" : "STANDBY"}</span>
+                            <span className="hidden md:inline">SENSOR: {webcamRef.current ? "ONLINE" : "STANDBY"}</span>
                         </div>
                         <button
                             onClick={() => setShowSettings(!showSettings)}
@@ -2540,7 +2759,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                     </div>
                 </header>
 
-                <main className="flex-1 p-8 relative overflow-hidden">
+                <main className="flex-1 min-h-0 min-w-0 p-4 sm:p-6 lg:p-8 relative overflow-y-auto overflow-x-hidden">
                     {/* DIRECTOR CONTROLS DRAWER */}
                     <AnimatePresence>
                         {showSettings && (
@@ -2548,9 +2767,9 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                 initial={{ x: "100%" }}
                                 animate={{ x: 0 }}
                                 exit={{ x: "100%" }}
-                                className="absolute top-0 right-0 z-50 h-full w-80 bg-surface border-l border-border p-6 overflow-y-auto backdrop-blur-xl"
+                                className="absolute top-0 right-0 z-50 h-full w-[24rem] lg:w-[26rem] xl:w-[28rem] max-w-[92vw] bg-surface border-l border-border p-4 sm:p-6 overflow-y-auto overflow-x-hidden backdrop-blur-xl"
                             >
-                                <div className="flex flex-col h-full">
+                                <div className="flex flex-col h-full min-w-0">
                                     <div className="flex justify-between items-center mb-6">
                                         <HelpTooltip zone="nano" id="directorModeToggle">
                                             <div className="flex bg-surface-2 rounded-lg p-1 gap-1">
@@ -2579,7 +2798,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
 
                                     {/* STORAGE CONFIGURATION */}
                                     <div className="mb-6 p-3 bg-black/40 rounded-lg border border-border/50">
-                                        <h4 className="text-[10px] uppercase font-black text-muted tracking-widest mb-2 flex justify-between">
+                                        <h4 className="text-[10px] uppercase font-black text-muted tracking-widest mb-2 flex justify-between gap-2">
                                             Storage Link
                                             <span className={state.saveDirectoryHandle || state.saveDirectoryPath ? 'text-success' : 'text-danger'}>
                                                 {state.saveDirectoryHandle || state.saveDirectoryPath ? 'CONNECTED' : 'NOT LINKED'}
@@ -2599,17 +2818,21 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                                     }
 
                                                     // WEB MODE
-                                                    // @ts-ignore
-                                                    const handle = await window.showDirectoryPicker({ mode: 'readwrite', startIn: 'documents' });
+                                                    const directoryPicker = (window as Window & {
+                                                        showDirectoryPicker?: (options?: { mode?: 'read' | 'readwrite'; startIn?: string }) => Promise<FileSystemDirectoryHandle>;
+                                                    }).showDirectoryPicker;
+                                                    const handle = directoryPicker
+                                                        ? await directoryPicker({ mode: 'readwrite', startIn: 'documents' })
+                                                        : null;
                                                     if (handle) {
                                                         dispatch({ type: 'SET_SAVE_DIRECTORY', payload: handle });
                                                         dispatch({ type: 'ADD_LOG', payload: { message: "Storage Link Established", type: 'success' } });
                                                     }
-                                                } catch (e) {
+                                                } catch {
                                                     console.log("Folder selection cancelled");
                                                 }
                                             }}
-                                            className={`w-full py-2 rounded text-[10px] font-bold uppercase tracking-widest transition-all border ${state.saveDirectoryHandle || state.saveDirectoryPath
+                                            className={`w-full py-2 rounded text-[10px] font-bold uppercase tracking-widest transition-all border truncate ${state.saveDirectoryHandle || state.saveDirectoryPath
                                                 ? 'bg-success/10 text-success border-success/30 hover:bg-success/20'
                                                 : 'bg-danger/10 text-danger border-danger/30 hover:bg-danger/20'
                                                 }`}
@@ -2822,7 +3045,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                                 </div>
 
                                                 <div className="grid grid-cols-2 gap-2 max-h-[400px] overflow-y-auto pr-1">
-                                                    {state.wardrobeItems.map((item: any) => (
+                                                    {state.wardrobeItems.map((item) => (
                                                         <div
                                                             key={item.id}
                                                             onClick={() => setSelectedWardrobeItem(item)}
@@ -2835,7 +3058,6 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                                                     onClick={(e) => {
                                                                         e.preventDefault();
                                                                         e.stopPropagation();
-                                                                        // @ts-ignore
                                                                         dispatch({ type: 'SET_INSPECT_IMAGE', payload: item.url });
                                                                     }}
                                                                     className="bg-blue-500/80 hover:bg-blue-500 text-white p-1.5 rounded-full cursor-pointer"
@@ -2872,7 +3094,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                         )}
                     </AnimatePresence>
 
-                    <AnimatePresence mode='wait'>
+                    <AnimatePresence mode="sync">
                         {/* PHASE 1: BIOMETRIC SCANNER */}
                         {phase === 1 && (
                             <motion.div
@@ -2880,7 +3102,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                 initial={{ opacity: 0, scale: 0.95, filter: 'blur(10px)' }}
                                 animate={{ opacity: 1, scale: 1, filter: 'blur(0px)' }}
                                 exit={{ opacity: 0, scale: 1.05, filter: 'blur(10px)' }}
-                                className="h-full flex gap-8"
+                                className="min-h-full flex flex-col 2xl:flex-row gap-6 lg:gap-8"
                             >
                                 <div className="flex-1 relative bg-black rounded-2xl overflow-hidden border border-border group flex flex-col">
                                     {/* TOGGLE HEADER */}
@@ -3063,7 +3285,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                             </div>
                                         </div>
                                     ) : (
-                                        <div className="h-full w-full p-12 grid grid-cols-3 gap-6 overflow-y-auto">
+                                        <div className="h-full w-full p-4 sm:p-6 lg:p-10 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 sm:gap-6 overflow-y-auto">
                                             {(['center', 'left', 'right', 'up', 'down'] as const).map(angle => (
                                                 <div key={angle} className="relative aspect-video bg-surface-2 border border-border rounded-xl overflow-hidden group hover:border-accent/50 transition-all">
                                                     {capturedAngles[angle] ? (
@@ -3103,7 +3325,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                     )}
                                 </div>
 
-                                <div className="w-80 flex flex-col gap-4">
+                                <div className="w-full 2xl:w-80 shrink-0 flex flex-col gap-4">
                                     <h3 className="text-xs font-bold text-accent uppercase tracking-[0.2em] mb-2 border-b border-border pb-2">Biometric Manifest</h3>
                                     {(['center', 'left', 'right', 'up', 'down'] as const).map((label) => (
                                         <div
@@ -3177,10 +3399,10 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                 initial={{ opacity: 0, x: 20 }}
                                 animate={{ opacity: 1, x: 0 }}
                                 exit={{ opacity: 0, x: -20 }}
-                                className="h-full flex flex-col items-center justify-center p-12"
+                                className="min-h-full flex flex-col items-center justify-start px-4 sm:px-6 lg:px-8 py-6 lg:py-8"
                             >
-                                <div className="text-center mb-12">
-                                    <h2 className="text-4xl font-black text-fg uppercase tracking-tighter mb-4 flex justify-center items-center gap-4">
+                                <div className="text-center mb-4 lg:mb-6">
+                                    <h2 className="text-2xl sm:text-3xl lg:text-4xl font-black text-fg uppercase tracking-tighter mb-4 flex justify-center items-center gap-4">
                                         <Layers className="w-8 h-8 text-accent animate-bounce" />
                                         Morphological Matrix
                                     </h2>
@@ -3189,16 +3411,16 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                     </p>
 
                                     {/* VARIANT SELECTOR */}
-                                    <div className="flex justify-center gap-4 mt-8">
-                                        {[
+                                    <div className="flex flex-wrap justify-center gap-3 sm:gap-4 mt-6 lg:mt-8">
+                                        {([
                                             { id: 'masc', label: 'Masculine' },
                                             { id: 'fem', label: 'Feminine' },
                                             { id: 'youth_masc', label: 'Youth (Boy)' },
                                             { id: 'youth_fem', label: 'Youth (Girl)' }
-                                        ].map((v) => (
+                                        ] as Array<{ id: MorphVariant; label: string }>).map((v) => (
                                             <button
                                                 key={v.id}
-                                                onClick={() => setMorphVariant(v.id as any)}
+                                                onClick={() => setMorphVariant(v.id)}
                                                 className={`px-6 py-2 rounded-full text-xs font-bold uppercase tracking-widest transition-all ${morphVariant === v.id
                                                     ? 'bg-yellow-500/10 text-yellow-500 border border-yellow-500 -[0_0_20px_rgba(234,179,8,0.4)] scale-105'
                                                     : 'bg-surface border border-border text-muted hover:text-white hover:border-accent/50'
@@ -3209,7 +3431,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                         ))}
                                     </div>
                                 </div>
-                                <div className="grid grid-cols-2 lg:grid-cols-4 gap-6 w-full max-w-6xl">
+                                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 lg:gap-6 w-full max-w-6xl">
                                     {bodyArchetypes.map((type) => {
                                         const Icon = type.icon;
                                         // Scope cover by variant so 'titan' (masc) is different from 'titan' (fem)
@@ -3217,7 +3439,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                         const customCover = customArchetypeCovers[storageKey];
 
                                         return (
-                                            <div key={type.id} className="relative group h-96 w-full rounded-2xl overflow-hidden border border-white/10 transition-all hover:scale-[1.02] hover:border-white/30 cursor-pointer" onClick={() => setSelectedBody(type.id)}>
+                                            <div key={type.id} className="relative group h-64 sm:h-72 lg:h-80 xl:h-96 w-full rounded-2xl overflow-hidden border border-white/10 transition-all hover:scale-[1.02] hover:border-white/30 cursor-pointer" onClick={() => setSelectedBody(type.id)}>
                                                 {/* Hidden File Input for Editing */}
                                                 <input
                                                     type="file"
@@ -3256,8 +3478,8 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                                 </div>
 
                                                 {/* Background Image */}
-                                                {(customCover || (type as any).defaultImage) ? (
-                                                    <img src={customCover || (type as any).defaultImage} className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
+                                                {(customCover || type.defaultImage) ? (
+                                                    <img src={customCover || type.defaultImage} className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
                                                 ) : (
                                                     <div className={`absolute inset-0 bg-gradient-to-br transition-all duration-300 ${selectedBody === type.id ? 'from-gray-800 to-black' : 'from-gray-900 to-black'}`}>
                                                         {/* Fallback pattern if no image */}
@@ -3292,14 +3514,14 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                         );
                                     })}
                                 </div>
-                                <div className="mt-16 flex justify-between w-full max-w-6xl">
+                                <div className="mt-8 lg:mt-12 flex flex-wrap items-center justify-between gap-4 w-full max-w-6xl">
                                     <button onClick={() => setPhase(1)} className="text-muted hover:text-fg text-xs font-bold uppercase tracking-widest flex items-center gap-2">
                                         &larr; Return to Scan
                                     </button>
                                     <button
                                         disabled={!selectedBody}
                                         onClick={() => setPhase(3)}
-                                        className={`px-12 py-4 text-sm font-black uppercase tracking-widest rounded-lg transition-all ${selectedBody
+                                        className={`px-6 sm:px-10 lg:px-12 py-4 text-sm font-black uppercase tracking-widest rounded-lg transition-all ${selectedBody
                                             ? 'bg-accent text-blue-700 hover:scale-105 -[0_0_20px_rgba(250,204,21,0.4)]'
                                             : 'bg-surface-2 text-muted cursor-not-allowed'
                                             }`}
@@ -3317,10 +3539,10 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                 initial={{ opacity: 0, y: 20 }}
                                 animate={{ opacity: 1, y: 0 }}
                                 exit={{ opacity: 0, y: -20 }}
-                                className="h-full flex flex-col items-center justify-center p-12"
+                                className="min-h-full flex flex-col items-center justify-start px-4 sm:px-6 lg:px-8 py-6 lg:py-8"
                             >
-                                <div className="text-center mb-12">
-                                    <h2 className="text-4xl font-black text-fg uppercase tracking-tighter mb-4 flex justify-center items-center gap-4">
+                                <div className="text-center mb-6 lg:mb-10">
+                                    <h2 className="text-2xl sm:text-3xl lg:text-4xl font-black text-fg uppercase tracking-tighter mb-4 flex justify-center items-center gap-4">
                                         <Aperture className="w-8 h-8 text-accent animate-spin-slow" />
                                         Style Synthesis Engine
                                     </h2>
@@ -3328,7 +3550,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                         Select rendering protocol for universe instantiation.
                                     </p>
                                 </div>
-                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 w-full max-w-5xl">
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 lg:gap-5 w-full max-w-5xl">
                                     {Object.values(styleMatrix).map((style) => {
                                         const normalizedId = normalizeStyleId(style.id);
                                         const isSelected = selectedStyle === normalizedId;
@@ -3354,7 +3576,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                                         showToast("Exact Likeness: Auto-locked Identity to 100%");
                                                     }
                                                 }}
-                                                className={`group relative h-56 border rounded-xl transition-all duration-300 overflow-hidden flex flex-col justify-end cursor-pointer ${isSelected
+                                                className={`group relative aspect-video border rounded-xl transition-all duration-300 overflow-hidden flex flex-col justify-end cursor-pointer ${isSelected
                                                     ? 'bg-surface border-blue-500 -[0_0_20px_rgba(59,130,246,0.3)] scale-[1.02] z-10'
                                                     : 'bg-surface border-border hover:border-accent hover: hover:scale-[1.01]'
                                                     }`}
@@ -3404,7 +3626,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                         );
                                     })}
                                 </div>
-                                <div className="mt-6 w-full max-w-5xl flex justify-center min-h-[140px]">
+                                <div className="mt-4 w-full max-w-5xl flex justify-center min-h-[88px] sm:min-h-[104px]">
                                     <AnimatePresence mode="wait">
                                         {selectedStyle && (
                                             <motion.div
@@ -3413,7 +3635,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                                 animate={{ opacity: 1, y: 0 }}
                                                 exit={{ opacity: 0, y: -8 }}
                                                 transition={{ duration: 0.2, ease: 'easeOut' }}
-                                                className="flex flex-col items-center gap-6"
+                                                className="flex flex-col items-center gap-4"
                                             >
                                                 <BodyScopeSelector
                                                     value={bodyScope}
@@ -3435,26 +3657,28 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                         )}
                                     </AnimatePresence>
                                 </div>
-                                <div className="mt-16 flex justify-between w-full max-w-5xl">
-                                    <button onClick={() => setPhase(2)} className="text-muted hover:text-fg text-xs font-bold uppercase tracking-widest flex items-center gap-2">
-                                        &larr; Return to Body
-                                    </button>
-                                    <div className="flex flex-col items-end gap-2">
-                                        <button
-                                            disabled={!selectedStyle || !bodyScope}
-                                            onClick={handleOrchestration}
-                                            className={`px-12 py-4 text-sm font-black uppercase tracking-widest rounded-lg transition-all ${selectedStyle && bodyScope
-                                                ? 'bg-gradient-to-r from-accent to-blue-600 text-white hover: -accent/20'
-                                                : 'bg-surface-2 text-muted cursor-not-allowed'
-                                                }`}
-                                        >
-                                            Initialize Neural Link &rarr;
+                                <div className="mt-3 lg:mt-4 w-full max-w-5xl flex justify-center">
+                                    <div className="flex flex-wrap items-start justify-center gap-4 sm:gap-6">
+                                        <button onClick={() => setPhase(2)} className="text-muted hover:text-fg text-xs font-bold uppercase tracking-widest flex items-center gap-2">
+                                            &larr; Return to Body
                                         </button>
-                                        {selectedStyle && !bodyScope && (
-                                            <div className="text-[9px] text-danger uppercase tracking-widest font-bold animate-pulse">
-                                                Select Body Scope to Continue
-                                            </div>
-                                        )}
+                                        <div className="flex flex-col items-center gap-2">
+                                            <button
+                                                disabled={!selectedStyle || !bodyScope}
+                                                onClick={handleOrchestration}
+                                                className={`px-6 sm:px-10 lg:px-12 py-4 text-sm font-black uppercase tracking-widest rounded-lg transition-all ${selectedStyle && bodyScope
+                                                    ? 'bg-gradient-to-r from-accent to-blue-600 text-white hover: -accent/20'
+                                                    : 'bg-surface-2 text-muted cursor-not-allowed'
+                                                    }`}
+                                            >
+                                                Initialize Neural Link &rarr;
+                                            </button>
+                                            {selectedStyle && !bodyScope && (
+                                                <div className="text-[9px] text-danger uppercase tracking-widest font-bold animate-pulse">
+                                                    Select Body Scope to Continue
+                                                </div>
+                                            )}
+                                        </div>
                                     </div>
                                 </div>
                             </motion.div>
@@ -3505,24 +3729,32 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
 
                                     {/* Resolution Time Warning */}
                                     <div className="w-full flex justify-center">
-                                        {state.imageResolution === '4K' && (
-                                            <div className="flex flex-col items-center text-center p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20 max-w-sm">
-                                                <span className="text-[10px] font-bold text-yellow-500 uppercase flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Notice: 4K Ultra HD Selected</span>
-                                                <span className="text-[10px] text-gray-400 mt-1">Generation can take up to 90 seconds. Please do not close this window.</span>
-                                            </div>
-                                        )}
-                                        {state.imageResolution === '2K' && (
-                                            <div className="flex flex-col items-center text-center p-3 rounded-lg bg-blue-500/10 border border-blue-500/20 max-w-sm">
-                                                <span className="text-[10px] font-bold text-blue-400 uppercase">Notice: 2K High Quality Selected</span>
-                                                <span className="text-[10px] text-gray-400 mt-1">Generation takes approximately 45 seconds.</span>
-                                            </div>
-                                        )}
-                                        {state.imageResolution === '1K' && (
-                                            <div className="flex flex-col items-center text-center p-3 rounded-lg bg-green-500/10 border border-green-500/20 max-w-sm">
-                                                <span className="text-[10px] font-bold text-green-400 uppercase">Notice: 1K Active</span>
-                                                <span className="text-[10px] text-gray-400 mt-1">Fastest generation speed. ETA ~15 seconds.</span>
-                                            </div>
-                                        )}
+                                        {(() => {
+                                            const resolution = state.imageResolution as RenderResolution;
+                                            const eta = NANO_NEURO_LINK_ETA[resolution];
+                                            if (!eta) return null;
+
+                                            const palette = resolution === '4K'
+                                                ? { box: 'bg-yellow-500/10 border-yellow-500/20', title: 'text-yellow-500', label: '4K Ultra HD Selected' }
+                                                : resolution === '2K'
+                                                    ? { box: 'bg-blue-500/10 border-blue-500/20', title: 'text-blue-400', label: '2K High Quality Selected' }
+                                                    : { box: 'bg-green-500/10 border-green-500/20', title: 'text-green-400', label: '1K Fast Preview Selected' };
+
+                                            return (
+                                                <div className={`flex flex-col items-center text-center p-3 rounded-lg border max-w-md ${palette.box}`}>
+                                                    <span className={`text-[10px] font-bold uppercase flex items-center gap-1 ${palette.title}`}>
+                                                        <AlertTriangle className="w-3 h-3" />
+                                                        Notice: {palette.label}
+                                                    </span>
+                                                    <span className="text-[10px] text-gray-300 mt-1">
+                                                        ETA (1G): {eta.range} avg ({eta.sampleRuns} test runs).
+                                                    </span>
+                                                    <span className="text-[9px] text-gray-500 mt-1">
+                                                        {NEURO_LINK_ETA_BASELINE_NOTE}
+                                                    </span>
+                                                </div>
+                                            );
+                                        })()}
                                     </div>
 
                                     <button
@@ -3541,9 +3773,9 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                 key="phase5"
                                 initial={{ opacity: 0, scale: 0.9 }}
                                 animate={{ opacity: 1, scale: 1 }}
-                                className="h-full flex gap-8 items-center justify-center p-12"
+                                className="min-h-full w-full max-w-[1280px] mx-auto flex flex-col xl:flex-row gap-4 lg:gap-6 items-center xl:items-start justify-start xl:justify-center px-2 sm:px-4 lg:px-6 py-4 lg:py-6"
                             >
-                                <div className="h-full aspect-[2/3] relative rounded-xl overflow-hidden border-2 border-accent group">
+                                <div className="w-full max-w-sm sm:max-w-md md:max-w-lg xl:max-w-none xl:w-auto xl:h-[min(70vh,760px)] aspect-[2/3] mx-auto xl:mx-0 relative rounded-xl overflow-hidden border-2 border-accent group shrink-0">
                                     <img src={finalCharacterUrl} className="w-full h-full object-cover" />
                                     <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent opacity-80"></div>
 
@@ -3566,19 +3798,19 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                     </div>
                                 </div>
 
-                                <div className="w-96 flex flex-col gap-4 h-full overflow-y-scroll px-4 pb-24">
+                                <div className="w-full xl:flex-1 xl:min-w-[18rem] xl:max-w-[26rem] max-w-2xl mx-auto xl:mx-0 flex flex-col gap-3 xl:max-h-[calc(100vh-210px)] overflow-y-auto overflow-x-hidden px-0 xl:px-2 pb-4">
                                     <h3 className="text-2xl font-black text-fg uppercase italic tracking-tighter">
                                         Reconstruction <span className="text-accent">Complete</span>
                                     </h3>
-                                    <p className="text-xs text-muted mb-8 leading-relaxed">
+                                    <p className="text-xs text-muted mb-4 leading-relaxed">
                                         Neural synthesis successful. Subject has been re-topologized and is ready for integration into the storyboard matrix.
                                         {generatePackMode && " Full variation pack generated."}
                                     </p>
 
-                                    <div className="grid grid-cols-2 gap-3">
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 sm:gap-3 min-w-0">
                                         <button
                                             onClick={() => addToCast(false)}
-                                            className="col-span-1 py-4 bg-surface-2 hover:bg-surface text-accent font-black uppercase tracking-widest text-xs rounded-xl transition-all -accent/10 border border-accent flex flex-col items-center gap-1 group-hover:scale-[1.02]"
+                                            className="col-span-1 py-3 px-2 bg-surface-2 hover:bg-surface text-accent font-black uppercase tracking-widest text-xs rounded-xl transition-all -accent/10 border border-accent flex flex-col items-center gap-1 text-center leading-tight group-hover:scale-[1.02]"
                                         >
                                             <UserPlus className="w-5 h-5" />
                                             {generatePackMode ? "Add Pack" : "Add Actor"}
@@ -3586,7 +3818,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
 
                                         <button
                                             onClick={() => handleOpenSaveModal('actor')}
-                                            className="col-span-1 py-4 bg-surface-2 hover:bg-surface text-purple-400 font-black uppercase tracking-widest text-xs rounded-xl transition-all border border-purple-500/30 hover:border-purple-500 flex flex-col items-center gap-1"
+                                            className="col-span-1 py-3 px-2 bg-surface-2 hover:bg-surface text-purple-400 font-black uppercase tracking-widest text-xs rounded-xl transition-all border border-purple-500/30 hover:border-purple-500 flex flex-col items-center gap-1 text-center leading-tight"
                                         >
                                             <FolderPlus className="w-5 h-5" />
                                             Save Library
@@ -3595,7 +3827,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                         <button
                                             // Call distinct handler to ensure state preservation
                                             onClick={handleRegenerate}
-                                            className="col-span-1 py-4 bg-surface-2 hover:bg-surface text-fg font-bold uppercase tracking-widest text-xs rounded-xl transition-all border border-border hover:border-accent flex flex-col items-center gap-1"
+                                            className="col-span-1 py-3 px-2 bg-surface-2 hover:bg-surface text-fg font-bold uppercase tracking-widest text-xs rounded-xl transition-all border border-border hover:border-accent flex flex-col items-center gap-1 text-center leading-tight"
                                         >
                                             <RotateCcw className="w-5 h-5 text-accent-2" />
                                             Regenerate
@@ -3603,7 +3835,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
 
                                         <button
                                             onClick={downloadPoster}
-                                            className="col-span-1 py-3 bg-bg border border-border text-muted hover:text-fg hover:border-accent text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2"
+                                            className="col-span-1 py-3 px-2 bg-bg border border-border text-muted hover:text-fg hover:border-accent text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2 text-center leading-tight"
                                         >
                                             <Share2 className="w-3 h-3" /> Save Poster
                                         </button>
@@ -3612,23 +3844,23 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                                 setShowSettings(true);
                                                 setSidebarMode('wardrobe');
                                             }}
-                                            className="col-span-1 py-3 bg-bg border border-border text-muted hover:text-accent hover:border-accent/30 text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2"
+                                            className="col-span-1 py-3 px-2 bg-bg border border-border text-muted hover:text-accent hover:border-accent/30 text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2 text-center leading-tight"
                                         >
                                             <Layers className="w-3 h-3" /> Wardrobe V2
                                         </button>
 
                                         {/* Reference Sheet Section */}
-                                        <div className="col-span-2 pt-2 border-t border-border mt-2 space-y-3">
-                                            <div className="flex gap-2">
-                                                {[
+                                        <div className="col-span-1 sm:col-span-2 pt-2 border-t border-border mt-2 space-y-3">
+                                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                                {([
                                                     { id: 'form_focus', label: 'Body Focus' },
                                                     { id: 'face_focus', label: 'Expressions' },
                                                     { id: 'split_focus', label: 'Hybrid' }
-                                                ].map((l) => (
+                                                ] as Array<{ id: RefLayout; label: string }>).map((l) => (
                                                     <button
                                                         key={l.id}
-                                                        onClick={() => setRefLayout(l.id as any)}
-                                                        className={`flex-1 py-2 rounded text-[9px] font-bold uppercase transition-all border ${refLayout === l.id
+                                                        onClick={() => setRefLayout(l.id)}
+                                                        className={`w-full py-2 px-1 rounded text-[9px] font-bold uppercase transition-all border text-center leading-tight ${refLayout === l.id
                                                             ? 'bg-accent/20 border-accent text-accent -[0_0_10px_rgba(250,204,21,0.2)]'
                                                             : 'bg-surface-2 border-border text-muted hover:border-white/50'
                                                             }`}
@@ -3644,7 +3876,12 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                                 <div className="relative">
                                                     <select
                                                         value={refStyle}
-                                                        onChange={(e) => setRefStyle(e.target.value as any)}
+                                                        onChange={(e) => {
+                                                            const nextStyle = e.target.value;
+                                                            if (nextStyle in REF_SHEET_STYLES) {
+                                                                setRefStyle(nextStyle as keyof typeof REF_SHEET_STYLES);
+                                                            }
+                                                        }}
                                                         className="w-full appearance-none bg-bg border border-border rounded-xl px-3 py-2 text-[10px] font-bold uppercase text-white outline-none focus:border-accent transition-colors cursor-pointer"
                                                     >
                                                         {Object.values(REF_SHEET_STYLES).map((s) => (
@@ -3790,14 +4027,21 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                         </h3>
                                     </div>
 
-                                    <div className="flex-1 w-full min-h-0 overflow-auto flex items-center justify-center bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] bg-repeat bg-[length:50px] p-2 custom-scrollbar">
+                                    <div
+                                        className="flex-1 w-full min-h-0 overflow-auto flex items-center justify-center p-2 custom-scrollbar"
+                                        style={{
+                                            backgroundColor: '#0f1014',
+                                            backgroundImage: 'radial-gradient(rgba(255,255,255,0.06) 1px, transparent 1px)',
+                                            backgroundSize: '24px 24px'
+                                        }}
+                                    >
                                         <img src={refSheetUrl} className="max-w-full h-auto object-contain rounded shadow-lg" />
                                     </div>
 
                                     <div className="w-full p-3 border-t border-white/10 bg-[#18181b] flex-shrink-0 sticky bottom-0 flex justify-end gap-3 z-10">
                                         <button
                                             onClick={() => {
-                                                const newMember = {
+                                                const newMember: CastMember = {
                                                     id: `nano_ref_${Date.now()}`,
                                                     url: refSheetUrl,
                                                     previewUrl: refSheetUrl,
@@ -3811,7 +4055,6 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                                         style: "Technical"
                                                     }
                                                 };
-                                                // @ts-ignore
                                                 dispatch({ type: 'ADD_CAST', payload: newMember });
                                                 showToast("Added to Cast Assets");
                                             }}
@@ -3858,7 +4101,14 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                         </h3>
                                     </div>
                                     
-                                    <div className="flex-1 w-full min-h-0 overflow-auto flex items-center justify-center p-2 custom-scrollbar bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] bg-repeat bg-[length:50px]">
+                                    <div
+                                        className="flex-1 w-full min-h-0 overflow-auto flex items-center justify-center p-2 custom-scrollbar"
+                                        style={{
+                                            backgroundColor: '#0f1014',
+                                            backgroundImage: 'radial-gradient(rgba(255,255,255,0.06) 1px, transparent 1px)',
+                                            backgroundSize: '24px 24px'
+                                        }}
+                                    >
                                         <img src={localBiometricSheetUrl} className="max-w-full h-auto object-contain rounded drop-shadow-[0_0_20px_rgba(79,70,229,0.2)]" />
                                     </div>
 

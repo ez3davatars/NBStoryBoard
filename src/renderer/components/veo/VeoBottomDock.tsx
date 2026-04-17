@@ -1,7 +1,8 @@
-import { useState, useMemo } from 'react';
+import { useState } from 'react';
 import { useAppContext } from '../../context/AppContext';
 import { Copy, Check, Terminal, FileCode2, ChevronDown } from 'lucide-react';
 import { formatVeoTimestampSequence, buildCombinedPrompt } from '../../promptEngine/veoFivePart';
+import type { VeoAudioBlock } from '../../promptEngine/veoFivePart';
 
 interface VeoBottomDockProps {
  mode: 'builder' | 'keyframes' | 'timeline';
@@ -15,23 +16,20 @@ export default function VeoBottomDock({ mode }: VeoBottomDockProps) {
  // Attempt to parse out the live draft content from the active shot
  const activeShot = state.shots.find(s => s.id === state.activeShotId);
  const draft = activeShot?.veoPromptDraft;
+ const draftAudio = (activeShot?.veoPromptDraft as (typeof draft & { audio?: VeoAudioBlock }) | undefined)?.audio;
 
- const formattedPrompt = useMemo(() => {
- if (!activeShot) return "No active shot selected.";
-
- if (mode === 'timeline') {
- const beats = activeShot.veoTimeline || [];
- if (beats.length === 0) return "No timestamp sequence defined.";
- return formatVeoTimestampSequence(beats);
+ let formattedPrompt = "No active shot selected.";
+ if (activeShot) {
+  if (mode === 'timeline') {
+   const beats = activeShot.veoTimeline || [];
+   formattedPrompt = beats.length === 0 ? "No timestamp sequence defined." : formatVeoTimestampSequence(beats);
+  } else if (!draft) {
+   formattedPrompt = "No active draft available. Select a shot and start building your prompt.";
+  } else {
+   const combined = buildCombinedPrompt(draft, draftAudio, undefined, draft.negativePrompt);
+   formattedPrompt = combined.prompt || "Draft is empty...";
+  }
  }
-
- if (!draft) return "No active draft available. Select a shot and start building your prompt.";
- const combined = buildCombinedPrompt(draft, (draft as any).audio, undefined, draft.negativePrompt);
-    const base = combined.prompt || "Draft is empty...";
-
- 
- return base;
- }, [activeShot, draft, mode]);
 
  const negativePrompt = draft?.negativePrompt || "No negative prompt assigned.";
 

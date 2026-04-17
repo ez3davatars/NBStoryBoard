@@ -1,6 +1,22 @@
 
 export const COVERS_DIR_NAME = 'Covers';
 
+type FsHandlePermissionDescriptor = {
+    mode?: 'read' | 'readwrite';
+};
+
+type PermissionCapableHandle = FileSystemHandle & {
+    queryPermission: (descriptor?: FsHandlePermissionDescriptor) => Promise<PermissionState>;
+    requestPermission: (descriptor?: FsHandlePermissionDescriptor) => Promise<PermissionState>;
+};
+
+const isPermissionCapableHandle = (handle: FileSystemHandle): handle is PermissionCapableHandle =>
+    typeof (handle as { queryPermission?: unknown }).queryPermission === 'function' &&
+    typeof (handle as { requestPermission?: unknown }).requestPermission === 'function';
+
+const getErrorName = (error: unknown): string =>
+    typeof error === 'object' && error !== null && 'name' in error ? String((error as { name: unknown }).name) : '';
+
 /**
  * Helper to get or create the 'Covers' subdirectory handle.
  */
@@ -42,9 +58,9 @@ export const loadAssetFromDisk = async (
         const fileHandle = await coversDir.getFileHandle(filename, { create: false });
         const file = await fileHandle.getFile();
         return URL.createObjectURL(file);
-    } catch (error: any) {
+    } catch (error: unknown) {
         // NotFoundError is expected if file doesn't exist yet
-        if (error.name === 'NotFoundError') {
+        if (getErrorName(error) === 'NotFoundError') {
             return null;
         }
         console.warn(`Failed to load asset ${filename} from disk:`, error);
@@ -62,8 +78,8 @@ export const deleteAssetFromDisk = async (
     try {
         const coversDir = await getCoversDir(rootDir);
         await coversDir.removeEntry(filename);
-    } catch (error: any) {
-        if (error.name !== 'NotFoundError') {
+    } catch (error: unknown) {
+        if (getErrorName(error) !== 'NotFoundError') {
             console.error(`Failed to delete asset ${filename}:`, error);
         }
     }
@@ -92,21 +108,18 @@ export const verifyPermission = async (
     console.log("verifyPermission: Checking handle", { name: fileHandle.name, kind: fileHandle.kind, readWrite, autoRequest });
 
     // SAFETY CHECK: Ensure handle has methods (IndexedDB serialization check)
-    // @ts-ignore
-    if (typeof fileHandle.queryPermission !== 'function' || typeof fileHandle.requestPermission !== 'function') {
+    if (!isPermissionCapableHandle(fileHandle)) {
         console.error("verifyPermission: Handle is invalid (missing methods). It may be a stale clone.", fileHandle);
         return false;
     }
 
     try {
-        // @ts-ignore
-        const options: FileSystemHandlePermissionDescriptor = {};
+        const options: FsHandlePermissionDescriptor = {};
         if (readWrite) {
             options.mode = 'readwrite';
         }
 
         // Check if permission was already granted
-        // @ts-ignore
         const status = await fileHandle.queryPermission(options);
         console.log("verifyPermission: Current Status:", status);
 
@@ -122,14 +135,13 @@ export const verifyPermission = async (
 
         // Request permission using the user gesture that triggered this
         console.log("verifyPermission: Requesting permission...");
-        // @ts-ignore
         const requestStatus = await fileHandle.requestPermission(options);
         console.log("verifyPermission: Request Status:", requestStatus);
 
         if (requestStatus === 'granted') {
             return true;
         }
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error("verifyPermission: Error during check:", error);
         // Don't swallow error completely so we can see it in logs
         // But return false to indicate failure

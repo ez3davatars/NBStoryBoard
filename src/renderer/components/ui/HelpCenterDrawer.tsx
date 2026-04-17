@@ -59,6 +59,9 @@ export const HelpCenterDrawer: React.FC = () => {
                     desc: "Import a real person into the Cast Director Studio.",
                     actions: [
                         "For strongest identity preservation, always use front-facing, clear, well-lit reference photos.",
+                        "For Left/Right captures, start with about a 45-degree head turn and hold steady.",
+                        "Use the shutter sound as success confirmation for each angle (Center, Left, Right, Up, Down).",
+                        "If you do not hear the shutter, keep your head in the same direction and make small adjustments until it triggers.",
                         "Use the Identity Lock Slider to control how aggressively the AI holds onto their exact bone structure.",
                         "The 'Delete All' button safely clears temporary generation previews without affecting your saved permanent characters."
                     ]
@@ -68,9 +71,10 @@ export const HelpCenterDrawer: React.FC = () => {
                     title: "WARDROBE Help",
                     desc: "Design costumes and fit them onto actors.",
                     actions: [
-                        "Designer vs Try-On: Use SKETCH or COSTUME modes to create clothing first, then use Virtual Try-On to fit it onto your saved actors.",
-                        "Use 'Auto-Remove BG' to isolate your actors immediately.",
-                        "Your Character Sheet anchors the identity during generation."
+                        "Designer vs Try-On: Build clothing first in SKETCH/COSTUME, then move to Virtual Try-On.",
+                        "Try-On sequence: select Subject, select Wardrobe, optionally upload Character Sheet, choose FRONT or TURNAROUND, then click Execute Virtual Try-On.",
+                        "Clear behavior: clicking CLEAR should reset output and also clear the selected wardrobe for a true clean slate.",
+                        "If a stale preview remains after clear, run one folder scan/refresh."
                     ]
                 };
             case 'props':
@@ -95,7 +99,7 @@ export const HelpCenterDrawer: React.FC = () => {
                         "Click on any active token on the canvas to refine its Z-Depth order, Scale, and explicit Occlusion.",
                         "Direct your actors: Describe exactly what the character is doing inside 'Actor Intelligence' (e.g., 'sitting on the floor -> looking shocked').",
                         "Scene Director (Right Panel): Use this to explicitly define global rules for your Environment, Lighting, Camera, and Layout.",
-                        "Reference Stack (Right Panel): Use this if you want the AI to place actors based on named references and directional notes rather than visual X/Y canvas coordinates.",
+                        "Reference Stack workflow: add refs to slots, enable the slots you want honored, name them in Scene Director notes, generate, then clear slots when switching reference sets.",
                         "Use the Bottom Toolbar to lock down your camera intent and draw manual path annotations if needed."
                     ]
                 };
@@ -113,7 +117,9 @@ export const HelpCenterDrawer: React.FC = () => {
                         "PREREQUISITE: You must finalize your scene in the STAGE sub-tab and generate at least one composite image to act as your Scene Truth.",
                         "Switch to the SHOTS tab to begin multi-angle generation.",
                         "Select a Pack (e.g., Cinematic) and auto-populate the Directed Shot Plan.",
-                        "Click GENERATE to render low-res previews, then select favorites to RENDER 4K."
+                        "Click GENERATE to render low-res previews.",
+                        "Select the shot cards you want to keep, then click RENDER 4K.",
+                        "Save/download final shots from the grid or inspect view."
                     ]
                 };
             case 'region_edit':
@@ -121,9 +127,10 @@ export const HelpCenterDrawer: React.FC = () => {
                     title: "REGION EDIT Help",
                     desc: "Correct part of an image without rerendering the full scene.",
                     actions: [
-                        "Write specific, highly localized masking instructions for best results.",
-                        "Toggle Protect Face/Hair to prevent the AI from dissolving critical biometric features.",
-                        "Use layers to separate distinct structural and lighting actions."
+                        "Turn Mask ON, choose a layer, then paint/erase only the exact area to change.",
+                        "Write a clear instruction per layer (remove, replace, relight), and keep unrelated edits on separate layers.",
+                        "Optionally generate Protect Face/Hair before applying to preserve anatomy.",
+                        "Click Apply Enabled Layers. If drift occurs, clear only the problematic mask layer and rerun."
                     ]
                 };
             case 'veo':
@@ -218,11 +225,27 @@ export const HelpCenterDrawer: React.FC = () => {
                             <div className="bg-[#18181b] p-4 rounded-xl border border-white/5 space-y-4">
                                 <div>
                                     <h4 className="font-bold text-yellow-500 uppercase text-xs tracking-wider mb-2">Hosted vs BYOK</h4>
-                                    <p className="text-xs text-gray-300 hover:text-white transition-colors">Your generation credits and behavior depend on your Active Billing Mode in Settings. Always check whether you are running in Hosted Mode (using credits) or BYOK Mode (Bring Your Own Key).</p>
+                                    <p className="text-xs text-gray-300 hover:text-white transition-colors">Your generation credits and behavior depend on your Active Billing Mode in Settings. Hosted uses subscription credits; BYOK uses your own API key.</p>
+                                    <ol className="list-decimal list-inside space-y-1 text-xs text-gray-400 mt-2">
+                                        <li>Open Settings and choose Hosted or BYOK mode.</li>
+                                        <li>Hosted: sign in under Hosted Cloud Authentication.</li>
+                                        <li>BYOK: paste your Gemini API key.</li>
+                                        <li>Click Save Config and verify the mode badge in the top bar.</li>
+                                    </ol>
                                 </div>
                                 <div className="border-t border-white/5 pt-4">
                                     <h4 className="font-bold text-yellow-500 uppercase text-xs tracking-wider mb-2">Save It or Lose It</h4>
-                                    <p className="text-xs text-gray-300 hover:text-white transition-colors">Many generated results remain temporary! If you love an actor, prop, or costume, explicitly click Save. You may need to refresh your library view after saving for it to securely register visually.</p>
+                                    <p className="text-xs text-gray-300 hover:text-white transition-colors">Many generated results remain temporary. Always run this sequence: generate, save, scan/refresh, then verify the item appears in library.</p>
+                                </div>
+                                <div className="border-t border-white/5 pt-4">
+                                    <h4 className="font-bold text-yellow-500 uppercase text-xs tracking-wider mb-2">Expected Render Times (1G Baseline)</h4>
+                                    <p className="text-xs text-gray-400 mb-2">Assumes approximately 1 Gbps internet speed. Actual times may vary with server load and prompt complexity.</p>
+                                    <ul className="space-y-1 text-xs text-gray-300">
+                                        <li>Nano Neuro Link 1K: 26-30s (3 test runs)</li>
+                                        <li>Nano Neuro Link 2K: 33-38s (3 test runs)</li>
+                                        <li>Nano Neuro Link 4K: 45-57s (5 test runs)</li>
+                                        <li>Reference Sheets: 70-90s</li>
+                                    </ul>
                                 </div>
                             </div>
 
@@ -231,7 +254,9 @@ export const HelpCenterDrawer: React.FC = () => {
                                 <ol className="list-decimal list-inside space-y-2 text-sm text-gray-400">
                                     <li>Go to <strong className="text-gray-200">CAST</strong> and generate a character.</li>
                                     <li>Save the character to your library.</li>
+                                    <li>Refresh your actor library once so the saved actor appears.</li>
                                     <li>Open <strong className="text-gray-200">WARDROBE</strong> and apply a costume.</li>
+                                    <li>Save the fitted output.</li>
                                     <li>Open <strong className="text-gray-200">STAGE [PREVIEW]</strong> and place the character on a background.</li>
                                     <li>Click <strong className="text-gray-200">Generate Composite</strong>.</li>
                                 </ol>
@@ -337,14 +362,17 @@ export const HelpCenterDrawer: React.FC = () => {
 
                             <div className="space-y-3">
                                 {[
-                                    { issue: "\"Not Linked\" Status", fix: "Go to Settings and re-select your 'Render Save Folder'." },
-                                    { issue: "Credit / Generation Mode Confusion", fix: "Ensure your generation mode (Hosted vs BYOK) in the Settings properly aligns with your intent." },
-                                    { issue: "Library Not Updating / Stuck Views", fix: "After saving or deleting, use the scan/refresh control to force a folder re-read to display changes properly." },
+                                    { issue: "\"Not Linked\" Status", fix: "Open Settings -> re-select Render Save Folder -> Save Config -> verify connected status." },
+                                    { issue: "Credit / Generation Mode Confusion", fix: "Open Settings -> confirm Hosted or BYOK -> if BYOK confirm API key -> Save Config -> retry." },
+                                    { issue: "Hosted credits exhausted", fix: "Switch to BYOK if available, or restore Hosted credits, then run a small test generation first." },
+                                    { issue: "BYOK key missing/invalid", fix: "Open Settings -> paste valid Gemini API key -> Save Config -> run a simple generation test." },
+                                    { issue: "Library Not Updating / Stuck Views", fix: "Use scan/refresh in that panel, switch tabs and return, then reopen workspace if still stale." },
                                     { issue: "Actor Name looks generic on disk", fix: "The generic PNG name prevents file conflicts. The exact real name is safely stored in the JSON sidecar." },
                                     { issue: "Portrait Details Return After Clearing", fix: "Clearing should permanently erase a portrait from memory. If it returns visually, click the Clear button again to force it to lock durably." },
+                                    { issue: "Try-On clear did not fully reset", fix: "Click CLEAR in Virtual Try-On, confirm output and selected wardrobe are empty, then run one scan/refresh if needed." },
                                     { issue: "Prop Still Appearing After Removal", fix: "Ensure the selected prop slot appears visually empty. If a ghost prop persists, a fast refresh or workspace re-open will force the interface to acknowledge the clean slate." },
                                     { issue: "Staging feels inconsistent", fix: "Remember that STAGE is currently a preview-tier system. Focus on Scene Truth locks to fix background drifting between shots." },
-                                    { issue: "Download or save issues", fix: "Confirm your 'Render Save Folder' is actively assigned and Connected in your settings." }
+                                    { issue: "Download or save issues", fix: "Confirm save folder is linked, confirm permissions are still granted, then save again and scan/refresh." }
                                 ].map((item, i) => (
                                     <div key={i} className="bg-[#18181b] p-3 rounded-xl border border-white/5">
                                         <h4 className="text-gray-200 font-bold text-sm mb-1">{item.issue}</h4>

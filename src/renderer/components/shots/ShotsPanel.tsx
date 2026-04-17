@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import type { ShotSession, ShotPackId, ShotLocks, ShotVariant, ShotPresetId, DirectedShotSlot } from '../../types/shots';
 import type { ActorIdentityReferenceSet, ShotsActorOption } from '../../context/AppContext';
-import { SHOT_PRESETS, buildShotPresetIdsForPack } from '../../utils/shotsPresets';
+import { SHOT_PRESETS, buildShotPresetIdsForPack, getDefaultCameraFlavorForPreset, getDefaultShotNotesForPreset } from '../../utils/shotsPresets';
 import { buildShotVariantPrompt, buildShotFinalRerenderPrompt } from '../../utils/promptHelpers';
 import { GeminiService } from '../../services/GeminiService';
 import { stripIdentityOverridingAnalysis } from '../../utils/analysisSanitizers';
@@ -34,6 +34,22 @@ export type ShotsPanelProps = {
   onSaveVariant?: (url: string, prefix: string) => void;
 };
 
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  return String(error);
+};
+
+const isShotPayloadConstraintError = (message: string): boolean =>
+  /(400|bad request|413|payload|request body too large|entity too large|body too large|502|gateway)/i.test(message);
+
+const buildCompactIdentitySets = (sets: ActorIdentityReferenceSet[]): ActorIdentityReferenceSet[] =>
+  sets.slice(0, 2).map((set) => ({
+    ...set,
+    angleFaceAnchors: set.angleFaceAnchors.slice(0, 1),
+    supportIdentityRefs: [],
+    wardrobeRefs: set.wardrobeRefs.slice(0, 1)
+  }));
+
 const deriveShotsStyleLock = (qualityMode?: string): string => {
   switch (qualityMode) {
     case '3D Render':
@@ -58,6 +74,9 @@ const deriveShotsStyleLock = (qualityMode?: string): string => {
       return 'Preserve the exact render medium and visual treatment of the source image. Do not change the source medium.';
   }
 };
+
+
+
 
 export const ShotsPanel: React.FC<ShotsPanelProps> = ({
   sceneId,
@@ -129,9 +148,17 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
     }
   }, [session]);
 
+  const lastBuiltPackRef = useRef<{packId: ShotPackId | '', count: number}>({ packId: '', count: 0 });
+
   // Auto-build slots when configuration changes
   useEffect(() => {
     if (!isConfiguring) return;
+
+    // Phase 1: Only rebuild if packId or count changes (or if we have no slots)
+    if (slots.length > 0 && lastBuiltPackRef.current.packId === packId && lastBuiltPackRef.current.count === count) {
+        return;
+    }
+    lastBuiltPackRef.current = { packId, count };
 
     const newSlots: DirectedShotSlot[] = [];
     if (packId === 'auto') {
@@ -152,7 +179,8 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
            index: idx,
            targetType: finalRole ? 'actor' : 'scene',
            shotType: item.presetId,
-           cameraFlavor: 'neutral',
+           cameraFlavor: getDefaultCameraFlavorForPreset(item.presetId),
+           shotNotes: getDefaultShotNotesForPreset(item.presetId),
            coveragePurpose: finalPurpose,
            targetLabel: finalRole
         });
@@ -165,12 +193,14 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
            index: idx,
            targetType: 'scene',
            shotType: pid as ShotPresetId,
-           cameraFlavor: 'neutral'
+           cameraFlavor: getDefaultCameraFlavorForPreset(pid as ShotPresetId),
+           shotNotes: getDefaultShotNotesForPreset(pid as ShotPresetId)
         });
       });
     }
     setSlots(newSlots);
-  }, [packId, count, isConfiguring, subjectActionText, environmentText]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [packId, count, isConfiguring]);
 
   const handleGenerateShots = async () => {
     if (!effectiveResultImageUrl) return;
@@ -223,6 +253,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
     try {
       sceneTruth = buildSceneTruthSnapshot({
         sourceResultUrl: effectiveResultImageUrl,
+        expectedActorCount,
         actorIdentitySets,
         shotsActorOptions,
         tokens: state.tokens,
@@ -231,20 +262,63 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
 
       variants = preparedSlots.map((slot, idx) => {
         const preset = SHOT_PRESETS[slot.shotType];
+        
+        const expectedNote = getDefaultShotNotesForPreset(slot.shotType);
+        const expectedFlavor = getDefaultCameraFlavorForPreset(slot.shotType);
+
+        let wasShotNotesUserEdited = false;
+        let finalNote = slot.shotNotes;
+
+        let wasFlavorUserEdited = false;
+        let finalFlavor = slot.cameraFlavor;
+
+        if (slot.shotNotes && slot.shotNotes !== expectedNote) {
+            const allKnownNotes = Object.keys(SHOT_PRESETS).map(pid => getDefaultShotNotesForPreset(pid as ShotPresetId)).filter(Boolean);
+            if (allKnownNotes.includes(slot.shotNotes)) {
+                finalNote = expectedNote;
+            } else {
+                wasShotNotesUserEdited = true;
+            }
+        }
+
+        if (slot.cameraFlavor && slot.cameraFlavor !== expectedFlavor) {
+            if (slot.cameraFlavor === 'intimate' || slot.cameraFlavor === 'neutral') {
+                finalFlavor = expectedFlavor;
+            } else {
+                wasFlavorUserEdited = true;
+            }
+        }
+
+        console.log('[ShotsPanel] PRE-FLIGHT COMPILER TRACE', {
+            slotId: slot.id,
+            shotType: slot.shotType,
+            shotNotes: slot.shotNotes,
+            wasShotNotesUserEdited,
+            cameraFlavor: slot.cameraFlavor,
+            wasFlavorUserEdited,
+            expectedDefaultNote: expectedNote,
+            finalNoteUsed: finalNote,
+            finalFlavorUsed: finalFlavor
+        });
+
+        const repairedSlot = { ...slot, shotNotes: finalNote, cameraFlavor: finalFlavor };
+
         const prompt = buildShotVariantPrompt({
           sourceResultUrl: effectiveResultImageUrl,
           sceneTruth,
           actorIdentitySets,
           shotsActorOptions,
           packId,
-          presetId: slot.shotType,
-          directedSlot: slot,
+          presetId: repairedSlot.shotType,
+          directedSlot: repairedSlot,
           locks: { ...locks, identity: true },
           environmentText,
           subjectActionText: safeSubjectActionText,
           lightingText,
           expectedActorCount,
-          sourceStyleLock
+          sourceStyleLock,
+          sceneId: sceneId,
+          tokensCount: state.tokens.length
         });
 
         return {
@@ -264,12 +338,12 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
           status: 'queued'
         } as unknown as ShotVariant;
       });
-    } catch (compilationError: any) {
+    } catch (compilationError: unknown) {
       console.error("[ShotsPanel] Failed to compile shot variants:", compilationError);
       dispatch({ 
         type: 'ADD_LOG', 
-        payload: { message: `Failed to compile scene snapshot: ${compilationError.message}`, type: 'error' } 
-      } as any);
+        payload: { message: `Failed to compile scene snapshot: ${getErrorMessage(compilationError)}`, type: 'error' } 
+      });
       setIsConfiguring(true);
       return;
     }
@@ -296,6 +370,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
     // Start Async Loop
     isGeneratingRef.current = true;
     abortControllerRef.current = new AbortController();
+    const generatedVariantPreviews: Array<{ variantId: string; presetId: ShotPresetId; previewUrl: string }> = [];
 
     for (const variant of variants) {
       if (!isGeneratingRef.current) break; // User cancelled or component unmounted
@@ -310,7 +385,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
 
       try {
         const preset = SHOT_PRESETS[variant.presetId];
-        const directedSlot = preparedSlots.find(s => s.id === (variant as any).slotId);
+        const directedSlot = preparedSlots.find(s => s.id === variant.slotId);
         
         const rawBlueprintUrl = await buildShotBlueprintImage({
             anchorImageUrl: effectiveResultImageUrl,
@@ -325,7 +400,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
                 sourceUrl: rawBlueprintUrl,
                 sceneId: sceneId,
                 variantId: variant.id,
-                kind: 'blueprint' as any,
+                kind: 'blueprint',
                 saveDirectoryPath: state.saveDirectoryPath
             });
             materializedBlueprintUrl = matBp.displayUrl;
@@ -342,44 +417,124 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
           options: { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, signal: abortControllerRef.current?.signal }
         };
 
-        const isHostedShots = state.billingEntitlements.effectiveBillingMode === 'hosted';
         let previewUrl: string;
-
-        if (isHostedShots) {
-          // Thin payload only for hosted mode to avoid oversized Edge Function requests
-          previewUrl = await GeminiService.generateShotPreview(previewBaseArgs);
-        } else {
+        const requestPreview = async (promptText: string): Promise<string> => {
+          const richArgs = {
+            ...previewBaseArgs,
+            prompt: promptText,
+            shotBlueprintUrl: rawBlueprintUrl,
+            sceneTruth,
+            presetId: variant.presetId,
+            hasSubjectStyleAnalysis: !!safeSubjectActionText,
+          };
           try {
-            previewUrl = await GeminiService.generateShotPreview({
-              ...previewBaseArgs,
-              shotBlueprintUrl: rawBlueprintUrl,
-              sceneTruth,
-              presetId: variant.presetId,
-              hasSubjectStyleAnalysis: !!safeSubjectActionText,
-            });
-          } catch (err: any) {
-            const msg = String(err?.message || err || '');
-            if (/400|Bad Request|413|Payload/i.test(msg)) {
-              console.warn('[ShotsPanel] Preview payload rejected. Original Error:', msg, 'Retrying thin payload for:', {
+            return await GeminiService.generateShotPreview(richArgs);
+          } catch (err: unknown) {
+            const msg = getErrorMessage(err);
+            if (isShotPayloadConstraintError(msg)) {
+              console.warn('[ShotsPanel] Rich preview payload rejected; retrying compact-rich payload', {
                 variantId: variant.id,
                 presetId: variant.presetId,
+                error: msg
               });
-              previewUrl = await GeminiService.generateShotPreview(previewBaseArgs);
-            } else {
-              throw err;
+              try {
+                return await GeminiService.generateShotPreview({
+                  ...richArgs,
+                  actorIdentitySets: buildCompactIdentitySets(actorIdentitySets)
+                });
+              } catch (retryErr: unknown) {
+                const retryMsg = getErrorMessage(retryErr);
+                if (isShotPayloadConstraintError(retryMsg)) {
+                  console.error('[ShotsPanel] Compact-rich payload rejected; aborting to preserve shot integrity', {
+                    variantId: variant.id,
+                    presetId: variant.presetId,
+                    error: retryMsg
+                  });
+                  throw new Error(`Shot payload rejected after compact optimization. Aborting instead of thin fallback to preserve camera/continuity integrity. (${retryMsg})`);
+                }
+                throw retryErr;
+              }
             }
+            throw err;
           }
-        }
+        };
+
+        console.log('[ShotsPanel] SHOT PROMPT DIAGNOSTIC', {
+          variantId: variant.id,
+          slotId: variant.slotId,
+          presetId: variant.presetId,
+          promptLength: variant.prompt?.length || 0,
+          promptPreview: (variant.prompt || '').slice(0, 500),
+          directedShotNotes: directedSlot?.shotNotes || '',
+          directedCameraFlavor: directedSlot?.cameraFlavor || '',
+          coveragePurpose: directedSlot?.coveragePurpose || '',
+          targetLabel: directedSlot?.targetLabel || ''
+        });
+
+        previewUrl = await requestPreview(variant.prompt);
 
         // Phase 7: Similarity Rejection
         let attempts = 1;
         let isDuplicate = false;
-        const SIMILARITY_THRESHOLD = 0.94; // If similarity >= 94%, it basically returned the anchor image or a trivial crop.
+        const SOURCE_SIMILARITY_THRESHOLD = 0.94; // near-trivial source copy
+        const VARIANT_SIMILARITY_THRESHOLD = 0.95; // near-duplicate of another generated variant
         try {
-           let similarity = await computeImageSimilarity(effectiveResultImageUrl, previewUrl);
-           console.log(`[ShotsPanel] Shot ${variant.presetId} similarity check: ${(similarity*100).toFixed(1)}%`);
-           while (autoReroll && similarity >= SIMILARITY_THRESHOLD && attempts < 3) {
-              console.warn(`[ShotsPanel] Shot ${variant.presetId} rejected for duplicate framing (${(similarity*100).toFixed(1)}%). Auto-retrying...`);
+           const findMostSimilarGeneratedVariant = async (candidateUrl: string): Promise<{ similarity: number; presetId?: ShotPresetId }> => {
+              let maxSimilarity = 0;
+              let matchedPresetId: ShotPresetId | undefined;
+              for (const existing of generatedVariantPreviews) {
+                const score = await computeImageSimilarity(existing.previewUrl, candidateUrl);
+                if (score > maxSimilarity) {
+                  maxSimilarity = score;
+                  matchedPresetId = existing.presetId;
+                }
+              }
+              return { similarity: maxSimilarity, presetId: matchedPresetId };
+           };
+
+           let sourceSimilarity = await computeImageSimilarity(effectiveResultImageUrl, previewUrl);
+           let peerSimilarity = await findMostSimilarGeneratedVariant(previewUrl);
+           const presetInfo = SHOT_PRESETS[variant.presetId];
+           
+           console.log('[ShotsPanel] Similarity Diagnostic', {
+             variantId: variant.id,
+             slotId: variant.slotId,
+             presetId: variant.presetId,
+             sourceSimilarity,
+             peerSimilarity: peerSimilarity.similarity,
+             peerPresetId: peerSimilarity.presetId,
+             uniquenessKey: SHOT_PRESETS[variant.presetId]?.uniquenessKey,
+             attempts
+           });
+           while (
+             autoReroll &&
+             (sourceSimilarity >= SOURCE_SIMILARITY_THRESHOLD || peerSimilarity.similarity >= VARIANT_SIMILARITY_THRESHOLD) &&
+             attempts < 3
+           ) {
+              const matchedLabel = peerSimilarity.presetId ? SHOT_PRESETS[peerSimilarity.presetId].label : 'another shot variant';
+              const reason = sourceSimilarity >= SOURCE_SIMILARITY_THRESHOLD
+                ? `too similar to source (${(sourceSimilarity * 100).toFixed(0)}%)`
+                : `too similar to ${matchedLabel} (${(peerSimilarity.similarity * 100).toFixed(0)}%)`;
+              
+              console.warn(`[ShotsPanel Rejection Diagnostics]`, {
+                  slotId: variant.id,
+                  requestedPreset: variant.presetId,
+                  uniquenessKey: presetInfo.uniquenessKey,
+                  sourceSimilarity: sourceSimilarity,
+                  peerSimilarity: peerSimilarity.similarity,
+                  reason,
+                  retryCount: attempts + 1
+              });
+
+              console.warn('[ShotsPanel] Auto-reroll triggered', {
+                variantId: variant.id,
+                presetId: variant.presetId,
+                attempts,
+                sourceSimilarity,
+                peerSimilarity: peerSimilarity.similarity,
+                peerPresetId: peerSimilarity.presetId,
+                reason
+              });
               
               onUpdateSession(sceneId, prev => {
                 if (!prev) return prev;
@@ -388,43 +543,46 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
                   variants: prev.variants.map(v => v.id === variant.id ? { 
                     ...v, 
                     status: 'generating', 
-                    error: `Similar composition detected (${(similarity*100).toFixed(0)}%). Rerolling alternative angle (Try ${attempts+1}/3)...` 
+                    error: `Insufficient differentiation (${reason}). Rerolling (Try ${attempts+1}/3)...` 
                   } : v)
                 };
               });
 
               attempts++;
-              const appendedPrompt = `${variant.prompt}\nCRITICAL: PREVIOUS ATTEMPT FAILED. YOU MUST MATERIALLY CHANGE THE CAMERA ANGLE AND CROP. DO NOT REPRODUCE THE SOURCE COMPOSITION.`;
+              const differentiationDirective = peerSimilarity.similarity >= VARIANT_SIMILARITY_THRESHOLD
+                ? `CRITICAL DIFFERENTIATION: This preset MUST NOT resemble ${matchedLabel}. Produce a visibly different framing class and camera geometry.`
+                : `CRITICAL DIFFERENTIATION: You MUST MATERIALLY CHANGE THE CAMERA ANGLE, SHOT SCALE, AND CROP. DO NOT REPRODUCE THE SOURCE COMPOSITION.`;
+              const continuityDirective = `CONTINUITY PRIORITY: Preserve actor identity, wardrobe, and environment truth. Preserve pose when possible but allow necessary perspective shifts.`;
+              const appendedPrompt = `${variant.prompt}\nCRITICAL: PREVIOUS ATTEMPT FAILED.\n${continuityDirective}\n${differentiationDirective}`;
               
-              if (isHostedShots) {
-                  previewUrl = await GeminiService.generateShotPreview({
-                     anchorImageUrl: effectiveResultImageUrl,
-                     actorIdentitySets,
-                     prompt: appendedPrompt,
-                     apiKey,
-                     model,
-                     options: { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, signal: abortControllerRef.current?.signal }
-                  });
-              } else {
-                  previewUrl = await GeminiService.generateShotPreview({
-                     anchorImageUrl: effectiveResultImageUrl,
-                     shotBlueprintUrl: rawBlueprintUrl,
-                     actorIdentitySets,
-                     prompt: appendedPrompt,
-                     apiKey,
-                     model,
-                     sceneTruth,
-                     presetId: variant.presetId,
-                     hasSubjectStyleAnalysis: !!safeSubjectActionText,
-                     options: { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, signal: abortControllerRef.current?.signal }
-                  });
-              }
-              similarity = await computeImageSimilarity(effectiveResultImageUrl, previewUrl);
-              console.log(`[ShotsPanel] Shot ${variant.presetId} retry ${attempts} similarity check: ${(similarity*100).toFixed(1)}%`);
+              previewUrl = await requestPreview(appendedPrompt);
+              sourceSimilarity = await computeImageSimilarity(effectiveResultImageUrl, previewUrl);
+              peerSimilarity = await findMostSimilarGeneratedVariant(previewUrl);
+              console.log(`[ShotsPanel Telemetry] Retry phase`, {
+                  slotId: variant.id,
+                  presetId: variant.presetId,
+                  sourceScore: sourceSimilarity,
+                  peerScore: peerSimilarity.similarity,
+                  matchedPeerId: peerSimilarity.presetId,
+                  retryCount: attempts
+              });
            }
-           if (autoReroll && similarity >= SIMILARITY_THRESHOLD) {
-              isDuplicate = true; // Still a duplicate after max retries
+           if (
+             autoReroll &&
+             (sourceSimilarity >= SOURCE_SIMILARITY_THRESHOLD || peerSimilarity.similarity >= VARIANT_SIMILARITY_THRESHOLD)
+           ) {
+              isDuplicate = true; // Still insufficiently differentiated after retries
            }
+
+           console.log(`[ShotsPanel Telemetry] Final evaluation`, {
+               slotId: variant.id,
+               presetId: variant.presetId,
+               uniquenessKey: presetInfo.uniquenessKey,
+               finalSourceScore: sourceSimilarity,
+               finalPeerScore: peerSimilarity.similarity,
+               retryCount: attempts,
+               status: isDuplicate ? 'REJECTED' : 'ACCEPTED'
+           });
         } catch (simErr) {
            console.error("[ShotsPanel] Failed to compute image similarity:", simErr);
         }
@@ -443,6 +601,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
           localPath: materialized.localPath,
           sourcePreviewUrl: previewUrl
         });
+        generatedVariantPreviews.push({ variantId: variant.id, presetId: variant.presetId, previewUrl });
 
         onUpdateSession(sceneId, prev => {
           if (!prev) return prev;
@@ -459,13 +618,13 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
             } : v)
           };
         });
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error("SHOTS PANEL FATAL:", err);
         onUpdateSession(sceneId, prev => {
           if (!prev) return prev;
           return {
             ...prev,
-            variants: prev.variants.map(v => v.id === variant.id ? { ...v, status: 'error', error: err.message } : v)
+            variants: prev.variants.map(v => v.id === variant.id ? { ...v, status: 'error', error: getErrorMessage(err) } : v)
           };
         });
       }
@@ -514,7 +673,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
           actorIdentitySets: session.actorIdentitySets,
           shotsActorOptions,
           presetId: variant.presetId,
-          directedSlot: session.directedShots?.find(s => s.id === (variant as any).slotId),
+          directedSlot: session.directedShots?.find(s => s.id === variant.slotId),
           locks: { ...session.locks, identity: true },
           environmentText,
           subjectActionText: safeSubjectActionText,
@@ -525,7 +684,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
 
         let finalUrl: string | undefined;
         let attempts = 0;
-        let lastErr: any;
+        let lastErr: unknown;
         
         while (attempts < 3) {
           try {
@@ -541,9 +700,9 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
               options: { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, signal: abortControllerRef.current?.signal }
             });
             break; 
-          } catch (e: any) {
+          } catch (e: unknown) {
             lastErr = e;
-            const msg = e.message.toLowerCase();
+            const msg = getErrorMessage(e).toLowerCase();
             if (msg.includes('failed to fetch') || msg.includes('429') || msg.includes('timeout')) {
               attempts++;
               console.warn(`[ShotsPanel] 4K Render failed (network/rate limit). Retrying ${attempts}/3 in 6 seconds...`);
@@ -584,12 +743,12 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
             } : v)
           };
         });
-      } catch (err: any) {
+      } catch (err: unknown) {
         onUpdateSession(sceneId, prev => {
           if (!prev) return prev;
           return {
             ...prev,
-            variants: prev.variants.map(v => v.id === variant.id ? { ...v, status: 'error', error: err.message } : v)
+            variants: prev.variants.map(v => v.id === variant.id ? { ...v, status: 'error', error: getErrorMessage(err) } : v)
           };
         });
       }
@@ -630,7 +789,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
     abortControllerRef.current = new AbortController();
 
     try {
-      const directedSlot = session.directedShots?.find(s => s.id === (variant as any).slotId);
+      const directedSlot = session.directedShots?.find(s => s.id === variant.slotId);
       const preset = SHOT_PRESETS[variant.presetId];
       
       let rawBlueprintUrl = variant.sourcePreviewUrl; // Fallback, will regenerate below if we can
@@ -651,43 +810,128 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
         options: { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, signal: abortControllerRef.current?.signal }
       };
 
-      const isHostedShots = state.billingEntitlements.effectiveBillingMode === 'hosted';
       let previewUrl: string;
-
-      if (isHostedShots) {
-        previewUrl = await GeminiService.generateShotPreview(previewBaseArgs);
-      } else {
+      const requestPreview = async (promptText: string): Promise<string> => {
+        const richArgs = {
+          ...previewBaseArgs,
+          prompt: promptText,
+          shotBlueprintUrl: rawBlueprintUrl,
+          sceneTruth: session.sceneTruth,
+          presetId: variant.presetId,
+          hasSubjectStyleAnalysis: !!subjectActionText,
+        };
         try {
-          previewUrl = await GeminiService.generateShotPreview({
-            ...previewBaseArgs,
-            shotBlueprintUrl: rawBlueprintUrl,
-            sceneTruth: session.sceneTruth,
-            presetId: variant.presetId,
-            hasSubjectStyleAnalysis: false,
-          });
-        } catch (err: any) {
-          const msg = String(err?.message || err || '');
-          if (/400|Bad Request|413|Payload/i.test(msg)) {
-            console.warn('[ShotsPanel] Rich preview payload rejected; retrying thin payload', {
+          return await GeminiService.generateShotPreview(richArgs);
+        } catch (err: unknown) {
+          const msg = getErrorMessage(err);
+          if (isShotPayloadConstraintError(msg)) {
+            console.warn('[ShotsPanel] Rich preview payload rejected; retrying compact-rich payload', {
               variantId: variant.id,
               presetId: variant.presetId,
+              error: msg
             });
-            previewUrl = await GeminiService.generateShotPreview(previewBaseArgs);
-          } else {
-            throw err;
+            try {
+              return await GeminiService.generateShotPreview({
+                ...richArgs,
+                actorIdentitySets: buildCompactIdentitySets(session.actorIdentitySets || [])
+              });
+            } catch (retryErr: unknown) {
+              const retryMsg = getErrorMessage(retryErr);
+              if (isShotPayloadConstraintError(retryMsg)) {
+                console.error('[ShotsPanel] Compact-rich payload rejected; aborting to preserve shot integrity', {
+                  variantId: variant.id,
+                  presetId: variant.presetId,
+                  error: retryMsg
+                });
+                throw new Error(`Shot payload rejected after compact optimization. Aborting instead of thin fallback to preserve camera/continuity integrity. (${retryMsg})`);
+              }
+              throw retryErr;
+            }
           }
+          throw err;
         }
-      }
+      };
+
+      console.log('[ShotsPanel] SHOT PROMPT DIAGNOSTIC', {
+        variantId: variant.id,
+        slotId: variant.slotId,
+        presetId: variant.presetId,
+        promptLength: variant.prompt?.length || 0,
+        promptPreview: (variant.prompt || '').slice(0, 500),
+        directedShotNotes: directedSlot?.shotNotes || '',
+        directedCameraFlavor: directedSlot?.cameraFlavor || '',
+        coveragePurpose: directedSlot?.coveragePurpose || '',
+        targetLabel: directedSlot?.targetLabel || ''
+      });
+
+      previewUrl = await requestPreview(variant.prompt);
 
       // Phase 7: Similarity Rejection
       let attempts = 1;
       let isDuplicate = false;
-      const SIMILARITY_THRESHOLD = 0.94;
+      const SOURCE_SIMILARITY_THRESHOLD = 0.94;
+      const VARIANT_SIMILARITY_THRESHOLD = 0.95;
       try {
-         let similarity = await computeImageSimilarity(effectiveResultImageUrl, previewUrl);
-         console.log(`[ShotsPanel] Shot ${variant.presetId} similarity check: ${(similarity*100).toFixed(1)}%`);
-         while (autoReroll && similarity >= SIMILARITY_THRESHOLD && attempts < 3) {
-            console.warn(`[ShotsPanel] Shot ${variant.presetId} rejected for duplicate framing (${(similarity*100).toFixed(1)}%). Auto-retrying...`);
+         const peerCandidates = (session.variants || [])
+           .filter(v => v.id !== variantId)
+           .map(v => ({ presetId: v.presetId, url: v.sourcePreviewUrl || v.previewUrl || '' }))
+           .filter(v => !!v.url) as Array<{ presetId: ShotPresetId; url: string }>;
+         const findMostSimilarPeer = async (candidateUrl: string): Promise<{ similarity: number; presetId?: ShotPresetId }> => {
+           let maxSimilarity = 0;
+           let matchedPresetId: ShotPresetId | undefined;
+           for (const peer of peerCandidates) {
+             const score = await computeImageSimilarity(peer.url, candidateUrl);
+             if (score > maxSimilarity) {
+               maxSimilarity = score;
+               matchedPresetId = peer.presetId;
+             }
+           }
+           return { similarity: maxSimilarity, presetId: matchedPresetId };
+         };
+
+         let sourceSimilarity = await computeImageSimilarity(effectiveResultImageUrl, previewUrl);
+         let peerSimilarity = await findMostSimilarPeer(previewUrl);
+         const presetInfo = SHOT_PRESETS[variant.presetId];
+
+         console.log('[ShotsPanel] Similarity Diagnostic', {
+           variantId: variant.id,
+           slotId: variant.slotId,
+           presetId: variant.presetId,
+           sourceSimilarity,
+           peerSimilarity: peerSimilarity.similarity,
+           peerPresetId: peerSimilarity.presetId,
+           uniquenessKey: SHOT_PRESETS[variant.presetId]?.uniquenessKey,
+           attempts
+         });
+         while (
+           autoReroll &&
+           (sourceSimilarity >= SOURCE_SIMILARITY_THRESHOLD || peerSimilarity.similarity >= VARIANT_SIMILARITY_THRESHOLD) &&
+           attempts < 3
+         ) {
+            const matchedLabel = peerSimilarity.presetId ? SHOT_PRESETS[peerSimilarity.presetId].label : 'another shot variant';
+            const reason = sourceSimilarity >= SOURCE_SIMILARITY_THRESHOLD
+              ? `too similar to source (${(sourceSimilarity * 100).toFixed(0)}%)`
+              : `too similar to ${matchedLabel} (${(peerSimilarity.similarity * 100).toFixed(0)}%)`;
+            
+            console.warn(`[ShotsPanel Rejection Diagnostics]`, {
+                  slotId: variant.id,
+                  requestedPreset: variant.presetId,
+                  uniquenessKey: presetInfo.uniquenessKey,
+                  sourceSimilarity: sourceSimilarity,
+                  peerSimilarity: peerSimilarity.similarity,
+                  reason,
+                  retryCount: attempts + 1
+            });
+
+            console.warn('[ShotsPanel] Auto-reroll triggered', {
+              variantId: variant.id,
+              presetId: variant.presetId,
+              attempts,
+              sourceSimilarity,
+              peerSimilarity: peerSimilarity.similarity,
+              peerPresetId: peerSimilarity.presetId,
+              reason
+            });
             
             onUpdateSession(sceneId, prev => {
               if (!prev) return prev;
@@ -696,40 +940,44 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
                 variants: prev.variants.map(v => v.id === variantId ? { 
                   ...v, 
                   status: 'generating', 
-                  error: `Similar composition detected (${(similarity*100).toFixed(0)}%). Rerolling alternative angle (Try ${attempts+1}/3)...` 
+                  error: `Insufficient differentiation (${reason}). Rerolling (Try ${attempts+1}/3)...` 
                 } : v)
               };
             });
 
             attempts++;
-            const appendedPrompt = `${variant.prompt}\nCRITICAL: PREVIOUS ATTEMPT FAILED. YOU MUST MATERIALLY CHANGE THE CAMERA ANGLE AND CROP. DO NOT REPRODUCE THE SOURCE COMPOSITION.`;
+            const differentiationDirective = peerSimilarity.similarity >= VARIANT_SIMILARITY_THRESHOLD
+              ? `CRITICAL DIFFERENTIATION: This preset MUST NOT resemble ${matchedLabel}. Produce a visibly different framing class and camera geometry.`
+              : `CRITICAL DIFFERENTIATION: You MUST MATERIALLY CHANGE THE CAMERA ANGLE, SHOT SCALE, AND CROP. DO NOT REPRODUCE THE SOURCE COMPOSITION.`;
+            const continuityDirective = `CONTINUITY PRIORITY: Preserve actor identity, wardrobe, and environment truth. Preserve pose when possible but allow necessary perspective shifts.`;
+            const appendedPrompt = `${variant.prompt}\nCRITICAL: PREVIOUS ATTEMPT FAILED.\n${continuityDirective}\n${differentiationDirective}`;
             
-            if (isHostedShots) {
-                previewUrl = await GeminiService.generateShotPreview({
-                   anchorImageUrl: effectiveResultImageUrl,
-                   actorIdentitySets: session.actorIdentitySets,
-                   prompt: appendedPrompt,
-                   apiKey,
-                   model,
-                   options: { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, signal: abortControllerRef.current?.signal }
-                });
-            } else {
-                previewUrl = await GeminiService.generateShotPreview({
-                   anchorImageUrl: effectiveResultImageUrl,
-                   shotBlueprintUrl: rawBlueprintUrl,
-                   actorIdentitySets: session.actorIdentitySets,
-                   prompt: appendedPrompt,
-                   apiKey,
-                   model,
-                   sceneTruth: session.sceneTruth,
-                   presetId: variant.presetId,
-                   hasSubjectStyleAnalysis: false,
-                   options: { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, signal: abortControllerRef.current?.signal }
-                });
-            }
-            similarity = await computeImageSimilarity(effectiveResultImageUrl, previewUrl);
+            previewUrl = await requestPreview(appendedPrompt);
+            sourceSimilarity = await computeImageSimilarity(effectiveResultImageUrl, previewUrl);
+            peerSimilarity = await findMostSimilarPeer(previewUrl);
+            console.log(`[ShotsPanel Telemetry] Retry phase`, {
+                  slotId: variant.id,
+                  presetId: variant.presetId,
+                  sourceScore: sourceSimilarity,
+                  peerScore: peerSimilarity.similarity,
+                  matchedPeerId: peerSimilarity.presetId,
+                  retryCount: attempts
+            });
          }
-         if (autoReroll && similarity >= SIMILARITY_THRESHOLD) isDuplicate = true;
+         if (
+           autoReroll &&
+           (sourceSimilarity >= SOURCE_SIMILARITY_THRESHOLD || peerSimilarity.similarity >= VARIANT_SIMILARITY_THRESHOLD)
+         ) isDuplicate = true;
+
+         console.log(`[ShotsPanel Telemetry] Final evaluation`, {
+               slotId: variant.id,
+               presetId: variant.presetId,
+               uniquenessKey: presetInfo.uniquenessKey,
+               finalSourceScore: sourceSimilarity,
+               finalPeerScore: peerSimilarity.similarity,
+               retryCount: attempts,
+               status: isDuplicate ? 'REJECTED' : 'ACCEPTED'
+         });
       } catch (simErr) {
          console.error("[ShotsPanel] Failed to compute image similarity:", simErr);
       }
@@ -757,12 +1005,12 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
           } : v)
         };
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       onUpdateSession(sceneId, prev => {
         if (!prev) return prev;
         return {
           ...prev,
-          variants: prev.variants.map(v => v.id === variantId ? { ...v, status: 'error', error: err.message } : v)
+          variants: prev.variants.map(v => v.id === variantId ? { ...v, status: 'error', error: getErrorMessage(err) } : v)
         };
       });
     }
@@ -772,6 +1020,16 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
   const isRerenderingFull = session?.isRerenderingSelected || false;
   const hasResult = !!effectiveResultImageUrl;
   const hasSelectedVariants = session?.variants.some(v => v.selected) || false;
+
+  const selectedVariant = session?.variants?.find(v => v.selected) || session?.variants?.[0];
+
+  const handleCopyShotPrompt = async () => {
+    try {
+      await navigator.clipboard.writeText(selectedVariant?.prompt || '');
+    } catch (err) {
+      console.error('Failed to copy shot prompt', err);
+    }
+  };
 
   return (
     <div ref={panelRef} className="flex flex-col w-full h-full min-w-0 bg-[#09090b] overflow-hidden text-gray-200">
@@ -915,14 +1173,42 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
           ))}
         </div>
       ) : (
-        <div className="flex-grow min-h-0 overflow-hidden relative">
-          <ShotGrid 
-            variants={session?.variants || []} 
-            onToggleSelected={(id, val) => onToggleVariantSelected(sceneId, id, val)}
-            onSave={handleSaveVariant}
-            onRegenerateOne={handleRegenerateOne}
-            onInspect={setInspectVariantId}
-          />
+        <div className="flex-grow flex flex-col min-h-0 overflow-hidden relative">
+          
+          {/* Compiled Shot Prompt Inspector */}
+          <div className="shrink-0 p-3 mx-4 mt-3 mb-1 rounded-xl border border-white/10 bg-black/20 z-10">
+            <div className="flex items-center justify-between mb-2">
+              <div>
+                <div className="text-xs uppercase tracking-wide text-white/50">Compiled Shot Prompt</div>
+                <div className="text-sm text-white/80">
+                  {selectedVariant ? `${selectedVariant.presetId} • ${selectedVariant.id}` : 'No shot selected'}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleCopyShotPrompt}
+                className="px-3 py-1.5 text-xs rounded-lg bg-white/10 hover:bg-white/15 text-white"
+                disabled={!selectedVariant?.prompt}
+              >
+                Copy
+              </button>
+            </div>
+            <textarea
+              readOnly
+              value={selectedVariant?.prompt || ''}
+              className="w-full h-[60px] sm:h-[100px] rounded-lg bg-black/30 border border-white/10 p-3 text-[10px] sm:text-xs text-white/85 resize-y focus:outline-none custom-scrollbar"
+            />
+          </div>
+
+          <div className="flex-grow min-h-0 relative">
+            <ShotGrid 
+              variants={session?.variants || []} 
+              onToggleSelected={(id, val) => onToggleVariantSelected(sceneId, id, val)}
+              onSave={handleSaveVariant}
+              onRegenerateOne={handleRegenerateOne}
+              onInspect={setInspectVariantId}
+            />
+          </div>
         </div>
       )}
 

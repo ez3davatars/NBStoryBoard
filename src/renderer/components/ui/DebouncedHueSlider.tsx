@@ -8,7 +8,9 @@ function HexToHSL(hex: string): { h: number; s: number; l: number } {
  const g = parseInt(hex.substring(2, 4), 16) / 255;
  const b = parseInt(hex.substring(4, 6), 16) / 255;
  const max = Math.max(r, g, b), min = Math.min(r, g, b);
- let h = 0, s, l = (max + min) / 2;
+ let h = 0;
+ let s = 0;
+ const l = (max + min) / 2;
  if (max === min) h = s = 0;
  else {
  const d = max - min;
@@ -43,7 +45,7 @@ export const DebouncedHueSlider = ({ color, onChange }: { color: string, onChang
  if (Math.abs(propHue - localHue) > 5) {
  setLocalHue(propHue);
  }
- }, [color]);
+ }, [color, localHue]);
 
  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
  const newHue = parseInt(e.target.value);

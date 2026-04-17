@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useLayoutEffect } from "react";
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
 import ReactDOM from "react-dom";
 import { autoUpdate, computePosition, offset, flip, shift, size } from "@floating-ui/dom";
 
@@ -53,7 +53,7 @@ export function Dropdown({ value, options, onChange, placeholder = "Select...", 
  }, [isOpen, id]);
 
  // Floating UI Positioning
- const updatePosition = async () => {
+ const updatePosition = useCallback(async () => {
  const ref = triggerRef.current;
  const floating = menuRef.current;
  if (!ref || !floating) return;
@@ -81,7 +81,7 @@ export function Dropdown({ value, options, onChange, placeholder = "Select...", 
  top: `${y}px`,
  zIndex: "9999",
  });
- };
+ }, [forceUpward]);
 
  useLayoutEffect(() => {
  if (!isOpen) return;
@@ -100,7 +100,7 @@ export function Dropdown({ value, options, onChange, placeholder = "Select...", 
  cleanupRef.current?.();
  cleanupRef.current = null;
  };
- }, [isOpen, forceUpward]);
+ }, [isOpen, forceUpward, updatePosition]);
 
  // Close on outside click, Escape, & scroll out of view
  useEffect(() => {

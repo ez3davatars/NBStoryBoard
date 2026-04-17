@@ -22,17 +22,15 @@ export const ShotTile: React.FC<ShotTileProps> = ({ variant, onToggleSelected, o
     variant.sourcePreviewUrl ||
     null;
 
-  const [displayUrl, setDisplayUrl] = useState<string | null>(null);
+  const [displayUrl, setDisplayUrl] = useState<{ source: string; url: string } | null>(null);
   const [localExpired, setLocalExpired] = useState(false);
   const effectiveStatus = localExpired ? 'expired' : variant.status;
 
   useEffect(() => {
-    if (!rawUrl) {
-      setDisplayUrl(null);
-      return;
-    }
+    if (!rawUrl) return;
 
     let isMounted = true;
+    const sourceUrl = rawUrl;
 
     resolveDisplayUrl({
       localPath: variant.localFinalPath || variant.localPreviewPath,
@@ -40,13 +38,13 @@ export const ShotTile: React.FC<ShotTileProps> = ({ variant, onToggleSelected, o
       previewUrl: variant.previewUrl,
       sourceFinalUrl: variant.sourceFinalUrl,
       sourcePreviewUrl: variant.sourcePreviewUrl,
-    } as any).then(resolved => {
+    }).then(resolved => {
       if (isMounted) {
-        setDisplayUrl(resolved || rawUrl);
+        setDisplayUrl({ source: sourceUrl, url: resolved || sourceUrl });
       }
     }).catch(() => {
       if (isMounted) {
-        setDisplayUrl(rawUrl);
+        setDisplayUrl({ source: sourceUrl, url: sourceUrl });
       }
     });
 
@@ -63,7 +61,7 @@ export const ShotTile: React.FC<ShotTileProps> = ({ variant, onToggleSelected, o
     rawUrl
   ]);
 
-  const effectiveUrl = displayUrl || rawUrl;
+  const effectiveUrl = displayUrl?.source === rawUrl ? displayUrl.url : rawUrl;
 
   return (
     <div 

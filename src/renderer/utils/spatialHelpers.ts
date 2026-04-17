@@ -114,7 +114,9 @@ export const buildPlacementIntentsFromAnnotations = (
 
         if (tokenId && anchorId) {
             const anchor = annotations.find(a => a.id === anchorId);
-            const action = anchor?.anchorKind || 'stand';
+            let action: PlacementIntent['action'] = 'stand';
+            if (anchor?.anchorKind === 'seat') action = 'sit';
+            if (anchor?.anchorKind === 'rail' || anchor?.anchorKind === 'wall' || anchor?.anchorKind === 'counter' || anchor?.anchorKind === 'table') action = 'lean';
 
             let lookAtId: string | undefined = undefined;
             // Check if there is a look arrow for this token
@@ -134,7 +136,7 @@ export const buildPlacementIntentsFromAnnotations = (
 
             intents.push({
                 actorId: tokenId,
-                action: action as any,
+                action,
                 anchorId: anchorId,
                 lookAtId: lookAtId,
                 priority: arrow.hard ? 'hard' : 'soft'

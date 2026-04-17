@@ -1,7 +1,7 @@
 import React from 'react';
 import type { DirectedShotSlot, ShotTargetType, CameraFlavor, ShotPresetId } from '../../types/shots';
 import type { ShotsActorOption } from '../../context/AppContext';
-import { SHOT_PRESETS } from '../../utils/shotsPresets';
+import { SHOT_PRESETS, getDefaultCameraFlavorForPreset, getDefaultShotNotesForPreset } from '../../utils/shotsPresets';
 
 export type DirectedShotCardProps = {
   slot: DirectedShotSlot;
@@ -15,7 +15,7 @@ export const DirectedShotCard: React.FC<DirectedShotCardProps> = ({ slot, actors
     onChange({ ...slot, ...updates });
   };
 
-  const presetEntries = Object.entries(SHOT_PRESETS) as [ShotPresetId, any][];
+  const presetEntries = Object.entries(SHOT_PRESETS) as [ShotPresetId, (typeof SHOT_PRESETS)[ShotPresetId]][];
   const flavors: CameraFlavor[] = ['neutral', 'dramatic', 'procedural', 'commercial_clean', 'intimate', 'kinetic'];
 
   return (
@@ -31,7 +31,14 @@ export const DirectedShotCard: React.FC<DirectedShotCardProps> = ({ slot, actors
       <div className="flex gap-2">
         <select
           value={slot.shotType}
-          onChange={e => update({ shotType: e.target.value as ShotPresetId })}
+          onChange={e => {
+            const newType = e.target.value as ShotPresetId;
+            update({ 
+               shotType: newType,
+               cameraFlavor: getDefaultCameraFlavorForPreset(newType),
+               shotNotes: getDefaultShotNotesForPreset(newType)
+            });
+          }}
           disabled={disabled}
           className="bg-gray-800 border-gray-700 rounded px-2 py-1 outline-none flex-1"
         >

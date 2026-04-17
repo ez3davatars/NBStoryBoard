@@ -41,7 +41,8 @@ import type {
     CastMember,
     DirectorSettings,
     DepthAssistWarning,
-    WhitelistProfile
+    WhitelistProfile,
+    StageAnnotation
 } from '../context/AppContext';
 import { GeminiService, type ExtractedStyle, type SceneIntent } from '../services/GeminiService';
 import { DepthService } from '../services/DepthService';
@@ -102,12 +103,18 @@ async function materializeDisplayUrl(url: string | null | undefined): Promise<st
     return url;
 }
 
-const normalizeGeneratedImageUrl = async (res: any): Promise<string> => {
+const getErrorMessage = (error: unknown): string => {
+    if (error instanceof Error) return error.message;
+    return String(error);
+};
+
+const normalizeGeneratedImageUrl = async (res: unknown): Promise<string> => {
+    const resObject = typeof res === 'object' && res !== null ? res as { asset_url?: unknown; url?: unknown } : null;
     const rawUrl =
         typeof res === 'string'
             ? res
-            : (res && typeof res === 'object'
-                ? (res.asset_url || res.url || '')
+            : (resObject
+                ? (typeof resObject.asset_url === 'string' ? resObject.asset_url : (typeof resObject.url === 'string' ? resObject.url : ''))
                 : '');
 
     if (!rawUrl) {
@@ -128,9 +135,12 @@ const SceneCanvas = () => {
 
 
     const { state, dispatch } = useAppContext();
+    const isDevMode = Boolean((import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV);
     const stageRef = useRef<HTMLDivElement>(null);
     const viewportRef = useRef<HTMLDivElement>(null);
     const centerPaneRef = useRef<HTMLDivElement>(null);
+    const activeProgressIntervalRef = useRef<number | null>(null);
+    const progressSessionRef = useRef(0);
 
     // Camera Gate: an inner viewport that always matches the selected aspect ratio.
     const [centerPaneWidth, setCenterPaneWidth] = useState(0);
@@ -175,8 +185,8 @@ const SceneCanvas = () => {
             } else {
                 throw new Error("Canvas composition returned empty.");
             }
-        } catch (e: any) {
-             dispatch({ type: 'ADD_LOG', payload: { message: `Download failed: ${e.message}`, type: 'error' } });
+        } catch (e: unknown) {
+             dispatch({ type: 'ADD_LOG', payload: { message: `Download failed: ${getErrorMessage(e)}`, type: 'error' } });
         } finally {
             dispatch({ type: 'SET_PROCESSING', payload: false });
         }
@@ -195,7 +205,7 @@ const SceneCanvas = () => {
         dispatch({ type: 'ADD_LOG', payload: { message: 'Depth map captured successfully.', type: 'success' } });
     };
 
-    const ensureStagingAiAccess = (featureLabel: string): boolean => {
+    const ensureStagingAiAccess = useCallback((featureLabel: string): boolean => {
         const billingMode = state.billingEntitlements?.effectiveBillingMode;
         
         if (billingMode === 'hosted') {
@@ -216,16 +226,16 @@ const SceneCanvas = () => {
 
         if (billingMode === 'byok') {
             if (!state.billingEntitlements.hasByokAccess || !state.apiKey) {
-                dispatch({ type: 'ADD_LOG', payload: { message: `${featureLabel} blocked: API Key required for BYOK`, type: 'error' } } as any);
+                dispatch({ type: 'ADD_LOG', payload: { message: `${featureLabel} blocked: API Key required for BYOK`, type: 'error' } });
                 return false;
             }
 
             return true;
         }
 
-        dispatch({ type: 'ADD_LOG', payload: { message: `${featureLabel} blocked: No billing mode available`, type: 'error' } } as any);
+        dispatch({ type: 'ADD_LOG', payload: { message: `${featureLabel} blocked: No billing mode available`, type: 'error' } });
         return false;
-    };
+    }, [state.billingEntitlements, state.hostedCredits, state.apiKey, dispatch]);
 
     // --- DOM CAPTURE FOR SHOTS ---
     // Tracks processing status by `${tokenId}-${sourceUrl}` to allow retries if image changes
@@ -233,6 +243,16 @@ const SceneCanvas = () => {
 
     const [isCompactCommandHeader, setIsCompactCommandHeader] = useState(false);
     const [isCompactStageToolbar, setIsCompactStageToolbar] = useState(false);
+
+    useEffect(() => {
+        return () => {
+            if (activeProgressIntervalRef.current !== null) {
+                window.clearInterval(activeProgressIntervalRef.current);
+                activeProgressIntervalRef.current = null;
+            }
+            progressSessionRef.current += 1;
+        };
+    }, []);
 
     useEffect(() => {
         // COMMAND HEADER
@@ -440,7 +460,7 @@ const SceneCanvas = () => {
         } else if (viewMode === 'shots' && !getEffectiveResultAnchorForScene(state, state.activeShotId || 'default')) {
             setViewMode('stage');
         }
-    }, [viewMode, state.resultImage, state.shots, state.activeShotId]);
+    }, [viewMode, state.resultImage, state.shots, state.activeShotId, state]);
     
     // --- ADVANCED RENDER CONTROLS ---
     const {
@@ -450,9 +470,9 @@ const SceneCanvas = () => {
         autoTokenProfiles, setAutoTokenProfiles, ensureTokenProfiles,
         handleAnalyzeMissingTokenProfiles,
         tokenProfilesReady, tokenProfilesTotal
-    } = useAdvancedRender(state, dispatch as any);
+    } = useAdvancedRender(state, dispatch);
 
-    useProductionExports(state, dispatch as any);
+    useProductionExports(state, dispatch);
 
     const [bgPrompt, setBgPrompt] = useState('');
 
@@ -470,7 +490,7 @@ const SceneCanvas = () => {
             activeRefs: activeReferences,
             tokens: state.tokens
         });
-    }, [strictMode, bgPrompt, state.director, state.depthMapUrl, activeReferences, state.tokens]);
+    }, [strictMode, bgPrompt, state.director, state.depthMapUrl, state.referenceSlots, activeReferences, state.tokens]);
 
 
     const [dragItem, setDragItem] = useState<{ id: string, type: 'token' | 'annotation', startX: number, startY: number, initialX: number, initialY: number } | null>(null);
@@ -592,11 +612,50 @@ const SceneCanvas = () => {
         } finally {
             dispatch({ type: 'SET_DEPTH_PROCESSING', payload: false });
         }
-    }, [state.backgroundUrl, state.apiKey, state.model, state.isDepthProcessing, dispatch]);
+    }, [state.backgroundUrl, state.apiKey, state.model, state.isDepthProcessing, state.billingEntitlements, dispatch, ensureStagingAiAccess]);
 
 
 
     // Style Transfer Pipeline: Phase 1 Logic
+    const AUTO_STYLE_CONTEXT_START = '=== AUTO STYLE CONTEXT ===';
+    const AUTO_STYLE_CONTEXT_END = '=== END AUTO STYLE CONTEXT ===';
+    const AUTO_STYLE_CONTEXT_REGEX = /(?:\n)?=== AUTO STYLE CONTEXT ===[\s\S]*?=== END AUTO STYLE CONTEXT ===(?:\n)?/g;
+    const inferQualityModeFromStyle = (style: ExtractedStyle): 'Standard' | 'Raw Uncompressed' | '3D Render' | 'Stylized' | null => {
+        const signature = `${style.medium || ''} ${style.renderStyle || ''} ${style.styleSummary || ''}`.toLowerCase();
+        if (/3d|cgi|octane|pixar|unreal|render/.test(signature)) return '3D Render';
+        if (/stylized|illustration|anime|toon|cartoon|digital art|painterly|painted|graphic/.test(signature)) return 'Stylized';
+        if (/photoreal|live action|raw photo|photographic/.test(signature)) return 'Raw Uncompressed';
+        return null;
+    };
+
+    const stripAutoStyleContext = (text: string) => {
+        return text
+            .replace(AUTO_STYLE_CONTEXT_REGEX, '\n')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim();
+    };
+
+    const buildAutoStyleContextBlock = (style: ExtractedStyle) => {
+        const lines = [
+            AUTO_STYLE_CONTEXT_START,
+            'Apply this style context while following the user scene prompt.',
+            'STYLE-ONLY RULE: Do NOT override explicit subject action, pose, or blocking instructions from the user prompt.',
+            `Style summary: ${style.styleSummary || 'cinematic stylized look'}`,
+            `Medium: ${style.medium || 'unspecified'}`,
+            `Render style: ${style.renderStyle || 'unspecified'}`,
+            `Palette: ${style.palette || 'balanced cinematic tones'}`,
+            `Lighting style: ${style.lighting || 'cinematic neutral'}`,
+            `Mood: ${style.mood || 'grounded'}`,
+            `Implied era: ${style.impliedEra || 'unspecified'}`,
+            `Implied world: ${style.impliedWorld || 'unspecified'}`,
+            `Architecture cues: ${style.architectureHints || 'none'}`,
+            `Avoid: ${style.environmentMustAvoid || 'none'}`,
+            AUTO_STYLE_CONTEXT_END
+        ].filter(Boolean);
+
+        return lines.join('\n');
+    };
+
     const handleAutoStyleEnvironment = async () => {
         if (!ensureStagingAiAccess('Style Environment')) return;
 
@@ -604,13 +663,12 @@ const SceneCanvas = () => {
         const activeToken = state.tokens.find((t: StageToken) => t.id === state.selection);
         if (!activeToken) return;
         
-        // Prefer original sourceImage for best aesthetic analysis, fallback to cutout
-        // Note: activeToken properties depend on the exact definition of StageToken in AppContext.
-        const analysisUrl = (activeToken as any).sourceImageUrl || (activeToken as any).sourceImage || activeToken.cutoutUrl || activeToken.url;
+        // Prefer source image when available, fallback to cutout/url.
+        const analysisUrl = activeToken.sourceImageUrl || activeToken.cutoutUrl || activeToken.url;
         if (!analysisUrl) return;
 
         setIsAnalyzingStyle(true);
-        const tokenLabel = (activeToken as any).label || activeToken.tag || 'Actor';
+        const tokenLabel = activeToken.tag || 'Actor';
         dispatch({ type: 'ADD_LOG', payload: { message: `Analyzing aesthetic style for ${tokenLabel}...`, type: 'info' } });
         
         try {
@@ -627,14 +685,20 @@ const SceneCanvas = () => {
             setExtractedStyle(style);
             dispatch({ type: 'ADD_LOG', payload: { message: `Style extracted: ${style.styleSummary}`, type: 'success' } });
 
-            // Phase 3: Automated Environment Plate Generation
-            const hasUserScenePrompt = !!bgPrompt.trim();
+            const inferredQualityMode = inferQualityModeFromStyle(style);
+            if (inferredQualityMode && inferredQualityMode !== state.director.qualityMode) {
+                dispatch({ type: 'SET_DIRECTOR', payload: { qualityMode: inferredQualityMode } });
+                dispatch({ type: 'ADD_LOG', payload: { message: `Auto-Style set Quality Mode: ${inferredQualityMode}`, type: 'success' } });
+            }
+
+            const userPrompt = stripAutoStyleContext(bgPrompt);
+            const hasUserScenePrompt = !!userPrompt.trim();
 
             let intent: SceneIntent | null = null;
             if (hasUserScenePrompt) {
                 dispatch({ type: 'ADD_LOG', payload: { message: `Parsing scene intent...`, type: 'info' } });
                 intent = await GeminiService.analyzeSceneIntent(
-                    bgPrompt,
+                    userPrompt,
                     state.apiKey,
                     state.model,
                     {
@@ -652,77 +716,22 @@ const SceneCanvas = () => {
                 } as SceneIntent;
             }
 
-            dispatch({ type: 'ADD_LOG', payload: { message: `Generating style-matched environment plate...`, type: 'info' } });
-            
-            // --- PHASE 4: Automated Inference for Scene Settings ---
-            const inferredCamera = (!state.director.camera || state.director.camera === 'Default / Auto') ? intent.recommendedCamera : state.director.camera;
-            const inferredLighting = (!state.director.lighting || state.director.lighting === 'Default / Auto') ? intent.recommendedLighting : state.director.lighting;
+            const styleContextBlock = buildAutoStyleContextBlock(style);
+            setBgPrompt((prev) => {
+                const basePrompt = stripAutoStyleContext(prev);
+                return basePrompt ? `${basePrompt}\n\n${styleContextBlock}` : styleContextBlock;
+            });
 
-            if (inferredCamera && inferredCamera !== state.director.camera) {
-                 dispatch({ type: 'SET_DIRECTOR', payload: { camera: inferredCamera } });
-                 dispatch({ type: 'ADD_LOG', payload: { message: `Auto-inferred Camera: ${inferredCamera}`, type: 'success' } });
-            }
-            if (inferredLighting && inferredLighting !== state.director.lighting) {
-                 dispatch({ type: 'SET_DIRECTOR', payload: { lighting: inferredLighting } });
-                dispatch({ type: 'ADD_LOG', payload: { message: `Auto-inferred Lighting: ${inferredLighting}`, type: 'success' } });
-            }
+            dispatch({
+                type: 'ADD_LOG',
+                payload: { message: 'Auto-Style applied to prompt context. No image was generated automatically.', type: 'success' }
+            });
 
-            let envPrompt = "";
-            if (hasUserScenePrompt) {
-                const { buildEnvironmentOnlyPrompt } = await import('../utils/promptHelpers');
-                envPrompt = buildEnvironmentOnlyPrompt(intent, style, inferredCamera || state.director.camera, state.tokens, state.annotations);
-            } else {
-                envPrompt = `
-Create a clean environment plate only.
-
-ERA / WORLD CONSISTENCY (HIGH PRIORITY):
-Match the environment to the character's visible wardrobe, props, and implied time period.
-Inferred era: ${style.impliedEra || 'None detected'}
-World type: ${style.impliedWorld || 'Neutral'}
-Architecture direction: ${style.architectureHints || 'Clean, abstract'}
-Do not generate an environment that contradicts the character's clothing or prop language.
-Constraints/Forbidden elements: ${style.environmentMustAvoid || 'None'}
-
-AESTHETIC STYLE:
-Match the visual style, material treatment, color logic, and mood of the analyzed character style.
-Do not include any people or characters.
-Do not include foreground subjects.
-Create a clean cinematic environment background suitable for staging and compositing.
-
-Style summary: ${style.styleSummary}
-Lighting: ${style.lighting || 'cinematic neutral'}
-Mood: ${style.mood || 'calm'}
-Color palette: ${style.palette || 'balanced cinematic tones'}
-
-Output: environment plate only.
-`;
-            }
-
-            dispatch({ type: 'SET_PROCESSING', payload: true });
-
-            const res = await GeminiService.generateImage(
-                envPrompt,
-                state.apiKey!,
-                state.model,
-                [], 
-                { aspectRatio: state.director.aspectRatio || '16:9', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements }
-            );
-
-            const img = await normalizeGeneratedImageUrl(res);
-
-            setPreviousBackgroundUrl(state.backgroundUrl || null);
-            dispatch({ type: 'SET_BG', payload: img });
-            dispatch({ type: 'ADD_LOG', payload: { message: `Environment plate generated successfully.`, type: 'success' } });
-
-            // Auto-composite pass explicitly removed per user request. 
-            // The environment plate will stay pure until user manually triggers composite.
-
-        } catch (err: any) {
-            console.error("Style Extract / BG Gen Error", err);
-            dispatch({ type: 'ADD_LOG', payload: { message: err.message, type: 'error' } });
+        } catch (err: unknown) {
+            console.error("Style Extract Error", err);
+            dispatch({ type: 'ADD_LOG', payload: { message: getErrorMessage(err), type: 'error' } });
         } finally {
             setIsAnalyzingStyle(false);
-            dispatch({ type: 'SET_PROCESSING', payload: false });
         }
     };
 
@@ -856,10 +865,10 @@ Output: environment plate only.
                     if (token.depth === undefined) continue;
 
                     // Safety gate: don't occlude brand-new placements until user confirms
-                    if ((token as any).hasConfirmedPlacement === false) continue;
+                    if ((token).hasConfirmedPlacement === false) continue;
 
-                    const tokenW = Math.max(1, Number((token as any).width) || 1);
-                    const tokenH = Math.max(1, Number((token as any).height) || 1);
+                    const tokenW = Math.max(1, Number((token).width) || 1);
+                    const tokenH = Math.max(1, Number((token).height) || 1);
                     if (!Number.isFinite(tokenW) || !Number.isFinite(tokenH)) continue;
 
                     // Downscale masks for performance, then rely on CSS mask-size to upscale.
@@ -877,8 +886,8 @@ Output: environment plate only.
                     const d = imgData.data;
 
                     // Stage placement (untransformed top-left)
-                    const anchorX = (token as any).anchorX ?? 0.5;
-                    const anchorY = (token as any).anchorY ?? 0.8;
+                    const anchorX = (token).anchorX ?? 0.5;
+                    const anchorY = (token).anchorY ?? 0.8;
                     const left = (token.x || 0) - (tokenW * anchorX);
                     const top = (token.y || 0) - (tokenH * anchorY);
 
@@ -1043,6 +1052,7 @@ Output: environment plate only.
 
             return {
                 region: idx + 1,
+                actorLabel: cast?.name || t.tag || `Actor ${idx + 1}`,
                 token: t,
                 cast,
                 profile
@@ -1143,29 +1153,29 @@ Output: environment plate only.
 
     const getAssignedZoneForActor = (token: StageToken) => {
         const zones = [...state.annotations]
-            .filter((a: any) => a.type === 'zone' && a.visible !== false)
-            .sort((a: any, b: any) => a.zIndex - b.zIndex);
+            .filter((a) => a.type === 'zone' && a.visible !== false)
+            .sort((a, b) => a.zIndex - b.zIndex);
 
         if (!zones.length) return null;
 
         const refs = state.referenceSlots || [];
         
         // Match 1: Explicit castId matching if available (deterministic root)
-        let exactSlot = refs.find((r: any) => r.castId && token.castId && r.castId === token.castId);
+        let exactSlot = refs.find((r) => r.castId && token.castId && r.castId === token.castId);
         
         // Match 2: Name lookup matching (fallback if slots lost castId references)
         if (!exactSlot && token.castId && state.cast) {
-            const castMember = state.cast.find((c: any) => c.id === token.castId);
+            const castMember = state.cast.find((c) => c.id === token.castId);
             if (castMember && castMember.name) {
                 const searchName = castMember.name.toLowerCase();
-                exactSlot = refs.find((r: any) => `${r.name || ''} ${r.analysis || ''} ${r.target || ''}`.toLowerCase().includes(searchName));
+                exactSlot = refs.find((r) => `${r.name || ''} ${r.analysis || ''} ${r.target || ''}`.toLowerCase().includes(searchName));
             }
         }
         
         // Match 3: Label lookup matching (fallback for anonymous single-shot items)
         if (!exactSlot && token.tag) {
              const searchName = token.tag.toLowerCase();
-             exactSlot = refs.find((r: any) => `${r.name || ''} ${r.analysis || ''} ${r.target || ''}`.toLowerCase().includes(searchName));
+             exactSlot = refs.find((r) => `${r.name || ''} ${r.analysis || ''} ${r.target || ''}`.toLowerCase().includes(searchName));
         }
 
         // If we found a slot, parse its target for zone assignment
@@ -1186,7 +1196,7 @@ Output: environment plate only.
 
     const computeZoneFitPlacement = async (
         actorUrl: string,
-        zone: any
+        zone: StageAnnotation
     ): Promise<{
         x: number;
         y: number;
@@ -1363,7 +1373,7 @@ Preserve exact actor placement and exact actor size.
     };
 
     const buildReferenceDirectiveBlocks = () => {
-        const refs = (state.referenceSlots || []).filter((r: any) => r.active && (r.url || r.name || r.analysis || r.target));
+        const refs = (state.referenceSlots || []).filter((r) => r.active && (r.url || r.name || r.analysis || r.target));
         if (!refs.length) {
             return {
                 identityBlock: '',
@@ -1377,7 +1387,7 @@ Preserve exact actor placement and exact actor size.
         identityLines.push('REFERENCE IDENTITY / STYLE DNA:');
         placementLines.push('REFERENCE PLACEMENT / ACTION DIRECTIVES (HIGH PRIORITY):');
 
-        refs.forEach((slot: any, idx: number) => {
+        refs.forEach((slot, idx: number) => {
             const actorAlias =
                 (slot.name && slot.name.trim()) ||
                 (slot.target && slot.target.trim()) ||
@@ -1406,7 +1416,7 @@ Preserve exact actor placement and exact actor size.
     };
 
     // Unified Workflow Generate Button
-    const generateBg = async (overrideBgUrl?: string | any) => {
+    const generateBg = async (overrideBgUrl?: string | unknown) => {
         if (!ensureStagingAiAccess('Environment Plate Generation')) return;
         const activeBgUrl = (typeof overrideBgUrl === 'string' ? overrideBgUrl : undefined) || state.backgroundUrl;
         const hasSourceScene = !!activeBgUrl;
@@ -1415,6 +1425,11 @@ Preserve exact actor placement and exact actor size.
         if (!hasPromptText && !hasSourceScene) return;
 
         dispatch({ type: 'SET_PROCESSING', payload: true });
+        const progressSessionId = ++progressSessionRef.current;
+        if (activeProgressIntervalRef.current !== null) {
+            window.clearInterval(activeProgressIntervalRef.current);
+            activeProgressIntervalRef.current = null;
+        }
 
         // Show result view right away so users see the loader overlay
         setViewMode('result');
@@ -1424,6 +1439,7 @@ Preserve exact actor placement and exact actor size.
         const etaMs = state.imageResolution === '4K' ? 45000 : 30000;
         const increment = (1000 / etaMs) * 100;
         const progressInterval = window.setInterval(() => {
+            if (progressSessionRef.current !== progressSessionId) return;
             currentPercent += increment;
             if (currentPercent > 95) currentPercent = 95;
 
@@ -1435,6 +1451,7 @@ Preserve exact actor placement and exact actor size.
 
             dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text } });
         }, 1000);
+        activeProgressIntervalRef.current = progressInterval;
 
         try {
             const primaryToken = state.tokens.find(t => t.visible !== false && (t.elementType === 'actor' || !t.elementType));
@@ -1493,8 +1510,6 @@ Preserve exact actor placement and exact actor size.
                     setViewMode('result');
                     dispatch({ type: 'ADD_LOG', payload: { message: 'Deterministic composite + integration pass complete.', type: 'success' } });
                     
-                    window.clearInterval(progressInterval);
-                    dispatch({ type: 'SET_PROCESSING', payload: false });
                     return; // EXIT EARLY
                 }
             }
@@ -1681,19 +1696,26 @@ ${loosePromptBase}`;
                 setViewMode('result');
                 dispatch({ type: 'ADD_LOG', payload: { message: "Staging (loose) rendered.", type: 'success' } });
             }
-        } catch (e: any) {
-            const isTimeout = e.name === 'TimeoutError' || e.message?.includes('Pending');
-            if (isTimeout && e.generationId) {
-                dispatch({ type: 'UPDATE_BACKGROUND_JOB', payload: { id: e.generationId, updates: { status: 'pending_background' } } });
+        } catch (e: unknown) {
+            const errObj = typeof e === 'object' && e !== null ? e as { name?: string; message?: string; generationId?: string } : {};
+            const errorMessage = errObj.message || getErrorMessage(e);
+            const isTimeout = errObj.name === 'TimeoutError' || errorMessage.includes('Pending');
+            if (isTimeout && errObj.generationId) {
+                dispatch({ type: 'UPDATE_BACKGROUND_JOB', payload: { id: errObj.generationId, updates: { status: 'pending_background' } } });
                 dispatch({ type: 'ADD_LOG', payload: { message: "Job shifted to background due to long queue.", type: 'info' } });
             } else {
-                dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });
+                dispatch({ type: 'ADD_LOG', payload: { message: errorMessage, type: 'error' } });
                 setViewMode('stage');
             }
         } finally {
             clearInterval(progressInterval);
-            dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
-            dispatch({ type: 'SET_PROCESSING', payload: false });
+            if (activeProgressIntervalRef.current === progressInterval) {
+                activeProgressIntervalRef.current = null;
+            }
+            if (progressSessionRef.current === progressSessionId) {
+                dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
+                dispatch({ type: 'SET_PROCESSING', payload: false });
+            }
         }
     };
 
@@ -1718,15 +1740,13 @@ ${loosePromptBase}`;
                 }
             }
             if (e.shiftKey && e.key === 'D') {
-                // @ts-ignore
-                if (import.meta.env?.DEV) {
+                if (isDevMode) {
                     e.preventDefault();
                     setShowDebugActorOverlay(prev => !prev);
                 }
             }
             if (e.shiftKey && e.key === 'G') {
-                // @ts-ignore
-                if (import.meta.env?.DEV) {
+                if (isDevMode) {
                     e.preventDefault();
                     setShowGroundDebug(prev => !prev);
                 }
@@ -1734,13 +1754,13 @@ ${loosePromptBase}`;
         };
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [state.selection, state.selectionType, dispatch]);
+    }, [state.selection, state.selectionType, dispatch, isDevMode]);
 
     // --- SIDEBAR STATE ---
     const [panelOrder, setPanelOrder] = useState<string[]>(() => {
         const saved = localStorage.getItem('nano_panel_order');
         if (saved) {
-            try { return JSON.parse(saved); } catch (e) {}
+            try { return JSON.parse(saved); } catch { return ['specs', 'layers', 'advanced_render', 'ref_stacks', 'region_edit', 'scene_director', 'shots']; }
         }
         return ['specs', 'layers', 'advanced_render', 'ref_stacks', 'region_edit', 'scene_director', 'shots'];
     });
@@ -1748,7 +1768,7 @@ ${loosePromptBase}`;
     const [leftPanelOrder, setLeftPanelOrder] = useState<string[]>(() => {
         const saved = localStorage.getItem('nano_left_panel_order');
         if (saved) {
-            try { return JSON.parse(saved); } catch (e) {}
+            try { return JSON.parse(saved); } catch { return ['anchor', 'cast_palette', 'actor_intel', 'token_props', 'annotation_props']; }
         }
         return ['anchor', 'cast_palette', 'actor_intel', 'token_props', 'annotation_props'];
     });
@@ -1762,7 +1782,7 @@ ${loosePromptBase}`;
     }, [leftPanelOrder]);
 
     // Use global panel state from AppContext to persist during navigation
-    const collapsedPanels = (state as any).stagePanelState || {
+    const collapsedPanels = (state).stagePanelState || {
         'ref_stacks': true,
         'region_edit': true,
         'stage-layers': true,
@@ -1780,7 +1800,7 @@ ${loosePromptBase}`;
         dispatch({
             type: 'SET_STAGE_PANEL_STATE',
             payload: { id, isOpen: !collapsedPanels[id] }
-        } as any);
+        });
     };
 
     const handlePanelDrop = (targetId: string) => {
@@ -1844,12 +1864,12 @@ ${loosePromptBase}`;
 
     useEffect(() => {
         setActiveShotNameDraft(activeShot?.name || '');
-    }, [activeShotId]);
+    }, [activeShot?.name]);
 
 
     // --- REGION EDIT (Mask / Brush) ---
-    const regionEdit = (state as any).regionEdit as any;
-    const activeLayer = regionEdit?.layers?.find((l: any) => l.id === regionEdit.activeLayerId) || regionEdit?.layers?.[0] || null;
+    const regionEdit = (state).regionEdit;
+    const activeLayer = regionEdit?.layers?.find((l) => l.id === regionEdit.activeLayerId) || regionEdit?.layers?.[0] || null;
 
     const maskCanvasRef = useRef<HTMLCanvasElement>(null);
     const maskIsDownRef = useRef(false);
@@ -1865,15 +1885,15 @@ ${loosePromptBase}`;
 
 
 
-    const loadDataUrlImage = (url: string): Promise<HTMLImageElement> =>
+    const loadDataUrlImage = useCallback((url: string): Promise<HTMLImageElement> =>
         new Promise((resolve, reject) => {
             const img = new Image();
             img.onload = () => resolve(img);
             img.onerror = () => reject(new Error('Failed to load image'));
             img.src = url;
-        });
+        }), []);
     // Erode (shrink) a white mask by radius pixels
-    const erodeMask = async (srcUrl: string, radius: number): Promise<string> => {
+    const erodeMask = useCallback(async (srcUrl: string, radius: number): Promise<string> => {
         if (radius === 0) return srcUrl;
 
         const img = await loadDataUrlImage(srcUrl);
@@ -1911,7 +1931,7 @@ ${loosePromptBase}`;
         const newId = new ImageData(result, w, h);
         ctx.putImageData(newId, 0, 0);
         return canvas.toDataURL();
-    };
+    }, [loadDataUrlImage]);
 
     useEffect(() => {
         if (rawProtectMaskUrl) {
@@ -1924,7 +1944,7 @@ ${loosePromptBase}`;
                 return () => clearTimeout(timer);
             }
         }
-    }, [rawProtectMaskUrl, protectErosion]);
+    }, [rawProtectMaskUrl, protectErosion, erodeMask]);
 
     // Subtract a protection mask (white = protected) from an edit mask (white = edit)
     const subtractProtectionMask = async (editMask: string, protectionMask: string): Promise<string> => {
@@ -1990,7 +2010,7 @@ ${loosePromptBase}`;
             const res = await GeminiService.generateImage(
                 prompt,
                 state.apiKey,
-                maskModel as any,
+                maskModel,
                 [{ url: captured, label: 'Base Frame' }],
                 { aspectRatio: state.director.aspectRatio, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements }
             );
@@ -2000,10 +2020,10 @@ ${loosePromptBase}`;
             setRawProtectMaskUrl(maskUrl);
             setProtectMaskUrl(maskUrl); // Initial set (erosion 0)
             setProtectStatus('ready');
-            dispatch({ type: 'ADD_LOG', payload: { message: 'Protection mask generated (face/hair).', type: 'success' } } as any);
-        } catch (e: any) {
+            dispatch({ type: 'ADD_LOG', payload: { message: 'Protection mask generated (face/hair).', type: 'success' } });
+        } catch (e: unknown) {
             setProtectStatus('error');
-            dispatch({ type: 'ADD_LOG', payload: { message: `Protection mask failed: ${e?.message || e}`, type: 'error' } } as any);
+            dispatch({ type: 'ADD_LOG', payload: { message: `Protection mask failed: ${getErrorMessage(e)}`, type: 'error' } });
         }
     };
 
@@ -2049,7 +2069,7 @@ ${loosePromptBase}`;
         const canvas = maskCanvasRef.current;
         if (!canvas || !activeLayer) return;
         const dataUrl = canvas.toDataURL('image/png');
-        dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: activeLayer.id, updates: { maskDataUrl: dataUrl } } } as any);
+        dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: activeLayer.id, updates: { maskDataUrl: dataUrl } } });
     };
 
     useEffect(() => {
@@ -2149,7 +2169,7 @@ ${loosePromptBase}`;
 
     const clearActiveMask = () => {
         if (!activeLayer) return;
-        dispatch({ type: 'CLEAR_REGION_LAYER_MASK', payload: activeLayer.id } as any);
+        dispatch({ type: 'CLEAR_REGION_LAYER_MASK', payload: activeLayer.id });
         const c = maskCanvasRef.current;
         const ctx = c?.getContext('2d');
         if (c && ctx) {
@@ -2160,15 +2180,15 @@ ${loosePromptBase}`;
 
     const applyRegionEditQueue = async () => {
         if (!ensureStagingAiAccess('Region Edit')) return;
-        if (!regionEdit?.layers?.some((l: any) => l.enabled && l.maskDataUrl && (l.prompt || '').trim())) {
-            dispatch({ type: 'ADD_LOG', payload: { message: 'No enabled mask layers with both mask + prompt.', type: 'error' } } as any);
+        if (!regionEdit?.layers?.some((l) => l.enabled && l.maskDataUrl && (l.prompt || '').trim())) {
+            dispatch({ type: 'ADD_LOG', payload: { message: 'No enabled mask layers with both mask + prompt.', type: 'error' } });
             return;
         }
 
         cancelRegionEditRef.current = false;
         setIsRegionEditRunning(true);
-        dispatch({ type: 'SET_PROCESSING', payload: true } as any);
-        dispatch({ type: 'SET_PROGRESS', payload: { phase: 'Region Edit', percent: 5, text: 'Preparing composite state...' } } as any);
+        dispatch({ type: 'SET_PROCESSING', payload: true });
+        dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: 5, text: 'Preparing composite state...' } });
         try {
             const editModel = state.model === 'imagen-4.0-generate-001' ? 'gemini-2.5-flash-image' : state.model;
 
@@ -2182,12 +2202,12 @@ ${loosePromptBase}`;
             let base: string = startingBase;
 
             // 1. Process standard regions
-            const layers = (regionEdit.layers as any[]).filter(
-                (l: any) => l.enabled && l.maskDataUrl && String(l.prompt || '').trim()
+            const layers = regionEdit.layers.filter(
+                (l) => l.enabled && l.maskDataUrl && String(l.prompt || '').trim()
             );
 
             // 2. Process intentional placements (Auto-Generated Region Edits)
-            const intents = buildPlacementIntentsFromAnnotations(state.annotations as any, state.tokens as any);
+            const intents = buildPlacementIntentsFromAnnotations(state.annotations, state.tokens);
             const intentLayers = [];
 
             for (const intent of intents) {
@@ -2198,7 +2218,7 @@ ${loosePromptBase}`;
                 const lookAt = intent.lookAtId ? state.annotations.find(a => a.id === intent.lookAtId) : undefined;
 
                 // Build literal mask
-                const anchorSurface = buildAnchorSurfaceFromZone(anchor as any);
+                const anchorSurface = buildAnchorSurfaceFromZone(anchor);
                 const allowance = buildAllowanceMaskFromAnchor(anchorSurface);
                 const generatedMask = captureBinaryMask([{ type: 'rect', ...allowance }]);
 
@@ -2212,7 +2232,7 @@ ${loosePromptBase}`;
                             allowance,
                             anchorSurface.surfaceDepth,
                             viewportBox,
-                            (_url: string, _nx: number, _ny: number) => 255 // Provide fallback or real sync-depth here if available in context
+                            () => 255 // Provide fallback or real sync-depth here if available in context
                         );
                         if (protMask && finalMask) {
                             finalMask = await subtractProtectionMask(finalMask, protMask);
@@ -2227,7 +2247,7 @@ ${loosePromptBase}`;
                         id: `intent-${intent.actorId}`,
                         name: `Placement: ${token.tag}`,
                         maskDataUrl: finalMask,
-                        prompt: buildPlacementPrompt(intent, token, anchor as any, lookAt as any),
+                        prompt: buildPlacementPrompt(intent, token, anchor, lookAt),
                         enabled: true,
                         status: 'idle'
                     });
@@ -2239,42 +2259,47 @@ ${loosePromptBase}`;
             // mark queued
             for (const layer of allLayers) {
                 if (cancelRegionEditRef.current) {
-                    dispatch({ type: 'ADD_LOG', payload: { message: 'Region Edit cancelled.', type: 'info' } } as any);
+                    dispatch({ type: 'ADD_LOG', payload: { message: 'Region Edit cancelled.', type: 'info' } });
                     break;
                 }
                 // Skip UI updates for virtual intent layers
                 if (!layer.id.startsWith('intent-')) {
-                    dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: layer.id, updates: { status: 'running', lastError: null } } } as any);
-                    dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: layer.id, updates: { status: 'queued', lastError: null } } } as any);
+                    const layerId = layer.id as 'A' | 'B' | 'C';
+                    dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: layerId, updates: { status: 'running', lastError: null } } });
+                    dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: layerId, updates: { status: 'queued', lastError: null } } });
                 }
             }
             const totalLayersTotal = allLayers.length;
             for (let i = 0; i < allLayers.length; i++) {
                 const layer = allLayers[i];
                 if (cancelRegionEditRef.current) {
-                    dispatch({ type: 'ADD_LOG', payload: { message: 'Region Edit cancelled.', type: 'info' } } as any);
+                    dispatch({ type: 'ADD_LOG', payload: { message: 'Region Edit cancelled.', type: 'info' } });
                     break;
                 }
 
                 if (!layer.id.startsWith('intent-')) {
-                    dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: layer.id, updates: { status: 'running', lastError: null } } } as any);
+                    const layerId = layer.id as 'A' | 'B' | 'C';
+                    dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: layerId, updates: { status: 'running', lastError: null } } });
                 }
 
                 const mask: string | null = layer.maskDataUrl ?? null;
                 const promptText: string = String(layer.prompt || '').trim();
 
                 if (!mask || !promptText) {
-                    if (!layer.id.startsWith('intent-')) dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: layer.id, updates: { status: 'idle' } } } as any);
+                    if (!layer.id.startsWith('intent-')) {
+                        const layerId = layer.id as 'A' | 'B' | 'C';
+                        dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: layerId, updates: { status: 'idle' } } });
+                    }
                     continue;
                 }
 
-                dispatch({ type: 'ADD_LOG', payload: { message: `Applying ${layer.name}...`, type: 'info' } } as any);
+                dispatch({ type: 'ADD_LOG', payload: { message: `Applying ${layer.name}...`, type: 'info' } });
                 
                 const percent = Math.round(((i) / totalLayersTotal) * 100) + 10;
                 dispatch({ 
-                    type: 'SET_PROGRESS', 
-                    payload: { phase: 'Region Edit', percent: Math.min(percent, 95), text: `Executing Mask: ${layer.name}` } 
-                } as any);
+                    type: 'SET_GLOBAL_PROGRESS', 
+                    payload: { percent: Math.min(percent, 95), text: `Executing Mask: ${layer.name}` } 
+                });
 
                 let maskToSend: string = mask;
                 if (protectEnabled && protectMaskUrl && !layer.id.startsWith('intent-')) { // intentional protects its own via depth
@@ -2284,7 +2309,7 @@ ${loosePromptBase}`;
                             message: `Anatomy protection applied to ${layer.name}: preserving hands, skin, face, and hair outside the edit region.`,
                             type: 'info'
                         }
-                    } as any);
+                    });
                     maskToSend = await subtractProtectionMask(mask, protectMaskUrl);
                 }
 
@@ -2296,7 +2321,7 @@ ${loosePromptBase}`;
                             message: `Removal edit safety active: keeping mask tight and anatomy protected.`,
                             type: 'info'
                         }
-                    } as any);
+                    });
                 }
 
                 // Get intrinsic dimensions of base to properly align resolution with the mask
@@ -2336,30 +2361,30 @@ ${loosePromptBase}`;
                 );
             }
 
-            dispatch({ type: 'SET_PROGRESS', payload: null } as any);
+            dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
 
             // Critical: normalize the returned image before pushing it into UI state
             const finalEditedUrl = await normalizeGeneratedImageUrl(base);
 
-            dispatch({ type: 'SET_RESULT_IMAGE', payload: finalEditedUrl } as any);
+            dispatch({ type: 'SET_RESULT_IMAGE', payload: finalEditedUrl });
             dispatch({
                 type: 'SET_COMPOSITE_METADATA',
                 payload: {
                     latestCompositeSource: 'directorCanvas',
                     latestCompositeResultUrl: finalEditedUrl
                 }
-            } as any);
+            });
 
             // Show the edited result immediately
             setViewMode('result');
 
-            dispatch({ type: 'ADD_LOG', payload: { message: 'Region Edit complete.', type: 'success' } } as any);
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Region Edit failed: ${e?.message || e}`, type: 'error' } } as any);
+            dispatch({ type: 'ADD_LOG', payload: { message: 'Region Edit complete.', type: 'success' } });
+        } catch (e: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Region Edit failed: ${getErrorMessage(e)}`, type: 'error' } });
         } finally {
-            dispatch({ type: 'SET_PROGRESS', payload: null } as any);
+            dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
             setIsRegionEditRunning(false);
-            dispatch({ type: 'SET_PROCESSING', payload: false } as any);
+            dispatch({ type: 'SET_PROCESSING', payload: false });
         }
     };
 
@@ -2422,10 +2447,10 @@ ${loosePromptBase}`;
                 entitlements: state.billingEntitlements
             });
             setInspectAnalysis(text);
-            dispatch({ type: 'ADD_LOG', payload: { message: 'DNA analysis complete.', type: 'success' } } as any);
-        } catch (e: any) {
+            dispatch({ type: 'ADD_LOG', payload: { message: 'DNA analysis complete.', type: 'success' } });
+        } catch (e: unknown) {
             setInspectAnalysis('');
-            dispatch({ type: 'ADD_LOG', payload: { message: `Analysis failed: ${e.message}`, type: 'error' } } as any);
+            dispatch({ type: 'ADD_LOG', payload: { message: `Analysis failed: ${getErrorMessage(e)}`, type: 'error' } });
         } finally {
             setAnalyzingTokenId(null);
         }
@@ -2453,9 +2478,9 @@ ${loosePromptBase}`;
                 slotIndex: index
             });
             await setSlotFromUrl(index, mat.url, file.name, undefined, mat.localPath || undefined, mat.sourceUrl);
-        } catch (e: any) {
+        } catch (e: unknown) {
             console.error("Failed to materialize reference", e);
-            dispatch({ type: 'ADD_LOG', payload: { message: `Reference Materialization Failed: ${e.message}`, type: 'error' } } as any);
+            dispatch({ type: 'ADD_LOG', payload: { message: `Reference Materialization Failed: ${getErrorMessage(e)}`, type: 'error' } });
             const url = await fileToDataUrl(file);
             await setSlotFromUrl(index, url, file.name, undefined);
         }
@@ -2489,7 +2514,7 @@ ${loosePromptBase}`;
 
                 if (cast && cast.url) {
                     console.log('[handleRefSlotDrop] Calling setSlotFromUrl for ID:', cast.id);
-                    await setSlotFromUrl(index, cast.previewUrl || cast.url, cast.name || (cast as any).tag, cast.id, cast.localPath, cast.sourceUrl || cast.url);
+                    await setSlotFromUrl(index, cast.previewUrl || cast.url, cast.name || (cast).tag, cast.id, cast.localPath, cast.sourceUrl || cast.url);
                 } else {
                     console.error('[handleRefSlotDrop] Cast or cast.url missing!', cast);
                 }
@@ -2693,7 +2718,7 @@ ${loosePromptBase}`;
 
     // --- DRAG & RESIZE LOGIC ---
     const handleStageMouseMove = (e: React.MouseEvent) => {
-        if ((state as any).regionEdit?.isMaskMode) return;
+        if ((state).regionEdit?.isMaskMode) return;
         if (dragItem) {
             const dx = e.clientX - dragItem.startX;
             const dy = e.clientY - dragItem.startY;
@@ -2718,8 +2743,8 @@ ${loosePromptBase}`;
             // Assuming 'token' type has anchorX/Y. We need to pass it in setResizeItem.
             // Let's assume passed in resizeItem.
 
-            const ax = (resizeItem as any).anchorX ?? 0.5;
-            const ay = (resizeItem as any).anchorY ?? 0.8;
+            const ax = (resizeItem).anchorX ?? 0.5;
+            const ay = (resizeItem).anchorY ?? 0.8;
 
             const oldLeft = resizeItem.initialX - (resizeItem.initialW * ax);
             const oldTop = resizeItem.initialY - (resizeItem.initialH * ay);
@@ -2862,18 +2887,21 @@ ${loosePromptBase}`;
                 // Handle Annotation Template Drops
                 if (item.templateType === 'annotation') {
                     const id = `ann-${Date.now()}`;
-                    let payload: any = { id, x, y, rotation: 0, scaleX: 1, scaleY: 1 };
+                    const basePayload = { id, x, y, rotation: 0, scaleX: 1, scaleY: 1 };
+                    let payload: StageAnnotation | null = null;
 
                     if (item.annotationType === 'note') {
-                        payload = { ...payload, type: 'note', width: 150, height: 100, zIndex: 10, text: '' };
+                        payload = { ...basePayload, type: 'note', width: 150, height: 100, zIndex: 10, text: '' };
                     } else if (item.annotationType === 'zone') {
-                        payload = { ...payload, type: 'zone', width: 200, height: 150, zIndex: 5 };
+                        payload = { ...basePayload, type: 'zone', width: 200, height: 150, zIndex: 5 };
                     } else if (item.annotationType === 'arrow') {
-                        payload = { ...payload, type: 'arrow', width: 60, height: 60, zIndex: 11 };
+                        payload = { ...basePayload, type: 'arrow', width: 60, height: 60, zIndex: 11 };
                     }
 
-                    dispatch({ type: 'ADD_ANNOTATION', payload });
-                    dispatch({ type: 'SELECT_ITEM', payload: { id, type: 'annotation' } });
+                    if (payload) {
+                        dispatch({ type: 'ADD_ANNOTATION', payload });
+                        dispatch({ type: 'SELECT_ITEM', payload: { id, type: 'annotation' } });
+                    }
                     return;
                 }
 
@@ -2928,49 +2956,45 @@ ${loosePromptBase}`;
 
     // --- SHOT HELPERS ---
     const addShotFromStage = () => {
-        const id = `shot-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-        dispatch({ type: 'ADD_SHOT_FROM_STAGE', payload: { id, name: newShotName.trim() || undefined } } as any);
+        dispatch({ type: 'ADD_SHOT_FROM_STAGE', payload: { name: newShotName.trim() || undefined } });
         setNewShotName('');
-
-        // Auto-capture the visual state into the newly created shot's Start Plate
-        captureAndSetShotFrame('start', id);
     };
 
     const setActiveShot = (id: string) => {
-        dispatch({ type: 'SET_ACTIVE_SHOT', payload: { id } } as any);
+        dispatch({ type: 'SET_ACTIVE_SHOT', payload: { id } });
     };
 
     const duplicateShot = (id: string) => {
-        dispatch({ type: 'DUPLICATE_SHOT', payload: { id } } as any);
+        dispatch({ type: 'DUPLICATE_SHOT', payload: { id } });
     };
 
     const removeShot = (id: string) => {
-        dispatch({ type: 'REMOVE_SHOT', payload: { id } } as any);
+        dispatch({ type: 'REMOVE_SHOT', payload: { id } });
     };
 
     const renameActiveShot = () => {
         if (!activeShotId) return;
         const name = activeShotNameDraft.trim();
         if (!name) return;
-        dispatch({ type: 'UPDATE_SHOT_META', payload: { id: activeShotId, updates: { name } } } as any);
+        dispatch({ type: 'UPDATE_SHOT_META', payload: { id: activeShotId, updates: { name } } });
     };
 
     const captureAndSetShotFrame = async (which: 'start' | 'end', targetId?: string) => {
         const idToUse = targetId || activeShotId;
         if (!idToUse) {
-            dispatch({ type: 'ADD_LOG', payload: { message: 'No active shot selected.', type: 'error' } } as any);
+            dispatch({ type: 'ADD_LOG', payload: { message: 'No active shot selected.', type: 'error' } });
             return;
         }
-        dispatch({ type: 'SET_PROCESSING', payload: true } as any);
+        dispatch({ type: 'SET_PROCESSING', payload: true });
         try {
             const dataUrl = await captureSceneImage();
             if (!dataUrl) throw new Error('Stage capture returned empty.');
-            dispatch({ type: 'SET_SHOT_FRAME', payload: { id: idToUse, which, url: dataUrl } } as any);
-            dispatch({ type: 'ADD_LOG', payload: { message: `Saved ${which.toUpperCase()} frame from stage.`, type: 'success' } } as any);
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Failed to capture ${which} frame: ${e?.message || e}`, type: 'error' } } as any);
+            dispatch({ type: 'SET_SHOT_FRAME', payload: { id: idToUse, which, url: dataUrl } });
+            dispatch({ type: 'ADD_LOG', payload: { message: `Saved ${which.toUpperCase()} frame from stage.`, type: 'success' } });
+        } catch (e: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Failed to capture ${which} frame: ${getErrorMessage(e)}`, type: 'error' } });
         } finally {
-            dispatch({ type: 'SET_PROCESSING', payload: false } as any);
+            dispatch({ type: 'SET_PROCESSING', payload: false });
         }
     };
 
@@ -3097,7 +3121,7 @@ ${loosePromptBase}`;
             dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: selectedAnnotation.id, color: newHex } });
             setLastCustomColor(newHex);
         }
-    }, [selectedAnnotation?.id, dispatch]);
+    }, [selectedAnnotation, dispatch]);
 
     const duplicateSelection = () => {
         if (!state.selection || !state.selectionType) return;
@@ -3142,7 +3166,7 @@ ${loosePromptBase}`;
 
     const renderCommandHeader = () => {
         const warnings = collectDepthAssistWarnings();
-        const topWarnings = warnings.filter((w: any) => w.severity === 'high' || w.severity === 'medium').slice(0, 2);
+        const topWarnings = warnings.filter((w) => w.severity === 'high' || w.severity === 'medium').slice(0, 2);
         const hasDepth = !!state.depthMapUrl && !state.isDepthProcessing;
 
         let depthStatusText = "Unavailable";
@@ -3215,7 +3239,7 @@ ${loosePromptBase}`;
 
                 <div
                     className="flex items-center gap-1 px-1.5 py-0.5 bg-black/40 border border-white/5 rounded whitespace-nowrap"
-                    title={topWarnings.map((w: any) => w.message).join(' | ')}
+                    title={topWarnings.map((w) => w.message).join(' | ')}
                 >
                     <span className="text-[8px] lg:text-[9px] font-bold text-gray-500 tracking-wider uppercase">Depth:</span>
                     <span className={`text-[8px] lg:text-[9px] font-bold uppercase tracking-wider ${depthStatusColor}`}>{depthStatusText}</span>
@@ -3223,7 +3247,7 @@ ${loosePromptBase}`;
 
                 <div
                     className="flex items-center gap-1 px-1.5 py-0.5 bg-black/40 border border-white/5 rounded whitespace-nowrap"
-                    title={activeReferences.length > 0 ? activeReferences.map((r: any) => r.name || `Ref ${r.index}`).join(', ') : ''}
+                    title={activeReferences.length > 0 ? activeReferences.map((r) => r.name || `Ref ${r.index}`).join(', ') : ''}
                 >
                     <span className="text-[8px] lg:text-[9px] font-bold text-gray-500 tracking-wider uppercase">Refs:</span>
                     <span className="text-[8px] lg:text-[9px] text-purple-400 font-mono font-bold">{activeReferences.length}</span>
@@ -3472,11 +3496,11 @@ ${loosePromptBase}`;
         const renderRightActions = () => {
             if (viewMode === 'shots') {
                 const currentSession = state.shotSessionsBySceneId?.[state.activeShotId || 'default'];
-                const selectedShots = currentSession?.variants.filter((v: any) => v.selected && (v.status === 'done' || v.status === 'error' || v.status === 'expired')) || [];
+                const selectedShots = currentSession?.variants.filter((v) => v.selected && (v.status === 'done' || v.status === 'error' || v.status === 'expired')) || [];
                 const isDisabled = selectedShots.length === 0;
 
                 const handleSaveShots = () => {
-                    selectedShots.forEach((variant: any) => {
+                    selectedShots.forEach((variant) => {
                         const url = variant.finalUrl || variant.previewUrl;
                         if (!url) return;
                         const link = document.createElement('a');
@@ -3547,7 +3571,7 @@ ${loosePromptBase}`;
         );
     };
 
-    const processingCutoutsCount = Object.values(cutoutStatuses).filter((v: any) => v === 'processing').length;
+    const processingCutoutsCount = Object.values(cutoutStatuses).filter((v) => v === 'processing').length;
     const isProcessingCutouts = processingCutoutsCount > 0;
 
     return (
@@ -4280,7 +4304,7 @@ ${loosePromptBase}`;
                         let computedActorCount: number | undefined = undefined;
                         if (effectiveAnchor) {
                             if (effectiveAnchor.kind === 'generated_result') {
-                                computedActorCount = state.tokens.filter((t: any) => t.elementType === 'actor' || !t.elementType).length;
+                                computedActorCount = state.tokens.filter((t) => t.elementType === 'actor' || !t.elementType).length;
                             } else if (effectiveAnchor.kind === 'uploaded_result') {
                                 computedActorCount = effectiveAnchor.visibleActorCount;
                             }
@@ -4293,7 +4317,7 @@ ${loosePromptBase}`;
                               apiKey={state.apiKey!} 
                               model={state.model}
                               effectiveResultImageUrl={getEffectiveResultAnchorForScene(state, state.activeShotId || 'default')?.imageUrl}
-                              subjectActionText={sceneIntent?.action || sceneIntent?.summary || undefined}
+                              subjectActionText={state.director?.subject?.trim() || undefined}
                               environmentText={state.director?.environment}
                               lightingText={state.director?.lighting}
                               expectedActorCount={computedActorCount}
@@ -4461,7 +4485,7 @@ ${loosePromptBase}`;
                             )}
 
                             {/* Region Edit Mask Overlay */}
-                            {(state as any).regionEdit?.isMaskMode && (
+                            {(state).regionEdit?.isMaskMode && (
                                 <canvas
                                     ref={maskCanvasRef}
                                     className="absolute inset-0 z-[65] opacity-50"
@@ -4502,7 +4526,7 @@ ${loosePromptBase}`;
 
                                     }}
                                     onMouseDown={(e) => {
-                                        if ((state as any).regionEdit?.isMaskMode) return;
+                                        if ((state).regionEdit?.isMaskMode) return;
                                         e.stopPropagation();
                                         dispatch({ type: 'SELECT_ITEM', payload: { id: token.id, type: 'token' } });
                                         dispatch({
@@ -4581,7 +4605,7 @@ ${loosePromptBase}`;
                                     {state.selection === token.id && (
                                         <>
                                             {/* Resize Handles */}
-                                            {['tl', 'tr', 'bl', 'br'].map((handle) => (
+                                            {(['tl', 'tr', 'bl', 'br'] as const).map((handle) => (
                                                 <div
                                                     key={handle}
                                                     className={`absolute w-3 h-3 bg-white border border-blue-500 rounded-full z-50
@@ -4595,7 +4619,7 @@ ${loosePromptBase}`;
                                                         setResizeItem({
                                                             id: token.id,
                                                             type: 'token',
-                                                            handle: handle as any,
+                                                            handle: handle,
                                                             startX: e.clientX,
                                                             startY: e.clientY,
                                                             initialW: token.width,
@@ -4608,7 +4632,7 @@ ${loosePromptBase}`;
                                                             // Pass anchor for resize math
                                                             anchorX: token.anchorX,
                                                             anchorY: token.anchorY
-                                                        } as any);
+                                                        });
                                                     }}
                                                 />
                                             ))}
@@ -4662,7 +4686,7 @@ ${loosePromptBase}`;
                                         transform: `rotate(${note.rotation}deg)`
                                     }}
                                     onMouseDown={(e) => {
-                                        if ((state as any).regionEdit?.isMaskMode) return;
+                                        if ((state).regionEdit?.isMaskMode) return;
                                         e.stopPropagation();
                                         dispatch({ type: 'SELECT_ITEM', payload: { id: note.id, type: 'annotation' } });
                                         setDragItem({
@@ -4873,18 +4897,18 @@ ${loosePromptBase}`;
                                     return (
                                         <RegionEditPanel
                                             key="region_edit"
-                                            regionEdit={(state as any).regionEdit}
+                                            regionEdit={(state).regionEdit}
                                             dispatch={dispatch}
                                             protectEnabled={protectEnabled}
                                             setProtectEnabled={setProtectEnabled}
-                                            protectStatus={protectStatus as any}
+                                            protectStatus={protectStatus}
                                             protectMaskUrl={protectMaskUrl ?? null}
                                             protectErosion={protectErosion}
                                             setProtectErosion={setProtectErosion}
                                             generateFaceProtectionMask={generateFaceProtectionMask}
                                             setProtectMaskUrl={setProtectMaskUrl}
                                             setRawProtectMaskUrl={setRawProtectMaskUrl}
-                                            setProtectStatus={setProtectStatus as any}
+                                            setProtectStatus={setProtectStatus}
                                             isProcessing={state.isProcessing ?? false}
                                             apiKey={state.apiKey || ''}
                                             billingMode={state.billingEntitlements?.effectiveBillingMode || 'byok'}
@@ -4892,7 +4916,7 @@ ${loosePromptBase}`;
                                             onToggle={togglePanel}
                                             onDragStart={setDraggedPanelId}
                                             onDrop={handlePanelDrop}
-                                            cursorMode={(state as any).cursorMode}
+                                            cursorMode={regionEdit?.mode === 'erase' ? 'eraser' : 'paint'}
                                             clearActiveMask={clearActiveMask}
                                             applyRegionEditQueue={applyRegionEditQueue}
                                             requestCancelRegionEdit={requestCancelRegionEdit}
@@ -5067,3 +5091,4 @@ ${loosePromptBase}`;
 };
 
 export default SceneCanvas;
+

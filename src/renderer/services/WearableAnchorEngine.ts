@@ -94,7 +94,7 @@ export class WearableAnchorEngine {
                 const headWidthPx = landmarks.headWidthPx || 200;
                 
                 // Crown width should be constrained to roughly 0.78–0.90 * headWidthPx
-                let baseWidth = headWidthPx * 0.84;
+                const baseWidth = headWidthPx * 0.84;
                 const minTargetWidth = headWidthPx * 0.78;
                 const maxTargetWidth = headWidthPx * 0.90;
                 const targetWidthPx = Math.max(minTargetWidth, Math.min(maxTargetWidth, baseWidth * scaleModifier));
@@ -135,7 +135,7 @@ export class WearableAnchorEngine {
                 const faceWidthPx = landmarks.faceWidthPx || 200;
                 
                 // Glasses width constrained to roughly 0.82–0.92 * faceWidthPx
-                let baseWidth = faceWidthPx * 0.90;
+                const baseWidth = faceWidthPx * 0.90;
                 const targetWidthPx = baseWidth * scaleModifier;
 
                 // Bridge aligns to noseBridge

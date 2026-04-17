@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
-import { createContext, useContext, useMemo } from 'react';
+import { createContext, useContext, useMemo, useRef } from 'react';
 import helpMapRaw from '../assets/help_map.json';
 
 // Types derived directly from JSON structure
@@ -32,22 +32,33 @@ interface HelpContextType {
 const HelpContext = createContext<HelpContextType | null>(null);
 
 export const HelpProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+ const zoneAliases: Record<string, string> = {
+ nano: 'nanoCast',
+ nano_cast: 'nanoCast',
+ nanocast: 'nanoCast'
+ };
+ const warnedMissingRef = useRef<Set<string>>(new Set());
 
  // 3. Pure Selector Hook
  const getHelp = (zone: string, id: string): HelpConfig | null => {
- // Strict lookup: Zone -> ID
- const zoneData = helpMap.zones[zone];
- if (!zoneData) {
- if (process.env.NODE_ENV === 'development') {
+ const resolvedZone = zoneAliases[zone] || zone;
+  // Strict lookup: Zone -> ID
+ const zoneData = helpMap.zones[resolvedZone];
+  if (!zoneData) {
+ const warnKey = `zone:${zone}`;
+ if (process.env.NODE_ENV === 'development' && !warnedMissingRef.current.has(warnKey)) {
+ warnedMissingRef.current.add(warnKey);
  console.warn(`[HelpContext] Zone not found: ${zone}`);
  }
  return null;
  }
 
  const config = zoneData[id];
- if (!config) {
- if (process.env.NODE_ENV === 'development') {
- console.warn(`[HelpContext] ID not found in zone ${zone}: ${id}`);
+  if (!config) {
+ const warnKey = `id:${resolvedZone}:${id}`;
+ if (process.env.NODE_ENV === 'development' && !warnedMissingRef.current.has(warnKey)) {
+ warnedMissingRef.current.add(warnKey);
+ console.warn(`[HelpContext] ID not found in zone ${resolvedZone}: ${id}`);
  }
  return null;
  }

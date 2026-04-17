@@ -1,22 +1,23 @@
 
 import { RotateCw, Pencil, X, Upload } from 'lucide-react';
 import { SidebarPanel } from '../ui/SidebarPanel';
-import type { ReferenceSlot } from '../../context/AppContext';
+import type { Action, AppState, ReferenceSlot } from '../../context/AppContext';
+import type { Dispatch, DragEvent, MutableRefObject } from 'react';
 
 interface RefStacksPanelProps {
- state: any;
- dispatch: (action: any) => void;
+ state: AppState;
+ dispatch: Dispatch<Action>;
  collapsed: boolean;
  onToggle: (id: string) => void;
  onDragStart: (id: string) => void;
  onDrop: (targetId: string) => void;
  handleRefSlotClick: (index: number) => void;
- handleRefSlotDrop: (index: number, e: React.DragEvent) => void;
+ handleRefSlotDrop: (index: number, e: DragEvent) => void;
  setDragOverRefSlot: (index: number | null) => void;
  dragOverRefSlot: number | null;
  setInspectRefIndex: (index: number | null) => void;
  clearRefSlot: (index: number) => void;
- refFileInputs: React.MutableRefObject<Record<number, HTMLInputElement | null>>;
+ refFileInputs: MutableRefObject<Record<number, HTMLInputElement | null>>;
  handleRefSlotFile: (index: number, file: File) => void;
 }
 
