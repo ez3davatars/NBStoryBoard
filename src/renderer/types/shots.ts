@@ -100,6 +100,15 @@ export type ShotVariant = {
   sourcePreviewUrl?: string;
   sourceFinalUrl?: string;
   blueprintUrl?: string;
+  
+  // Reprojection MVP Phase
+  projectionUrl?: string;
+  holeMaskUrl?: string;
+  repairMaskUrl?: string;
+  protectedMaskUrl?: string;
+  debugUrl?: string;
+  cameraTransform?: { x: number; y: number; z: number; yaw: number; pitch: number; fov: number };
+  
   coveragePurpose?: string;
   targetRole?: string;
   targetType?: ShotTargetType;
@@ -119,6 +128,11 @@ export type ShotLocks = {
   lighting: boolean;
 };
 
+export type ShotPinPoint = {
+  x: number;
+  y: number;
+};
+
 export type ShotSession = {
   id: string;
   sceneId: string;
@@ -129,6 +143,8 @@ export type ShotSession = {
   directedShots?: DirectedShotSlot[];
   locks: ShotLocks;
   sceneTruth?: SceneTruthSnapshot;
+  subjectAnchorPoint?: ShotPinPoint;
+  lookTargetPoint?: ShotPinPoint;
   variants: ShotVariant[];
   createdAt: string;
   updatedAt: string;

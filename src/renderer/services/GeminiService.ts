@@ -1663,6 +1663,98 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
   /**
    * Generates a preview shot variation
    */
+
+  /**
+   * Generates a constrained repair pass over a raw 2.5D geometric projection.
+   */
+  async generateReprojectedShotRepair(args: {
+    projectedImageUrl: string;
+    holeMaskUrl?: string;
+    protectionMaskUrl?: string;
+    anchorImageUrl?: string;
+    actorIdentitySets?: ActorIdentityReferenceSet[];
+    repairPrompt: string;
+    aspectRatio?: string;
+    apiKey: string;
+    model: string;
+    options?: CommonGeminiOptions;
+  }): Promise<string> {
+    if (args.options?.billingMode !== 'hosted' && !args.apiKey) throw new Error("No API Key provided for repair generation");
+
+    const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${args.model}:generateContent`;
+    const parts: GeminiPart[] = [];
+
+    const projMaxSize = args.options?.billingMode === 'hosted' ? 1792 : 2304;
+    const projected = await GeminiService._resolveImageData(args.projectedImageUrl, projMaxSize);
+    parts.push({ text: "[RAW GEOMETRIC PROJECTION - FULL COMPOSITIONAL AUTHORITY]\nCRITICAL: This image is the absolute mathematical truth for the shot layout. DO NOT alter the framing, perspective, subject positioning, or existing structures." });
+    parts.push({ inlineData: { mimeType: projected.mimeType, data: projected.data } });
+
+    if (args.anchorImageUrl) {
+        const anchorMaxSize = args.options?.billingMode === 'hosted' ? 1280 : 1536;
+        const anchor = await GeminiService._resolveImageData(args.anchorImageUrl, anchorMaxSize);
+        parts.push({ text: "[SCENE ANCHOR - TEXTURE & DETAIL REFERENCE]\nUse this image strictly to understand the colors, materials, and lighting of the scene to accurately smooth and fill transparent voids in the projection." });
+        parts.push({ inlineData: { mimeType: anchor.mimeType, data: anchor.data } });
+    }
+
+    if (args.holeMaskUrl) {
+        const mask = await GeminiService._resolveImageData(args.holeMaskUrl, projMaxSize);
+        parts.push({ text: `[INPAINTING EDIT MASK]\nCRITICAL: The white zones in this mask indicate missing data. You may ONLY edit regions corresponding to white pixels. Black mask pixels are STRICTLY PROTECTED.` });
+        parts.push({ inlineData: { mimeType: mask.mimeType, data: mask.data } });
+    }
+
+    if (args.protectionMaskUrl) {
+        const protection = await GeminiService._resolveImageData(args.protectionMaskUrl, projMaxSize);
+        parts.push({ text: `[PROTECTED REGION MASK]\nWhite pixels are frozen geometry and must remain unchanged. Only non-protected regions may be synthesized, and only where the edit mask allows.` });
+        parts.push({ inlineData: { mimeType: protection.mimeType, data: protection.data } });
+    }
+
+    parts.push({ text: args.repairPrompt });
+
+    const payload = {
+      contents: [{ parts }],
+      generationConfig: {
+        responseModalities: ["IMAGE"],
+        candidateCount: 1,
+        imageConfig: {
+          aspectRatio: args.aspectRatio || "16:9",
+          imageSize: "1K"
+        }
+      }
+    };
+
+    if (args.options?.billingMode === 'hosted') {
+        const hostedArgs = { ...args.options };
+        if (!hostedArgs.expectedResponseType) hostedArgs.expectedResponseType = 'image';
+        return await GeminiService._executeHostedRequest(args.model, payload, hostedArgs);
+    }
+
+    const response = await fetch(`${baseUrl}?key=${args.apiKey}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: args.options?.signal
+    });
+
+    if (!response.ok) {
+      const err = await response.text();
+      const cleanMsg = GeminiService._extractApiErrorMessage(err);
+      throw new Error(`Shot Repair Generation Error: ${cleanMsg}`);
+    }
+
+    const result = await response.json();
+    let data;
+    try {
+        const resParts = result.candidates?.[0]?.content?.parts || [];
+        data = resParts.find((p: GeminiPart) => p.inlineData?.data)?.inlineData?.data;
+    } catch {
+        data = undefined;
+    }
+    
+    if (!data) throw new Error("No image data in shot repair response.");
+
+    return `data:image/png;base64,${data}`;
+  },
+
   async generateShotPreview(args: {
     anchorImageUrl: string;
     shotBlueprintUrl?: string;

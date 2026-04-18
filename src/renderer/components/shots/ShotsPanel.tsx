@@ -1,11 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
-import type { ShotSession, ShotPackId, ShotLocks, ShotVariant, ShotPresetId, DirectedShotSlot } from '../../types/shots';
+import type { ShotSession, ShotPackId, ShotLocks, ShotVariant, ShotPresetId, DirectedShotSlot, ShotPinPoint } from '../../types/shots';
 import type { ActorIdentityReferenceSet, ShotsActorOption } from '../../context/AppContext';
 import { SHOT_PRESETS, buildShotPresetIdsForPack, getDefaultCameraFlavorForPreset, getDefaultShotNotesForPreset } from '../../utils/shotsPresets';
-import { buildShotVariantPrompt, buildShotFinalRerenderPrompt } from '../../utils/promptHelpers';
-import { GeminiService } from '../../services/GeminiService';
+import { buildShotVariantPrompt, buildShotRepairPrompt } from '../../utils/promptHelpers';
 import { stripIdentityOverridingAnalysis } from '../../utils/analysisSanitizers';
 import { LocalAssetService } from '../../services/LocalAssetService';
+import { GeminiService } from '../../services/GeminiService';
 import { hasStrongFaceAnchor } from '../../utils/identityReferenceHelpers';
 import { inferCoverageSceneType, extractRoleHints } from '../../utils/sceneTypeInference';
 import { COVERAGE_TEMPLATES } from '../../utils/coverageTemplates';
@@ -13,8 +13,8 @@ import { ShotGrid } from './ShotGrid';
 import { DirectedShotCard } from './DirectedShotCard';
 import { useAppContext } from '../../context/AppContext';
 import { buildSceneTruthSnapshot } from '../../utils/sceneTruthHelpers';
-import { buildShotBlueprintImage } from '../../utils/shotBlueprintHelpers';
-import { computeImageSimilarity } from '../../utils/similarityHelpers';
+import { buildReprojectedShot } from '../../utils/shotReprojectionEngine';
+import { extractSceneAssets } from '../../utils/sceneDecompositionHelpers';
 
 export type ShotsPanelProps = {
   sceneId: string;
@@ -38,17 +38,6 @@ const getErrorMessage = (error: unknown): string => {
   if (error instanceof Error) return error.message;
   return String(error);
 };
-
-const isShotPayloadConstraintError = (message: string): boolean =>
-  /(400|bad request|413|payload|request body too large|entity too large|body too large|502|gateway)/i.test(message);
-
-const buildCompactIdentitySets = (sets: ActorIdentityReferenceSet[]): ActorIdentityReferenceSet[] =>
-  sets.slice(0, 2).map((set) => ({
-    ...set,
-    angleFaceAnchors: set.angleFaceAnchors.slice(0, 1),
-    supportIdentityRefs: [],
-    wardrobeRefs: set.wardrobeRefs.slice(0, 1)
-  }));
 
 const deriveShotsStyleLock = (qualityMode?: string): string => {
   switch (qualityMode) {
@@ -75,8 +64,130 @@ const deriveShotsStyleLock = (qualityMode?: string): string => {
   }
 };
 
+const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
 
+const buildDefaultLookTarget = (subjectAnchor: ShotPinPoint): ShotPinPoint => ({
+  x: clamp01(subjectAnchor.x),
+  y: clamp01(subjectAnchor.y - 0.14)
+});
 
+const MASKED_REPAIR_PRESETS = new Set<ShotPresetId>([
+  'mediumClose',
+  'wide',
+  'highAngle',
+  'lowAngleHero'
+]);
+
+const FALLBACK_REPAIR_PROMPT = [
+  'PRESERVE THE SUPPLIED COMPOSITION EXACTLY.',
+  'PRESERVE SUBJECT POSE, SILHOUETTE, AND ANCHOR PLACEMENT.',
+  'FILL MISSING REGIONS ONLY.',
+  'DO NOT REFRAME.',
+  'DO NOT REDESIGN THE SCENE.',
+  'DO NOT INVENT NEW PROPS OR STRUCTURAL ELEMENTS.',
+  'BLACK MASKED PIXELS ARE FULLY PROTECTED AND MUST REMAIN UNCHANGED.'
+].join(' ');
+
+const loadImage = (url: string): Promise<HTMLImageElement> =>
+  new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error(`Failed to load image: ${url.slice(0, 96)}`));
+    img.src = url;
+  });
+
+const getMaskWhiteCoverage = async (maskUrl: string): Promise<number> => {
+  const img = await loadImage(maskUrl);
+  const canvas = document.createElement('canvas');
+  canvas.width = img.naturalWidth || img.width;
+  canvas.height = img.naturalHeight || img.height;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx || canvas.width <= 0 || canvas.height <= 0) return 0;
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  let white = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i] > 127) white++;
+  }
+  return white / (canvas.width * canvas.height);
+};
+
+const fuseRepairIntoProjection = async (args: {
+  projectionUrl: string;
+  repairedUrl: string;
+  repairMaskUrl: string;
+}): Promise<string> => {
+  const [projectionImg, repairedImg, maskImg] = await Promise.all([
+    loadImage(args.projectionUrl),
+    loadImage(args.repairedUrl),
+    loadImage(args.repairMaskUrl)
+  ]);
+
+  const width = projectionImg.naturalWidth || projectionImg.width;
+  const height = projectionImg.naturalHeight || projectionImg.height;
+
+  const maskCanvas = document.createElement('canvas');
+  maskCanvas.width = width;
+  maskCanvas.height = height;
+  const maskCtx = maskCanvas.getContext('2d', { willReadFrequently: true });
+  if (!maskCtx) return args.projectionUrl;
+
+  maskCtx.drawImage(maskImg, 0, 0, width, height);
+  const mask = maskCtx.getImageData(0, 0, width, height);
+  const maskPx = mask.data;
+  for (let i = 0; i < maskPx.length; i += 4) {
+    const white = maskPx[i] > 127 ? 255 : 0;
+    maskPx[i] = white;
+    maskPx[i + 1] = white;
+    maskPx[i + 2] = white;
+    maskPx[i + 3] = white;
+  }
+  maskCtx.putImageData(mask, 0, 0);
+
+  const keepCanvas = document.createElement('canvas');
+  keepCanvas.width = width;
+  keepCanvas.height = height;
+  const keepCtx = keepCanvas.getContext('2d', { willReadFrequently: true });
+  if (!keepCtx) return args.projectionUrl;
+  keepCtx.drawImage(maskCanvas, 0, 0, width, height);
+  const keepData = keepCtx.getImageData(0, 0, width, height);
+  const keepPx = keepData.data;
+  for (let i = 0; i < keepPx.length; i += 4) {
+    const white = keepPx[i] > 127;
+    keepPx[i] = white ? 0 : 255;
+    keepPx[i + 1] = white ? 0 : 255;
+    keepPx[i + 2] = white ? 0 : 255;
+    keepPx[i + 3] = 255;
+  }
+  keepCtx.putImageData(keepData, 0, 0);
+
+  const composite = document.createElement('canvas');
+  composite.width = width;
+  composite.height = height;
+  const compCtx = composite.getContext('2d');
+  if (!compCtx) return args.projectionUrl;
+
+  compCtx.drawImage(projectionImg, 0, 0, width, height);
+  compCtx.save();
+  compCtx.globalCompositeOperation = 'destination-in';
+  compCtx.drawImage(keepCanvas, 0, 0, width, height);
+  compCtx.restore();
+
+  const repairedMasked = document.createElement('canvas');
+  repairedMasked.width = width;
+  repairedMasked.height = height;
+  const repairedMaskedCtx = repairedMasked.getContext('2d');
+  if (!repairedMaskedCtx) return args.projectionUrl;
+  repairedMaskedCtx.drawImage(repairedImg, 0, 0, width, height);
+  repairedMaskedCtx.save();
+  repairedMaskedCtx.globalCompositeOperation = 'destination-in';
+  repairedMaskedCtx.drawImage(maskCanvas, 0, 0, width, height);
+  repairedMaskedCtx.restore();
+
+  compCtx.drawImage(repairedMasked, 0, 0, width, height);
+  return composite.toDataURL('image/png');
+};
 
 export const ShotsPanel: React.FC<ShotsPanelProps> = ({
   sceneId,
@@ -125,6 +236,10 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
   const [slots, setSlots] = useState<DirectedShotSlot[]>([]);
   const sourceStyleLock = deriveShotsStyleLock(state.director?.qualityMode);
   const [inspectVariantId, setInspectVariantId] = useState<string | null>(null);
+  const [pinMode, setPinMode] = useState<'subject' | 'look'>('subject');
+  const [subjectAnchorPoint, setSubjectAnchorPoint] = useState<ShotPinPoint | null>(session?.subjectAnchorPoint || null);
+  const [lookTargetPoint, setLookTargetPoint] = useState<ShotPinPoint | null>(session?.lookTargetPoint || null);
+  const [isPinLoading, setIsPinLoading] = useState(false);
 
   // Responsive UI: Collapse config on smaller vertical screens (like 1080p laptops)
   const [isConfigExpanded, setIsConfigExpanded] = useState(typeof window !== 'undefined' ? window.innerHeight > 1050 : true);
@@ -147,6 +262,191 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
       setIsConfiguring(session.variants.length === 0);
     }
   }, [session]);
+
+  useEffect(() => {
+    setSubjectAnchorPoint(session?.subjectAnchorPoint || null);
+    setLookTargetPoint(session?.lookTargetPoint || null);
+  }, [session?.subjectAnchorPoint, session?.lookTargetPoint]);
+
+  useEffect(() => {
+    if (!effectiveResultImageUrl) return;
+    if (subjectAnchorPoint && lookTargetPoint) return;
+
+    let isMounted = true;
+    setIsPinLoading(true);
+
+    extractSceneAssets({ sceneImageUrl: effectiveResultImageUrl, depthMapUrl: null })
+      .then((assets) => {
+        if (!isMounted) return;
+
+        const inferredSubject = subjectAnchorPoint || {
+          x: clamp01(assets.subjectAnchor.x),
+          y: clamp01(assets.subjectAnchor.y)
+        };
+        const inferredLook = lookTargetPoint || buildDefaultLookTarget(inferredSubject);
+
+        setSubjectAnchorPoint(inferredSubject);
+        setLookTargetPoint(inferredLook);
+
+        if (session && (!session.subjectAnchorPoint || !session.lookTargetPoint)) {
+          onUpdateSession(sceneId, (prev) => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              subjectAnchorPoint: prev.subjectAnchorPoint || inferredSubject,
+              lookTargetPoint: prev.lookTargetPoint || inferredLook,
+              updatedAt: new Date().toISOString()
+            };
+          });
+        }
+      })
+      .catch((err) => {
+        console.warn('[ShotsPanel] Could not infer initial pin points', err);
+      })
+      .finally(() => {
+        if (isMounted) setIsPinLoading(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [
+    effectiveResultImageUrl,
+    lookTargetPoint,
+    onUpdateSession,
+    sceneId,
+    session,
+    subjectAnchorPoint
+  ]);
+
+  const persistPinPoints = (nextSubject: ShotPinPoint | null, nextLook: ShotPinPoint | null) => {
+    if (!session) return;
+    onUpdateSession(sceneId, (prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        subjectAnchorPoint: nextSubject || undefined,
+        lookTargetPoint: nextLook || undefined,
+        updatedAt: new Date().toISOString()
+      };
+    });
+  };
+
+  const handlePinCanvasClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+
+    const clickedPoint: ShotPinPoint = {
+      x: clamp01((e.clientX - rect.left) / rect.width),
+      y: clamp01((e.clientY - rect.top) / rect.height)
+    };
+
+    if (pinMode === 'subject') {
+      const nextSubject = clickedPoint;
+      const nextLook = lookTargetPoint || buildDefaultLookTarget(nextSubject);
+      setSubjectAnchorPoint(nextSubject);
+      setLookTargetPoint(nextLook);
+      persistPinPoints(nextSubject, nextLook);
+      return;
+    }
+
+    const nextLook = clickedPoint;
+    const nextSubject = subjectAnchorPoint || {
+      x: 0.5,
+      y: 0.55
+    };
+    setSubjectAnchorPoint(nextSubject);
+    setLookTargetPoint(nextLook);
+    persistPinPoints(nextSubject, nextLook);
+  };
+
+  const maybeRunMaskedRepair = async (args: {
+    variant: ShotVariant;
+    reproj: Awaited<ReturnType<typeof buildReprojectedShot>>;
+    sceneTruthSnapshot?: import('../../types/shots').SceneTruthSnapshot;
+    directedSlot?: DirectedShotSlot;
+    packIdForRepair: ShotPackId;
+  }): Promise<{
+    previewSourceUrl: string;
+    repairMaskSourceUrl?: string;
+    protectedMaskSourceUrl?: string;
+  }> => {
+    const repairMaskSourceUrl = args.reproj.repairMaskUrl || args.reproj.holeMaskUrl;
+    const protectedMaskSourceUrl = args.reproj.protectedMaskUrl;
+    if (!MASKED_REPAIR_PRESETS.has(args.variant.presetId)) {
+      return { previewSourceUrl: args.reproj.imageUrl, repairMaskSourceUrl, protectedMaskSourceUrl };
+    }
+    if (!repairMaskSourceUrl) {
+      return { previewSourceUrl: args.reproj.imageUrl, repairMaskSourceUrl, protectedMaskSourceUrl };
+    }
+
+    const whiteCoverage = await getMaskWhiteCoverage(repairMaskSourceUrl).catch(() => 0);
+    if (whiteCoverage < 0.00003) {
+      return { previewSourceUrl: args.reproj.imageUrl, repairMaskSourceUrl, protectedMaskSourceUrl };
+    }
+
+    const billingMode = state.billingEntitlements?.effectiveBillingMode === 'hosted' ? 'hosted' : 'byok';
+    if (billingMode === 'byok' && !apiKey) {
+      console.warn('[ShotsPanel] Skipping masked repair (BYOK with no API key).');
+      return { previewSourceUrl: args.reproj.imageUrl, repairMaskSourceUrl, protectedMaskSourceUrl };
+    }
+
+    const repairPrompt =
+      args.sceneTruthSnapshot
+        ? buildShotRepairPrompt({
+            sourceResultUrl: effectiveResultImageUrl || '',
+            sceneTruth: args.sceneTruthSnapshot,
+            actorIdentitySets,
+            shotsActorOptions,
+            packId: args.packIdForRepair,
+            presetId: args.variant.presetId,
+            directedSlot: args.directedSlot,
+            locks,
+            environmentText,
+            subjectActionText,
+            lightingText,
+            expectedActorCount: args.sceneTruthSnapshot.expectedActorCount,
+            sourceStyleLock
+          })
+        : FALLBACK_REPAIR_PROMPT;
+
+    try {
+      const repairedFullImage = await GeminiService.generateReprojectedShotRepair({
+        projectedImageUrl: args.reproj.imageUrl,
+        holeMaskUrl: repairMaskSourceUrl,
+        protectionMaskUrl: protectedMaskSourceUrl,
+        anchorImageUrl: effectiveResultImageUrl,
+        actorIdentitySets,
+        repairPrompt,
+        aspectRatio: '16:9',
+        apiKey,
+        model,
+        options: {
+          billingMode,
+          entitlements: state.billingEntitlements,
+          signal: abortControllerRef.current?.signal
+        }
+      });
+
+      const fused = await fuseRepairIntoProjection({
+        projectionUrl: args.reproj.imageUrl,
+        repairedUrl: repairedFullImage,
+        repairMaskUrl: repairMaskSourceUrl
+      });
+
+      return {
+        previewSourceUrl: fused,
+        repairMaskSourceUrl,
+        protectedMaskSourceUrl
+      };
+    } catch (repairErr) {
+      console.warn('[ShotsPanel] Masked repair failed, keeping raw reprojection', {
+        presetId: args.variant.presetId,
+        repairErr
+      });
+      return { previewSourceUrl: args.reproj.imageUrl, repairMaskSourceUrl, protectedMaskSourceUrl };
+    }
+  };
 
   const lastBuiltPackRef = useRef<{packId: ShotPackId | '', count: number}>({ packId: '', count: 0 });
 
@@ -348,6 +648,9 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
       return;
     }
 
+    const effectiveSubjectAnchorPoint: ShotPinPoint = subjectAnchorPoint || { x: 0.5, y: 0.55 };
+    const effectiveLookTargetPoint: ShotPinPoint = lookTargetPoint || buildDefaultLookTarget(effectiveSubjectAnchorPoint);
+
     const newSession: ShotSession = {
       id: `session-${Date.now()}`,
       sceneId,
@@ -358,6 +661,8 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
       directedShots: slots,
       locks,
       sceneTruth,
+      subjectAnchorPoint: effectiveSubjectAnchorPoint,
+      lookTargetPoint: effectiveLookTargetPoint,
       variants,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -370,7 +675,6 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
     // Start Async Loop
     isGeneratingRef.current = true;
     abortControllerRef.current = new AbortController();
-    const generatedVariantPreviews: Array<{ variantId: string; presetId: ShotPresetId; previewUrl: string }> = [];
 
     for (const variant of variants) {
       if (!isGeneratingRef.current) break; // User cancelled or component unmounted
@@ -384,247 +688,103 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
       });
 
       try {
-        const preset = SHOT_PRESETS[variant.presetId];
-        const directedSlot = preparedSlots.find(s => s.id === variant.slotId);
-        
-        const rawBlueprintUrl = await buildShotBlueprintImage({
-            anchorImageUrl: effectiveResultImageUrl,
-            preset,
-            directedSlot
-        });
-
-        // Materialize the blueprint so we can inspect it without dealing with 2MB base64 strings in redux
-        let materializedBlueprintUrl = rawBlueprintUrl;
-        try {
-            const matBp = await LocalAssetService.materializeImageAsset({
-                sourceUrl: rawBlueprintUrl,
-                sceneId: sceneId,
-                variantId: variant.id,
-                kind: 'blueprint',
-                saveDirectoryPath: state.saveDirectoryPath
-            });
-            materializedBlueprintUrl = matBp.displayUrl;
-        } catch (bpErr) {
-            console.warn("Could not materialize blueprint for variant", variant.id, bpErr);
-        }
-
-        const previewBaseArgs = {
-          anchorImageUrl: effectiveResultImageUrl,
-          actorIdentitySets,
-          prompt: variant.prompt,
-          apiKey,
-          model,
-          options: { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, signal: abortControllerRef.current?.signal }
-        };
-
-        let previewUrl: string;
-        const requestPreview = async (promptText: string): Promise<string> => {
-          const richArgs = {
-            ...previewBaseArgs,
-            prompt: promptText,
-            shotBlueprintUrl: rawBlueprintUrl,
-            sceneTruth,
-            presetId: variant.presetId,
-            hasSubjectStyleAnalysis: !!safeSubjectActionText,
-          };
-          try {
-            return await GeminiService.generateShotPreview(richArgs);
-          } catch (err: unknown) {
-            const msg = getErrorMessage(err);
-            if (isShotPayloadConstraintError(msg)) {
-              console.warn('[ShotsPanel] Rich preview payload rejected; retrying compact-rich payload', {
-                variantId: variant.id,
-                presetId: variant.presetId,
-                error: msg
-              });
-              try {
-                return await GeminiService.generateShotPreview({
-                  ...richArgs,
-                  actorIdentitySets: buildCompactIdentitySets(actorIdentitySets)
-                });
-              } catch (retryErr: unknown) {
-                const retryMsg = getErrorMessage(retryErr);
-                if (isShotPayloadConstraintError(retryMsg)) {
-                  console.error('[ShotsPanel] Compact-rich payload rejected; aborting to preserve shot integrity', {
-                    variantId: variant.id,
-                    presetId: variant.presetId,
-                    error: retryMsg
-                  });
-                  throw new Error(`Shot payload rejected after compact optimization. Aborting instead of thin fallback to preserve camera/continuity integrity. (${retryMsg})`);
-                }
-                throw retryErr;
-              }
-            }
-            throw err;
-          }
-        };
-
-        console.log('[ShotsPanel] SHOT PROMPT DIAGNOSTIC', {
-          variantId: variant.id,
-          slotId: variant.slotId,
+        const reproj = await buildReprojectedShot({
+          sceneImageUrl: effectiveResultImageUrl,
           presetId: variant.presetId,
-          promptLength: variant.prompt?.length || 0,
-          promptPreview: (variant.prompt || '').slice(0, 500),
-          directedShotNotes: directedSlot?.shotNotes || '',
-          directedCameraFlavor: directedSlot?.cameraFlavor || '',
-          coveragePurpose: directedSlot?.coveragePurpose || '',
-          targetLabel: directedSlot?.targetLabel || ''
+          aspectRatio: '16:9',
+          subjectAnchorPoint: effectiveSubjectAnchorPoint,
+          lookTargetPoint: effectiveLookTargetPoint
         });
 
-        previewUrl = await requestPreview(variant.prompt);
+        const directedSlot = preparedSlots.find((slot) => slot.id === variant.slotId);
+        const repaired = await maybeRunMaskedRepair({
+          variant,
+          reproj,
+          sceneTruthSnapshot: sceneTruth,
+          directedSlot,
+          packIdForRepair: packId
+        });
 
-        // Phase 7: Similarity Rejection
-        let attempts = 1;
-        let isDuplicate = false;
-        const SOURCE_SIMILARITY_THRESHOLD = 0.94; // near-trivial source copy
-        const VARIANT_SIMILARITY_THRESHOLD = 0.95; // near-duplicate of another generated variant
-        try {
-           const findMostSimilarGeneratedVariant = async (candidateUrl: string): Promise<{ similarity: number; presetId?: ShotPresetId }> => {
-              let maxSimilarity = 0;
-              let matchedPresetId: ShotPresetId | undefined;
-              for (const existing of generatedVariantPreviews) {
-                const score = await computeImageSimilarity(existing.previewUrl, candidateUrl);
-                if (score > maxSimilarity) {
-                  maxSimilarity = score;
-                  matchedPresetId = existing.presetId;
-                }
-              }
-              return { similarity: maxSimilarity, presetId: matchedPresetId };
-           };
+        const projectionAsset = await LocalAssetService.materializeImageAsset({
+          sourceUrl: reproj.imageUrl,
+          sceneId,
+          variantId: variant.id,
+          kind: 'blueprint',
+          saveDirectoryPath: state.saveDirectoryPath
+        });
 
-           let sourceSimilarity = await computeImageSimilarity(effectiveResultImageUrl, previewUrl);
-           let peerSimilarity = await findMostSimilarGeneratedVariant(previewUrl);
-           const presetInfo = SHOT_PRESETS[variant.presetId];
-           
-           console.log('[ShotsPanel] Similarity Diagnostic', {
-             variantId: variant.id,
-             slotId: variant.slotId,
-             presetId: variant.presetId,
-             sourceSimilarity,
-             peerSimilarity: peerSimilarity.similarity,
-             peerPresetId: peerSimilarity.presetId,
-             uniquenessKey: SHOT_PRESETS[variant.presetId]?.uniquenessKey,
-             attempts
-           });
-           while (
-             autoReroll &&
-             (sourceSimilarity >= SOURCE_SIMILARITY_THRESHOLD || peerSimilarity.similarity >= VARIANT_SIMILARITY_THRESHOLD) &&
-             attempts < 3
-           ) {
-              const matchedLabel = peerSimilarity.presetId ? SHOT_PRESETS[peerSimilarity.presetId].label : 'another shot variant';
-              const reason = sourceSimilarity >= SOURCE_SIMILARITY_THRESHOLD
-                ? `too similar to source (${(sourceSimilarity * 100).toFixed(0)}%)`
-                : `too similar to ${matchedLabel} (${(peerSimilarity.similarity * 100).toFixed(0)}%)`;
-              
-              console.warn(`[ShotsPanel Rejection Diagnostics]`, {
-                  slotId: variant.id,
-                  requestedPreset: variant.presetId,
-                  uniquenessKey: presetInfo.uniquenessKey,
-                  sourceSimilarity: sourceSimilarity,
-                  peerSimilarity: peerSimilarity.similarity,
-                  reason,
-                  retryCount: attempts + 1
-              });
-
-              console.warn('[ShotsPanel] Auto-reroll triggered', {
-                variantId: variant.id,
-                presetId: variant.presetId,
-                attempts,
-                sourceSimilarity,
-                peerSimilarity: peerSimilarity.similarity,
-                peerPresetId: peerSimilarity.presetId,
-                reason
-              });
-              
-              onUpdateSession(sceneId, prev => {
-                if (!prev) return prev;
-                return {
-                  ...prev,
-                  variants: prev.variants.map(v => v.id === variant.id ? { 
-                    ...v, 
-                    status: 'generating', 
-                    error: `Insufficient differentiation (${reason}). Rerolling (Try ${attempts+1}/3)...` 
-                  } : v)
-                };
-              });
-
-              attempts++;
-              const differentiationDirective = peerSimilarity.similarity >= VARIANT_SIMILARITY_THRESHOLD
-                ? `CRITICAL DIFFERENTIATION: This preset MUST NOT resemble ${matchedLabel}. Produce a visibly different framing class and camera geometry.`
-                : `CRITICAL DIFFERENTIATION: You MUST MATERIALLY CHANGE THE CAMERA ANGLE, SHOT SCALE, AND CROP. DO NOT REPRODUCE THE SOURCE COMPOSITION.`;
-              const continuityDirective = `CONTINUITY PRIORITY: Preserve actor identity, wardrobe, and environment truth. Preserve pose when possible but allow necessary perspective shifts.`;
-              const appendedPrompt = `${variant.prompt}\nCRITICAL: PREVIOUS ATTEMPT FAILED.\n${continuityDirective}\n${differentiationDirective}`;
-              
-              previewUrl = await requestPreview(appendedPrompt);
-              sourceSimilarity = await computeImageSimilarity(effectiveResultImageUrl, previewUrl);
-              peerSimilarity = await findMostSimilarGeneratedVariant(previewUrl);
-              console.log(`[ShotsPanel Telemetry] Retry phase`, {
-                  slotId: variant.id,
-                  presetId: variant.presetId,
-                  sourceScore: sourceSimilarity,
-                  peerScore: peerSimilarity.similarity,
-                  matchedPeerId: peerSimilarity.presetId,
-                  retryCount: attempts
-              });
-           }
-           if (
-             autoReroll &&
-             (sourceSimilarity >= SOURCE_SIMILARITY_THRESHOLD || peerSimilarity.similarity >= VARIANT_SIMILARITY_THRESHOLD)
-           ) {
-              isDuplicate = true; // Still insufficiently differentiated after retries
-           }
-
-           console.log(`[ShotsPanel Telemetry] Final evaluation`, {
-               slotId: variant.id,
-               presetId: variant.presetId,
-               uniquenessKey: presetInfo.uniquenessKey,
-               finalSourceScore: sourceSimilarity,
-               finalPeerScore: peerSimilarity.similarity,
-               retryCount: attempts,
-               status: isDuplicate ? 'REJECTED' : 'ACCEPTED'
-           });
-        } catch (simErr) {
-           console.error("[ShotsPanel] Failed to compute image similarity:", simErr);
-        }
-
-        const materialized = await LocalAssetService.materializeImageAsset({
-          sourceUrl: previewUrl,
-          sceneId: sceneId,
+        const previewAsset = await LocalAssetService.materializeImageAsset({
+          sourceUrl: repaired.previewSourceUrl,
+          sceneId,
           variantId: variant.id,
           kind: 'preview',
           saveDirectoryPath: state.saveDirectoryPath
         });
 
-        console.log("[ShotsPanel] Materialized preview asset:", {
-          variantId: variant.id,
-          displayUrl: materialized.displayUrl,
-          localPath: materialized.localPath,
-          sourcePreviewUrl: previewUrl
-        });
-        generatedVariantPreviews.push({ variantId: variant.id, presetId: variant.presetId, previewUrl });
+        let holeMaskDisplayUrl = repaired.repairMaskSourceUrl;
+        if (repaired.repairMaskSourceUrl) {
+          try {
+            const holeMaskAsset = await LocalAssetService.materializeImageAsset({
+              sourceUrl: repaired.repairMaskSourceUrl,
+              sceneId,
+              variantId: variant.id,
+              kind: 'blueprint',
+              saveDirectoryPath: state.saveDirectoryPath
+            });
+            holeMaskDisplayUrl = holeMaskAsset.displayUrl;
+          } catch (maskErr) {
+            console.warn('[ShotsPanel] Could not materialize hole mask', { variantId: variant.id, maskErr });
+          }
+        }
+
+        let protectedMaskDisplayUrl = repaired.protectedMaskSourceUrl;
+        if (repaired.protectedMaskSourceUrl) {
+          try {
+            const protectedMaskAsset = await LocalAssetService.materializeImageAsset({
+              sourceUrl: repaired.protectedMaskSourceUrl,
+              sceneId,
+              variantId: variant.id,
+              kind: 'blueprint',
+              saveDirectoryPath: state.saveDirectoryPath
+            });
+            protectedMaskDisplayUrl = protectedMaskAsset.displayUrl;
+          } catch (protectErr) {
+            console.warn('[ShotsPanel] Could not materialize protected mask', { variantId: variant.id, protectErr });
+          }
+        }
 
         onUpdateSession(sceneId, prev => {
           if (!prev) return prev;
           return {
             ...prev,
-            variants: prev.variants.map(v => v.id === variant.id ? { 
-              ...v, 
-              status: 'done', 
-              previewUrl: materialized.displayUrl,
-              blueprintUrl: materializedBlueprintUrl,
-              localPreviewPath: materialized.localPath || undefined,
-              sourcePreviewUrl: previewUrl,
-              error: isDuplicate ? 'CRITICAL: Failed to materially change framing.' : undefined
-            } : v)
+            variants: prev.variants.map(v =>
+              v.id === variant.id
+                ? {
+                    ...v,
+                    status: 'done',
+                    previewUrl: previewAsset.displayUrl,
+                    localPreviewPath: previewAsset.localPath || undefined,
+                    sourcePreviewUrl: repaired.previewSourceUrl,
+                    projectionUrl: projectionAsset.displayUrl,
+                    holeMaskUrl: holeMaskDisplayUrl,
+                    repairMaskUrl: holeMaskDisplayUrl,
+                    protectedMaskUrl: protectedMaskDisplayUrl,
+                    cameraTransform: reproj.metadata.cameraTransform,
+                    error: undefined
+                  }
+                : v
+            )
           };
         });
       } catch (err: unknown) {
-        console.error("SHOTS PANEL FATAL:", err);
+        console.error('[ShotsPanel] Deterministic reprojection failed:', err);
         onUpdateSession(sceneId, prev => {
           if (!prev) return prev;
           return {
             ...prev,
-            variants: prev.variants.map(v => v.id === variant.id ? { ...v, status: 'error', error: getErrorMessage(err) } : v)
+            variants: prev.variants.map(v =>
+              v.id === variant.id ? { ...v, status: 'error', error: getErrorMessage(err) } : v
+            )
           };
         });
       }
@@ -638,126 +798,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
   };
 
   const handleRender4K = async () => {
-    if (!session || !effectiveResultImageUrl) return;
-
-    const selectedVariants = session.variants.filter(v => v.selected && (v.status === 'done' || v.status === 'error'));
-    if (selectedVariants.length === 0) return;
-
-    abortControllerRef.current = new AbortController();
-
-    onUpdateSession(sceneId, prev => {
-      if (!prev) return prev;
-      return {
-        ...prev,
-        isRerenderingSelected: true,
-        variants: prev.variants.map(v => selectedVariants.some(sel => sel.id === v.id) ? { ...v, status: 'rerendering' } : v),
-      };
-    });
-
-    let safeSubjectActionText = subjectActionText;
-    const hasStrictIdentityRefs = (session.actorIdentitySets || []).some(s => s.identityPriority === 'strict' && hasStrongFaceAnchor(s));
-    if (hasStrictIdentityRefs && subjectActionText) {
-        safeSubjectActionText = stripIdentityOverridingAnalysis(subjectActionText);
-        if (safeSubjectActionText !== subjectActionText) {
-            console.warn(`[IdentityPrecedence] Subject/style analysis demoted in SHOTS final rerender because strict actor refs are present`);
-        }
-    }
-
-    for (const variant of selectedVariants) {
-      if (!variant.previewUrl) continue;
-      try {
-        const finalPrompt = buildShotFinalRerenderPrompt({
-          sourceResultUrl: effectiveResultImageUrl,
-          sceneTruth: session.sceneTruth!,
-          selectedShotPreviewUrl: variant.previewUrl,
-          actorIdentitySets: session.actorIdentitySets,
-          shotsActorOptions,
-          presetId: variant.presetId,
-          directedSlot: session.directedShots?.find(s => s.id === variant.slotId),
-          locks: { ...session.locks, identity: true },
-          environmentText,
-          subjectActionText: safeSubjectActionText,
-          lightingText,
-          expectedActorCount,
-          sourceStyleLock
-        });
-
-        let finalUrl: string | undefined;
-        let attempts = 0;
-        let lastErr: unknown;
-        
-        while (attempts < 3) {
-          try {
-            finalUrl = await GeminiService.rerenderShotFinal({
-              sourceResultUrl: effectiveResultImageUrl,
-              selectedShotPreviewUrl: variant.previewUrl!,
-              actorIdentitySets: session.actorIdentitySets,
-              prompt: finalPrompt,
-              apiKey,
-              model,
-              sceneTruth: session.sceneTruth,
-              presetId: variant.presetId,
-              options: { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, signal: abortControllerRef.current?.signal }
-            });
-            break; 
-          } catch (e: unknown) {
-            lastErr = e;
-            const msg = getErrorMessage(e).toLowerCase();
-            if (msg.includes('failed to fetch') || msg.includes('429') || msg.includes('timeout')) {
-              attempts++;
-              console.warn(`[ShotsPanel] 4K Render failed (network/rate limit). Retrying ${attempts}/3 in 6 seconds...`);
-              await new Promise(r => setTimeout(r, 6000));
-            } else {
-              throw e;
-            }
-          }
-        }
-        
-        if (!finalUrl) throw lastErr || new Error("Failed to render 4K after multiple attempts");
-
-        const materialized = await LocalAssetService.materializeImageAsset({
-          sourceUrl: finalUrl,
-          sceneId: sceneId,
-          variantId: variant.id,
-          kind: 'final',
-          saveDirectoryPath: state.saveDirectoryPath
-        });
-
-        console.log("[ShotsPanel] Materialized final asset:", {
-          variantId: variant.id,
-          displayUrl: materialized.displayUrl,
-          localPath: materialized.localPath,
-          sourceFinalUrl: finalUrl
-        });
-
-        onUpdateSession(sceneId, prev => {
-          if (!prev) return prev;
-          return {
-            ...prev,
-            variants: prev.variants.map(v => v.id === variant.id ? { 
-              ...v, 
-              status: 'done', 
-              finalUrl: materialized.displayUrl,
-              localFinalPath: materialized.localPath || undefined,
-              sourceFinalUrl: finalUrl
-            } : v)
-          };
-        });
-      } catch (err: unknown) {
-        onUpdateSession(sceneId, prev => {
-          if (!prev) return prev;
-          return {
-            ...prev,
-            variants: prev.variants.map(v => v.id === variant.id ? { ...v, status: 'error', error: getErrorMessage(err) } : v)
-          };
-        });
-      }
-    }
-
-    onUpdateSession(sceneId, prev => {
-      if (!prev) return prev;
-      return { ...prev, isRerenderingSelected: false };
-    });
+    alert('RENDER 4K is disabled during reprojection-only debugging. Re-enable it after masked repair is stable.');
   };
 
   const handleSaveVariant = (variantId: string) => {
@@ -773,8 +814,8 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
   };
 
   const handleRegenerateOne = async (variantId: string) => {
-    // Basic implementation for single tile retry
     if (!session || !effectiveResultImageUrl) return;
+
     const variant = session.variants.find(v => v.id === variantId);
     if (!variant) return;
 
@@ -786,223 +827,96 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
       };
     });
 
-    abortControllerRef.current = new AbortController();
-
     try {
-      const directedSlot = session.directedShots?.find(s => s.id === variant.slotId);
-      const preset = SHOT_PRESETS[variant.presetId];
-      
-      let rawBlueprintUrl = variant.sourcePreviewUrl; // Fallback, will regenerate below if we can
-      if (directedSlot && preset) {
-         rawBlueprintUrl = await buildShotBlueprintImage({
-            anchorImageUrl: effectiveResultImageUrl,
-            preset,
-            directedSlot
-         });
-      }
+      const effectiveSubjectAnchorPoint: ShotPinPoint = session.subjectAnchorPoint || subjectAnchorPoint || { x: 0.5, y: 0.55 };
+      const effectiveLookTargetPoint: ShotPinPoint = session.lookTargetPoint || lookTargetPoint || buildDefaultLookTarget(effectiveSubjectAnchorPoint);
 
-      const previewBaseArgs = {
-        anchorImageUrl: effectiveResultImageUrl,
-        actorIdentitySets: session.actorIdentitySets,
-        prompt: variant.prompt,
-        apiKey,
-        model,
-        options: { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, signal: abortControllerRef.current?.signal }
-      };
-
-      let previewUrl: string;
-      const requestPreview = async (promptText: string): Promise<string> => {
-        const richArgs = {
-          ...previewBaseArgs,
-          prompt: promptText,
-          shotBlueprintUrl: rawBlueprintUrl,
-          sceneTruth: session.sceneTruth,
-          presetId: variant.presetId,
-          hasSubjectStyleAnalysis: !!subjectActionText,
-        };
-        try {
-          return await GeminiService.generateShotPreview(richArgs);
-        } catch (err: unknown) {
-          const msg = getErrorMessage(err);
-          if (isShotPayloadConstraintError(msg)) {
-            console.warn('[ShotsPanel] Rich preview payload rejected; retrying compact-rich payload', {
-              variantId: variant.id,
-              presetId: variant.presetId,
-              error: msg
-            });
-            try {
-              return await GeminiService.generateShotPreview({
-                ...richArgs,
-                actorIdentitySets: buildCompactIdentitySets(session.actorIdentitySets || [])
-              });
-            } catch (retryErr: unknown) {
-              const retryMsg = getErrorMessage(retryErr);
-              if (isShotPayloadConstraintError(retryMsg)) {
-                console.error('[ShotsPanel] Compact-rich payload rejected; aborting to preserve shot integrity', {
-                  variantId: variant.id,
-                  presetId: variant.presetId,
-                  error: retryMsg
-                });
-                throw new Error(`Shot payload rejected after compact optimization. Aborting instead of thin fallback to preserve camera/continuity integrity. (${retryMsg})`);
-              }
-              throw retryErr;
-            }
-          }
-          throw err;
-        }
-      };
-
-      console.log('[ShotsPanel] SHOT PROMPT DIAGNOSTIC', {
-        variantId: variant.id,
-        slotId: variant.slotId,
+      const reproj = await buildReprojectedShot({
+        sceneImageUrl: effectiveResultImageUrl,
         presetId: variant.presetId,
-        promptLength: variant.prompt?.length || 0,
-        promptPreview: (variant.prompt || '').slice(0, 500),
-        directedShotNotes: directedSlot?.shotNotes || '',
-        directedCameraFlavor: directedSlot?.cameraFlavor || '',
-        coveragePurpose: directedSlot?.coveragePurpose || '',
-        targetLabel: directedSlot?.targetLabel || ''
+        aspectRatio: '16:9',
+        subjectAnchorPoint: effectiveSubjectAnchorPoint,
+        lookTargetPoint: effectiveLookTargetPoint
       });
 
-      previewUrl = await requestPreview(variant.prompt);
+      const directedSlot = session.directedShots?.find((slot) => slot.id === variant.slotId);
+      const repaired = await maybeRunMaskedRepair({
+        variant,
+        reproj,
+        sceneTruthSnapshot: session.sceneTruth,
+        directedSlot,
+        packIdForRepair: session.packId
+      });
 
-      // Phase 7: Similarity Rejection
-      let attempts = 1;
-      let isDuplicate = false;
-      const SOURCE_SIMILARITY_THRESHOLD = 0.94;
-      const VARIANT_SIMILARITY_THRESHOLD = 0.95;
-      try {
-         const peerCandidates = (session.variants || [])
-           .filter(v => v.id !== variantId)
-           .map(v => ({ presetId: v.presetId, url: v.sourcePreviewUrl || v.previewUrl || '' }))
-           .filter(v => !!v.url) as Array<{ presetId: ShotPresetId; url: string }>;
-         const findMostSimilarPeer = async (candidateUrl: string): Promise<{ similarity: number; presetId?: ShotPresetId }> => {
-           let maxSimilarity = 0;
-           let matchedPresetId: ShotPresetId | undefined;
-           for (const peer of peerCandidates) {
-             const score = await computeImageSimilarity(peer.url, candidateUrl);
-             if (score > maxSimilarity) {
-               maxSimilarity = score;
-               matchedPresetId = peer.presetId;
-             }
-           }
-           return { similarity: maxSimilarity, presetId: matchedPresetId };
-         };
+      const projectionAsset = await LocalAssetService.materializeImageAsset({
+        sourceUrl: reproj.imageUrl,
+        sceneId,
+        variantId: variant.id,
+        kind: 'blueprint',
+        saveDirectoryPath: state.saveDirectoryPath
+      });
 
-         let sourceSimilarity = await computeImageSimilarity(effectiveResultImageUrl, previewUrl);
-         let peerSimilarity = await findMostSimilarPeer(previewUrl);
-         const presetInfo = SHOT_PRESETS[variant.presetId];
-
-         console.log('[ShotsPanel] Similarity Diagnostic', {
-           variantId: variant.id,
-           slotId: variant.slotId,
-           presetId: variant.presetId,
-           sourceSimilarity,
-           peerSimilarity: peerSimilarity.similarity,
-           peerPresetId: peerSimilarity.presetId,
-           uniquenessKey: SHOT_PRESETS[variant.presetId]?.uniquenessKey,
-           attempts
-         });
-         while (
-           autoReroll &&
-           (sourceSimilarity >= SOURCE_SIMILARITY_THRESHOLD || peerSimilarity.similarity >= VARIANT_SIMILARITY_THRESHOLD) &&
-           attempts < 3
-         ) {
-            const matchedLabel = peerSimilarity.presetId ? SHOT_PRESETS[peerSimilarity.presetId].label : 'another shot variant';
-            const reason = sourceSimilarity >= SOURCE_SIMILARITY_THRESHOLD
-              ? `too similar to source (${(sourceSimilarity * 100).toFixed(0)}%)`
-              : `too similar to ${matchedLabel} (${(peerSimilarity.similarity * 100).toFixed(0)}%)`;
-            
-            console.warn(`[ShotsPanel Rejection Diagnostics]`, {
-                  slotId: variant.id,
-                  requestedPreset: variant.presetId,
-                  uniquenessKey: presetInfo.uniquenessKey,
-                  sourceSimilarity: sourceSimilarity,
-                  peerSimilarity: peerSimilarity.similarity,
-                  reason,
-                  retryCount: attempts + 1
-            });
-
-            console.warn('[ShotsPanel] Auto-reroll triggered', {
-              variantId: variant.id,
-              presetId: variant.presetId,
-              attempts,
-              sourceSimilarity,
-              peerSimilarity: peerSimilarity.similarity,
-              peerPresetId: peerSimilarity.presetId,
-              reason
-            });
-            
-            onUpdateSession(sceneId, prev => {
-              if (!prev) return prev;
-              return {
-                ...prev,
-                variants: prev.variants.map(v => v.id === variantId ? { 
-                  ...v, 
-                  status: 'generating', 
-                  error: `Insufficient differentiation (${reason}). Rerolling (Try ${attempts+1}/3)...` 
-                } : v)
-              };
-            });
-
-            attempts++;
-            const differentiationDirective = peerSimilarity.similarity >= VARIANT_SIMILARITY_THRESHOLD
-              ? `CRITICAL DIFFERENTIATION: This preset MUST NOT resemble ${matchedLabel}. Produce a visibly different framing class and camera geometry.`
-              : `CRITICAL DIFFERENTIATION: You MUST MATERIALLY CHANGE THE CAMERA ANGLE, SHOT SCALE, AND CROP. DO NOT REPRODUCE THE SOURCE COMPOSITION.`;
-            const continuityDirective = `CONTINUITY PRIORITY: Preserve actor identity, wardrobe, and environment truth. Preserve pose when possible but allow necessary perspective shifts.`;
-            const appendedPrompt = `${variant.prompt}\nCRITICAL: PREVIOUS ATTEMPT FAILED.\n${continuityDirective}\n${differentiationDirective}`;
-            
-            previewUrl = await requestPreview(appendedPrompt);
-            sourceSimilarity = await computeImageSimilarity(effectiveResultImageUrl, previewUrl);
-            peerSimilarity = await findMostSimilarPeer(previewUrl);
-            console.log(`[ShotsPanel Telemetry] Retry phase`, {
-                  slotId: variant.id,
-                  presetId: variant.presetId,
-                  sourceScore: sourceSimilarity,
-                  peerScore: peerSimilarity.similarity,
-                  matchedPeerId: peerSimilarity.presetId,
-                  retryCount: attempts
-            });
-         }
-         if (
-           autoReroll &&
-           (sourceSimilarity >= SOURCE_SIMILARITY_THRESHOLD || peerSimilarity.similarity >= VARIANT_SIMILARITY_THRESHOLD)
-         ) isDuplicate = true;
-
-         console.log(`[ShotsPanel Telemetry] Final evaluation`, {
-               slotId: variant.id,
-               presetId: variant.presetId,
-               uniquenessKey: presetInfo.uniquenessKey,
-               finalSourceScore: sourceSimilarity,
-               finalPeerScore: peerSimilarity.similarity,
-               retryCount: attempts,
-               status: isDuplicate ? 'REJECTED' : 'ACCEPTED'
-         });
-      } catch (simErr) {
-         console.error("[ShotsPanel] Failed to compute image similarity:", simErr);
-      }
-
-      const materialized = await LocalAssetService.materializeImageAsset({
-        sourceUrl: previewUrl,
-        sceneId: sceneId,
+      const previewAsset = await LocalAssetService.materializeImageAsset({
+        sourceUrl: repaired.previewSourceUrl,
+        sceneId,
         variantId: variant.id,
         kind: 'preview',
         saveDirectoryPath: state.saveDirectoryPath
       });
 
+      let holeMaskDisplayUrl = repaired.repairMaskSourceUrl;
+      if (repaired.repairMaskSourceUrl) {
+        try {
+          const holeMaskAsset = await LocalAssetService.materializeImageAsset({
+            sourceUrl: repaired.repairMaskSourceUrl,
+            sceneId,
+            variantId: variant.id,
+            kind: 'blueprint',
+            saveDirectoryPath: state.saveDirectoryPath
+          });
+          holeMaskDisplayUrl = holeMaskAsset.displayUrl;
+        } catch (maskErr) {
+          console.warn('[ShotsPanel] Could not materialize hole mask on regenerate', { variantId, maskErr });
+        }
+      }
+
+      let protectedMaskDisplayUrl = repaired.protectedMaskSourceUrl;
+      if (repaired.protectedMaskSourceUrl) {
+        try {
+          const protectedMaskAsset = await LocalAssetService.materializeImageAsset({
+            sourceUrl: repaired.protectedMaskSourceUrl,
+            sceneId,
+            variantId: variant.id,
+            kind: 'blueprint',
+            saveDirectoryPath: state.saveDirectoryPath
+          });
+          protectedMaskDisplayUrl = protectedMaskAsset.displayUrl;
+        } catch (protectErr) {
+          console.warn('[ShotsPanel] Could not materialize protected mask on regenerate', { variantId, protectErr });
+        }
+      }
+
       onUpdateSession(sceneId, prev => {
         if (!prev) return prev;
         return {
           ...prev,
-          variants: prev.variants.map(v => v.id === variantId ? { 
-            ...v, 
-            status: 'done', 
-            previewUrl: materialized.displayUrl,
-            blueprintUrl: rawBlueprintUrl, // Fallback if no materialized one exists
-            localPreviewPath: materialized.localPath || undefined,
-            sourcePreviewUrl: previewUrl,
-            error: isDuplicate ? 'CRITICAL: Failed to materially change framing.' : undefined
-          } : v)
+          variants: prev.variants.map(v =>
+            v.id === variantId
+              ? {
+                  ...v,
+                  status: 'done',
+                  previewUrl: previewAsset.displayUrl,
+                  localPreviewPath: previewAsset.localPath || undefined,
+                  sourcePreviewUrl: repaired.previewSourceUrl,
+                  projectionUrl: projectionAsset.displayUrl,
+                  holeMaskUrl: holeMaskDisplayUrl,
+                  repairMaskUrl: holeMaskDisplayUrl,
+                  protectedMaskUrl: protectedMaskDisplayUrl,
+                  cameraTransform: reproj.metadata.cameraTransform,
+                  error: undefined
+                }
+              : v
+          )
         };
       });
     } catch (err: unknown) {
@@ -1147,6 +1061,108 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
       <div className="px-4 py-1.5 bg-black/40 border-b border-[#27272a] text-[9px] text-gray-500 font-mono tracking-wider truncate shrink-0">
         Generate cinematic angle variations from the current staged result.
       </div>
+
+      {hasResult && (
+        <div className="px-4 py-2.5 border-b border-[#27272a] bg-[#0f0f10] shrink-0">
+          <div className="flex flex-wrap items-center gap-2 mb-2">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-gray-300">Camera Pins</span>
+            <button
+              onClick={() => setPinMode('subject')}
+              className={`px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide rounded border transition-colors ${
+                pinMode === 'subject'
+                  ? 'bg-blue-600/20 border-blue-500/50 text-blue-300'
+                  : 'bg-black border-gray-700 text-gray-400 hover:text-gray-200'
+              }`}
+            >
+              Set Subject Anchor
+            </button>
+            <button
+              onClick={() => setPinMode('look')}
+              className={`px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide rounded border transition-colors ${
+                pinMode === 'look'
+                  ? 'bg-pink-600/20 border-pink-500/50 text-pink-300'
+                  : 'bg-black border-gray-700 text-gray-400 hover:text-gray-200'
+              }`}
+            >
+              Set Look Target
+            </button>
+            <button
+              onClick={() => {
+                const fallbackSubject = subjectAnchorPoint || { x: 0.5, y: 0.55 };
+                const fallbackLook = buildDefaultLookTarget(fallbackSubject);
+                setSubjectAnchorPoint(fallbackSubject);
+                setLookTargetPoint(fallbackLook);
+                persistPinPoints(fallbackSubject, fallbackLook);
+              }}
+              className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide rounded border bg-black border-gray-700 text-gray-400 hover:text-gray-200 transition-colors"
+            >
+              Reset Look
+            </button>
+            <span className="text-[10px] text-gray-500">
+              Click the image to place the active pin.
+            </span>
+          </div>
+
+          <div
+            className="relative w-full max-w-[300px] aspect-[16/9] rounded-md border border-gray-800 overflow-hidden cursor-crosshair bg-black"
+            onClick={handlePinCanvasClick}
+            title={`Click to set ${pinMode === 'subject' ? 'Subject Anchor' : 'Look Target'}`}
+          >
+            <img
+              src={effectiveResultImageUrl}
+              alt="Pin staging source"
+              className="w-full h-full object-cover opacity-90"
+              draggable={false}
+            />
+            {subjectAnchorPoint && (
+              <div
+                className="absolute w-4 h-4 rounded-full border-2 border-blue-300 bg-blue-500 shadow-[0_0_0_2px_rgba(0,0,0,0.7)] pointer-events-none"
+                style={{
+                  left: `${subjectAnchorPoint.x * 100}%`,
+                  top: `${subjectAnchorPoint.y * 100}%`,
+                  transform: 'translate(-50%, -50%)'
+                }}
+              />
+            )}
+            {lookTargetPoint && (
+              <div
+                className="absolute w-4 h-4 rounded-full border-2 border-pink-200 bg-pink-500 shadow-[0_0_0_2px_rgba(0,0,0,0.7)] pointer-events-none"
+                style={{
+                  left: `${lookTargetPoint.x * 100}%`,
+                  top: `${lookTargetPoint.y * 100}%`,
+                  transform: 'translate(-50%, -50%)'
+                }}
+              />
+            )}
+            {subjectAnchorPoint && lookTargetPoint && (
+              <div
+                className="absolute border-t border-dashed border-white/60 pointer-events-none"
+                style={{
+                  left: `${subjectAnchorPoint.x * 100}%`,
+                  top: `${subjectAnchorPoint.y * 100}%`,
+                  width: `${Math.sqrt(
+                    ((lookTargetPoint.x - subjectAnchorPoint.x) * 100) ** 2 +
+                      ((lookTargetPoint.y - subjectAnchorPoint.y) * 100) ** 2
+                  )}%`,
+                  transformOrigin: 'left center',
+                  transform: `translateY(-50%) rotate(${Math.atan2(
+                    lookTargetPoint.y - subjectAnchorPoint.y,
+                    lookTargetPoint.x - subjectAnchorPoint.x
+                  )}rad)`
+                }}
+              />
+            )}
+            {isPinLoading && (
+              <div className="absolute inset-0 bg-black/45 flex items-center justify-center text-[10px] uppercase tracking-wide text-gray-200">
+                Inferring default pins...
+              </div>
+            )}
+          </div>
+          <div className="mt-1 text-[10px] text-gray-500">
+            Blue pin = subject/world anchor (orbit center). Pink pin = look target (framing target).
+          </div>
+        </div>
+      )}
 
       {/* Main Content Area */}
       {!hasResult ? (

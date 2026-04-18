@@ -63,6 +63,22 @@ export const ShotTile: React.FC<ShotTileProps> = ({ variant, onToggleSelected, o
 
   const effectiveUrl = displayUrl?.source === rawUrl ? displayUrl.url : rawUrl;
 
+  const [viewMode, setViewMode] = useState<'preview' | 'projection' | 'holeMask'>(
+    () => (variant.projectionUrl && !variant.finalUrl ? 'projection' : 'preview')
+  );
+
+  useEffect(() => {
+    if (variant.projectionUrl && !variant.finalUrl) {
+      setViewMode('projection');
+    } else {
+      setViewMode('preview');
+    }
+  }, [variant.projectionUrl, variant.finalUrl]);
+
+  let activeUrl = effectiveUrl;
+  if (viewMode === 'projection' && variant.projectionUrl) activeUrl = variant.projectionUrl;
+  if (viewMode === 'holeMask' && variant.holeMaskUrl) activeUrl = variant.holeMaskUrl;
+
   return (
     <div 
       className={`
@@ -73,28 +89,35 @@ export const ShotTile: React.FC<ShotTileProps> = ({ variant, onToggleSelected, o
     >
       {/* Image / Status Container */}
       <div 
-        className={`w-full relative flex items-center justify-center cursor-pointer group overflow-hidden rounded-t-lg shrink-0 transition-all ${effectiveUrl && effectiveStatus !== 'expired' ? '' : 'py-6 bg-[#0a0a0a]'}`}
-        style={effectiveUrl && effectiveStatus !== 'expired' ? { aspectRatio: '16/9' } : { minHeight: '60px' }}
+        className={`w-full relative flex items-center justify-center cursor-pointer group overflow-hidden rounded-t-lg shrink-0 transition-all pt-11 ${activeUrl && effectiveStatus !== 'expired' ? '' : 'py-6 bg-[#0a0a0a]'}`}
+        style={activeUrl && effectiveStatus !== 'expired' ? { aspectRatio: '16/9' } : { minHeight: '60px' }}
         onClick={() => {
           if (effectiveStatus === 'done' || effectiveStatus === 'error') {
             onToggleSelected(variant.id, !variant.selected);
           }
         }}
       >
-        {effectiveUrl && effectiveStatus !== 'expired' ? (
+        {activeUrl && effectiveStatus !== 'expired' ? (
           <>
             <img 
-              src={effectiveUrl} 
+              src={activeUrl} 
               alt={variant.label}
               className="w-full h-full object-cover"
               onError={(e) => {
-                if (effectiveUrl.includes('r2.dev') || effectiveUrl.includes('cloudflare')) {
+                if (activeUrl.includes('r2.dev') || activeUrl.includes('cloudflare')) {
                   // If the remote blob 404s, explicitly trap it as an expiration rather than just broken text
                   e.currentTarget.style.display = 'none';
                   setLocalExpired(true);
                 }
               }}
             />
+            {(variant.projectionUrl || variant.holeMaskUrl) && (
+              <div className="absolute top-2 left-2 z-20 pointer-events-none">
+                <span className="bg-black/80 border border-white/10 text-white text-[10px] font-bold uppercase tracking-wide px-2 py-1 rounded">
+                  {viewMode === 'projection' ? 'RAW' : viewMode === 'holeMask' ? 'HOLE' : 'PREVIEW'}
+                </span>
+              </div>
+            )}
             {isGenerating && (
               <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center z-10 rounded-t-lg backdrop-blur-[2px]">
                 <svg className="animate-spin h-8 w-8 text-white mb-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -136,7 +159,7 @@ export const ShotTile: React.FC<ShotTileProps> = ({ variant, onToggleSelected, o
 
 
 
-        {/* Action Badge - Regenerate, Inspect, Download */}
+        {/* Action Badge */}
         {hasImage && (
           <div className="absolute top-2 right-2 flex gap-1 z-20 bg-black/55 p-1 rounded-lg backdrop-blur-sm">
             {onRegenerateOne && (
@@ -270,6 +293,47 @@ export const ShotTile: React.FC<ShotTileProps> = ({ variant, onToggleSelected, o
                     <line style={{ stroke: '#ffffff' }} x1="12" y1="15" x2="12" y2="3" />
                   </svg>
                 </span>
+              </button>
+            )}
+          </div>
+        )}
+
+        {(variant.projectionUrl || variant.holeMaskUrl) && (
+          <div className="absolute top-12 left-2 right-2 z-20 flex gap-2">
+            <button
+              onClick={(e) => { e.stopPropagation(); setViewMode('preview'); }}
+              className={`h-8 px-3 text-[10px] font-bold rounded uppercase tracking-wide transition-colors whitespace-nowrap ${
+                viewMode === 'preview'
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-black/80 border border-white/10 text-gray-300 hover:bg-black'
+              }`}
+            >
+              Preview
+            </button>
+
+            {variant.projectionUrl && (
+              <button
+                onClick={(e) => { e.stopPropagation(); setViewMode('projection'); }}
+                className={`h-8 px-3 text-[10px] font-bold rounded uppercase tracking-wide transition-colors whitespace-nowrap ${
+                  viewMode === 'projection'
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-black/80 border border-white/10 text-gray-300 hover:bg-black'
+                }`}
+              >
+                Raw
+              </button>
+            )}
+
+            {variant.holeMaskUrl && (
+              <button
+                onClick={(e) => { e.stopPropagation(); setViewMode('holeMask'); }}
+                className={`h-8 px-3 text-[10px] font-bold rounded uppercase tracking-wide transition-colors whitespace-nowrap ${
+                  viewMode === 'holeMask'
+                    ? 'bg-pink-600 text-white'
+                    : 'bg-black/80 border border-white/10 text-gray-300 hover:bg-black'
+                }`}
+              >
+                Hole
               </button>
             )}
           </div>

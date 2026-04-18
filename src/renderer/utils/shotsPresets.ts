@@ -22,9 +22,19 @@ export type ShotPresetDefinition = {
   lensClass: ShotLensClass;
 
   cropRule: string;
-  opticalIntent: string;
   uniquenessKey: string;
   negatives: string[];
+
+  cameraOffsetX?: number;
+  cameraOffsetY?: number;
+  cameraOffsetZ?: number;
+  yaw?: number;
+  pitch?: number;
+  fov?: number;
+  targetOccupancy?: number;
+  lookTargetYOffset?: number;
+  lookTargetXOffset?: number;
+  repairOpticalIntent?: string;
 };
 
 export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
@@ -40,8 +50,16 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     orbit: 'front',
     placement: 'center',
     lensClass: 'portrait',
+    cameraOffsetX: 0,
+    cameraOffsetY: 0,
+    cameraOffsetZ: -3.5,
+    yaw: 0,
+    pitch: 0,
+    fov: 24,
+    targetOccupancy: 0.8,
+    lookTargetYOffset: 0.86,
     cropRule: 'Face and upper shoulders dominant. Crop before elbows/wrists where possible to avoid edge-limb artifacts. Do not drift into medium/full-body framing.',
-    opticalIntent: 'Extremely shallow depth of field. Background should be heavily blurred/bokeh. High focal compression drawing maximum attention to facial features and eyes.',
+    repairOpticalIntent: 'Extremely shallow depth of field. Background heavily blurred.',
     uniquenessKey: 'front_close_identity',
     negatives: [
       'Do not widen to medium-close or medium shot',
@@ -63,8 +81,15 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     orbit: 'front',
     placement: 'center',
     lensClass: 'normal',
+    cameraOffsetX: 0,
+    cameraOffsetY: 0,
+    cameraOffsetZ: -2,
+    yaw: 0,
+    pitch: 0,
+    fov: 38,
+    targetOccupancy: 0.66,
     cropRule: 'Head and torso, chest up. Tighter than medium but looser than closeup.',
-    opticalIntent: 'Shallow depth of field with soft background blur. Ensure the subject clearly pops from the environment without dissolving background shapes completely.',
+    repairOpticalIntent: 'Soft depth of field with readable background.',
     uniquenessKey: 'front_medclose',
     negatives: [
       'Do not widen to medium or wide shot',
@@ -85,8 +110,15 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     orbit: 'front',
     placement: 'center',
     lensClass: 'normal',
+    cameraOffsetX: 0,
+    cameraOffsetY: 0,
+    cameraOffsetZ: 0,
+    yaw: 0,
+    pitch: 0,
+    fov: 42,
+    targetOccupancy: 0.52,
     cropRule: 'Waist-up or hip-up framing. Must be clearly wider than mediumClose and clearly tighter than wide.',
-    opticalIntent: 'Moderate depth of field. Background is readable but slightly out of focus, allowing structural context while favoring the subject.',
+    repairOpticalIntent: 'Moderate depth of field.',
     uniquenessKey: 'front_medium',
     negatives: [
       'Do not crop to face only or medium-close',
@@ -107,8 +139,15 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     orbit: 'front',
     placement: 'center',
     lensClass: 'mildWide',
+    cameraOffsetX: 0,
+    cameraOffsetY: 0,
+    cameraOffsetZ: 2.8,
+    yaw: 0,
+    pitch: 0,
+    fov: 48,
+    targetOccupancy: 0.28,
     cropRule: 'Environment-forward framing with substantial architecture visible. Do not collapse into portrait/medium crop.',
-    opticalIntent: 'Deep focus (large depth of field). Background and environment should be sharp and readable. Minimal lens compression.',
+    repairOpticalIntent: 'Deep focus with readable architecture.',
     uniquenessKey: 'scene_wide_master',
     negatives: [
       'Do not crop to medium or medium-close',
@@ -129,8 +168,16 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     orbit: 'front',
     placement: 'center',
     lensClass: 'mildWide',
+    cameraOffsetX: 0,
+    cameraOffsetY: -4.9,
+    cameraOffsetZ: 2.2,
+    yaw: 0,
+    pitch: 0.98,
+    fov: 40,
+    targetOccupancy: 0.64,
+    lookTargetYOffset: 0.3,
     cropRule: 'Subtle up-angle. Subject placed slightly higher in frame.',
-    opticalIntent: 'Clear focal separation drawing the eye to the subject, but preserving strong perspective lines from the ground pushing upwards.',
+    repairOpticalIntent: 'Strong upward perspective with preserved vertical convergence.',
     uniquenessKey: 'front_low_power',
     negatives: [
       'Do not shoot from eye-level',
@@ -151,8 +198,16 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     orbit: 'front',
     placement: 'center',
     lensClass: 'mildWide',
+    cameraOffsetX: 0,
+    cameraOffsetY: 8.2,
+    cameraOffsetZ: 2.4,
+    yaw: 0,
+    pitch: -1.24,
+    fov: 41,
+    targetOccupancy: 0.23,
+    lookTargetYOffset: -0.28,
     cropRule: 'Look down from elevated position. Subject placed slightly lower in frame.',
-    opticalIntent: 'Deep focus pushing down into the floor. Foreground structural elements (desks, ground) should feel grounded with readable depth.',
+    repairOpticalIntent: 'Downward perspective with more visible top and floor planes.',
     uniquenessKey: 'scene_high_elevated',
     negatives: [
       'Do not shoot from ground level or eye-level',
@@ -173,8 +228,16 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     orbit: 'threeQuarterLeft',
     placement: 'rightThird',
     lensClass: 'normal',
+    cameraOffsetX: -2.1,
+    cameraOffsetY: 0,
+    cameraOffsetZ: 0.5,
+    yaw: 0.32,
+    pitch: 0,
+    fov: 40,
+    targetOccupancy: 0.6,
+    lookTargetXOffset: 0.14,
     cropRule: 'Camera from the left, subject typically favored on the right third looking left.',
-    opticalIntent: 'Soft depth of field focusing on the near-plane of the face. Far shoulder/background should softly fall off in focus.',
+    repairOpticalIntent: 'Soft falloff on the far side with clear lateral environment reveal.',
     uniquenessKey: 'left_34_angle',
     negatives: [
       'Do not drift to frontal or face-front',
@@ -197,8 +260,16 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     orbit: 'threeQuarterRight',
     placement: 'leftThird',
     lensClass: 'normal',
+    cameraOffsetX: 2.1,
+    cameraOffsetY: 0,
+    cameraOffsetZ: 0.5,
+    yaw: -0.32,
+    pitch: 0,
+    fov: 40,
+    targetOccupancy: 0.6,
+    lookTargetXOffset: -0.14,
     cropRule: 'Camera from the right, subject typically favored on the left third looking right.',
-    opticalIntent: 'Soft depth of field focusing on the near-plane of the face. Far shoulder/background should softly fall off in focus.',
+    repairOpticalIntent: 'Soft falloff on the far side with clear lateral environment reveal.',
     uniquenessKey: 'right_34_angle',
     negatives: [
       'Do not drift to frontal or face-front',
@@ -221,8 +292,17 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     orbit: 'profileLeft',
     placement: 'center',
     lensClass: 'portrait',
+    cameraOffsetX: -3.4,
+    cameraOffsetY: 0,
+    cameraOffsetZ: 0.2,
+    yaw: 0.60,
+    pitch: 0,
+    fov: 35,
+    targetOccupancy: 0.7,
+    lookTargetYOffset: 0.36,
+    lookTargetXOffset: 0.22,
     cropRule: 'Extremely tight crop. Shoulders and head only. NO full body context. Strict 90-degree profile. Focus purely on one-eye side silhouette.',
-    opticalIntent: 'Strong background blur to perfectly silhouette and separate the harsh profile line from the environment.',
+    repairOpticalIntent: 'Strong side silhouette with blurred background and no frontal recovery.',
     uniquenessKey: 'side_profile_strict',
     negatives: [
       'Do not reveal both eyes',
@@ -248,8 +328,15 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     orbit: 'overShoulder',
     placement: 'leftThird',
     lensClass: 'normal',
+    cameraOffsetX: -1.7,
+    cameraOffsetY: 0,
+    cameraOffsetZ: 0.6,
+    yaw: 0.18,
+    pitch: 0,
+    fov: 45,
+    targetOccupancy: 0.54,
     cropRule: 'Foreground out of focus shoulder/head wedge, revealing target subject prominently.',
-    opticalIntent: 'Extreme depth stratification: foreground shoulder must be heavily blurred (bokeh), target subject perfectly sharp, and background softly blurred.',
+    repairOpticalIntent: 'Foreground shoulder separation with target retained in focus.',
     uniquenessKey: 'pair_ots_depth',
     negatives: [
       'Do not omit the foreground shoulder layer',
@@ -273,8 +360,15 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     orbit: 'front',
     placement: 'center',
     lensClass: 'mildWide',
+    cameraOffsetX: 0,
+    cameraOffsetY: 0,
+    cameraOffsetZ: 0.8,
+    yaw: 0,
+    pitch: 0,
+    fov: 46,
+    targetOccupancy: 0.46,
     cropRule: 'Wide enough to include both interacting subjects clearly.',
-    opticalIntent: 'Split diopter or sufficient depth of field to keep both subjects sharp and clearly readable, while the background remains softly separated.',
+    repairOpticalIntent: 'Balanced focus across both subjects.',
     uniquenessKey: 'pair_twoshot_balanced',
     negatives: [
       'Do not isolate only one subject',

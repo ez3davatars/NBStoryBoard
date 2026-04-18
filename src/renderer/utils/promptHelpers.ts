@@ -1096,8 +1096,8 @@ export function buildShotVariantPrompt(args: BuildShotVariantPromptArgs): string
     p += `Recompose this image as a ${preset.label}.\n`;
     p += `${preset.shotInstruction}\n`;
     p += `Lens Note: ${preset.defaultLensNote}\n`;
-    if (preset.opticalIntent) {
-        p += `Optical Intent: ${preset.opticalIntent}\n`;
+    if (preset.repairOpticalIntent) {
+        p += `Optical Intent: ${preset.repairOpticalIntent}\n`;
     }
     p += `\n### SHOT FRAMING LOCK\n${buildShotFramingLockBlock(preset)}\n\n`;
 
@@ -1345,4 +1345,51 @@ export function buildShotFinalRerenderPrompt(args: BuildShotFinalRerenderPromptA
   p += `\nIDENTITY LOCK: FACE_STRICT\n`;
 
   return p;
+}
+
+export function buildShotRepairPrompt(args: BuildShotVariantPromptArgs): string {
+    const preset = SHOT_PRESETS[args.presetId];
+    
+    let p = `CRITICAL GEN-REPAIR INSTRUCTION\n`;
+    p += `This is a constrained generative repair pass. The provided control image is a deterministic 2.5D geometric projection.\n`;
+    p += `The camera layout, perspective, depth, and scale in this image are MATHEMATICALLY EXACT. Do not invent your own composition.\n\n`;
+
+    p += `REPAIR CONTRACT:\n`;
+    p += `1. PRESERVE THE PROVIDED COMPOSITION EXACTLY.\n`;
+    p += `2. DO NOT REFRAME, crop, zoom, or alter the aspect ratio under any circumstances.\n`;
+    p += `3. DO NOT MOVE THE SUBJECT. Keep their silhouette, pose, and physical anchor placement absolutely fixed.\n`;
+    p += `4. DO NOT RESTORE FRONTAL SYMMETRY. If the projection shows a side profile or heavy oblique angle, maintain it strictly.\n`;
+    p += `5. FILL MISSING REGIONS ONLY. Focus solely on smoothing seams and filling tears/voids in the geometry.\n`;
+    p += `6. DO NOT REDESIGN THE SCENE OR INVENT NEW PROPS/STRUCTURAL ELEMENTS.\n`;
+    p += `7. BLACK MASK REGION = FULLY PROTECTED. NON-MASKED PIXELS MUST REMAIN UNCHANGED.\n\n`;
+
+    p += `PROTECTED REGIONS (STRICTLY DO NOT MODIFY):\n`;
+    p += `- The subject's exact projected silhouette\n`;
+    p += `- Foreground pillar geometry and scale\n`;
+    p += `- Already-correct scene regions and environmental textures\n`;
+    p += `- Any preserved ropes, chains, or attachments actually present in the primary projection image.\n\n`;
+
+    p += `SHOT CONTEXT (For optical intent only):\n`;
+    p += `This geometry represents a ${preset.label}.\n`;
+    p += `Optical Intent to apply during repair fusing: ${preset.repairOpticalIntent || preset.defaultLensNote}\n\n`;
+
+    p += `CONTINUITY LOCKS:\n`;
+    if (args.locks?.identity || (args.actorIdentitySets && args.actorIdentitySets.length > 0)) {
+        p += `IDENTITY: Strictly preserve the original face/identity traits.\n`;
+    }
+    if (args.locks?.wardrobe) {
+        p += `WARDROBE: Preserve the original clothing explicitly.\n`;
+    }
+    p += `Apply these ONLY to ensure the reconstructed subject pixels perfectly match the original intent, without changing the geometric pose/silhouette.\n\n`;
+
+    if (args.locks?.background && args.environmentText) {
+        p += `ENVIRONMENT LOCK:\n${args.environmentText}\n`;
+        p += `Apply this specifically to the newly revealed/inpainted background space behind moving occlusion structures.\n\n`;
+    }
+
+    if (args.locks?.lighting && args.lightingText) {
+        p += `LIGHTING FUSION:\n${args.lightingText}\n`;
+    }
+
+    return p;
 }

@@ -27,6 +27,7 @@
     "@mediapipe/face_mesh": "^0.4.1633559619",
     "@radix-ui/react-tooltip": "^1.2.8",
     "@supabase/supabase-js": "^2.101.1",
+    "@types/three": "^0.184.0",
     "framer-motion": "^12.26.1",
     "lucide-react": "^0.562.0",
     "react": "^19.2.0",
@@ -34,6 +35,7 @@
     "react-markdown": "^10.1.0",
     "react-webcam": "^7.2.0",
     "remark-gfm": "^4.0.1",
+    "three": "^0.184.0",
     "zustand": "^5.0.11"
   },
   "devDependencies": {
