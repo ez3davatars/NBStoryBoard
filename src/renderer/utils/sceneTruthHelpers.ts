@@ -3,16 +3,24 @@ import type { SceneTruthSnapshot, SceneTruthActor } from '../types/shots';
 
 export function buildSceneTruthSnapshot(args: {
   sourceResultUrl: string;
+  expectedActorCount?: number;
   actorIdentitySets?: ActorIdentityReferenceSet[];
   shotsActorOptions?: ShotsActorOption[];
   tokens?: StageToken[];
   environmentText?: string;
 }): SceneTruthSnapshot {
   
-  const { sourceResultUrl, actorIdentitySets = [], shotsActorOptions = [], tokens = [], environmentText = '' } = args;
+  const {
+    sourceResultUrl,
+    expectedActorCount: passedExpectedActorCount,
+    actorIdentitySets = [],
+    shotsActorOptions = [],
+    tokens = [],
+    environmentText = ''
+  } = args;
 
   // 1. Compute Actor Count
-  const expectedActorCount = Math.max(tokens.length, actorIdentitySets.length, 0);
+  const expectedActorCount = Math.max(passedExpectedActorCount || 0, tokens.length, actorIdentitySets.length, 0);
 
   // 2. Derive Left-to-Right order and postures from Tokens or Actor Sets
   const actors: SceneTruthActor[] = [];
@@ -112,8 +120,13 @@ export function buildSceneTruthSnapshotBlock(sceneTruth: SceneTruthSnapshot): st
   const lines: string[] = [];
   lines.push(`### SCENE TRUTH SNAPSHOT (FROZEN PHYSICAL REALITY):`);
   lines.push(`CRITICAL DIRECTIVE: You MUST perfectly mirror the physical reality recorded below.`);
-  
-  lines.push(`- Visible Actor Count: EXACTLY ${sceneTruth.expectedActorCount}`);
+
+  if (sceneTruth.expectedActorCount === 0) {
+    lines.push(`- Visible Actor Count: preserve all visible people already present in the anchor image`);
+    lines.push(`- Do not add, remove, duplicate, or merge visible people`);
+  } else {
+    lines.push(`- Visible Actor Count: EXACTLY ${sceneTruth.expectedActorCount}`);
+  }
   
   if (sceneTruth.actors.length > 0) {
     const actorOrder = sceneTruth.actors

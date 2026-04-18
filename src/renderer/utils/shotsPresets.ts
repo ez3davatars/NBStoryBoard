@@ -7,12 +7,20 @@ export type ShotOrbit = 'front' | 'threeQuarterLeft' | 'threeQuarterRight' | 'pr
 export type ShotPlacement = 'center' | 'leftThird' | 'rightThird';
 export type ShotLensClass = 'portrait' | 'normal' | 'mildWide';
 
+export type ShotOpticalIntent = {
+  focalFeel: string;
+  compressionBehavior: string;
+  depthOfFieldBehavior: string;
+  separationStyle: string;
+};
+
 export type ShotPresetDefinition = {
   id: ShotPresetId;
   label: string;
   description: string;
   shotInstruction: string;
   defaultLensNote: string;
+  opticalIntent: ShotOpticalIntent;
 
   targetMode: ShotTargetMode;
   framing: ShotFraming;
@@ -31,8 +39,14 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     id: 'closeup',
     label: 'Close-Up',
     description: 'Tight facial framing with strong identity clarity.',
-    shotInstruction: 'Recompose as a cinematic close-up centered on the primary subject’s face and upper shoulders.',
+    shotInstruction: 'Recompose as a cinematic close-up centered on the primary subject face and upper shoulders.',
     defaultLensNote: 'Natural portrait perspective with clean facial proportions.',
+    opticalIntent: {
+      focalFeel: 'Portrait-leaning focal feel with intimate field of view.',
+      compressionBehavior: 'Mild flattering compression; avoid face widening.',
+      depthOfFieldBehavior: 'Very shallow depth of field with strong rear falloff.',
+      separationStyle: 'Subject isolated from background with soft bokeh rolloff.'
+    },
     targetMode: 'single',
     framing: 'closeup',
     elevation: 'eye',
@@ -54,6 +68,12 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     description: 'Head-and-torso framing for dialogue and performance emphasis.',
     shotInstruction: 'Recompose as a cinematic medium close-up from approximately chest-up.',
     defaultLensNote: 'Natural perspective, no distortion.',
+    opticalIntent: {
+      focalFeel: 'Neutral-to-portrait focal feel that protects facial identity.',
+      compressionBehavior: 'Balanced compression with stable proportions.',
+      depthOfFieldBehavior: 'Soft depth of field with readable environment cues.',
+      separationStyle: 'Clear subject prominence without fully collapsing background detail.'
+    },
     targetMode: 'single',
     framing: 'mediumClose',
     elevation: 'eye',
@@ -74,6 +94,12 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     description: 'Balanced subject and environment relationship.',
     shotInstruction: 'Recompose as a cinematic medium shot preserving posture and environment context.',
     defaultLensNote: 'Balanced field of view.',
+    opticalIntent: {
+      focalFeel: 'Neutral focal feel balancing actor and scene context.',
+      compressionBehavior: 'Natural perspective with moderate depth continuity.',
+      depthOfFieldBehavior: 'Moderate depth of field; both actor and set remain legible.',
+      separationStyle: 'Subject remains focal, but scene geometry stays readable.'
+    },
     targetMode: 'single',
     framing: 'medium',
     elevation: 'eye',
@@ -94,6 +120,12 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     description: 'Subject and environment coverage with scene context.',
     shotInstruction: 'Recompose as a cinematic wide shot showing the subject within the environment.',
     defaultLensNote: 'Wide framing without fisheye distortion.',
+    opticalIntent: {
+      focalFeel: 'Mild wide focal feel emphasizing spatial context.',
+      compressionBehavior: 'Low compression with clear depth expansion.',
+      depthOfFieldBehavior: 'Deeper depth of field so architecture and extras read clearly.',
+      separationStyle: 'Foreground, midground, and background planes all remain distinguishable.'
+    },
     targetMode: 'scene',
     framing: 'wide',
     elevation: 'eye',
@@ -115,6 +147,12 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     description: 'Subtle low-angle power framing.',
     shotInstruction: 'Recompose from a subtle low-angle hero perspective while preserving realism and proportions.',
     defaultLensNote: 'Cinematic low-angle perspective, no exaggerated warping.',
+    opticalIntent: {
+      focalFeel: 'Slightly wider heroic perspective without distortion.',
+      compressionBehavior: 'Keep perspective cues honest; no artificial flattening.',
+      depthOfFieldBehavior: 'Moderate depth with foreground-to-subject depth read.',
+      separationStyle: 'Subject dominance comes from camera position, not synthetic blur alone.'
+    },
     targetMode: 'single',
     framing: 'medium',
     elevation: 'low',
@@ -135,6 +173,12 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     description: 'Subtle elevated viewpoint.',
     shotInstruction: 'Recompose from a subtle high-angle perspective while preserving realism and scene continuity.',
     defaultLensNote: 'Natural elevated perspective.',
+    opticalIntent: {
+      focalFeel: 'Mildly wide overhead-leaning perspective without extreme top-down.',
+      compressionBehavior: 'Natural perspective depth with visible floor and plane changes.',
+      depthOfFieldBehavior: 'Moderate-to-deeper depth preserving layout readability.',
+      separationStyle: 'Subject remains readable while environmental planes gain clarity.'
+    },
     targetMode: 'scene',
     framing: 'wide',
     elevation: 'high',
@@ -155,6 +199,12 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     description: 'Three-quarter framing from the left side.',
     shotInstruction: 'Recompose as a cinematic three-quarter-left camera angle, preserving identity and continuity.',
     defaultLensNote: 'Natural perspective with clear facial consistency.',
+    opticalIntent: {
+      focalFeel: 'Normal lens feel suited for profile-adjacent facial geometry.',
+      compressionBehavior: 'Moderate compression that preserves nose-cheek-jaw depth cues.',
+      depthOfFieldBehavior: 'Soft background falloff with side-plane readability.',
+      separationStyle: 'Subject separated while preserving side-of-face depth structure.'
+    },
     targetMode: 'single',
     framing: 'mediumClose',
     elevation: 'eye',
@@ -175,6 +225,12 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     description: 'Three-quarter framing from the right side.',
     shotInstruction: 'Recompose as a cinematic three-quarter-right camera angle, preserving identity and continuity.',
     defaultLensNote: 'Natural perspective with clear facial consistency.',
+    opticalIntent: {
+      focalFeel: 'Normal lens feel suited for profile-adjacent facial geometry.',
+      compressionBehavior: 'Moderate compression that preserves nose-cheek-jaw depth cues.',
+      depthOfFieldBehavior: 'Soft background falloff with side-plane readability.',
+      separationStyle: 'Subject separated while preserving side-of-face depth structure.'
+    },
     targetMode: 'single',
     framing: 'mediumClose',
     elevation: 'eye',
@@ -195,6 +251,12 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     description: 'Profile-oriented composition with side-view emphasis.',
     shotInstruction: 'Recompose with a strong profile emphasis while preserving subject identity and scene logic.',
     defaultLensNote: 'Natural side-view framing, no facial drift.',
+    opticalIntent: {
+      focalFeel: 'Portrait-to-normal side-view focal feel.',
+      compressionBehavior: 'Subtle compression preserving silhouette purity.',
+      depthOfFieldBehavior: 'Background softened enough to protect profile edge readability.',
+      separationStyle: 'Subject contour separation is prioritized over frontal facial detail.'
+    },
     targetMode: 'single',
     framing: 'mediumClose',
     elevation: 'eye',
@@ -215,6 +277,12 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     description: 'Looking past a foreground subject to focus on the target.',
     shotInstruction: 'Recompose as an over-the-shoulder shot, placing one subject as a soft foreground shoulder/head wedge while keeping the target subject in focus. Preserve the same stylized render medium, same character world, and same non-photoreal visual treatment as the source image.',
     defaultLensNote: 'Cinematic depth of field, natural perspective.',
+    opticalIntent: {
+      focalFeel: 'Normal cinematic focal feel with pronounced near-to-far plane contrast.',
+      compressionBehavior: 'Moderate compression retaining foreground wedge volume.',
+      depthOfFieldBehavior: 'Foreground wedge softened, target subject remains in focal plane.',
+      separationStyle: 'Layered foreground-background separation defines shot identity.'
+    },
     targetMode: 'pair',
     framing: 'mediumClose',
     elevation: 'eye',
@@ -238,6 +306,12 @@ export const SHOT_PRESETS: Record<ShotPresetId, ShotPresetDefinition> = {
     description: 'Balanced framing containing two subjects.',
     shotInstruction: 'Recompose as a balanced two-shot highlighting the interaction between both subjects.',
     defaultLensNote: 'Mid-lens perspective, equitable framing.',
+    opticalIntent: {
+      focalFeel: 'Neutral cinematic focal feel that keeps both actors legible.',
+      compressionBehavior: 'Balanced compression so neither actor appears unnaturally flattened.',
+      depthOfFieldBehavior: 'Moderate depth to keep both actors readable in shared focus space.',
+      separationStyle: 'Foreground/background separation supports interaction, not isolation.'
+    },
     targetMode: 'pair',
     framing: 'medium',
     elevation: 'eye',
@@ -275,18 +349,18 @@ export function buildShotPresetIdsForPack(packId: ShotPackId, count: 4 | 6 | 9):
     if (count === 6) return ['closeup', 'mediumClose', 'medium', 'wide', 'lowAngleHero', 'highAngle'];
     return ['closeup', 'mediumClose', 'medium', 'wide', 'lowAngleHero', 'highAngle', 'threeQuarterLeft', 'threeQuarterRight', 'profile'];
   }
-  
+
   if (packId === 'portrait') {
     if (count === 4) return ['closeup', 'mediumClose', 'threeQuarterLeft', 'threeQuarterRight'];
     if (count === 6) return ['closeup', 'mediumClose', 'threeQuarterLeft', 'threeQuarterRight', 'profile', 'medium'];
     return ['closeup', 'mediumClose', 'threeQuarterLeft', 'threeQuarterRight', 'profile', 'medium', 'highAngle', 'lowAngleHero', 'wide'];
   }
-  
+
   if (packId === 'coverage') {
     if (count === 4) return ['closeup', 'mediumClose', 'medium', 'wide'];
     if (count === 6) return ['closeup', 'mediumClose', 'medium', 'wide', 'highAngle', 'lowAngleHero'];
     return ['closeup', 'mediumClose', 'medium', 'wide', 'highAngle', 'lowAngleHero', 'threeQuarterLeft', 'threeQuarterRight', 'profile'];
   }
-  
+
   return ['closeup', 'medium', 'wide', 'profile'].slice(0, count) as ShotPresetId[];
 }

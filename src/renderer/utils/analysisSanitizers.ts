@@ -24,6 +24,39 @@ export function stripIdentityOverridingAnalysis(text: string | undefined): strin
   return sanitized.replace(/\s{2,}/g, ' ').trim();
 }
 
+const SHOT_DIRECTIVE_REGEX = /\b(extreme close[- ]?up|close[- ]?up|medium close(?:[- ]?up)?|medium shot|wide shot|long shot|establishing shot|two[- ]?shot|over[- ]the[- ]shoulder|ots|profile shot|three[- ]quarter|3\/4 shot|camera angle|camera move|camera orbit|lens choice|focal length|shot size|framing|crop)\b/i;
+const SHOT_DIRECTIVE_PHRASE_REGEX = /\b(extreme close[- ]?up|close[- ]?up|medium close(?:[- ]?up)?|medium shot|wide shot|long shot|establishing shot|two[- ]?shot|over[- ]the[- ]shoulder|ots|profile shot|three[- ]quarter|3\/4 shot|shot size|framing|camera angle|camera move|camera orbit|lens choice|focal length)\b/gi;
+
+export function stripShotDirectiveContamination(text: string | undefined): string {
+  if (!text) return '';
+
+  const parts = text
+    .split(/\r?\n+/)
+    .flatMap(line => line.split(/[.;!?]+/))
+    .map(part => part.trim())
+    .filter(Boolean);
+
+  const cleaned = parts
+    .map(part => {
+      let candidate = part;
+      const hadDirective = SHOT_DIRECTIVE_REGEX.test(candidate);
+
+      candidate = candidate
+        .replace(SHOT_DIRECTIVE_PHRASE_REGEX, ' ')
+        .replace(/\b(in|as|for|with)\s+(a|an)\s*$/gi, ' ')
+        .replace(/\s{2,}/g, ' ')
+        .replace(/^[,\-\s]+|[,\-\s]+$/g, '')
+        .trim();
+
+      if (!candidate) return '';
+      if (hadDirective && candidate.split(/\s+/).length <= 2) return '';
+      return candidate;
+    })
+    .filter(Boolean);
+
+  return cleaned.join('. ').trim();
+}
+
 /**
  * Helper to safely demote extracted styles if strict actors are present.
  */

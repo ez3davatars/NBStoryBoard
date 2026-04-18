@@ -7,7 +7,7 @@ interface ShotTileProps {
   variant: ShotVariant;
   onToggleSelected: (variantId: string, selected: boolean) => void;
   onSave?: (variantId: string) => void;
-  onRegenerateOne?: (variantId: string) => void;
+  onRegenerateOne?: (variantId: string, instruction?: string) => void;
   onInspect?: (variantId: string) => void;
 }
 
@@ -24,6 +24,7 @@ export const ShotTile: React.FC<ShotTileProps> = ({ variant, onToggleSelected, o
 
   const [displayUrl, setDisplayUrl] = useState<string | null>(null);
   const [localExpired, setLocalExpired] = useState(false);
+  const [regenerateInstruction, setRegenerateInstruction] = useState('');
   const effectiveStatus = localExpired ? 'expired' : variant.status;
 
   useEffect(() => {
@@ -64,11 +65,16 @@ export const ShotTile: React.FC<ShotTileProps> = ({ variant, onToggleSelected, o
   ]);
 
   const effectiveUrl = displayUrl || rawUrl;
+  const triggerRegenerate = () => {
+    if (!onRegenerateOne) return;
+    const instruction = regenerateInstruction.trim();
+    onRegenerateOne(variant.id, instruction || undefined);
+  };
 
   return (
     <div 
       className={`
-        relative flex flex-col min-w-0 overflow-hidden rounded-xl border bg-[#111111] transition-all duration-200
+        relative flex h-full flex-col min-w-0 overflow-hidden rounded-xl border bg-[#111111] transition-all duration-200
         ${variant.selected ? 'border-blue-500 shadow-[0_0_15px_rgba(59,130,246,0.5)]' : 'border-[#27272a] hover:border-gray-500'}
         ${isGenerating ? 'opacity-75' : 'opacity-100'}
       `}
@@ -138,154 +144,133 @@ export const ShotTile: React.FC<ShotTileProps> = ({ variant, onToggleSelected, o
 
 
 
-        {/* Action Badge - Regenerate, Inspect, Download */}
-        {hasImage && (
-          <div className="absolute top-2 right-2 flex gap-1 z-20 bg-black/55 p-1 rounded-lg backdrop-blur-sm">
-            {onRegenerateOne && (
-              <button
-                onClick={(e) => { e.stopPropagation(); onRegenerateOne(variant.id); }}
-                className="bg-[#1a1a1c] border border-[#3f3f46] hover:bg-[#27272a] hover:border-gray-400 transition-colors w-8 h-8 flex items-center justify-center rounded shadow-lg group/btn"
-                title="Regenerate Shot"
-                style={{ color: '#ffffff', WebkitTextFillColor: '#ffffff' }}
-              >
-                <span
-                  className="w-4 h-4 flex items-center justify-center pointer-events-none group-hover/btn:scale-110 transition-transform"
-                  style={{ minWidth: 16, minHeight: 16 }}
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="#ffffff"
-                    strokeWidth="2.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    className="block drop-shadow-md"
-                    style={{
-                      display: 'block',
-                      width: '16px',
-                      height: '16px',
-                      minWidth: '16px',
-                      minHeight: '16px',
-                      overflow: 'visible',
-                      opacity: 1,
-                      visibility: 'visible',
-                      color: '#ffffff',
-                      stroke: '#ffffff',
-                      flexShrink: 0
-                    }}
-                  >
-                    <polyline style={{ stroke: '#ffffff' }} points="23 4 23 10 17 10" />
-                    <polyline style={{ stroke: '#ffffff' }} points="1 20 1 14 7 14" />
-                    <path style={{ stroke: '#ffffff' }} d="M3.51 9a9 9 0 0 1 14.13-3.36L23 10" />
-                    <path style={{ stroke: '#ffffff' }} d="M20.49 15a9 9 0 0 1-14.13 3.36L1 14" />
-                  </svg>
-                </span>
-              </button>
-            )}
-
-            {onInspect && (
-              <button
-                onClick={(e) => { e.stopPropagation(); onInspect(variant.id); }}
-                className="bg-[#1a1a1c] border border-[#3f3f46] hover:bg-[#27272a] hover:border-gray-400 transition-colors w-8 h-8 flex items-center justify-center rounded shadow-lg group/btn"
-                title="Inspect Large"
-                style={{ color: '#ffffff', WebkitTextFillColor: '#ffffff' }}
-              >
-                <span
-                  className="w-4 h-4 flex items-center justify-center pointer-events-none group-hover/btn:scale-110 transition-transform"
-                  style={{ minWidth: 16, minHeight: 16 }}
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="#ffffff"
-                    strokeWidth="2.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    className="block drop-shadow-md"
-                    style={{
-                      display: 'block',
-                      width: '16px',
-                      height: '16px',
-                      minWidth: '16px',
-                      minHeight: '16px',
-                      overflow: 'visible',
-                      opacity: 1,
-                      visibility: 'visible',
-                      color: '#ffffff',
-                      stroke: '#ffffff',
-                      flexShrink: 0
-                    }}
-                  >
-                    <polyline style={{ stroke: '#ffffff' }} points="15 3 21 3 21 9" />
-                    <polyline style={{ stroke: '#ffffff' }} points="9 21 3 21 3 15" />
-                    <line style={{ stroke: '#ffffff' }} x1="21" y1="3" x2="14" y2="10" />
-                    <line style={{ stroke: '#ffffff' }} x1="3" y1="21" x2="10" y2="14" />
-                  </svg>
-                </span>
-              </button>
-            )}
-
-            {onSave && (
-              <button
-                onClick={(e) => { e.stopPropagation(); onSave(variant.id); }}
-                className="bg-[#1a1a1c] border border-[#3f3f46] hover:bg-[#27272a] hover:border-gray-400 transition-colors w-8 h-8 flex items-center justify-center rounded shadow-lg group/btn"
-                title={variant.finalUrl ? "Download 4K" : "Download preview"}
-                style={{ color: '#ffffff', WebkitTextFillColor: '#ffffff' }}
-              >
-                <span
-                  className="w-4 h-4 flex items-center justify-center pointer-events-none group-hover/btn:scale-110 transition-transform"
-                  style={{ minWidth: 16, minHeight: 16 }}
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="#ffffff"
-                    strokeWidth="2.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    className="block drop-shadow-md"
-                    style={{
-                      display: 'block',
-                      width: '16px',
-                      height: '16px',
-                      minWidth: '16px',
-                      minHeight: '16px',
-                      overflow: 'visible',
-                      opacity: 1,
-                      visibility: 'visible',
-                      color: '#ffffff',
-                      stroke: '#ffffff',
-                      flexShrink: 0
-                    }}
-                  >
-                    <path style={{ stroke: '#ffffff' }} d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                    <polyline style={{ stroke: '#ffffff' }} points="7 10 12 15 17 10" />
-                    <line style={{ stroke: '#ffffff' }} x1="12" y1="15" x2="12" y2="3" />
-                  </svg>
-                </span>
-              </button>
-            )}
-          </div>
-        )}
       </div>
 
       {/* Info Bar */}
-      <div className="min-w-0 p-3 flex flex-col flex-grow justify-between bg-[#111111] border-t border-[#27272a]">
-        <div className="min-w-0 pr-1">
+      <div className="min-w-0 p-3 flex flex-col flex-grow justify-between bg-[#111111] border-t border-[#27272a] min-h-[136px]">
+        <div className="min-w-0 pr-1 min-h-[52px]">
           <div className="truncate text-gray-200 font-medium text-sm m-0 p-0 leading-tight">{variant.label}</div>
-          <div className="text-xs text-gray-500 mt-1 leading-snug line-clamp-2" title={variant.description}>
+          <div className="text-xs text-gray-500 mt-1 leading-snug line-clamp-2 min-h-[34px]" title={variant.description}>
             {variant.description}
           </div>
         </div>
+
+        {hasImage && (
+          <div className="mt-2 mx-auto w-full max-w-[280px] bg-black/55 p-1 rounded-lg backdrop-blur-sm border border-[#3f3f46]/60">
+            <div className="flex gap-1 justify-center">
+              {onRegenerateOne && (
+                <button
+                  onClick={triggerRegenerate}
+                  className="bg-[#1a1a1c] border border-[#3f3f46] hover:bg-[#27272a] hover:border-gray-400 transition-colors w-8 h-8 flex items-center justify-center rounded shadow-lg group/btn"
+                  title="Regenerate Shot"
+                  style={{ color: '#ffffff', WebkitTextFillColor: '#ffffff' }}
+                >
+                  <span
+                    className="w-4 h-4 flex items-center justify-center pointer-events-none group-hover/btn:scale-110 transition-transform"
+                    style={{ minWidth: 16, minHeight: 16 }}
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="#ffffff"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="block drop-shadow-md"
+                    >
+                      <polyline points="23 4 23 10 17 10" />
+                      <polyline points="1 20 1 14 7 14" />
+                      <path d="M3.51 9a9 9 0 0 1 14.13-3.36L23 10" />
+                      <path d="M20.49 15a9 9 0 0 1-14.13 3.36L1 14" />
+                    </svg>
+                  </span>
+                </button>
+              )}
+
+              {onInspect && (
+                <button
+                  onClick={() => onInspect(variant.id)}
+                  className="bg-[#1a1a1c] border border-[#3f3f46] hover:bg-[#27272a] hover:border-gray-400 transition-colors w-8 h-8 flex items-center justify-center rounded shadow-lg group/btn"
+                  title="Inspect Large"
+                  style={{ color: '#ffffff', WebkitTextFillColor: '#ffffff' }}
+                >
+                  <span
+                    className="w-4 h-4 flex items-center justify-center pointer-events-none group-hover/btn:scale-110 transition-transform"
+                    style={{ minWidth: 16, minHeight: 16 }}
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="#ffffff"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="block drop-shadow-md"
+                    >
+                      <polyline points="15 3 21 3 21 9" />
+                      <polyline points="9 21 3 21 3 15" />
+                      <line x1="21" y1="3" x2="14" y2="10" />
+                      <line x1="3" y1="21" x2="10" y2="14" />
+                    </svg>
+                  </span>
+                </button>
+              )}
+
+              {onSave && (
+                <button
+                  onClick={() => onSave(variant.id)}
+                  className="bg-[#1a1a1c] border border-[#3f3f46] hover:bg-[#27272a] hover:border-gray-400 transition-colors w-8 h-8 flex items-center justify-center rounded shadow-lg group/btn"
+                  title={variant.finalUrl ? "Download 4K" : "Download preview"}
+                  style={{ color: '#ffffff', WebkitTextFillColor: '#ffffff' }}
+                >
+                  <span
+                    className="w-4 h-4 flex items-center justify-center pointer-events-none group-hover/btn:scale-110 transition-transform"
+                    style={{ minWidth: 16, minHeight: 16 }}
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="#ffffff"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="block drop-shadow-md"
+                    >
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                      <polyline points="7 10 12 15 17 10" />
+                      <line x1="12" y1="15" x2="12" y2="3" />
+                    </svg>
+                  </span>
+                </button>
+              )}
+            </div>
+
+            {onRegenerateOne && (
+              <input
+                type="text"
+                value={regenerateInstruction}
+                onChange={(e) => setRegenerateInstruction(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    triggerRegenerate();
+                  }
+                }}
+                placeholder="Regen instruction (optional)"
+                className="mt-1 w-full bg-[#0f0f10] border border-[#3f3f46] focus:border-blue-500/60 text-[11px] text-gray-200 placeholder:text-gray-500 rounded px-2 py-1 outline-none"
+              />
+            )}
+          </div>
+        )}
 
         {/* Error/Info Footer Actions */}
         {variant.error && variant.status !== 'done' && (

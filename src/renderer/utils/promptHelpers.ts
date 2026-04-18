@@ -4,8 +4,9 @@ import type { PlacementIntent } from './spatialHelpers';
 import type { ExtractedStyle, SceneIntent } from '../services/GeminiService';
 import type { ShotPackId, ShotPresetId, ShotLocks, DirectedShotSlot } from '../types/shots';
 import type { ActorIdentityReferenceSet, ShotsActorOption } from '../context/AppContext';
-import { SHOT_PRESETS } from './shotsPresets';
+import { SHOT_PRESETS, type ShotPresetDefinition } from './shotsPresets';
 import { buildSceneTruthSnapshotBlock } from './sceneTruthHelpers';
+import { stripShotDirectiveContamination } from './analysisSanitizers';
 
 export const SCENE_LOCK_NEGATIVE_TOKENS = "scene alteration, background change, lighting shift, camera angle change, style deviation, new composition, structural change, reimagined scene, time of day shift, seasonal change, architectural alteration, furniture movement, lens flares, color grading shift, original studio background, white backgrounds showing through gaps";
 
@@ -846,25 +847,41 @@ export type BuildSceneLayoutLockBlockArgs = {
   preserveRelativePositions?: boolean;
   preserveSpacing?: boolean;
   preservePoseRoles?: boolean;
+  isShotVariant?: boolean;
 };
 
 export function buildSceneLayoutLockBlock(args: BuildSceneLayoutLockBlockArgs): string {
   const base = [
-    "Preserve the exact same scene layout and blocking shown in the source anchor.",
+    args.isShotVariant
+      ? "TRUTH LOCK: Preserve the underlying layout and blocking of the scene."
+      : "Preserve the exact same scene layout and blocking shown in the source anchor.",
     "Keep the same people in the same absolute geographical positions.",
     "CAMERA PIVOT RULE: To change a camera angle, you must physically move the camera around the subjects, revealing the appropriate new background area. DO NOT rotate the subjects in place to face the camera. The subjects' physical orientation relative to the room MUST remain permanently locked.",
-    "CRITICAL HEIGHT & SCALE LOCK: Maintain the exact relative height differences, body scale, and physical build between all subjects. Taller actors must remain strictly taller, shorter actors must remain strictly shorter.",
+    "PARALLAX REQUIREMENT: Camera-angle presets must show real 3D viewpoint change (foreground/background overlap shifts, different wall or column reveals, and perspective depth changes) proving the camera moved in space.",
+    "CRITICAL HEIGHT & SCALE LOCK: Maintain the exact relative height differences, body scale, and physical build between all subjects.",
     "Maintain the same left-to-right ordering, seating/standing roles, spacing, and subject-to-room relationships.",
     "Only change the camera framing and viewpoint.",
     "Do not add, remove, duplicate, merge, or invent any additional people.",
+    "CROWD UNIQUENESS LOCK: Background extras must remain unique individuals. Do not mirror-copy or stamp repeated crowd figures on opposite sides of frame.",
     "BACKGROUND CHARACTER LOCK: You MUST preserve the exact physical appearance, hair color, and clothing of any background characters (e.g., judges, extras). Do not alter their outfits, hair, or ethnicity.",
-    "No shifting actor positions, no swapping left/right ordering.",
-    "CRITICAL POSTURE LOCK: Do NOT change a standing subject into a seated subject. Do NOT change a seated subject into a standing subject. They MUST retain their original anchor posture.",
-    "No moving subjects closer or farther unless caused only by camera reframing."
+    "No shifting actor positions, no swapping left/right ordering."
   ];
-  if (args.expectedActorCount !== undefined) {
-    base.push(`CRITICAL DIRECTIVE: The scene must contain exactly ${args.expectedActorCount} visible person(s). Do not hallucinate crowds.`);
+
+  if (!args.isShotVariant) {
+    base.push("CRITICAL POSTURE LOCK: Do NOT change a standing subject into a seated subject. Do NOT change a seated subject into a standing subject. They MUST retain their original anchor posture.");
+    base.push("No moving subjects closer or farther unless caused only by camera reframing.");
+  } else {
+    base.push("CINEMATIC CONTINUITY: Preserve scene geography and performance blocking while allowing natural crop/headroom drift required by the requested camera move.");
   }
+
+  if (args.expectedActorCount !== undefined) {
+    if (args.expectedActorCount > 0) {
+      base.push(`CRITICAL DIRECTIVE: The scene must contain exactly ${args.expectedActorCount} visible person(s). Do not hallucinate crowds.`);
+    } else {
+      base.push(`CRITICAL DIRECTIVE: Preserve all visible people already present in the anchor image. Do not hallucinate extra crowds or remove existing subjects.`);
+    }
+  }
+
   return base.join('\n');
 }
 
@@ -905,16 +922,28 @@ export function buildWardrobeAndPropContinuityLockBlock(): string {
   ].join('\n');
 }
 
-export function buildExactPoseLockBlock(): string {
+export function buildExactPoseLockBlock(isShotVariant = false): string {
+  if (isShotVariant) {
+    return [
+      "CINEMATIC POSE CONTINUITY:",
+      "Preserve the underlying body pose, gesture timing, and exact anatomical proportions from the source result image.",
+      "Preserve the performance beat and pose logic. Allow limbs to be naturally occluded or revealed based on the new camera geometry.",
+      "Do not shrink the head. Do not widen the shoulders. Do not mutate the face or hair structure.",
+      "Do not reinterpret the performance. Treat the source result as a frozen moment in time viewed from a different camera."
+    ].join('\n');
+  }
+
   return [
     "EXACT POSE LOCK (HARD):",
     "Preserve the exact same body pose from the source result image.",
     "Do not reinterpret the performance.",
     "Do not create a new gesture.",
-    "Do not change arm bend, elbow height, hand position, finger spread, shoulder raise, torso twist, hip angle, leg stance, foot planting, neck tilt, or head angle except for what is naturally hidden or revealed by the new camera viewpoint.",
+    "Preserve the performance beat and pose logic. Allow limbs/hands to be naturally hidden or revealed by the new camera viewpoint without forcing artificial visibility.",
     "Do not re-pose the character to better fit the shot.",
     "The only allowed change is camera position, lens, crop, and perspective.",
     "Treat the source result as a frozen moment in time viewed from a different camera.",
+    "In close-up framing, preserve the same facial expression, gaze direction, head angle, and shoulder tension implied by the source pose.",
+    "If limbs are cropped out by framing, crop naturally without inventing a new gesture or replacement pose.",
     "If a limb or hand is partially hidden in the anchor, infer only the hidden continuation of the same pose, not a new pose.",
     "Do not convert a symmetrical pose into an asymmetrical one or vice versa.",
     "Do not change weight distribution or balance.",
@@ -922,14 +951,34 @@ export function buildExactPoseLockBlock(): string {
   ].join('\n');
 }
 
+export function buildShotPresetBlock(preset: ShotPresetDefinition): string {
+  const lines = [
+    "### SHOTS PRESET BLOCK (AUTHORITATIVE: APPLY EXACTLY ONCE)",
+    `- Preset: ${preset.label}`,
+    `- Framing Intent: ${preset.shotInstruction}`,
+    `- Lens Note: ${preset.defaultLensNote}`,
+    `- Focal Feel: ${preset.opticalIntent.focalFeel}`,
+    `- Compression Behavior: ${preset.opticalIntent.compressionBehavior}`,
+    `- Depth-of-Field Behavior: ${preset.opticalIntent.depthOfFieldBehavior}`,
+    `- Foreground/Background Separation: ${preset.opticalIntent.separationStyle}`,
+    `- Crop Rule: ${preset.cropRule}`,
+    "- Preset-Specific Constraints:"
+  ];
+
+  preset.negatives.forEach(neg => {
+    lines.push(`  - ${neg}`);
+  });
+
+  return lines.join('\n');
+}
+
 export function buildShotVariantPrompt(args: BuildShotVariantPromptArgs): string {
     const preset = SHOT_PRESETS[args.presetId];
+    const safeSceneActionContext = stripShotDirectiveContamination(args.subjectActionText);
     
     let p = `OPERATION\n`;
     p += `Create a NEW CAMERA SETUP of the same scene continuity using the staged result image as the primary visual anchor.\n`;
-    p += `Recompose this image as a ${preset.label}.\n`;
-    p += `${preset.shotInstruction}\n`;
-    p += `Lens Note: ${preset.defaultLensNote}\n\n`;
+    p += `${buildShotPresetBlock(preset)}\n\n`;
 
     p += `CHANGE\n`;
     p += `- camera only, not body pose\n`;
@@ -938,7 +987,8 @@ export function buildShotVariantPrompt(args: BuildShotVariantPromptArgs): string
     p += `- crop / subject size in frame\n`;
     p += `- screen position\n`;
     p += `- headroom\n`;
-    p += `- perspective\n\n`;
+    p += `- perspective\n`;
+    p += `- physically plausible parallax from the new camera position\n\n`;
 
     p += `KEEP\n`;
     if (args.locks.identity) p += `- actor identity\n`;
@@ -947,7 +997,7 @@ export function buildShotVariantPrompt(args: BuildShotVariantPromptArgs): string
     if (args.locks.background) p += `- prop continuity\n`;
     if (args.locks.lighting) p += `- approximate lighting continuity\n`;
     if (args.environmentText) p += `- Scene Environment context: ${args.environmentText}\n`;
-    if (args.subjectActionText) p += `- Scene Action context: ${args.subjectActionText}\n`;
+    if (safeSceneActionContext) p += `- Scene Action context: ${safeSceneActionContext}\n`;
     if (args.lightingText) p += `- Scene Lighting context: ${args.lightingText}\n\n`;
 
     if (args.locks.wardrobe) {
@@ -977,9 +1027,6 @@ export function buildShotVariantPrompt(args: BuildShotVariantPromptArgs): string
     p += `- do not flatten back into the original source composition\n`;
     p += `- do not output a contact sheet, grid, or collage\n`;
     p += `- do not add cinematic black bars unless already present in the anchor\n`;
-    preset.negatives.forEach(neg => {
-        p += `- ${neg}\n`;
-    });
     p += `- No text, no watermark, no duplicate subjects, no distorted anatomy, no unrealistic perspective warping.\n`;
 
     if (args.actorIdentitySets && args.actorIdentitySets.length > 0) {
@@ -1011,8 +1058,8 @@ export function buildShotVariantPrompt(args: BuildShotVariantPromptArgs): string
     
     p += `\n### ENVIRONMENT & LAYOUT GUARDRAILS (REINFORCEMENTS)\n`;
     p += `${buildEnvironmentConsistencyLockBlock({})}\n`;
-    p += `${buildSceneLayoutLockBlock({ expectedActorCount: args.sceneTruth.expectedActorCount })}\n`;
-    p += `${buildExactPoseLockBlock()}\n`;
+    p += `${buildSceneLayoutLockBlock({ expectedActorCount: args.sceneTruth.expectedActorCount, isShotVariant: true })}\n`;
+    p += `${buildExactPoseLockBlock(true)}\n`;
     
     p += buildDirectedSlotBlock(args.directedSlot, args.shotsActorOptions, false);
 
@@ -1077,8 +1124,6 @@ export type BuildShotFinalRerenderPromptArgs = {
 };
 
 export function buildShotFinalRerenderPrompt(args: BuildShotFinalRerenderPromptArgs): string {
-  const preset = SHOT_PRESETS[args.presetId];
-
   let p = `OPERATION\n`;
   p += `Generate a higher-quality final render of the selected preview shot.\n`;
   p += `Use the original staged result image only as supporting scene continuity context.\n\n`;
@@ -1122,9 +1167,6 @@ export function buildShotFinalRerenderPrompt(args: BuildShotFinalRerenderPromptA
   p += `- do not add props or handheld objects not present in the source anchor\n`;
   p += `- do not invent wardrobe details that are not clearly visible in the source image\n`;
   p += `- do not transfer props or wardrobe pieces between actors\n`;
-  preset.negatives.forEach(neg => {
-      p += `- ${neg}\n`;
-  });
 
   const hasFaceAnchors = args.actorIdentitySets?.some(s => !!s.primaryFaceAnchor || s.angleFaceAnchors.length > 0) || false;
   const hasActorReferences = (args.actorIdentitySets?.length || 0) > 0;

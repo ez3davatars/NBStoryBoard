@@ -4,7 +4,7 @@ import type { ActorIdentityReferenceSet, ShotsActorOption } from '../../context/
 import { SHOT_PRESETS, buildShotPresetIdsForPack } from '../../utils/shotsPresets';
 import { buildShotVariantPrompt, buildShotFinalRerenderPrompt } from '../../utils/promptHelpers';
 import { GeminiService } from '../../services/GeminiService';
-import { stripIdentityOverridingAnalysis } from '../../utils/analysisSanitizers';
+import { stripIdentityOverridingAnalysis, stripShotDirectiveContamination } from '../../utils/analysisSanitizers';
 import { LocalAssetService } from '../../services/LocalAssetService';
 import { hasStrongFaceAnchor } from '../../utils/identityReferenceHelpers';
 import { inferCoverageSceneType, extractRoleHints } from '../../utils/sceneTypeInference';
@@ -177,12 +177,18 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
     
     // Identity Precedence: Scrub analysis if we have strict face anchors
     const hasStrictIdentityRefs = actorIdentitySets.some(s => s.identityPriority === 'strict' && hasStrongFaceAnchor(s));
-    let safeSubjectActionText = subjectActionText;
-    if (hasStrictIdentityRefs && subjectActionText) {
-        safeSubjectActionText = stripIdentityOverridingAnalysis(subjectActionText);
-        if (safeSubjectActionText !== subjectActionText) {
+    const shotSanitizedActionText = stripShotDirectiveContamination(subjectActionText);
+    if (subjectActionText && shotSanitizedActionText !== subjectActionText) {
+        console.warn(`[ShotsPanel] Shot directive text removed from Scene Action context before SHOTS preview prompt assembly.`);
+    }
+
+    let safeSubjectActionText = shotSanitizedActionText;
+    if (hasStrictIdentityRefs && safeSubjectActionText) {
+        const identitySanitizedActionText = stripIdentityOverridingAnalysis(safeSubjectActionText);
+        if (identitySanitizedActionText !== safeSubjectActionText) {
             console.warn(`[IdentityPrecedence] Subject/style analysis demoted in SHOTS preview generation because strict actor refs are present`);
         }
+        safeSubjectActionText = identitySanitizedActionText;
     }
 
     // Phase 1: Preflight Actor Binding
@@ -223,6 +229,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
     try {
       sceneTruth = buildSceneTruthSnapshot({
         sourceResultUrl: effectiveResultImageUrl,
+        expectedActorCount,
         actorIdentitySets,
         shotsActorOptions,
         tokens: state.tokens,
@@ -495,13 +502,19 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
       };
     });
 
-    let safeSubjectActionText = subjectActionText;
+    const shotSanitizedActionText = stripShotDirectiveContamination(subjectActionText);
+    if (subjectActionText && shotSanitizedActionText !== subjectActionText) {
+      console.warn(`[ShotsPanel] Shot directive text removed from Scene Action context before SHOTS final rerender prompt assembly.`);
+    }
+
+    let safeSubjectActionText = shotSanitizedActionText;
     const hasStrictIdentityRefs = (session.actorIdentitySets || []).some(s => s.identityPriority === 'strict' && hasStrongFaceAnchor(s));
-    if (hasStrictIdentityRefs && subjectActionText) {
-        safeSubjectActionText = stripIdentityOverridingAnalysis(subjectActionText);
-        if (safeSubjectActionText !== subjectActionText) {
+    if (hasStrictIdentityRefs && safeSubjectActionText) {
+        const identitySanitizedActionText = stripIdentityOverridingAnalysis(safeSubjectActionText);
+        if (identitySanitizedActionText !== safeSubjectActionText) {
             console.warn(`[IdentityPrecedence] Subject/style analysis demoted in SHOTS final rerender because strict actor refs are present`);
         }
+        safeSubjectActionText = identitySanitizedActionText;
     }
 
     for (const variant of selectedVariants) {
@@ -613,7 +626,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
     onSaveVariant(url, prefix);
   };
 
-  const handleRegenerateOne = async (variantId: string) => {
+  const handleRegenerateOne = async (variantId: string, instruction?: string) => {
     // Basic implementation for single tile retry
     if (!session || !effectiveResultImageUrl) return;
     const variant = session.variants.find(v => v.id === variantId);
@@ -642,10 +655,15 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
          });
       }
 
+      const extraInstruction = instruction?.trim();
+      const basePrompt = extraInstruction
+        ? `${variant.prompt}\n### SHOT-SPECIFIC REGENERATE ADJUSTMENT\n${extraInstruction}\nRespect all core scene, identity, and continuity locks while applying this adjustment.`
+        : variant.prompt;
+
       const previewBaseArgs = {
         anchorImageUrl: effectiveResultImageUrl,
         actorIdentitySets: session.actorIdentitySets,
-        prompt: variant.prompt,
+        prompt: basePrompt,
         apiKey,
         model,
         options: { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, signal: abortControllerRef.current?.signal }
@@ -702,7 +720,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
             });
 
             attempts++;
-            const appendedPrompt = `${variant.prompt}\nCRITICAL: PREVIOUS ATTEMPT FAILED. YOU MUST MATERIALLY CHANGE THE CAMERA ANGLE AND CROP. DO NOT REPRODUCE THE SOURCE COMPOSITION.`;
+            const appendedPrompt = `${basePrompt}\nCRITICAL: PREVIOUS ATTEMPT FAILED. YOU MUST MATERIALLY CHANGE THE CAMERA ANGLE AND CROP. DO NOT REPRODUCE THE SOURCE COMPOSITION.`;
             
             if (isHostedShots) {
                 previewUrl = await GeminiService.generateShotPreview({

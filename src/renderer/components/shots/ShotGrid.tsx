@@ -6,7 +6,7 @@ interface ShotGridProps {
   variants: ShotVariant[];
   onToggleSelected: (variantId: string, selected: boolean) => void;
   onSave?: (variantId: string) => void;
-  onRegenerateOne?: (variantId: string) => void;
+  onRegenerateOne?: (variantId: string, instruction?: string) => void;
   onInspect?: (variantId: string) => void;
 }
 
@@ -20,17 +20,19 @@ export const ShotGrid: React.FC<ShotGridProps> = ({ variants, onToggleSelected, 
   }
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-3 gap-4 p-4 w-full h-full overflow-y-auto">
-      {variants.map((v) => (
-        <ShotTile 
-          key={v.id}
-          variant={v}
-          onToggleSelected={onToggleSelected}
-          onSave={onSave}
-          onRegenerateOne={onRegenerateOne}
-          onInspect={onInspect}
-        />
-      ))}
+    <div className="w-full h-full overflow-y-auto">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 p-4 w-full content-start auto-rows-max items-stretch">
+        {variants.map((v) => (
+          <ShotTile 
+            key={v.id}
+            variant={v}
+            onToggleSelected={onToggleSelected}
+            onSave={onSave}
+            onRegenerateOne={onRegenerateOne}
+            onInspect={onInspect}
+          />
+        ))}
+      </div>
     </div>
   );
 };

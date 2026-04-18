@@ -299,7 +299,14 @@ export class WearableOverlayComposer {
                         );
                     }
                     finalPropCanvas = defCanvas;
-                    finalPropBounds = { x: 0, y: 0, width: defCanvas.width, height: defCanvas.height };
+                    finalPropBounds = {
+                        x: 0,
+                        y: 0,
+                        width: defCanvas.width,
+                        height: defCanvas.height,
+                        centerX: defCanvas.width / 2,
+                        centerY: defCanvas.height / 2
+                    };
                     finalTargetHeight = targetHeight * (1 + profile.deformation);
                 }
             }
