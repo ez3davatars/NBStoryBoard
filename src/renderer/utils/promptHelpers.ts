@@ -829,7 +829,11 @@ export type BuildEnvironmentConsistencyLockBlockArgs = {
 
 export function buildEnvironmentConsistencyLockBlock(_args: BuildEnvironmentConsistencyLockBlockArgs): string {
   return [
+    "ENVIRONMENT IMMUTABILITY (HARD): The source anchor image defines the canonical location. This location may NOT be changed.",
     "Preserve the exact same room, architecture, layout, and set dressing as shown in the scene anchor.",
+    "Do not relocate the scene to a different place, city, biome, set, or architectural style.",
+    "Do not convert indoor scenes to outdoor scenes. Do not convert outdoor scenes to indoor scenes.",
+    "Do not shift time-of-day, weather, season, or overall environmental mood away from the anchor.",
     "Maintain the same wall positions, window arrangement, ceiling lines, lighting fixture placement, glass partition layout, furniture placement, and overall spatial proportions.",
     "CRITICAL FURNITURE ENFORCEMENT: DO NOT add, generate, or invent any new furniture (desks, tables, chairs, benches) that was not present in the anchor image.",
     "CRITICAL ARCHITECTURE ENFORCEMENT: Do not alter room architecture or move walls, windows, or glass partitions. Keep the wall paneling exactly the same width and material.",
@@ -978,6 +982,7 @@ export function buildShotVariantPrompt(args: BuildShotVariantPromptArgs): string
     
     let p = `OPERATION\n`;
     p += `Create a NEW CAMERA SETUP of the same scene continuity using the staged result image as the primary visual anchor.\n`;
+    p += `SOURCE-OF-TRUTH PRIORITY (HARD): Anchor image > Shot Blueprint > Text instructions. If any text conflicts with the anchor image environment, the anchor image always wins.\n`;
     p += `${buildShotPresetBlock(preset)}\n\n`;
 
     p += `CHANGE\n`;
@@ -996,7 +1001,7 @@ export function buildShotVariantPrompt(args: BuildShotVariantPromptArgs): string
     if (args.locks.background) p += `- environment continuity\n`;
     if (args.locks.background) p += `- prop continuity\n`;
     if (args.locks.lighting) p += `- approximate lighting continuity\n`;
-    if (args.environmentText) p += `- Scene Environment context: ${args.environmentText}\n`;
+    if (args.environmentText) p += `- Scene Environment context (advisory only, cannot override anchor location/architecture): ${args.environmentText}\n`;
     if (safeSceneActionContext) p += `- Scene Action context: ${safeSceneActionContext}\n`;
     if (args.lightingText) p += `- Scene Lighting context: ${args.lightingText}\n\n`;
 
@@ -1127,6 +1132,7 @@ export function buildShotFinalRerenderPrompt(args: BuildShotFinalRerenderPromptA
   let p = `OPERATION\n`;
   p += `Generate a higher-quality final render of the selected preview shot.\n`;
   p += `Use the original staged result image only as supporting scene continuity context.\n\n`;
+  p += `SOURCE-OF-TRUTH PRIORITY (HARD): Selected preview framing + source anchor environment are authoritative. Text instructions cannot relocate the scene.\n\n`;
 
   p += `CHANGE\n`;
   p += `- Upscale and refine the detail\n\n`;

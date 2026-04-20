@@ -25,7 +25,7 @@ export function stripIdentityOverridingAnalysis(text: string | undefined): strin
 }
 
 const SHOT_DIRECTIVE_REGEX = /\b(extreme close[- ]?up|close[- ]?up|medium close(?:[- ]?up)?|medium shot|wide shot|long shot|establishing shot|two[- ]?shot|over[- ]the[- ]shoulder|ots|profile shot|three[- ]quarter|3\/4 shot|camera angle|camera move|camera orbit|lens choice|focal length|shot size|framing|crop)\b/i;
-const SHOT_DIRECTIVE_PHRASE_REGEX = /\b(extreme close[- ]?up|close[- ]?up|medium close(?:[- ]?up)?|medium shot|wide shot|long shot|establishing shot|two[- ]?shot|over[- ]the[- ]shoulder|ots|profile shot|three[- ]quarter|3\/4 shot|shot size|framing|camera angle|camera move|camera orbit|lens choice|focal length)\b/gi;
+const CAMERA_DIRECTIVE_REGEX = /\b(recompose|reframe|frame|camera|lens|focal length|zoom|dolly|truck|pan|tilt|orbit|rack focus|depth[- ]of[- ]field|headroom)\b/i;
 
 export function stripShotDirectiveContamination(text: string | undefined): string {
   if (!text) return '';
@@ -38,18 +38,15 @@ export function stripShotDirectiveContamination(text: string | undefined): strin
 
   const cleaned = parts
     .map(part => {
-      let candidate = part;
-      const hadDirective = SHOT_DIRECTIVE_REGEX.test(candidate);
-
-      candidate = candidate
-        .replace(SHOT_DIRECTIVE_PHRASE_REGEX, ' ')
-        .replace(/\b(in|as|for|with)\s+(a|an)\s*$/gi, ' ')
-        .replace(/\s{2,}/g, ' ')
-        .replace(/^[,\-\s]+|[,\-\s]+$/g, '')
-        .trim();
-
+      const candidate = part.replace(/\s{2,}/g, ' ').trim();
       if (!candidate) return '';
-      if (hadDirective && candidate.split(/\s+/).length <= 2) return '';
+
+      // Drop entire clauses that contain shot/camera directives so preset intent appears only once
+      // in the dedicated SHOTS preset block during prompt assembly.
+      if (SHOT_DIRECTIVE_REGEX.test(candidate) || CAMERA_DIRECTIVE_REGEX.test(candidate)) {
+        return '';
+      }
+
       return candidate;
     })
     .filter(Boolean);

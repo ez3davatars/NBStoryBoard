@@ -174,6 +174,14 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
 
   const handleGenerateShots = async () => {
     if (!effectiveResultImageUrl) return;
+    const enforcedLocks: ShotLocks = { ...locks, identity: true, background: true, lighting: true };
+    if (
+      locks.identity !== enforcedLocks.identity ||
+      locks.background !== enforcedLocks.background ||
+      locks.lighting !== enforcedLocks.lighting
+    ) {
+      setLocks(enforcedLocks);
+    }
     
     // Identity Precedence: Scrub analysis if we have strict face anchors
     const hasStrictIdentityRefs = actorIdentitySets.some(s => s.identityPriority === 'strict' && hasStrongFaceAnchor(s));
@@ -232,8 +240,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
         expectedActorCount,
         actorIdentitySets,
         shotsActorOptions,
-        tokens: state.tokens,
-        environmentText
+        tokens: state.tokens
       });
 
       variants = preparedSlots.map((slot, idx) => {
@@ -246,7 +253,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
           packId,
           presetId: slot.shotType,
           directedSlot: slot,
-          locks: { ...locks, identity: true },
+          locks: enforcedLocks,
           environmentText,
           subjectActionText: safeSubjectActionText,
           lightingText,
@@ -289,7 +296,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
       packId,
       count,
       directedShots: slots,
-      locks,
+      locks: enforcedLocks,
       sceneTruth,
       variants,
       createdAt: new Date().toISOString(),
@@ -528,7 +535,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
           shotsActorOptions,
           presetId: variant.presetId,
           directedSlot: session.directedShots?.find(s => s.id === (variant as any).slotId),
-          locks: { ...session.locks, identity: true },
+          locks: { ...session.locks, identity: true, background: true, lighting: true },
           environmentText,
           subjectActionText: safeSubjectActionText,
           lightingText,
@@ -656,14 +663,21 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
       }
 
       const extraInstruction = instruction?.trim();
+      const environmentHardLock =
+        `\n### HARD ENVIRONMENT LOCK (NON-NEGOTIABLE)\n` +
+        `Preserve the exact source anchor environment and architectural setting.\n` +
+        `No relocation, no indoor/outdoor conversion, no time-of-day/weather/era drift.\n` +
+        `If any text conflicts with the anchor image environment, ignore the text and follow the anchor image.\n`;
+
       const basePrompt = extraInstruction
         ? `${variant.prompt}\n### SHOT-SPECIFIC REGENERATE ADJUSTMENT\n${extraInstruction}\nRespect all core scene, identity, and continuity locks while applying this adjustment.`
         : variant.prompt;
+      const lockedPrompt = `${basePrompt}${environmentHardLock}`;
 
       const previewBaseArgs = {
         anchorImageUrl: effectiveResultImageUrl,
         actorIdentitySets: session.actorIdentitySets,
-        prompt: basePrompt,
+        prompt: lockedPrompt,
         apiKey,
         model,
         options: { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, signal: abortControllerRef.current?.signal }
@@ -720,7 +734,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
             });
 
             attempts++;
-            const appendedPrompt = `${basePrompt}\nCRITICAL: PREVIOUS ATTEMPT FAILED. YOU MUST MATERIALLY CHANGE THE CAMERA ANGLE AND CROP. DO NOT REPRODUCE THE SOURCE COMPOSITION.`;
+            const appendedPrompt = `${lockedPrompt}\nCRITICAL: PREVIOUS ATTEMPT FAILED. YOU MUST MATERIALLY CHANGE THE CAMERA ANGLE AND CROP. DO NOT REPRODUCE THE SOURCE COMPOSITION.`;
             
             if (isHostedShots) {
                 previewUrl = await GeminiService.generateShotPreview({

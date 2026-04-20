@@ -1573,6 +1573,11 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
     const anchor = await GeminiService._resolveImageData(anchorImageUrl);
     parts.push({ text: `[AUTHORITATIVE SCENE AND LAYOUT ANCHOR]` });
     parts.push({ inlineData: { mimeType: anchor.mimeType, data: anchor.data } });
+    parts.push({
+      text:
+        `[HARD ENVIRONMENT LOCK: Keep the exact same location, architecture, and environmental context from the anchor image. ` +
+        `Do not relocate to a different setting. Do not switch indoor/outdoor. Do not change time-of-day/weather/era.]`
+    });
 
     // 2. Camera Instruction Blueprint (MUST BE SECOND)
     if (shotBlueprintUrl) {
@@ -1698,6 +1703,11 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
     const sceneAnchor = await GeminiService._resolveImageData(sourceResultUrl);
     parts.push({ text: `[AUTHORITATIVE SCENE AND LAYOUT TRUTH ANCHOR - PRESERVE EXACT ROOM AND ACTOR COUNT]` });
     parts.push({ inlineData: { mimeType: sceneAnchor.mimeType, data: sceneAnchor.data } });
+    parts.push({
+      text:
+        `[HARD ENVIRONMENT LOCK: Preserve the exact source environment from the staged anchor. ` +
+        `No relocation, no indoor/outdoor conversion, no time-of-day/weather/era drift.]`
+    });
     
     // Shot Prompt
     parts.push({ text: prompt });
