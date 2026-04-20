@@ -474,18 +474,7 @@ export default function PortraitStudio() {
         }
 
         const billingMode = state.billingEntitlements.effectiveBillingMode;
-        const hasHosted = state.billingEntitlements.hasHostedAccess;
-        const hasByok = state.billingEntitlements.hasByokAccess;
-
-        if (billingMode === "hosted" && !hasHosted) {
-            dispatch({
-                type: "ADD_LOG",
-                payload: { message: "Hosted Cloud access required for generation", type: "error" }
-            });
-            return;
-        }
-
-        if (billingMode === "byok" && (!hasByok || !state.apiKey)) {
+        if (billingMode === "byok" && !state.apiKey) {
             dispatch({
                 type: "ADD_LOG",
                 payload: { message: "API Key required for BYOK generation", type: "error" }

@@ -1111,22 +1111,14 @@ const WardrobeStudio = () => {
 
     const handleDesignerGenerate = async () => {
         const billingMode = state.billingEntitlements.effectiveBillingMode;
-        const hasHosted = state.billingEntitlements.hasHostedAccess;
-        const hasByok = state.billingEntitlements.hasByokAccess;
         
         if (billingMode === 'hosted' && state.hostedCredits === 0) {
             dispatch({ type: 'ADD_LOG', payload: { message: "Generation blocked: Insufficient credits", type: 'error' } });
             dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
             return;
         }
-        
-        if (billingMode === "hosted" && !hasHosted) {
-            showToast("Hosted Cloud access required for Costume Designer.");
-            dispatch({ type: 'ADD_LOG', payload: { message: "Hosted Cloud access required for Costume Designer.", type: 'error' } });
-            return;
-        }
 
-        if (billingMode === "byok" && (!hasByok || !state.apiKey)) {
+        if (billingMode === "byok" && !state.apiKey) {
             showToast("API Key required for BYOK Costume Designer.");
             dispatch({ type: 'ADD_LOG', payload: { message: "API Key required for BYOK Costume Designer.", type: 'error' } });
             return;
@@ -1360,8 +1352,6 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
     const handleTryOn = async () => {
         const billingMode = state.billingEntitlements.effectiveBillingMode;
-        const hasHosted = state.billingEntitlements.hasHostedAccess;
-        const hasByok = state.billingEntitlements.hasByokAccess;
 
         if (billingMode === 'hosted' && state.hostedCredits === 0) {
             dispatch({ type: 'ADD_LOG', payload: { message: "Generation blocked: Insufficient credits", type: 'error' } });
@@ -1375,13 +1365,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
             return;
         }
 
-        if (billingMode === "hosted" && !hasHosted) {
-            showToast("Hosted Cloud access required for Virtual Try-On.");
-            dispatch({ type: 'ADD_LOG', payload: { message: "Hosted Cloud access required for Virtual Try-On.", type: 'error' } });
-            return;
-        }
-
-        if (billingMode === "byok" && (!hasByok || !state.apiKey)) {
+        if (billingMode === "byok" && !state.apiKey) {
             showToast("API Key required for BYOK Virtual Try-On.");
             dispatch({ type: 'ADD_LOG', payload: { message: "API Key required for BYOK Virtual Try-On.", type: 'error' } });
             return;
@@ -2123,7 +2107,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                             disabled={
                                                 state.isProcessing || 
                                                 !designerPrompt ||
-                                                (state.billingEntitlements.effectiveBillingMode === "hosted" && !state.billingEntitlements.hasHostedAccess) || (state.billingEntitlements.effectiveBillingMode === "byok" && (!state.billingEntitlements.hasByokAccess || !state.apiKey))
+                                                (state.billingEntitlements.effectiveBillingMode === "byok" && !state.apiKey)
                                             }
                                             className="w-full bg-gradient-to-r from-yellow-500 to-yellow-600 hover:from-yellow-400 hover:to-yellow-500 text-black py-3 rounded-xl font-black text-xs uppercase tracking-[0.2em] transition-all active:scale-95 disabled:opacity-50"
                                         >
@@ -2346,7 +2330,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                                 state.isProcessing || 
                                                 !selectedCharacter || 
                                                 !selectedCostume ||
-                                                (state.billingEntitlements.effectiveBillingMode === "hosted" && !state.billingEntitlements.hasHostedAccess) || (state.billingEntitlements.effectiveBillingMode === "byok" && (!state.billingEntitlements.hasByokAccess || !state.apiKey))
+                                                (state.billingEntitlements.effectiveBillingMode === "byok" && !state.apiKey)
                                             }
                                             className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white py-3 rounded-xl font-black text-[10px] uppercase tracking-[0.25em] active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
                                         >

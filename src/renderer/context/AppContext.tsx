@@ -967,7 +967,11 @@ export const initialState: AppState = {
     sessionFilePath: null,
 
     billingMode: loadJson<'hosted' | 'byok'>('nano_billing_mode', 'byok'),
-    billingEntitlements: { hasHostedAccess: false, hasByokAccess: false, effectiveBillingMode: 'none' }, // Resolved on auth change
+    billingEntitlements: {
+        hasHostedAccess: true,
+        hasByokAccess: true,
+        effectiveBillingMode: loadJson<'hosted' | 'byok'>('nano_billing_mode', 'byok')
+    },
     hostedSession: null,
     hostedCredits: null,
     showCreditModal: false,

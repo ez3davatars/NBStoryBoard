@@ -196,14 +196,9 @@ const SceneCanvas = () => {
     };
 
     const ensureStagingAiAccess = (featureLabel: string): boolean => {
-        const billingMode = state.billingEntitlements?.effectiveBillingMode;
+        const billingMode = state.billingEntitlements?.effectiveBillingMode || state.billingMode;
         
         if (billingMode === 'hosted') {
-            if (!state.billingEntitlements.hasHostedAccess) {
-                dispatch({ type: 'ADD_LOG', payload: { message: `${featureLabel} blocked: Hosted access required`, type: 'error' } });
-                return false;
-            }
-
             const hostedCredits = state.hostedCredits;
             if (hostedCredits !== null && hostedCredits <= 0) {
                 dispatch({ type: 'ADD_LOG', payload: { message: `${featureLabel} blocked: Insufficient credits`, type: 'error' } });
@@ -215,7 +210,7 @@ const SceneCanvas = () => {
         }
 
         if (billingMode === 'byok') {
-            if (!state.billingEntitlements.hasByokAccess || !state.apiKey) {
+            if (!state.apiKey) {
                 dispatch({ type: 'ADD_LOG', payload: { message: `${featureLabel} blocked: API Key required for BYOK`, type: 'error' } } as any);
                 return false;
             }
@@ -223,8 +218,7 @@ const SceneCanvas = () => {
             return true;
         }
 
-        dispatch({ type: 'ADD_LOG', payload: { message: `${featureLabel} blocked: No billing mode available`, type: 'error' } } as any);
-        return false;
+        return true;
     };
 
     // --- DOM CAPTURE FOR SHOTS ---

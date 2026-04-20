@@ -29,7 +29,7 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
             dispatch({ type: 'ADD_LOG', payload: { message: "No background set to analyze.", type: 'error' } });
             return null;
         }
-        if (state.billingEntitlements.effectiveBillingMode === 'byok' && (!state.billingEntitlements.hasByokAccess || !state.apiKey)) {
+        if (state.billingEntitlements.effectiveBillingMode === 'byok' && !state.apiKey) {
             dispatch({ type: 'ADD_LOG', payload: { message: "BYOK mode is selected. Add your API key in Settings to continue.", type: 'error' } });
             return null;
         }
@@ -43,7 +43,7 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
                 state.apiKey || '',
                 state.model,
                 state.backgroundUrl,
-                { billingMode: state.billingEntitlements.effectiveBillingMode === 'none' ? undefined : state.billingEntitlements.effectiveBillingMode, expectedResponseType: 'json' }
+                { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', expectedResponseType: 'json' }
             );
 
             const parsed = safeParseJson(raw);
@@ -79,7 +79,7 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
     // Auto DNA on background change
     useEffect(() => {
         if (!autoAnchorDNA || !state.backgroundUrl) return;
-        if (state.billingEntitlements.effectiveBillingMode === 'byok' && (!state.billingEntitlements.hasByokAccess || !state.apiKey)) return;
+        if (state.billingEntitlements.effectiveBillingMode === 'byok' && !state.apiKey) return;
         if (state.director?.environment || state.director?.lighting || state.director?.camera) return;
         if (lastDnaBgRef.current === state.backgroundUrl) return;
 
@@ -94,7 +94,7 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
             state.apiKey || '',
             state.model,
             imageUrl,
-            { billingMode: state.billingEntitlements.effectiveBillingMode === 'none' ? undefined : state.billingEntitlements.effectiveBillingMode, expectedResponseType: 'json' }
+            { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', expectedResponseType: 'json' }
         );
 
         const parsed = safeParseJson(raw);
@@ -118,7 +118,7 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
         const overrides = new Map<string, WhitelistProfile>();
 
         if (!shouldRun) return overrides;
-        if (state.billingEntitlements.effectiveBillingMode === 'byok' && (!state.billingEntitlements.hasByokAccess || !state.apiKey)) return overrides;
+        if (state.billingEntitlements.effectiveBillingMode === 'byok' && !state.apiKey) return overrides;
 
         const missing = tokens.filter(t => !t.profile);
         if (missing.length === 0) return overrides;
@@ -147,7 +147,7 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
 
     const handleAnalyzeMissingTokenProfiles = async () => {
         if (state.tokens.length === 0) return;
-        if (state.billingEntitlements.effectiveBillingMode === 'byok' && (!state.billingEntitlements.hasByokAccess || !state.apiKey)) {
+        if (state.billingEntitlements.effectiveBillingMode === 'byok' && !state.apiKey) {
              dispatch({ type: 'ADD_LOG', payload: { message: "BYOK mode is selected. Add your API key in Settings to continue.", type: 'error' } });
              return;
         }

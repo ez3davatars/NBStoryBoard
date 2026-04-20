@@ -343,8 +343,6 @@ const PropAccessoryStudio = () => {
 
     const handleDesignerGenerate = async () => {
         const billingMode = state.billingEntitlements.effectiveBillingMode;
-        const hasHosted = state.billingEntitlements.hasHostedAccess;
-        const hasByok = state.billingEntitlements.hasByokAccess;
         
         if (billingMode === 'hosted' && state.hostedCredits === 0) {
             dispatch({ type: 'ADD_LOG', payload: { message: "Generation blocked: Insufficient credits", type: 'error' } });
@@ -360,15 +358,7 @@ const PropAccessoryStudio = () => {
             return;
         }
 
-        if (billingMode === 'hosted' && !hasHosted) {
-            dispatch({
-                type: 'ADD_LOG',
-                payload: { message: 'Hosted Cloud access required for Prop Designer.', type: 'error' }
-            });
-            return;
-        }
-
-        if (billingMode === 'byok' && (!hasByok || !state.apiKey)) {
+        if (billingMode === 'byok' && !state.apiKey) {
             dispatch({
                 type: 'ADD_LOG',
                 payload: { message: 'API Key required for BYOK Prop Designer.', type: 'error' }
@@ -620,8 +610,6 @@ oversized wearable, resized wearable, moved wearable, floating wearable, theatri
     const handleApply = async () => {
         console.warn(`[DEBUG_PATH] handleApply invoked! Button was clicked.`);
         const billingMode = state.billingEntitlements.effectiveBillingMode;
-        const hasHosted = state.billingEntitlements.hasHostedAccess;
-        const hasByok = state.billingEntitlements.hasByokAccess;
         
         if (billingMode === 'hosted' && state.hostedCredits === 0) {
             dispatch({ type: 'ADD_LOG', payload: { message: "Generation blocked: Insufficient credits", type: 'error' } });
@@ -637,15 +625,7 @@ oversized wearable, resized wearable, moved wearable, floating wearable, theatri
             return;
         }
 
-        if (billingMode === 'hosted' && !hasHosted) {
-            dispatch({
-                type: 'ADD_LOG',
-                payload: { message: 'Hosted Cloud access required for Prop Application.', type: 'error' }
-            });
-            return;
-        }
-
-        if (billingMode === 'byok' && (!hasByok || !state.apiKey)) {
+        if (billingMode === 'byok' && !state.apiKey) {
             dispatch({
                 type: 'ADD_LOG',
                 payload: { message: 'API Key required for BYOK Prop Application.', type: 'error' }
@@ -980,8 +960,7 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                                     <textarea value={designerPrompt} onChange={(e) => setDesignerPrompt(e.target.value)} className="w-full bg-[#09090b] border border-[#27272a] p-4 rounded-xl text-sm text-gray-200 flex-grow resize-none mb-4 focus:border-blue-500 focus:outline-none" placeholder="Describe the object..." />
                                     <button onClick={handleDesignerGenerate} disabled={
                                         state.isProcessing || !designerPrompt ||
-                                        (state.billingEntitlements.effectiveBillingMode === 'hosted' && !state.billingEntitlements.hasHostedAccess) ||
-                                        (state.billingEntitlements.effectiveBillingMode === "hosted" && !state.billingEntitlements.hasHostedAccess) || (state.billingEntitlements.effectiveBillingMode === 'byok' && (!state.billingEntitlements.hasByokAccess || !state.apiKey))
+                                        (state.billingEntitlements.effectiveBillingMode === 'byok' && !state.apiKey)
                                     } className="w-full shrink-0 bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-xl font-black text-xs uppercase transition-all active:scale-95 disabled:opacity-50">Generate Prop</button>
                                 </div>
                             </div>
@@ -1046,8 +1025,7 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                                         state.isProcessing ||
                                         !selectedCharacter ||
                                         !selectedProp ||
-                                        (state.billingEntitlements.effectiveBillingMode === 'hosted' && !state.billingEntitlements.hasHostedAccess) ||
-                                        (state.billingEntitlements.effectiveBillingMode === "hosted" && !state.billingEntitlements.hasHostedAccess) || (state.billingEntitlements.effectiveBillingMode === 'byok' && (!state.billingEntitlements.hasByokAccess || !state.apiKey))
+                                        (state.billingEntitlements.effectiveBillingMode === 'byok' && !state.apiKey)
                                     } className="w-full bg-blue-600 hover:bg-blue-500 text-white py-4 rounded-xl font-black text-[10px] uppercase tracking-widest active:scale-95 disabled:opacity-50 transition-all">Apply to Character</button>
                                 </div>
                             </div>

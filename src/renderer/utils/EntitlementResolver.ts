@@ -6,52 +6,20 @@ export interface Entitlements {
 
 export class EntitlementResolver {
   /**
-   * Resolves entitlements from the authenticated session and local state.
+   * Feature access is app-wide. Billing mode controls API routing only.
    */
   static resolveEntitlements(
-    session: any | null,
+    _session: any | null,
     localApiKey: string | null,
-    isDev: boolean = false,
-    devOverrideMode: 'hosted' | 'byok' | null = null
+    _isDev: boolean = false,
+    selectedMode: 'hosted' | 'byok' | null = null
   ): Entitlements {
-    let hasHostedAccess = false;
-    let hasByokAccess = false;
-
-    if (session && session.user) {
-      const appMetadata = session.user.app_metadata || {};
-      const userMetadata = session.user.user_metadata || {};
-      
-      const rawEntitlements = appMetadata.entitlements || userMetadata.entitlements;
-      
-      if (Array.isArray(rawEntitlements)) {
-        hasHostedAccess = rawEntitlements.includes('hosted');
-        hasByokAccess = rawEntitlements.includes('byok');
-      }
-    }
-
-    let effectiveBillingMode: 'hosted' | 'byok' | 'none' = 'none';
-
-    // Development Override Rule
-    if (isDev && devOverrideMode) {
-        effectiveBillingMode = devOverrideMode;
-        if (devOverrideMode === 'hosted') {
-            hasHostedAccess = true;
-        } else if (devOverrideMode === 'byok') {
-            hasByokAccess = true;
-        }
-    } 
-    // Production Rules
-    else {
-        if (hasHostedAccess) {
-            effectiveBillingMode = 'hosted'; // Prefer hosted if available
-        } else if (hasByokAccess && !!localApiKey?.trim()) {
-            effectiveBillingMode = 'byok';
-        }
-    }
+    const effectiveBillingMode: 'hosted' | 'byok' | 'none' =
+      selectedMode ?? (localApiKey?.trim() ? 'byok' : 'hosted');
 
     return {
-      hasHostedAccess,
-      hasByokAccess,
+      hasHostedAccess: true,
+      hasByokAccess: true,
       effectiveBillingMode
     };
   }

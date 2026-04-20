@@ -357,29 +357,16 @@ export const GeminiService = {
     options: { aspectRatio?: string, imageSize?: '1K' | '2K' | '4K', thinkingLevel?: boolean | 'minimal' | 'low' | 'medium' | 'high', googleGrounding?: boolean, strictMode?: boolean, billingMode?: 'hosted' | 'byok', entitlements?: { hasHostedAccess: boolean, hasByokAccess: boolean, effectiveBillingMode: string }, onJobAccepted?: (generationId: string, acceptedAt?: number) => void } = {}
   ): Promise<string> {
 
-    // --- ENFORCEMENT LAYER ---
-    const entitlements = options.entitlements;
-    
-    // If passing entitlements down, enforcement is strict.
-    if (entitlements) {
-      if (options.billingMode === 'hosted' && !entitlements.hasHostedAccess) {
-        throw new Error("Generation blocked: You do not have an active Hosted Cloud entitlement. Please check your subscription or use BYOK if enabled.");
-      }
-
-      if (options.billingMode === 'byok' && !entitlements.hasByokAccess) {
-        throw new Error("Generation blocked: You do not have Bring Your Own Key access.");
-      }
-      
-      if (options.billingMode === 'byok' && !apiKey) {
-        throw new Error("Setup Required: BYOK access is active, but a Gemini API key is required in Settings before generation can begin.");
-      }
-    } else {
-      // Legacy fallback if call-site not yet updated (though all should be)
-      if (!apiKey && options.billingMode !== 'hosted') {
-         console.warn("No API Key. Running in simulation mode.");
-         await new Promise(r => setTimeout(r, 1500));
-         return `https://placehold.co/1024x576/1a1a1a/FFF?text=Demo+Mode:+${encodeURIComponent(prompt.substring(0, 20))}`;
-      }
+    // --- API ACCESS LAYER ---
+    // All features are available in both Hosted and BYOK. The only difference is API prerequisites.
+    if (options.billingMode === 'byok' && !apiKey) {
+      throw new Error("API Key required for BYOK generation.");
+    }
+    // Legacy fallback for older call-sites that don't send billing mode.
+    if (!apiKey && options.billingMode !== 'hosted') {
+      console.warn("No API Key. Running in simulation mode.");
+      await new Promise(r => setTimeout(r, 1500));
+      return `https://placehold.co/1024x576/1a1a1a/FFF?text=Demo+Mode:+${encodeURIComponent(prompt.substring(0, 20))}`;
     }
 
     // MULTIMODAL PIPELINE (Gemini)

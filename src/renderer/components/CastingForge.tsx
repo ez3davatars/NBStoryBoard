@@ -1746,11 +1746,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
     if (!state.lastCastedImage) return;
 
     const billingMode = state.billingEntitlements.effectiveBillingMode;
-    const hasHosted = state.billingEntitlements.hasHostedAccess;
-    const hasByok = state.billingEntitlements.hasByokAccess;
-
-    if (billingMode === "hosted" && !hasHosted) return;
-    if (billingMode === "byok" && (!hasByok || !state.apiKey)) return;
+    if (billingMode === "byok" && !state.apiKey) return;
     dispatch({ type: 'SET_PROCESSING', payload: true });
     dispatch({ type: 'ADD_LOG', payload: { message: "Generating Character Reference Sheet...", type: 'info' } });
 

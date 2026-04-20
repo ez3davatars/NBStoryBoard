@@ -1102,8 +1102,7 @@ const NanoCastingDirector = () => {
 
     const generateWardrobe = async () => {
         const billingMode = state.billingEntitlements.effectiveBillingMode;
-        if (billingMode === "hosted" && !state.billingEntitlements.hasHostedAccess) { dispatch({ type: 'ADD_LOG', payload: { message: 'Hosted access required', type: 'error' } }); return; }
-        if (billingMode === "byok" && (!state.billingEntitlements.hasByokAccess || !state.apiKey)) { dispatch({ type: 'ADD_LOG', payload: { message: 'API Key required for BYOK', type: 'error' } }); return; }
+        if (billingMode === "byok" && !state.apiKey) { dispatch({ type: 'ADD_LOG', payload: { message: 'API Key required for BYOK', type: 'error' } }); return; }
         
         if (billingMode === 'hosted' && state.hostedCredits === 0) {
             dispatch({ type: 'ADD_LOG', payload: { message: "Generation blocked: Insufficient credits", type: 'error' } });
@@ -1228,12 +1227,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
             dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
             return;
         }
-        if (state.billingEntitlements.effectiveBillingMode === "hosted") {
-            dispatch({ type: 'ADD_LOG', payload: { message: "This feature is currently BYOK-only. Please configure an API Key.", type: 'error' } });
-            showToast("Feature requires BYOK settings");
-            return;
-        }
-        if (state.billingEntitlements.effectiveBillingMode === "byok" && (!state.billingEntitlements.hasByokAccess || !state.apiKey)) {
+        if (state.billingEntitlements.effectiveBillingMode === "byok" && !state.apiKey) {
             dispatch({ type: 'ADD_LOG', payload: { message: "API Key required for BYOK generation.", type: 'error' } });
             return;
         }
@@ -1477,12 +1471,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
             dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
             return;
         }
-        if (state.billingEntitlements.effectiveBillingMode === "hosted") {
-            dispatch({ type: 'ADD_LOG', payload: { message: "This feature is currently BYOK-only. Please configure an API Key.", type: 'error' } });
-            showToast("Feature requires BYOK settings");
-            return;
-        }
-        if (state.billingEntitlements.effectiveBillingMode === "byok" && (!state.billingEntitlements.hasByokAccess || !state.apiKey)) {
+        if (state.billingEntitlements.effectiveBillingMode === "byok" && !state.apiKey) {
             dispatch({ type: 'ADD_LOG', payload: { message: "API Key required for BYOK generation.", type: 'error' } });
             return;
         }
@@ -1818,8 +1807,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
 
     const handleGeneratePremiumBiometricSheet = async () => {
         const billingMode = state.billingEntitlements.effectiveBillingMode;
-        if (billingMode === "hosted" && !state.billingEntitlements.hasHostedAccess) { dispatch({ type: 'ADD_LOG', payload: { message: 'Hosted access required', type: 'error' } }); showToast("Hosted Access Required"); return; }
-        if (billingMode === "byok" && (!state.billingEntitlements.hasByokAccess || !state.apiKey)) { dispatch({ type: 'ADD_LOG', payload: { message: 'API Key required for Premium Synthesis', type: 'error' } }); showToast("API Key Required"); return; }
+        if (billingMode === "byok" && !state.apiKey) { dispatch({ type: 'ADD_LOG', payload: { message: 'API Key required for Premium Synthesis', type: 'error' } }); showToast("API Key Required"); return; }
 
         const hasBiometrics = Boolean(capturedAngles.center && capturedAngles.left && capturedAngles.right);
         if (!hasBiometrics) {
@@ -1937,16 +1925,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
 
     const handleGenerateRefSheet = async () => {
         const billingMode = state.billingEntitlements.effectiveBillingMode;
-        const hasHosted = state.billingEntitlements.hasHostedAccess;
-        const hasByok = state.billingEntitlements.hasByokAccess;
-
-        if (billingMode === "hosted" && !hasHosted) {
-            showToast("Hosted Cloud access required for reference sheet generation.");
-            dispatch({ type: 'ADD_LOG', payload: { message: "Hosted Cloud access required for reference sheet generation.", type: 'error' } });
-            return;
-        }
-
-        if (billingMode === "byok" && (!hasByok || !state.apiKey)) {
+        if (billingMode === "byok" && !state.apiKey) {
             showToast("API Key required for BYOK reference sheet generation.");
             dispatch({ type: 'ADD_LOG', payload: { message: "API Key required for BYOK reference sheet generation.", type: 'error' } });
             return;
