@@ -1,11 +1,20 @@
 import type { Veo31Spec } from './types';
 import { buildNegatives } from './negatives';
 import { buildContinuityLockBlock } from '../utils/promptHelpers';
+import type { VeoFivePartDraft } from './veoFivePart';
+
+type PromptDraftOverrides = Partial<VeoFivePartDraft> & { concept?: string };
+
+type BuiltPromptDebug = {
+  spec: Veo31Spec;
+  opts: VeoPromptOptions;
+  continuityOn: boolean;
+};
 
 export interface BuiltPrompt {
   prompt: string;
   negatives: string;
-  debug: any;
+  debug: BuiltPromptDebug;
 }
 
 export type VeoPromptOptions = {
@@ -16,20 +25,20 @@ export type VeoPromptOptions = {
   lockLighting?: boolean;
   lockLens?: boolean;
   lockStyle?: boolean;
-  injectPromptDraft?: any; // VeoFivePartDraft
+  injectPromptDraft?: PromptDraftOverrides;
 };
 
-const safeJoin = (val: any): string => {
+const safeJoin = (val: unknown): string => {
   if (Array.isArray(val)) return val.filter(Boolean).join(', ');
   if (typeof val === 'string') return val;
   return '';
 };
 
 export function buildVeo31Prompt(spec: Veo31Spec, opts: VeoPromptOptions = {}): BuiltPrompt {
-  const character: any = (spec as any).character ?? {};
-  const style: any = (spec as any).style ?? {};
-  const environment: any = (spec as any).environment ?? {};
-  const motion: any = (spec as any).motion ?? {};
+  const character = spec.character ?? {};
+  const style = spec.style ?? {};
+  const environment = spec.environment ?? {};
+  const motion = spec.motion ?? {};
 
   const identityLocks: string[] = Array.isArray(character.lockedTraits)
     ? character.lockedTraits
@@ -79,15 +88,15 @@ export function buildVeo31Prompt(spec: Veo31Spec, opts: VeoPromptOptions = {}): 
     motion.characterAction ? `- Character Action: ${safeJoin(motion.characterAction)}` : '',
   ].filter(Boolean).join('\n');
 
-  const frame1Block = (spec as any).frame1Description
-    ? `FRAME 1 DESCRIPTION:\n${safeJoin((spec as any).frame1Description)}`
+  const frame1Block = spec.frame1Description
+    ? `FRAME 1 DESCRIPTION:\n${safeJoin(spec.frame1Description)}`
     : '';
-  const frame2Block = (spec as any).frame2Description
-    ? `FRAME 2 DESCRIPTION:\n${safeJoin((spec as any).frame2Description)}`
+  const frame2Block = spec.frame2Description
+    ? `FRAME 2 DESCRIPTION:\n${safeJoin(spec.frame2Description)}`
     : '';
 
   // INJECT USER'S HANDWRITTEN OVERRIDES (if available)
-  const userOverrideParts = [];
+  const userOverrideParts: string[] = [];
   if (opts.injectPromptDraft) {
     userOverrideParts.push('==================================================');
     userOverrideParts.push('DIRECTOR\'S MANUAL OVERRIDES (HIGHEST PRIORITY):');
@@ -122,7 +131,7 @@ export function buildVeo31Prompt(spec: Veo31Spec, opts: VeoPromptOptions = {}): 
   ].filter(Boolean);
 
   const fullPrompt = fullPromptParts.join('\n\n');
-  const negatives = buildNegatives(spec as any).join(', ');
+  const negatives = buildNegatives(spec).join(', ');
 
   return {
     prompt: fullPrompt,

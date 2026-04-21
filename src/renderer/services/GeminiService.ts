@@ -29,6 +29,99 @@ export type SceneIntent = {
   recommendedLighting?: string;
 };
 
+type BillingMode = 'hosted' | 'byok';
+type ExpectedResponseType = 'image' | 'text' | 'json';
+
+type GenerationEntitlements = {
+  hasHostedAccess?: boolean;
+  hasByokAccess?: boolean;
+  effectiveBillingMode?: string;
+};
+
+type GeminiInlineData = {
+  mimeType: string;
+  data: string;
+};
+
+type GeminiPart = {
+  text?: string;
+  inlineData?: GeminiInlineData;
+  [key: string]: unknown;
+};
+
+type GeminiGenerateContentResult = {
+  candidates?: Array<{
+    content?: {
+      parts?: GeminiPart[];
+    };
+    finishReason?: string;
+  }>;
+  predictions?: Array<{
+    bytesBase64Encoded?: string;
+  }>;
+};
+
+type HostedExecutionOptions = {
+  imageSize?: '1K' | '2K' | '4K';
+  expectedResponseType?: ExpectedResponseType;
+  onJobAccepted?: (generationId: string, acceptedAt?: number) => void;
+  signal?: AbortSignal;
+};
+
+type SharedGenerationOptions = {
+  billingMode?: BillingMode;
+  entitlements?: GenerationEntitlements;
+  onJobAccepted?: (generationId: string, acceptedAt?: number) => void;
+  expectedResponseType?: ExpectedResponseType;
+  signal?: AbortSignal;
+};
+
+type HostedSupabaseClient = {
+  auth: {
+    getUser: () => Promise<{ data?: { user?: { id?: string } } }>;
+  };
+  storage: {
+    from: (bucket: string) => {
+      upload: (
+        path: string,
+        file: Blob,
+        options: { contentType?: string; upsert?: boolean }
+      ) => Promise<{ error: { message: string } | null }>;
+    };
+  };
+};
+
+type ElectronApiWithWorkerStatus = {
+  getWorkerStatus?: () => Promise<{
+    imageWorker: { status: string; lastError?: string | null };
+  }>;
+};
+
+type ThinkingConfig = { thinkingLevel: string };
+
+type VeoFivePartDraftResponse = VeoFivePartDraft & {
+  audio?: VeoAudioBlock;
+  negativePrompt?: string;
+};
+
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  return String(error);
+};
+
+const extractInlineImageData = (result: GeminiGenerateContentResult): string | undefined =>
+  result.candidates?.[0]?.content?.parts?.find(
+    (part): part is GeminiPart & { inlineData: GeminiInlineData } =>
+      typeof part.inlineData?.data === 'string' && part.inlineData.data.length > 0
+  )?.inlineData.data;
+
+const extractTextParts = (result: GeminiGenerateContentResult, joiner: string): string =>
+  (result.candidates?.[0]?.content?.parts ?? [])
+    .map((part) => part.text)
+    .filter((text): text is string => typeof text === 'string' && text.trim().length > 0)
+    .join(joiner)
+    .trim();
+
 export const GeminiService = {
 
   // Helper: Flatten structured actor references for multi-image Gemini injection
@@ -59,7 +152,7 @@ export const GeminiService = {
         resolvedMimeType = url.substring(url.indexOf(':') + 1, url.indexOf(';'));
         resolvedData = url.split('base64,')[1];
         if (!resolvedData) throw new Error("Invalid base64 data");
-      } catch (e) {
+      } catch {
         throw new Error("Failed to parse base64 data URL");
       }
     }
@@ -77,15 +170,15 @@ export const GeminiService = {
               resolvedMimeType = result.substring(result.indexOf(':') + 1, result.indexOf(';'));
               resolvedData = result.split('base64,')[1];
               resolve();
-            } catch (e) {
+            } catch {
               reject(new Error("Failed to parse blob to base64"));
             }
           };
           reader.onerror = () => reject(new Error("FileReader error"));
           reader.readAsDataURL(blob);
         });
-      } catch (e: any) {
-        throw new Error(`Failed to resolve image data from ${url.startsWith('blob:') ? 'blob' : 'URL'}: ${e.message}`);
+      } catch (e: unknown) {
+        throw new Error(`Failed to resolve image data from ${url.startsWith('blob:') ? 'blob' : 'URL'}: ${getErrorMessage(e)}`);
       }
     }
     // 3. Handle Raw Base64 (Assume PNG)
@@ -197,7 +290,7 @@ export const GeminiService = {
   // Helper: build a safe thinkingConfig for the given model.
   // NOTE: Gemini 3.1 Flash Image supports only `minimal` (default) and `high`.
   // Passing legacy values like "low" will cause a 400.
-  _buildThinkingConfigForModel(model: string, level?: string): any | undefined {
+  _buildThinkingConfigForModel(model: string, level?: string): ThinkingConfig | undefined {
     if (!level) return undefined;
     const lv = String(level).trim().toLowerCase();
 
@@ -224,16 +317,12 @@ export const GeminiService = {
 
   async _executeHostedRequest(
     model: string,
-    requestBody: any,
-    options: {
-      imageSize?: '1K' | '2K' | '4K',
-      expectedResponseType?: 'image' | 'text' | 'json',
-      onJobAccepted?: (generationId: string, acceptedAt?: number) => void,
-      signal?: AbortSignal
-    } = {}
+    requestBody: Record<string, unknown>,
+    options: HostedExecutionOptions = {}
   ): Promise<string> {
-    if ((window as any).electronAPI && typeof (window as any).electronAPI.getWorkerStatus === 'function') {
-        const workerState = await (window as any).electronAPI.getWorkerStatus();
+    const electronApi = (window as Window & { electronAPI?: ElectronApiWithWorkerStatus }).electronAPI;
+    if (electronApi && typeof electronApi.getWorkerStatus === 'function') {
+        const workerState = await electronApi.getWorkerStatus();
         if (workerState.imageWorker.status !== 'online') {
             throw new Error(`Hosted Generation is unavailable because the required background worker is not currently online. Status: ${workerState.imageWorker.status}. Reason: ${workerState.imageWorker.lastError || 'None'}`);
         }
@@ -340,9 +429,9 @@ export const GeminiService = {
         }
       }
       
-      const timeoutErr = new Error('Hosted Generation Pending: Generation exceeded the current UI wait window and may still complete in the background.');
+      const timeoutErr = new Error('Hosted Generation Pending: Generation exceeded the current UI wait window and may still complete in the background.') as Error & { generationId?: string };
       timeoutErr.name = 'TimeoutError';
-      (timeoutErr as any).generationId = genId;
+      timeoutErr.generationId = genId;
       throw timeoutErr;
     }
 
@@ -360,7 +449,7 @@ export const GeminiService = {
     apiKey: string,
     model: string,
     referenceImages: { url: string; label: string }[] = [],
-    options: { aspectRatio?: string, imageSize?: '1K' | '2K' | '4K', thinkingLevel?: boolean | 'minimal' | 'low' | 'medium' | 'high', googleGrounding?: boolean, strictMode?: boolean, billingMode?: 'hosted' | 'byok', entitlements?: { hasHostedAccess: boolean, hasByokAccess: boolean, effectiveBillingMode: string }, onJobAccepted?: (generationId: string, acceptedAt?: number) => void } = {}
+    options: { aspectRatio?: string, imageSize?: '1K' | '2K' | '4K', thinkingLevel?: boolean | 'minimal' | 'low' | 'medium' | 'high', googleGrounding?: boolean, strictMode?: boolean, billingMode?: BillingMode, entitlements?: GenerationEntitlements, onJobAccepted?: (generationId: string, acceptedAt?: number) => void } = {}
   ): Promise<string> {
 
     // --- API ACCESS LAYER ---
@@ -379,18 +468,18 @@ export const GeminiService = {
     if (model.includes('gemini')) {
       const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
-      const contentsParts: any[] = [];
+      const contentsParts: GeminiPart[] = [];
 
       // Debug log in dev
       console.log("Multimodal images attached:", referenceImages.length);
 
-      let host_supabase: any = null;
+      let host_supabase: HostedSupabaseClient | null = null;
       let host_uid: string = 'anon';
       const executionBatchId = crypto.randomUUID();
       
       if (options.billingMode === 'hosted') {
          const clientRef = await import('./SupabaseClient');
-         host_supabase = clientRef.supabase;
+         host_supabase = clientRef.supabase as HostedSupabaseClient | null;
          if (!host_supabase) throw new Error("Supabase is not configured for hosted generation.");
          
          // Use strict getUser() specifically to guarantee fresh network validity instead of local session cache
@@ -441,7 +530,7 @@ export const GeminiService = {
             console.log(`- Exact Target Path: ${storagePath}`);
             console.log(`- Valid Session Detected? ${host_uid !== 'anon'}`);
             
-            const { error } = await host_supabase.storage.from('reference_images').upload(storagePath, blob, { 
+            const { error } = await host_supabase!.storage.from('reference_images').upload(storagePath, blob, { 
                 contentType: inline.mimeType, 
                 upsert: true 
             });
@@ -514,7 +603,23 @@ export const GeminiService = {
       else if (finalAspectRatio === "3:2") finalAspectRatio = "4:3";
       else if (finalAspectRatio === "21:9") finalAspectRatio = "16:9";
 
-      const requestBody: any = {
+      const requestBody: {
+        contents: Array<{ parts: GeminiPart[] }>;
+        generationConfig: {
+          responseModalities: string[];
+          candidateCount: number;
+          imageConfig: { aspectRatio: string; imageSize?: '1K' | '2K' | '4K' };
+          thinkingConfig?: ThinkingConfig;
+        };
+        tools?: Array<{
+          googleSearch: {
+            searchTypes: {
+              webSearch: Record<string, never>;
+              imageSearch: Record<string, never>;
+            };
+          };
+        }>;
+      } = {
         contents: [{ parts: contentsParts }],
         generationConfig: {
           responseModalities: ["IMAGE"],
@@ -588,8 +693,8 @@ export const GeminiService = {
         }
       }
 
-      const result = await response.json();
-      const imgData = result.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData)?.inlineData?.data;
+      const result = await response.json() as GeminiGenerateContentResult;
+      const imgData = extractInlineImageData(result);
       if (!imgData) throw new Error("No image returned from Gemini.");
       return `data:image/png;base64,${imgData}`;
     }
@@ -624,7 +729,7 @@ export const GeminiService = {
     apiKey: string | null | undefined,
     _model: string,
     imageUrl: string,
-    options: { billingMode?: 'hosted' | 'byok', entitlements?: any, onJobAccepted?: any, expectedResponseType?: 'image' | 'text' | 'json' } = {}
+    options: SharedGenerationOptions = {}
   ): Promise<string> {
     if (!apiKey && options.billingMode !== 'hosted') throw new Error("No API Key provided.");
     const effectiveKey = options.billingMode === 'hosted' ? 'HOSTED_MODE' : (apiKey || '');
@@ -663,9 +768,13 @@ export const GeminiService = {
       throw new Error(`Gemini Analyze Error: ${cleanMsg}`);
     }
 
-    const result = await response.json();
+    const result = await response.json() as GeminiGenerateContentResult;
     const parts = result.candidates?.[0]?.content?.parts || [];
-    const textOut = parts.map((p: any) => p.text).filter(Boolean).join("\n").trim();
+    const textOut = parts
+      .map((p) => p.text)
+      .filter((text): text is string => typeof text === 'string' && text.trim().length > 0)
+      .join("\n")
+      .trim();
     if (!textOut) throw new Error("No text returned from analysis.");
     return textOut;
   },
@@ -676,7 +785,7 @@ export const GeminiService = {
     apiKey: string | null | undefined,
     _model: string,
     frames: { url: string; label: string }[],
-    options: { billingMode?: 'hosted' | 'byok', entitlements?: any, onJobAccepted?: any, expectedResponseType?: 'image' | 'text' | 'json' } = {}
+    options: SharedGenerationOptions = {}
   ): Promise<string> {
     if (!apiKey && options.billingMode !== 'hosted') throw new Error("No API Key provided.");
     const effectiveKey = options.billingMode === 'hosted' ? 'HOSTED_MODE' : (apiKey || '');
@@ -684,7 +793,7 @@ export const GeminiService = {
     const useModel = 'gemini-2.5-flash';
     const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${useModel}:generateContent`;
 
-    const parts: any[] = [];
+    const parts: GeminiPart[] = [];
 
     // 1. Inject frames with labels
     let idx = 1;
@@ -725,8 +834,8 @@ export const GeminiService = {
       throw new Error(`Gemini Multi-Frame Error: ${cleanMsg}`);
     }
 
-    const result = await response.json();
-    const textOut = result.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join('') || '';
+    const result = await response.json() as GeminiGenerateContentResult;
+    const textOut = extractTextParts(result, '');
     if (!textOut) throw new Error("No reasoning generated.");
     return textOut;
   },
@@ -736,7 +845,7 @@ export const GeminiService = {
     apiKey: string | null | undefined,
     model: string,
     frames: { url: string; label: string }[],
-    options: { billingMode?: 'hosted' | 'byok', entitlements?: any, onJobAccepted?: any, expectedResponseType?: 'image' | 'text' | 'json' } = {}
+    options: SharedGenerationOptions = {}
   ): Promise<T> {
     const strictPrompt = `
        ${prompt}
@@ -763,7 +872,7 @@ export const GeminiService = {
 
       const jsonString = cleaned.substring(firstBrace, lastBrace + 1);
       return JSON.parse(jsonString) as T;
-    } catch (e) {
+    } catch {
       console.error("JSON Parse Error on:", rawText);
       throw new Error("Gemini failed to return valid JSON. Please try again.");
     }
@@ -779,7 +888,7 @@ export const GeminiService = {
     imageUrl: string,
     apiKey: string | null | undefined,
     model: string = 'gemini-2.5-flash', // Defaulting to the fast multimodal model
-    options: { billingMode?: 'hosted' | 'byok', entitlements?: any, onJobAccepted?: any } = {}
+    options: SharedGenerationOptions = {}
   ): Promise<ExtractedStyle> {
     if (!apiKey && options.billingMode !== 'hosted') throw new Error("No API Key provided for style analysis.");
     const effectiveKey = options.billingMode === 'hosted' ? 'HOSTED_MODE' : (apiKey || '');
@@ -824,7 +933,7 @@ export const GeminiService = {
       }
 
       return result;
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("[GeminiService.analyzeCharacterStyle] Failed:", err);
       throw new Error("Failed to extract style from character. Please try again.");
     }
@@ -846,7 +955,7 @@ export const GeminiService = {
     apiKey: string | null | undefined,
     model: string,
     referenceImages: { url: string; label: string }[] = [],
-    options: { aspectRatio?: string, imageSize?: '1K' | '2K' | '4K', billingMode?: 'hosted' | 'byok', entitlements?: any, expectedResponseType?: 'image' } = {}
+    options: { aspectRatio?: string, imageSize?: '1K' | '2K' | '4K', billingMode?: BillingMode, entitlements?: GenerationEntitlements, expectedResponseType?: 'image' } = {}
   ): Promise<string> {
     if (!apiKey && options.billingMode !== 'hosted') throw new Error("No API Key provided.");
     const effectiveKey = options.billingMode === 'hosted' ? 'HOSTED_MODE' : (apiKey || '');
@@ -855,7 +964,7 @@ export const GeminiService = {
     const base = await GeminiService._resolveImageData(baseImageUrl);
     const mask = await GeminiService._resolveImageData(maskDataUrl);
 
-    const parts: any[] = [];
+    const parts: GeminiPart[] = [];
 
     // 1) Base image and edit mask
     parts.push({ inlineData: { mimeType: base.mimeType, data: base.data } });
@@ -926,7 +1035,7 @@ Hard constraints:
         if (payload && typeof payload === 'object') {
             try {
                 payload = JSON.stringify(payload);
-            } catch (e) {
+            } catch {
                 throw new Error('Hosted payload failure: could not serialize non-string response.');
             }
         }
@@ -950,8 +1059,8 @@ Hard constraints:
         // Case 2: Hosted worker returned raw Gemini JSON instead of finalized asset URL
         if (trimmed.startsWith('{')) {
             try {
-                const parsed = JSON.parse(trimmed);
-                const extracted = parsed.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData)?.inlineData?.data;
+                const parsed = JSON.parse(trimmed) as GeminiGenerateContentResult;
+                const extracted = extractInlineImageData(parsed);
 
                 if (extracted && typeof extracted === 'string' && extracted.length > 100) {
                     return `data:image/png;base64,${extracted}`;
@@ -962,8 +1071,8 @@ Hard constraints:
                 }
 
                 throw new Error('Completed, but payload JSON did not contain usable image data.');
-            } catch (e: any) {
-                throw new Error(`Failed to parse hosted edit payload JSON: ${e.message}`);
+            } catch (e: unknown) {
+                throw new Error(`Failed to parse hosted edit payload JSON: ${getErrorMessage(e)}`);
             }
         }
 
@@ -989,9 +1098,8 @@ Hard constraints:
       throw new Error(`Gemini Mask Edit Error: ${cleanMsg}`);
     }
 
-    const result = await response.json();
-    const imgData =
-      result.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData)?.inlineData?.data;
+    const result = await response.json() as GeminiGenerateContentResult;
+    const imgData = extractInlineImageData(result);
 
     if (!imgData) throw new Error('No edited image returned from Gemini.');
 
@@ -1010,7 +1118,7 @@ Hard constraints:
     const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
     const base = await GeminiService._resolveImageData(sourceImageUrl);
-    const parts: any[] = [];
+    const parts: GeminiPart[] = [];
     
     parts.push({ inlineData: { mimeType: base.mimeType, data: base.data } });
     parts.push({ text: `[IMAGE 1] BASE IMAGE.` });
@@ -1065,8 +1173,8 @@ Hard constraints:
       throw new Error(`Gemini Refine Error: ${cleanMsg}`);
     }
 
-    const result = await response.json();
-    const imgData = result.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData)?.inlineData?.data;
+    const result = await response.json() as GeminiGenerateContentResult;
+    const imgData = extractInlineImageData(result);
 
     if (!imgData) throw new Error('No refined image returned from Gemini.');
 
@@ -1118,7 +1226,7 @@ Hard constraints:
     prompt: string, 
     apiKey: string | null | undefined,
     model: string = 'gemini-2.5-flash',
-    options: { billingMode?: 'hosted' | 'byok', entitlements?: any, onJobAccepted?: any, expectedResponseType?: 'image' | 'text' | 'json' } = {}
+    options: SharedGenerationOptions = {}
   ): Promise<SceneIntent> {
     const p = prompt.toLowerCase();
     const words = p.replace(/[.,!?]/g, '').split(/\s+/);
@@ -1161,7 +1269,7 @@ Return ONLY valid JSON without markdown formatting. Exact schema:
   "recommendedLighting": "string"
 }
 `;
-        const parsed = await this.analyzeMultiFrameJson<any>(
+        const parsed = await this.analyzeMultiFrameJson<SceneIntent>(
           strictPrompt,
           effectiveKey,
           model,
@@ -1185,7 +1293,7 @@ Return ONLY valid JSON without markdown formatting. Exact schema:
           ],
           summary: prompt.trim()
         };
-      } catch (e) {
+      } catch (e: unknown) {
         console.warn('LLM intent analysis failed, falling back to rule-based parser.', e);
       }
     }
@@ -1291,7 +1399,7 @@ Return ONLY valid JSON without markdown formatting. Exact schema:
     return intent;
   },
 
-  async generateText(prompt: string, apiKey: string, options: { billingMode?: 'hosted' | 'byok', entitlements?: any } = {}): Promise<string> {
+  async generateText(prompt: string, apiKey: string, options: Pick<SharedGenerationOptions, 'billingMode' | 'entitlements'> = {}): Promise<string> {
     if (!apiKey && options.billingMode !== 'hosted') throw new Error("No API Key provided.");
     const effectiveKey = options.billingMode === 'hosted' ? 'HOSTED_MODE' : (apiKey || '');
     const useModel = 'gemini-2.5-flash';
@@ -1322,13 +1430,13 @@ Return ONLY valid JSON without markdown formatting. Exact schema:
       throw new Error(`Gemini Text Error: ${cleanMsg}`);
     }
 
-    const result = await response.json();
-    const textOut = result.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join('') || '';
+    const result = await response.json() as GeminiGenerateContentResult;
+    const textOut = extractTextParts(result, '');
     if (!textOut) throw new Error("No text generated.");
     return textOut;
   },
 
-  async generateJson<T>(prompt: string, apiKey: string, options: { billingMode?: 'hosted' | 'byok', entitlements?: any } = {}): Promise<T> {
+  async generateJson<T>(prompt: string, apiKey: string, options: Pick<SharedGenerationOptions, 'billingMode' | 'entitlements'> = {}): Promise<T> {
     const strictPrompt = `${prompt}\n\nCRITICAL INSTRUCTION: Return ONLY valid JSON. No markdown formatting. No code fences. No commentary.`;
 
     let rawText = await this.generateText(strictPrompt, apiKey, options);
@@ -1343,19 +1451,19 @@ Return ONLY valid JSON without markdown formatting. Exact schema:
 
     try {
       return tryParse(rawText);
-    } catch (e) {
+    } catch {
       console.warn("First JSON parse failed, attempting repair... Raw text was:", rawText);
       const repairPrompt = `The following text was supposed to be valid JSON but failed to parse. Please fix it and return ONLY valid JSON.\n\n${rawText}`;
       rawText = await this.generateText(repairPrompt, apiKey, options);
       try {
         return tryParse(rawText);
-      } catch (e2) {
+      } catch {
         throw new Error("Gemini failed to return valid JSON even after repair.");
       }
     }
   },
 
-  async generateVeoFivePartDraft(concept: string, apiKey: string, optionalContext?: string, options: { billingMode?: 'hosted' | 'byok', entitlements?: any } = {}): Promise<VeoFivePartDraft & { audio?: VeoAudioBlock, negativePrompt?: string }> {
+  async generateVeoFivePartDraft(concept: string, apiKey: string, optionalContext?: string, options: Pick<SharedGenerationOptions, 'billingMode' | 'entitlements'> = {}): Promise<VeoFivePartDraftResponse> {
     if (!apiKey && options.billingMode !== 'hosted') {
       console.warn("No API Key. Returning mocked Veo prompt.");
       await new Promise(r => setTimeout(r, 1000));
@@ -1397,7 +1505,7 @@ Output a JSON object exactly matching this structure:
 Note: Leave audio fields out if not applicable. The core 5 parts are required.
 `;
 
-    return await this.generateJson<any>(prompt, apiKey, options);
+    return await this.generateJson<VeoFivePartDraftResponse>(prompt, apiKey, options);
   },
 
   /**
@@ -1433,7 +1541,7 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
     }
 
     const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
-    const contentsParts: any[] = [];
+    const contentsParts: GeminiPart[] = [];
 
     // 1. Text Instructions
     contentsParts.push({ text: instructions });
@@ -1487,7 +1595,12 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
     }
 
     // Force strict structure behavior and Google grounding disabled for tight compositing
-    const generationConfig: any = {
+    const generationConfig: {
+      responseModalities: string[];
+      candidateCount: number;
+      imageConfig: { aspectRatio: string; imageSize?: '1K' | '2K' | '4K' };
+      thinkingConfig?: ThinkingConfig;
+    } = {
       responseModalities: ["IMAGE"],
       candidateCount: 1,
       imageConfig: {
@@ -1534,8 +1647,8 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
        }
     }
 
-    const result = await response.json();
-    const imgData = result.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData)?.inlineData?.data;
+    const result = await response.json() as GeminiGenerateContentResult;
+    const imgData = extractInlineImageData(result);
     
     if (!imgData) throw new Error("No image returned from generation.");
     
@@ -1556,7 +1669,7 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
     sceneTruth?: import('../types/shots').SceneTruthSnapshot;
     presetId?: string;
     hasSubjectStyleAnalysis?: boolean;
-    options?: { billingMode?: 'hosted' | 'byok', entitlements?: any, onJobAccepted?: any, expectedResponseType?: 'image' | 'text' | 'json', signal?: AbortSignal };
+    options?: SharedGenerationOptions;
   }): Promise<string> {
     const { anchorImageUrl, shotBlueprintUrl, actorIdentitySets = [], prompt, aspectRatio, apiKey, model, sceneTruth, presetId, hasSubjectStyleAnalysis } = args;
     
@@ -1573,7 +1686,7 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
     if (args.options?.billingMode !== 'hosted' && !apiKey) throw new Error("No API Key provided for shot generation");
     
     const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
-    const parts: any[] = [];
+    const parts: GeminiPart[] = [];
     
     // 1. Primary scene anchor (MUST BE FIRST)
     const anchor = await GeminiService._resolveImageData(anchorImageUrl);
@@ -1649,8 +1762,8 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
       throw new Error(`Shot Preview Generation Error: ${cleanMsg}`);
     }
     
-    const result = await response.json();
-    const data = result.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData)?.inlineData?.data;
+    const result = await response.json() as GeminiGenerateContentResult;
+    const data = extractInlineImageData(result);
     if (!data) throw new Error("No image data in shot preview response.");
     
     return `data:image/png;base64,${data}`;
@@ -1669,7 +1782,7 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
     model: string;
     sceneTruth?: import('../types/shots').SceneTruthSnapshot;
     presetId?: string;
-    options?: { billingMode?: 'hosted' | 'byok', entitlements?: any, onJobAccepted?: any, expectedResponseType?: 'image' | 'text' | 'json', signal?: AbortSignal };
+    options?: SharedGenerationOptions;
   }): Promise<string> {
     const { sourceResultUrl, selectedShotPreviewUrl, actorIdentitySets = [], prompt, aspectRatio, apiKey, model, sceneTruth, presetId, options } = args;
     
@@ -1685,7 +1798,7 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
     if (options?.billingMode !== 'hosted' && !apiKey) throw new Error("No API Key provided for shot generation");
     
     const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
-    const parts: any[] = [];
+    const parts: GeminiPart[] = [];
     
     // 1. Supplemental identity anchors
     for (const set of actorIdentitySets) {
@@ -1750,8 +1863,8 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
       throw new Error(`Shot Final Rerender Error: ${cleanMsg}`);
     }
     
-    const result = await response.json();
-    const data = result.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData)?.inlineData?.data;
+    const result = await response.json() as GeminiGenerateContentResult;
+    const data = extractInlineImageData(result);
     if (!data) throw new Error("No image data in shot final response.");
     
     return `data:image/png;base64,${data}`;

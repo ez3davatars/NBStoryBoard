@@ -86,6 +86,25 @@ export const getActiveReferenceSlots = (slots: ReferenceSlot[]) => {
 
 import { LIGHTING_PRESETS, CAMERA_PRESETS } from '../../prompts/portraitPrompts';
 
+type PresetPromptOption = {
+  key: string;
+  prompt: string;
+};
+
+type StrictPromptPlanEntry = {
+  region: number;
+  token: StageToken;
+  actorLabel?: string;
+  cast?: { name?: string } | null;
+  profile?: string | object | null;
+};
+
+type StrictPromptDNA = {
+  environment?: string;
+  lighting?: string;
+  camera?: string;
+};
+
 export const compileV3DirectorPrompt = (director: DirectorSettings, slots: ReferenceSlot[], tokens: StageToken[] = [], bgPrompt: string = ''): string => {
   const activeRefs = getActiveReferenceSlots(slots);
 
@@ -205,8 +224,14 @@ export const compileV3DirectorPrompt = (director: DirectorSettings, slots: Refer
   }
 
   // RESOLVE PRESETS for Lighting and Camera
-  const resolvedLighting = LIGHTING_PRESETS.find((p: any) => p.key === director.lighting)?.prompt || director.lighting?.trim() || '';
-  const resolvedCamera = CAMERA_PRESETS.find((p: any) => p.key === director.camera)?.prompt || director.camera?.trim() || '';
+  const resolvedLighting =
+    LIGHTING_PRESETS.find((p: PresetPromptOption) => p.key === director.lighting)?.prompt ||
+    director.lighting?.trim() ||
+    '';
+  const resolvedCamera =
+    CAMERA_PRESETS.find((p: PresetPromptOption) => p.key === director.camera)?.prompt ||
+    director.camera?.trim() ||
+    '';
 
   // 2.5) Actor Intelligence (Pose, Lighting interaction per actor & Spatial Enforcement)
   tokens.forEach(token => {
@@ -387,8 +412,8 @@ export const buildPlacementPrompt = (
 import { buildHumanPlacementIntents, formatPlacementIntents } from './placementHelpers';
 
 export const buildStrictPrompt = (
-    plan: any[], 
-    dnaForRender: any, 
+    plan: StrictPromptPlanEntry[],
+    dnaForRender: StrictPromptDNA,
     notes: string, 
     tokens: StageToken[], 
     annotations: StageAnnotation[],
@@ -406,12 +431,13 @@ export const buildStrictPrompt = (
 
     const regions = plan.map(r => {
         const t = r.token;
+        const actorLabel = r.actorLabel || r.cast?.name || t.tag || `Actor ${r.region}`;
 
         const boundsBlock = `BBOX_ABS: [${Math.round(t.x)}, ${Math.round(t.y)}, ${Math.round(t.width)}, ${Math.round(t.height)}]`;
         let profile = typeof r.profile === 'string' ? r.profile : (r.profile ? JSON.stringify(r.profile) : `You MUST perfectly match the facial identity, skin tone, hair, and clothing of the subject in the attached image labeled "REGION_${r.region}_REF"`);
         if (t.intelligence) profile += `\nMANDATORY ACTION/POSE: ${t.intelligence}`;
 
-        return `REGION ${r.region} (${r.actorLabel}):\n- Position: ${boundsBlock}\n- Description: ${profile}`;
+        return `REGION ${r.region} (${actorLabel}):\n- Position: ${boundsBlock}\n- Description: ${profile}`;
     }).join('\n\n');
 
     // Director Canvas Semantic Handoff

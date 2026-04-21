@@ -1,4 +1,5 @@
 // Sanitizer to enforce identity precedence over loose style abstraction.
+import type { ExtractedStyle } from '../services/GeminiService';
 
 export function stripIdentityOverridingAnalysis(text: string | undefined): string {
   if (!text) return '';
@@ -57,8 +58,12 @@ export function stripShotDirectiveContamination(text: string | undefined): strin
 /**
  * Helper to safely demote extracted styles if strict actors are present.
  */
-export function sanitizeStyleForStrictIdentity(styleObj: any): any {
-  if (!styleObj) return styleObj;
+type SanitizableStyle = ExtractedStyle & { subject?: unknown };
+
+export function sanitizeStyleForStrictIdentity(
+  styleObj: SanitizableStyle | null | undefined
+): SanitizableStyle | null {
+  if (!styleObj) return null;
   
   // We preserve the environment/cinematic styling, but we scrub the summary/mood if it describes the human.
   return {

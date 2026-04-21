@@ -1,6 +1,41 @@
 import { useState } from 'react';
 import { GeminiService } from '../services/GeminiService';
-import type { StageToken } from '../context/AppContext';
+import type { Action, StageToken } from '../context/AppContext';
+import type { VeoFivePartDraft } from '../promptEngine/veoFivePart';
+import type { Veo31Spec } from '../promptEngine/types';
+
+type PromptDraftOverride = Partial<VeoFivePartDraft> & { concept?: string };
+
+type RawAnalysisSpec = {
+    characterBible?: {
+        identity?: string;
+        wardrobe?: string;
+        emotionalState?: string;
+        lockedTraits?: string[];
+    };
+    styleBible?: {
+        visualStyle?: string;
+        lighting?: string;
+        colorPalette?: string;
+        lensLanguage?: string;
+    };
+    environmentBible?: {
+        setting?: string;
+        props?: string[];
+        weatherTime?: string;
+        lockedElements?: string[];
+    };
+    motionDelta?: {
+        cameraMovement?: string;
+        characterAction?: string;
+    };
+    motion?: {
+        cameraMovement?: string;
+        characterAction?: string;
+    };
+    frame1Description?: string;
+    frame2Description?: string;
+};
 
 export interface SmartAnalyzeOptions {
     apiKey?: string;
@@ -12,13 +47,13 @@ export interface SmartAnalyzeOptions {
     continuityLockEnabled: boolean;
     noExtraObjects: boolean;
     noMorph: boolean;
-    dispatch: any;
-    injectPromptDraft?: any; // VeoFivePartDraft
+    dispatch: React.Dispatch<Action>;
+    injectPromptDraft?: PromptDraftOverride;
 }
 
 export function useVeoSmartAnalyze() {
     const [analysisResult, setAnalysisResult] = useState<string>('');
-    const [analysisSpec, setAnalysisSpec] = useState<any>(null);
+    const [analysisSpec, setAnalysisSpec] = useState<Veo31Spec | null>(null);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
 
     const runSmartAnalyze = async ({
@@ -103,10 +138,10 @@ export function useVeoSmartAnalyze() {
 
             // 2. Call Gemini with Strict JSON
             if (!apiKey) throw new Error("API Key required for Smart Analyze");
-            let spec: any;
+            let spec: RawAnalysisSpec;
             try {
                 spec = await GeminiService.analyzeMultiFrameJson(prompt, apiKey, model || 'gemini-2.5-flash', frames);
-            } catch (jsonErr) {
+            } catch {
                 throw new Error("Failed to extract Scene Bibles. Please retry.");
             }
 
@@ -121,21 +156,41 @@ export function useVeoSmartAnalyze() {
             }
 
             // Merge locks
-            if (spec.characterBible && castingForgeLocks.length > 0) {
-                spec.characterBible.lockedTraits = [
-                    ...(spec.characterBible.lockedTraits || []),
-                    ...castingForgeLocks
-                ];
+            if (castingForgeLocks.length > 0) {
+                const existingTraits = spec.characterBible?.lockedTraits || [];
+                spec.characterBible = {
+                    ...(spec.characterBible || {}),
+                    lockedTraits: [...existingTraits, ...castingForgeLocks]
+                };
             }
 
             // Map JSON to Veo31Spec structure and STORE IT
-            const veoSpec = {
-                character: spec.characterBible,
-                style: spec.styleBible,
-                environment: spec.environmentBible,
-                motion: spec.motionDelta || spec.motion, // Handle potential key mismatch
-                frame1Description: spec.frame1Description,
-                frame2Description: spec.frame2Description
+            const motionSource = spec.motionDelta || spec.motion;
+            const veoSpec: Veo31Spec = {
+                character: {
+                    identity: spec.characterBible?.identity || '',
+                    wardrobe: spec.characterBible?.wardrobe || '',
+                    emotionalState: spec.characterBible?.emotionalState || '',
+                    lockedTraits: spec.characterBible?.lockedTraits || []
+                },
+                style: {
+                    visualStyle: spec.styleBible?.visualStyle || '',
+                    lighting: spec.styleBible?.lighting || '',
+                    colorPalette: spec.styleBible?.colorPalette || '',
+                    lensLanguage: spec.styleBible?.lensLanguage || ''
+                },
+                environment: {
+                    setting: spec.environmentBible?.setting || '',
+                    props: spec.environmentBible?.props || [],
+                    weatherTime: spec.environmentBible?.weatherTime || '',
+                    lockedElements: spec.environmentBible?.lockedElements || []
+                },
+                motion: {
+                    cameraMovement: motionSource?.cameraMovement || '',
+                    characterAction: motionSource?.characterAction || ''
+                },
+                frame1Description: spec.frame1Description || '',
+                frame2Description: spec.frame2Description || spec.frame1Description || ''
             };
             setAnalysisSpec(veoSpec); // <--- PERSIST FOR STORYBOARD GENERATION
 
@@ -158,8 +213,9 @@ export function useVeoSmartAnalyze() {
             setAnalysisResult(displayOutput);
             dispatch({ type: 'ADD_LOG', payload: { message: "Veo 3.1 JSON Prompt Engine: Success", type: 'success' } });
 
-        } catch (err: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Analysis failed: ${err.message}`, type: 'error' } });
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            dispatch({ type: 'ADD_LOG', payload: { message: `Analysis failed: ${message}`, type: 'error' } });
         } finally {
             setIsAnalyzing(false);
         }

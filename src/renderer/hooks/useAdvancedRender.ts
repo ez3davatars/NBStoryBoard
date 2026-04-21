@@ -15,10 +15,19 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
         camera: state.director?.camera || '',
     };
 
-    const safeParseJson = (raw: string): any | null => {
+    const getErrorMessage = (error: unknown): string => {
+        if (error instanceof Error) return error.message;
+        return String(error);
+    };
+
+    const safeParseJson = (raw: string): Record<string, unknown> | null => {
         try {
             const cleaned = raw.replace(/```json/g, '').replace(/```/g, '').trim();
-            return JSON.parse(cleaned);
+            const parsed = JSON.parse(cleaned);
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                return null;
+            }
+            return parsed as Record<string, unknown>;
         } catch {
             return null;
         }
@@ -69,12 +78,12 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
 
             dispatch({ type: 'ADD_LOG', payload: { message: "Anchor DNA extracted.", type: 'success' } });
             return dna;
-        } catch (e: any) {
+        } catch (e: unknown) {
             setDnaStatus('error');
-            dispatch({ type: 'ADD_LOG', payload: { message: e.message || "DNA analysis failed", type: 'error' } });
+            dispatch({ type: 'ADD_LOG', payload: { message: getErrorMessage(e) || "DNA analysis failed", type: 'error' } });
             return null;
         }
-    }, [state.backgroundUrl, state.apiKey, state.model, dispatch]);
+    }, [state.backgroundUrl, state.apiKey, state.model, state.billingEntitlements.effectiveBillingMode, dispatch]);
 
     // Auto DNA on background change
     useEffect(() => {
@@ -136,8 +145,8 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
 
                 overrides.set(t.id, prof);
                 dispatch({ type: 'UPDATE_TOKEN', payload: { id: t.id, profile: prof } });
-            } catch (e: any) {
-                dispatch({ type: 'ADD_LOG', payload: { message: `Token profile failed: ${e.message || t.id}`, type: 'error' } });
+            } catch (e: unknown) {
+                dispatch({ type: 'ADD_LOG', payload: { message: `Token profile failed: ${getErrorMessage(e) || t.id}`, type: 'error' } });
             }
         }
 
@@ -159,7 +168,7 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
         }
     };
 
-    const tokenProfilesReady = state.tokens.filter((t: any) => !!t.profile).length;
+    const tokenProfilesReady = state.tokens.filter((t) => !!t.profile).length;
     const tokenProfilesTotal = state.tokens.length;
 
     return {

@@ -1,49 +1,67 @@
 import { useCallback } from 'react';
-import type { AppState, Action } from '../context/AppContext';
+import type { Dispatch } from 'react';
+import type { AppState, Action, RegionEditLayer, RegionEditState, Shot } from '../context/AppContext';
 import { StorageService } from '../services/StorageService';
 import { APP_SCHEMA_VERSION } from '../context/AppContext';
 import { compileV3DirectorPrompt, getActiveReferenceSlots } from '../utils/promptHelpers';
 
-export const useProductionExports = (state: AppState, dispatch: React.Dispatch<Action>) => {
+const getErrorMessage = (error: unknown): string => {
+    if (error instanceof Error) return error.message;
+    return String(error);
+};
+
+type BatchManifestEntry = {
+    id: string;
+    name: string;
+    folder: string;
+    startFrame: boolean;
+    endFrame: boolean;
+};
+
+type BatchManifest = {
+    app: string;
+    exportedAt: string;
+    batch: string;
+    shotCount: number;
+    shots: BatchManifestEntry[];
+};
+
+export const useProductionExports = (state: AppState, dispatch: Dispatch<Action>) => {
     
-    const activeShot = (() => {
-        if (!('shots' in state) || !('activeShotId' in state)) return null as any;
-        const shots = (state as any).shots as any[];
-        const id = (state as any).activeShotId as string | null;
-        if (!id) return null;
-        return shots.find(s => s.id === id) || null;
-    })();
+    const activeShot = state.activeShotId
+        ? (state.shots.find((shot) => shot.id === state.activeShotId) ?? null)
+        : null;
 
     const sanitizeName = (name: string) =>
         name.replace(/[^a-z0-9-_ ]/gi, '').trim().replace(/\s+/g, '_').slice(0, 50) || 'Shot';
 
-    const writeFileToDir = async (dir: FileSystemDirectoryHandle, filename: string, blob: Blob) => {
+    const writeFileToDir = useCallback(async (dir: FileSystemDirectoryHandle, filename: string, blob: Blob) => {
         const handle = await dir.getFileHandle(filename, { create: true });
         const writable = await handle.createWritable();
         await writable.write(blob);
         await writable.close();
-    };
+    }, []);
 
-    const writeDataUrlPng = async (dir: FileSystemDirectoryHandle, filename: string, dataUrl: string) => {
+    const writeDataUrlPng = useCallback(async (dir: FileSystemDirectoryHandle, filename: string, dataUrl: string) => {
         const res = await fetch(dataUrl);
         const blob = await res.blob();
         await writeFileToDir(dir, filename, blob);
-    };
+    }, [writeFileToDir]);
 
-    const writeTextFile = async (dir: FileSystemDirectoryHandle, filename: string, text: string) => {
+    const writeTextFile = useCallback(async (dir: FileSystemDirectoryHandle, filename: string, text: string) => {
         await writeFileToDir(dir, filename, new Blob([text], { type: 'text/plain' }));
-    };
+    }, [writeFileToDir]);
 
-    const redactStateForDiagnostics = () => {
-        const { apiKey, saveDirectoryHandle, ...rest } = state as any;
+    const redactStateForDiagnostics = useCallback(() => {
+        const { apiKey, saveDirectoryHandle, ...rest } = state;
         return {
             ...rest,
             apiKey: apiKey ? `REDACTED_${String(apiKey).length}` : '',
             hasSaveDirectory: Boolean(saveDirectoryHandle),
         };
-    };
+    }, [state]);
 
-    const verifyFilesExist = async (dir: FileSystemDirectoryHandle, required: string[]) => {
+    const verifyFilesExist = useCallback(async (dir: FileSystemDirectoryHandle, required: string[]) => {
         const missing: string[] = [];
         for (const name of required) {
             try {
@@ -53,9 +71,9 @@ export const useProductionExports = (state: AppState, dispatch: React.Dispatch<A
             }
         }
         return missing;
-    };
+    }, []);
 
-    const exportRegionEditAssets = async (shotDir: FileSystemDirectoryHandle, regionEdit: any) => {
+    const exportRegionEditAssets = useCallback(async (shotDir: FileSystemDirectoryHandle, regionEdit?: RegionEditState) => {
         try {
             if (!regionEdit) return;
 
@@ -72,7 +90,7 @@ export const useProductionExports = (state: AppState, dispatch: React.Dispatch<A
                 new Blob([JSON.stringify(regionEdit, null, 2)], { type: 'application/json' })
             );
 
-            const layers: any[] = Array.isArray(regionEdit.layers) ? regionEdit.layers : [];
+            const layers: RegionEditLayer[] = Array.isArray(regionEdit.layers) ? regionEdit.layers : [];
             const outDir = await regionDir.getDirectoryHandle('outputs', { create: true });
 
             for (const layer of layers) {
@@ -87,17 +105,17 @@ export const useProductionExports = (state: AppState, dispatch: React.Dispatch<A
                     await writeDataUrlPng(outDir, `out_${safeId}.png`, layer.lastOutputUrl);
                 }
             }
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Region edit export warning: ${e?.message || e}`, type: 'error' } });
+        } catch (e: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Region edit export warning: ${getErrorMessage(e)}`, type: 'error' } });
         }
-    };
+    }, [dispatch, writeDataUrlPng, writeFileToDir, writeTextFile]);
 
     const handleSaveActiveShot = useCallback(() => {
         if (!activeShot) {
             dispatch({ type: 'ADD_LOG', payload: { message: 'No active shot selected.', type: 'error' } });
             return;
         }
-        dispatch({ type: 'SAVE_ACTIVE_SHOT', payload: { touchUpdatedAt: true } } as any);
+        dispatch({ type: 'SAVE_ACTIVE_SHOT', payload: { touchUpdatedAt: true } });
         dispatch({ type: 'ADD_LOG', payload: { message: `Saved snapshot for shot: ${activeShot.name}`, type: 'success' } });
     }, [activeShot, dispatch]);
 
@@ -123,21 +141,21 @@ export const useProductionExports = (state: AppState, dispatch: React.Dispatch<A
                 schemaStorageService: schemaStored,
                 userAgent: navigator.userAgent,
                 view: state.view,
-                activeShotId: (state as any).activeShotId ?? null,
-                shotCount: (state as any).shots?.length ?? 0,
+                activeShotId: state.activeShotId ?? null,
+                shotCount: state.shots.length,
                 note: 'State snapshot is redacted (apiKey removed).',
                 state: redactStateForDiagnostics(),
                 logs: state.logs?.slice(-200) ?? [],
             };
 
             await writeFileToDir(dir, 'diagnostics.json', new Blob([JSON.stringify(diag, null, 2)], { type: 'application/json' }));
-            await writeTextFile(dir, 'logs.txt', (state.logs || []).slice(-200).map((l: any) => `${l.timestamp} [${l.type}] ${l.message}`).join('\n'));
+            await writeTextFile(dir, 'logs.txt', (state.logs || []).slice(-200).map((l) => `${l.timestamp} [${l.type}] ${l.message}`).join('\n'));
 
             dispatch({ type: 'ADD_LOG', payload: { message: `Diagnostics exported: Diagnostics/${folderName}`, type: 'success' } });
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Diagnostics export failed: ${e?.message || e}`, type: 'error' } });
+        } catch (e: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Diagnostics export failed: ${getErrorMessage(e)}`, type: 'error' } });
         }
-    }, [state, dispatch]);
+    }, [dispatch, redactStateForDiagnostics, state, writeFileToDir, writeTextFile]);
 
     const handleExportActiveShotPack = useCallback(async (compiledPrompt: string, strictMode: boolean) => {
         if (!activeShot) {
@@ -151,7 +169,7 @@ export const useProductionExports = (state: AppState, dispatch: React.Dispatch<A
 
         dispatch({ type: 'SET_PROCESSING', payload: true });
         try {
-            dispatch({ type: 'SAVE_ACTIVE_SHOT', payload: { touchUpdatedAt: true } } as any);
+            dispatch({ type: 'SAVE_ACTIVE_SHOT', payload: { touchUpdatedAt: true } });
 
             const root = await state.saveDirectoryHandle.getDirectoryHandle('ShotPacks', { create: true });
             const folderName = `SHOT-${Date.now()}-${sanitizeName(activeShot.name)}`;
@@ -181,7 +199,7 @@ export const useProductionExports = (state: AppState, dispatch: React.Dispatch<A
                 compiledPrompt,
                 stage: {
                     backgroundUrl: state.backgroundUrl || null,
-                    tokens: state.tokens.map((t: any) => ({
+                    tokens: state.tokens.map((t) => ({
                         id: t.id,
                         tag: t.tag,
                         castId: t.castId,
@@ -197,8 +215,8 @@ export const useProductionExports = (state: AppState, dispatch: React.Dispatch<A
                     referenceSlots: state.referenceSlots,
                 },
                 frames: {
-                    start: ((activeShot as any).startFrameUrl ?? null) as string | null,
-                    end: ((activeShot as any).endFrameUrl ?? null) as string | null,
+                    start: activeShot.startFrameUrl ?? null,
+                    end: activeShot.endFrameUrl ?? null,
                     lastResult: state.resultImage || null,
                 }
             };
@@ -207,8 +225,8 @@ export const useProductionExports = (state: AppState, dispatch: React.Dispatch<A
             await writeFileToDir(shotDir, 'prompt.txt', new Blob([compiledPrompt || ''], { type: 'text/plain' }));
 
             if (state.backgroundUrl) await writeDataUrlPng(shotDir, 'background.png', state.backgroundUrl);
-            if ((activeShot as any).startFrameUrl) await writeDataUrlPng(shotDir, 'start.png', (activeShot as any).startFrameUrl);
-            if ((activeShot as any).endFrameUrl) await writeDataUrlPng(shotDir, 'end.png', (activeShot as any).endFrameUrl);
+            if (activeShot.startFrameUrl) await writeDataUrlPng(shotDir, 'start.png', activeShot.startFrameUrl);
+            if (activeShot.endFrameUrl) await writeDataUrlPng(shotDir, 'end.png', activeShot.endFrameUrl);
             if (state.resultImage) await writeDataUrlPng(shotDir, 'last_result.png', state.resultImage);
 
             const refsDir = await shotDir.getDirectoryHandle('refs', { create: true });
@@ -224,12 +242,12 @@ export const useProductionExports = (state: AppState, dispatch: React.Dispatch<A
                 await writeDataUrlPng(tokensDir, `token_${sanitizeName(t.tag || t.id)}.png`, t.url);
             }
 
-            await exportRegionEditAssets(shotDir, (state as any).regionEdit);
+            await exportRegionEditAssets(shotDir, state.regionEdit);
 
             const required = ['shot.json', 'prompt.txt'];
             if (state.backgroundUrl) required.push('background.png');
-            if ((activeShot as any).startFrameUrl) required.push('start.png');
-            if ((activeShot as any).endFrameUrl) required.push('end.png');
+            if (activeShot.startFrameUrl) required.push('start.png');
+            if (activeShot.endFrameUrl) required.push('end.png');
             const missing = await verifyFilesExist(shotDir, required);
             
             if (missing.length > 0) {
@@ -237,19 +255,19 @@ export const useProductionExports = (state: AppState, dispatch: React.Dispatch<A
             } else {
                 dispatch({ type: 'ADD_LOG', payload: { message: `Shot Pack exported: ShotPacks/${folderName}`, type: 'success' } });
             }
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Shot Pack export failed: ${e.message || e}`, type: 'error' } });
+        } catch (e: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Shot Pack export failed: ${getErrorMessage(e)}`, type: 'error' } });
         } finally {
             dispatch({ type: 'SET_PROCESSING', payload: false });
         }
-    }, [activeShot, state, dispatch]);
+    }, [activeShot, dispatch, exportRegionEditAssets, state, verifyFilesExist, writeDataUrlPng, writeFileToDir]);
 
     const handleExportAllShotPacks = useCallback(async () => {
         if (!state.saveDirectoryHandle) {
             dispatch({ type: 'ADD_LOG', payload: { message: 'No save directory selected (Settings).', type: 'error' } });
             return;
         }
-        const shots = (state as any).shots || [];
+        const shots: Shot[] = state.shots || [];
         if (shots.length === 0) {
             dispatch({ type: 'ADD_LOG', payload: { message: 'No shots available to export.', type: 'error' } });
             return;
@@ -261,12 +279,12 @@ export const useProductionExports = (state: AppState, dispatch: React.Dispatch<A
             const batchName = `BATCH-${Date.now()}`;
             const batchDir = await root.getDirectoryHandle(batchName, { create: true });
 
-            const manifest: any = {
+            const manifest: BatchManifest = {
                 app: 'NBStoryBoard',
                 exportedAt: new Date().toISOString(),
                 batch: batchName,
                 shotCount: shots.length,
-                shots: [] as any[],
+                shots: [],
             };
 
             for (let i = 0; i < shots.length; i++) {
@@ -328,7 +346,7 @@ export const useProductionExports = (state: AppState, dispatch: React.Dispatch<A
                     await writeDataUrlPng(tokensDir, `token_${sanitizeName(tag)}.png`, t.url);
                 }
 
-                await exportRegionEditAssets(shotDir, (shot as any).regionEdit);
+                await exportRegionEditAssets(shotDir, shot.regionEdit);
 
                 manifest.shots.push({
                     id: shot.id,
@@ -342,12 +360,12 @@ export const useProductionExports = (state: AppState, dispatch: React.Dispatch<A
             await writeFileToDir(batchDir, 'manifest.json', new Blob([JSON.stringify(manifest, null, 2)], { type: 'application/json' }));
 
             dispatch({ type: 'ADD_LOG', payload: { message: `Exported ALL shot packs: ShotPacks/${batchName}`, type: 'success' } });
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Export ALL shot packs failed: ${e.message || e}`, type: 'error' } });
+        } catch (e: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Export ALL shot packs failed: ${getErrorMessage(e)}`, type: 'error' } });
         } finally {
             dispatch({ type: 'SET_PROCESSING', payload: false });
         }
-    }, [state, dispatch]);
+    }, [dispatch, exportRegionEditAssets, state, writeDataUrlPng, writeFileToDir]);
 
     return {
         handleSaveActiveShot,

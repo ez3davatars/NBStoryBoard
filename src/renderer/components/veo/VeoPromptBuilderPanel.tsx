@@ -1,4 +1,5 @@
 import { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
+import type { ChangeEvent, ReactNode } from 'react';
 import { useAppContext } from '../../context/AppContext';
 import { GeminiService } from '../../services/GeminiService';
 import { formatVeoFivePartPrompt } from '../../promptEngine/veoFivePart';
@@ -14,8 +15,38 @@ export interface VeoPromptBuilderRef {
     saveToShot: () => void;
 }
 
+type VeoDraftExtended = VeoFivePartDraft & {
+    audio?: VeoAudioBlock;
+    concept?: string;
+    negativePrompt?: string;
+    shotType?: string;
+    lens?: string;
+    motion?: string;
+};
+
+type ActiveEditorState = {
+    id: string;
+    title: string;
+    value: string;
+    setter: (val: string) => void;
+};
+
+type InspectorSectionProps = {
+    title: string;
+    children: ReactNode;
+    defaultOpen?: boolean;
+    titleAddon?: ReactNode;
+    showExpand?: boolean;
+    onExpand?: () => void;
+};
+
+const getErrorMessage = (error: unknown): string => {
+    if (error instanceof Error) return error.message;
+    return String(error);
+};
+
 // Helper for inspector sections
-const InspectorSection = ({ title, children, defaultOpen = true, titleAddon, showExpand, onExpand }: any) => (
+const InspectorSection = ({ title, children, defaultOpen = true, titleAddon, showExpand, onExpand }: InspectorSectionProps) => (
     <details open={defaultOpen} className="group rounded-xl bg-white/5 border border-white/10 overflow-hidden shrink-0">
         <summary className="px-4 py-3 cursor-pointer list-none flex items-center justify-between text-[10px] font-black uppercase tracking-widest text-white/80 select-none bg-white/5 hover:bg-white/10 transition-colors">
             <div className="flex items-center gap-2">
@@ -45,13 +76,10 @@ const InspectorSection = ({ title, children, defaultOpen = true, titleAddon, sho
     </details>
 );
 
-interface VeoPromptBuilderPanelProps {
-    // analysisSpec?: any; // Removed as unused
-}
-
-const VeoPromptBuilderPanel = forwardRef<VeoPromptBuilderRef, VeoPromptBuilderPanelProps>((_, ref) => { // Removed analysisSpec from props
+const VeoPromptBuilderPanel = forwardRef<VeoPromptBuilderRef>((_, ref) => { // Removed analysisSpec from props
     const { state, dispatch } = useAppContext();
     const activeShot = state.shots.find(s => s.id === state.activeShotId);
+    const activeShotId = activeShot?.id;
 
     // Local state for the draft
     const [concept, setConcept] = useState('');
@@ -74,7 +102,7 @@ const VeoPromptBuilderPanel = forwardRef<VeoPromptBuilderRef, VeoPromptBuilderPa
 
     const [isEnhancing, setIsEnhancing] = useState(false);
 
-    const [activeEditor, setActiveEditor] = useState<{ id: string, title: string, value: string, setter: (val: string) => void } | null>(null);
+    const [activeEditor, setActiveEditor] = useState<ActiveEditorState | null>(null);
 
     // Sync from active shot (or global fallback) when it changes
     useEffect(() => {
@@ -82,7 +110,7 @@ const VeoPromptBuilderPanel = forwardRef<VeoPromptBuilderRef, VeoPromptBuilderPa
         const draftSource = activeShot?.veoPromptDraft || state.veoPromptDraft;
 
         if (draftSource) {
-            const draft = draftSource;
+            const draft = draftSource as VeoDraftExtended;
             setConcept(draft.concept || '');
             setCinematography(draft.cinematography || '');
             setSubject(draft.subject || '');
@@ -91,10 +119,9 @@ const VeoPromptBuilderPanel = forwardRef<VeoPromptBuilderRef, VeoPromptBuilderPa
             setStyleAmbiance(draft.styleAmbiance || '');
             setNegativePrompt(draft.negativePrompt || '');
 
-            const fullDraft = draft as any;
-            setShotType(draft.cinematographyShotType || fullDraft.shotType || '');
-            setLens(draft.cinematographyLens || fullDraft.lens || '');
-            setMotion(draft.cinematographyMotion || fullDraft.motion || '');
+            setShotType(draft.cinematographyShotType || draft.shotType || '');
+            setLens(draft.cinematographyLens || draft.lens || '');
+            setMotion(draft.cinematographyMotion || draft.motion || '');
 
             if (draft.audio) {
                 setAudioDialogue(draft.audio.dialogue || '');
@@ -120,7 +147,7 @@ const VeoPromptBuilderPanel = forwardRef<VeoPromptBuilderRef, VeoPromptBuilderPa
             setAudioMusic('');
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [activeShot?.id]); // Re-sync when switching shots
+    }, [activeShotId]); // Re-sync when switching shots
 
     // Auto-save draft changes to Active Shot OR Global State (Debounced)
     useEffect(() => {
@@ -144,10 +171,10 @@ const VeoPromptBuilderPanel = forwardRef<VeoPromptBuilderRef, VeoPromptBuilderPa
         };
 
         const timer = setTimeout(() => {
-            if (activeShot) {
+            if (activeShotId) {
                 dispatch({
                     type: 'UPDATE_SHOT_META',
-                    payload: { id: activeShot.id, updates: { veoPromptDraft: draft } }
+                    payload: { id: activeShotId, updates: { veoPromptDraft: draft } }
                 });
             } else {
                 dispatch({
@@ -159,10 +186,9 @@ const VeoPromptBuilderPanel = forwardRef<VeoPromptBuilderRef, VeoPromptBuilderPa
 
         return () => clearTimeout(timer);
     }, [
-        activeShot?.id, // Ensure we save to the correct boundary
+        activeShotId, // Ensure we save to the correct boundary
         concept, cinematography, shotType, lens, motion, subject, action, contextStr, styleAmbiance, negativePrompt,
         audioDialogue, audioSfx, audioAmbience, audioMusic, dispatch
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     ]);
 
     const handleEnhance = async () => {
@@ -178,7 +204,8 @@ const VeoPromptBuilderPanel = forwardRef<VeoPromptBuilderRef, VeoPromptBuilderPa
             if (draft.action) setAction(draft.action);
             if (draft.context) setContextStr(draft.context);
             if (draft.styleAmbiance) setStyleAmbiance(draft.styleAmbiance);
-            if ((draft as any).negativePrompt) setNegativePrompt((draft as any).negativePrompt);
+            const enhancedDraft = draft as VeoDraftExtended;
+            if (enhancedDraft.negativePrompt) setNegativePrompt(enhancedDraft.negativePrompt);
 
             if (draft.audio) {
                 if (draft.audio.dialogue) setAudioDialogue(draft.audio.dialogue);
@@ -188,9 +215,9 @@ const VeoPromptBuilderPanel = forwardRef<VeoPromptBuilderRef, VeoPromptBuilderPa
             }
 
             dispatch({ type: 'ADD_LOG', payload: { message: "Prompt Enhanced via Gemini", type: 'success' } });
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error(err);
-            dispatch({ type: 'ADD_LOG', payload: { message: `Enhance failed: ${err.message} `, type: 'error' } });
+            dispatch({ type: 'ADD_LOG', payload: { message: `Enhance failed: ${getErrorMessage(err)} `, type: 'error' } });
         } finally {
             setIsEnhancing(false);
         }
@@ -334,7 +361,7 @@ const VeoPromptBuilderPanel = forwardRef<VeoPromptBuilderRef, VeoPromptBuilderPa
                 >
                     <AutoGrowTextarea
                         value={concept}
-                        onChange={(e: any) => {
+                        onChange={(e: ChangeEvent<HTMLTextAreaElement>) => {
                             console.warn("[VeoPromptBuilderPanel] Concept onChange FIRED. Value:", e.target.value);
                             setConcept(e.target.value);
                         }}
@@ -573,7 +600,7 @@ const VeoPromptBuilderPanel = forwardRef<VeoPromptBuilderRef, VeoPromptBuilderPa
                         <div className="p-6">
                             <AutoGrowTextarea
                                 value={activeEditor.value}
-                                onChange={(e: any) => {
+                                onChange={(e: ChangeEvent<HTMLTextAreaElement>) => {
                                     activeEditor.setter(e.target.value);
                                     setActiveEditor({ ...activeEditor, value: e.target.value });
                                 }}

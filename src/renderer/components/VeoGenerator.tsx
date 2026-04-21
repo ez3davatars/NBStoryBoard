@@ -1,11 +1,28 @@
 import { useEffect, useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
 import {
  Trash2, MonitorPlay, Image as ImageIcon,
  X, Lock, Unlock, Sparkles, RotateCw, Film, Copy
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
+import type { Shot } from '../context/AppContext';
+import type { SmartAnalyzeOptions } from '../hooks/useVeoSmartAnalyze';
 
-const InspectorSection = ({ title, children, defaultOpen = true, titleAddon }: any) => (
+type InspectorSectionProps = {
+ title: string;
+ children: ReactNode;
+ defaultOpen?: boolean;
+ titleAddon?: ReactNode;
+};
+
+type SmartAnalyzeHandle = {
+ analysisResult: string;
+ isAnalyzing: boolean;
+ runSmartAnalyze: (options: SmartAnalyzeOptions) => Promise<void>;
+ setAnalysisResult: (value: string) => void;
+};
+
+const InspectorSection = ({ title, children, defaultOpen = true, titleAddon }: InspectorSectionProps) => (
  <details open={defaultOpen} className="group rounded-xl bg-white/5 border border-white/10 overflow-hidden shrink-0">
  <summary className="px-4 py-3 cursor-pointer list-none flex items-center justify-between text-[10px] font-black uppercase tracking-widest text-white/80 select-none bg-white/5 hover:bg-white/10 transition-colors">
  <div className="flex items-center gap-2">
@@ -22,7 +39,7 @@ const InspectorSection = ({ title, children, defaultOpen = true, titleAddon }: a
  </details>
 );
 
-const VeoGenerator = ({ smartAnalyze }: { smartAnalyze: any }) => {
+const VeoGenerator = ({ smartAnalyze }: { smartAnalyze: SmartAnalyzeHandle }) => {
  const { state, dispatch } = useAppContext();
  const { analysisResult, isAnalyzing, runSmartAnalyze: doSmartAnalyze, setAnalysisResult } = smartAnalyze;
  const [strictCharacterAds, setStrictCharacterAds] = useState(true);
@@ -33,12 +50,10 @@ const VeoGenerator = ({ smartAnalyze }: { smartAnalyze: any }) => {
 
 
  // --- Shot Sync (from AppContext Shot List) ---
- const activeShot = useMemo(() => {
- const shots = (state as any).shots as any[] | undefined;
- const activeShotId = (state as any).activeShotId as string | undefined;
- if (!shots || !activeShotId) return null;
- return shots.find((s) => s.id === activeShotId) || null;
- }, [state]);
+ const activeShot = useMemo<Shot | null>(() => {
+ if (!state.activeShotId) return null;
+ return state.shots.find((s) => s.id === state.activeShotId) || null;
+ }, [state.shots, state.activeShotId]);
 
  const loadFramesFromActiveShot = () => {
  if (!activeShot) return;
