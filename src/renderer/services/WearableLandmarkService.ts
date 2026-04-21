@@ -124,8 +124,8 @@ function extractNonBlackBounds(
 
 export class WearableLandmarkService {
     static async detect(imageUrl: string): Promise<WearableLandmarks> {
-        return new Promise<WearableLandmarks>(async (resolve, reject) => {
-            try {
+        return new Promise<WearableLandmarks>((resolve, reject) => {
+            (async () => {
                 const img = await loadImageElement(imageUrl);
                 const w = img.naturalWidth || img.width;
                 const h = img.naturalHeight || img.height;
@@ -201,10 +201,7 @@ export class WearableLandmarkService {
                     console.warn("WearableLandmarkService: FaceMesh failed to run. Using silhouette fallback.", fmError);
                     resolve(WearableLandmarkService.fallbackSilhouetteDetection(img));
                 }
-
-            } catch (err) {
-                reject(err);
-            }
+            })().catch(reject);
         });
     }
 

@@ -9,7 +9,7 @@ export class EntitlementResolver {
    * Feature access is app-wide. Billing mode controls API routing only.
    */
   static resolveEntitlements(
-    _session: any | null,
+    _session: unknown,
     localApiKey: string | null,
     _isDev: boolean = false,
     selectedMode: 'hosted' | 'byok' | null = null

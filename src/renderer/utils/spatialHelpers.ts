@@ -6,6 +6,10 @@
 import type { StageAnnotation, StageToken } from '../context/AppContext';
 
 export type DepthLayer = 'foreground' | 'midground' | 'background';
+const toPlacementAction = (value: string | undefined): PlacementIntent['action'] => {
+    if (value === 'sit' || value === 'lean') return value;
+    return 'stand';
+};
 
 interface ActorMinimal {
     scale: number;
@@ -134,7 +138,7 @@ export const buildPlacementIntentsFromAnnotations = (
 
             intents.push({
                 actorId: tokenId,
-                action: action as any,
+                action: toPlacementAction(action),
                 anchorId: anchorId,
                 lookAtId: lookAtId,
                 priority: arrow.hard ? 'hard' : 'soft'

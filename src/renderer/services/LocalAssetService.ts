@@ -21,7 +21,7 @@ async function materializeImageAsset(args: {
   sourceUrl: string;
   sceneId: string;
   variantId: string;
-  kind: 'preview' | 'final';
+  kind: 'preview' | 'final' | 'blueprint';
   saveDirectoryPath?: string | null;
   preferredSubdir?: string;
   forcePngExtension?: boolean;

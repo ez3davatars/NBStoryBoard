@@ -1,4 +1,4 @@
-import type { AppState, StageToken, StageAnnotation, Shot, DirectorSettings, RegionEditState, HistorySnapshot, ReferenceSlot } from '../context/AppContext';
+import type { AppState, StageToken, StageAnnotation, Shot, DirectorSettings, RegionEditState, HistorySnapshot, ReferenceSlot, FloorPlane, OccupiedVolume } from '../context/AppContext';
 import type { ShotSession } from '../types/shots';
 
 export interface SessionPayload {
@@ -15,8 +15,8 @@ export interface SessionPayload {
         depthMapUrl: string | null;
         depthMapHash: string | null;
         sourceBackgroundHash: string | null;
-        floorPlane: any | null; // FloorPlane type
-        occupiedVolumes: any[]; // OccupiedVolume type
+        floorPlane: FloorPlane | null;
+        occupiedVolumes: OccupiedVolume[];
         activeShotId: string | null;
         resultImage: string | null;
         historyPast: HistorySnapshot[];

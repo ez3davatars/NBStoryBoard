@@ -41,7 +41,7 @@ export async function resolveDisplayUrl(input: ResolveAssetUrlInput): Promise<st
                 return `data:image/png;base64,${base64Data}`;
             }
         }
-      } catch (error) {
+      } catch {
         // Suppress failure noise and fallback gracefully
       }
   }
