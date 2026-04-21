@@ -852,7 +852,7 @@ function registerDepthIpcHandlers() {
       });
     } catch (err) {
       console.error("[IPC] Depth Generation Error:", err);
-      throw err;
+      throw err instanceof Error ? err : new Error(String(err));
     }
   });
 }
