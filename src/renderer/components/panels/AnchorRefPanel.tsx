@@ -3,16 +3,28 @@ import { SidebarPanel } from '../ui/SidebarPanel';
 import { Dropdown } from '../ui/Dropdown';
 import { getEffectiveResultAnchorForScene } from '../../context/AppContext';
 import type { DirectorMergeStrategy } from '../../context/AppContext';
+import type { Action, AppState, DirectorSettings, StageToken } from '../../context/AppContext';
+
+type ExtractedStyle = {
+ styleSummary?: string;
+} | null;
+
+type SceneIntent = {
+ location?: string;
+ action?: string;
+ furniture?: string[];
+ propContext?: string[];
+} | null;
 
 interface AnchorRefPanelProps {
- state: any;
- dispatch: (action: any) => void;
+ state: AppState;
+ dispatch: React.Dispatch<Action>;
  bgPrompt: string;
  setBgPrompt: (val: string) => void;
  generateBg: () => void;
  anchorFileInputRef: React.RefObject<HTMLInputElement | null>;
  fileToDataUrl: (file: File) => Promise<string>;
- setDirector: (updates: any) => void;
+ setDirector: (updates: Partial<DirectorSettings>) => void;
  collapsed: boolean;
  onToggle: (id: string) => void;
  onDragStart: (id: string) => void;
@@ -21,9 +33,9 @@ interface AnchorRefPanelProps {
  // Style Transfer Props
  selectedTokenId: string | null;
  isAnalyzingStyle: boolean;
- extractedStyle: any;
+ extractedStyle: ExtractedStyle;
  handleAutoStyleEnvironment: () => void;
- sceneIntent?: any;
+ sceneIntent?: SceneIntent;
  previousBackgroundUrl?: string | null;
  onRestoreBackground?: () => void;
  style?: React.CSSProperties;
@@ -60,13 +72,13 @@ export const AnchorRefPanel = ({
     if (!state.backgroundUrl) return;
     dispatch({
       type: 'SET_SCENE_RESULT_ANCHOR',
-      payload: {
+          payload: {
         sceneId: activeShotId,
         anchor: { 
           kind: 'uploaded_result', 
           imageUrl: state.backgroundUrl, 
           sourceImageId: 'background',
-          visibleActorCount: state.tokens.filter((t: any) => t.elementType === 'actor' || !t.elementType).length
+          visibleActorCount: state.tokens.filter((t: StageToken) => t.elementType === 'actor' || !t.elementType).length
         }
       }
     });
@@ -182,7 +194,7 @@ export const AnchorRefPanel = ({
                     <div className="flex flex-col gap-1 mt-1">
                         <button
                             onClick={handleAutoStyleEnvironment}
-                            disabled={isAnalyzingStyle || !selectedTokenId || !state.tokens.find((t: any) => t.id === selectedTokenId)}
+                            disabled={isAnalyzingStyle || !selectedTokenId || !state.tokens.find((t: StageToken) => t.id === selectedTokenId)}
                             className="w-full py-1 px-2 border border-blue-500/30 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 rounded text-[10px] uppercase font-bold tracking-wider disabled:opacity-30 disabled:hover:bg-blue-500/10 transition-colors flex items-center justify-center gap-2"
                         >
                             {isAnalyzingStyle ? (

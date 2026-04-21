@@ -1,20 +1,23 @@
 
+import type { ComponentType, CSSProperties, ReactNode } from 'react';
 import { ChevronDown, GripVertical } from 'lucide-react';
+
+type PanelIcon = ComponentType<{ className?: string }>;
 
 interface SidebarPanelProps {
  id: string;
  title: string;
- icon: any;
- children: React.ReactNode;
+ icon?: PanelIcon;
+ children: ReactNode;
  collapsed: boolean;
  onToggle: (id: string) => void;
  onDragStart?: (id: string) => void;
  onDrop?: (targetId: string) => void;
  isMaskMode?: boolean;
  headerColor?: string;
- rightElement?: React.ReactNode;
+ rightElement?: ReactNode;
  draggable?: boolean;
- style?: React.CSSProperties;
+ style?: CSSProperties;
 }
 
 export const SidebarPanel = ({
@@ -49,7 +52,7 @@ export const SidebarPanel = ({
  onDrop={(e) => {
  if (draggable) {
  e.preventDefault();
- onDrop && onDrop(id);
+ if (onDrop) onDrop(id);
  }
  }}
  className={`border border-[#27272a] rounded-xl overflow-hidden transition-all duration-300 shrink-0 ${collapsed ? 'h-[42px]' : 'bg-[#09090b]/80 backdrop-blur-md'}`}
@@ -63,9 +66,9 @@ export const SidebarPanel = ({
  return;
  }
  e.dataTransfer.setData('panelId', id);
- onDragStart && onDragStart(id);
+ if (onDragStart) onDragStart(id);
  }}
- onClick={() => onToggle && onToggle(id)}
+ onClick={() => onToggle(id)}
  className={`flex items-center justify-between p-3 cursor-pointer select-none hover:bg-white/5 transition-colors ${activeBg}`}
  >
  <div className="flex items-center gap-2">

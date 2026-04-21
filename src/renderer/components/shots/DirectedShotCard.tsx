@@ -1,7 +1,7 @@
 import React from 'react';
 import type { DirectedShotSlot, ShotTargetType, CameraFlavor, ShotPresetId } from '../../types/shots';
 import type { ShotsActorOption } from '../../context/AppContext';
-import { SHOT_PRESETS } from '../../utils/shotsPresets';
+import { SHOT_PRESETS, type ShotPresetDefinition } from '../../utils/shotsPresets';
 
 export type DirectedShotCardProps = {
   slot: DirectedShotSlot;
@@ -15,7 +15,7 @@ export const DirectedShotCard: React.FC<DirectedShotCardProps> = ({ slot, actors
     onChange({ ...slot, ...updates });
   };
 
-  const presetEntries = Object.entries(SHOT_PRESETS) as [ShotPresetId, any][];
+  const presetEntries = Object.entries(SHOT_PRESETS) as [ShotPresetId, ShotPresetDefinition][];
   const flavors: CameraFlavor[] = ['neutral', 'dramatic', 'procedural', 'commercial_clean', 'intimate', 'kinetic'];
 
   return (

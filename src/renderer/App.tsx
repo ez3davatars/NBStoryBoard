@@ -43,6 +43,35 @@ import {
 
 import { NanobananaThinking } from './components/ui/NanobananaThinking';
 
+type PermissionAwareDirectoryHandle = FileSystemDirectoryHandle & {
+  queryPermission?: (descriptor: { mode: 'read' | 'readwrite' }) => Promise<PermissionState>;
+  values?: () => AsyncIterableIterator<FileSystemHandle>;
+};
+
+type WindowWithDirectoryPicker = Window & {
+  showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle>;
+};
+
+type GenerationTimingMetrics = {
+  worker_claimed_at?: number;
+  provider_started_at?: number;
+  provider_finished_at?: number;
+  r2_started_at?: number;
+  r2_finished_at?: number;
+  db_completed_at?: number;
+  error?: string;
+  error_message?: string;
+};
+
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'object' && error !== null && 'message' in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string') return message;
+  }
+  return String(error);
+};
+
 const ImageInspector = () => {
   const { state, dispatch } = useAppContext();
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
@@ -50,7 +79,6 @@ const ImageInspector = () => {
 
   useEffect(() => {
     if (!state.inspectImage) {
-      setResolvedDisplay(null);
       return;
     }
 
@@ -195,9 +223,9 @@ const ImageInspector = () => {
                   setShowSaveConfirm(true);
                   setTimeout(() => setShowSaveConfirm(false), 2000);
                   dispatch({ type: 'ADD_LOG', payload: { message: `Saved to Actors/${filename}`, type: 'success' } });
-                } catch (err: any) {
+                } catch (err: unknown) {
                   console.error("Save failed", err);
-                  dispatch({ type: 'ADD_LOG', payload: { message: `Save failed: ${err.message}`, type: 'error' } });
+                  dispatch({ type: 'ADD_LOG', payload: { message: `Save failed: ${getErrorMessage(err)}`, type: 'error' } });
                 }
               } else {
                 const link = document.createElement('a');
@@ -230,7 +258,7 @@ const ImageInspector = () => {
 
 // --- ERROR BOUNDARY ---
 class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean, error: Error | null }> {
-  constructor(props: any) {
+  constructor(props: { children: ReactNode }) {
     super(props);
     this.state = { hasError: false, error: null };
   }
@@ -312,7 +340,7 @@ const App = () => {
 
   // Track previous credits locally for debug metrics without breaking useEffect dependencies
   const prevCreditsRef = useRef(state.hostedCredits);
-  const debounceTimerRef = useRef<any>(null);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   useEffect(() => { prevCreditsRef.current = state.hostedCredits; }, [state.hostedCredits]);
 
@@ -402,8 +430,8 @@ const App = () => {
         if (data) {
           if (data.status === 'COMPLETED') {
             const observedCompletedAt = Date.now();
-            const t = job.timing || {} as any;
-            const db = data.timing_metrics || {};
+            const t = job.timing;
+            const db = (data.timing_metrics || {}) as GenerationTimingMetrics;
 
             let finalAssetUrl = data.asset_url;
             if (job.context === 'scene_render' && finalAssetUrl) {
@@ -416,16 +444,16 @@ const App = () => {
 
             // Pipeline Diagnostics
             const d = {
-              '1. Edge Queue Delay (ms)': (db.worker_claimed_at && t.edgeAcceptedAt) ? db.worker_claimed_at - t.edgeAcceptedAt : 'N/A',
+              '1. Edge Queue Delay (ms)': (db.worker_claimed_at && t?.edgeAcceptedAt) ? db.worker_claimed_at - t.edgeAcceptedAt : 'N/A',
               '2. Gemini Provider Latency (ms)': (db.provider_finished_at && db.provider_started_at) ? db.provider_finished_at - db.provider_started_at : 'N/A',
               '3. Upload Overhead (ms)': (db.r2_finished_at && db.r2_started_at) ? db.r2_finished_at - db.r2_started_at : 'N/A',
               '4. Poller Observation Lag (ms)': (db.db_completed_at) ? observedCompletedAt - db.db_completed_at : 'N/A',
-              'Total End-to-End Time (ms)': t.submittedAt ? observedCompletedAt - t.submittedAt : 'N/A',
-              'Post-Timeout Overrun (ms)': t.clientTimeoutAt ? observedCompletedAt - t.clientTimeoutAt : 'N/A'
+              'Total End-to-End Time (ms)': t?.submittedAt ? observedCompletedAt - t.submittedAt : 'N/A',
+              'Post-Timeout Overrun (ms)': t?.clientTimeoutAt ? observedCompletedAt - t.clientTimeoutAt : 'N/A'
             };
             console.groupCollapsed(`🚀 [HOSTED AUDIT] Generation ${job.id} Timings`);
             console.table(d);
-            console.log("Raw Metric Dump:", { client: t, edge: { accepted: t.edgeAcceptedAt }, worker: db, observationTime: observedCompletedAt });
+            console.log("Raw Metric Dump:", { client: t, edge: { accepted: t?.edgeAcceptedAt }, worker: db, observationTime: observedCompletedAt });
             console.groupEnd();
           } else if (data.status === 'FAILED' || data.status === 'CANCELED' || data.status === 'EXPIRED') {
             dispatch({ type: 'FAIL_BACKGROUND_JOB', payload: { id: job.id, errorMessage: 'Provider rejected or failed' } });
@@ -445,7 +473,7 @@ const App = () => {
 
   // Sync Supabase Hosted Auth Session
   useEffect(() => {
-    const checkJwtDebug = async (session: any) => {
+    const checkJwtDebug = async (session: unknown) => {
       if (session) {
         try {
           const jwt = await SupabaseAuth.getValidJwt();
@@ -573,6 +601,11 @@ const App = () => {
   const [tempKey, setTempKey] = useState(state.apiKey);
   const [tempModel, setTempModel] = useState<AppState['model']>(state.model);
   const [tempBillingMode, setTempBillingMode] = useState<'hosted' | 'byok'>(state.billingMode);
+  const modelOptions: Array<{ id: AppState['model']; name: string; desc: string }> = [
+    { id: 'gemini-2.5-flash-image', name: 'Gemini 2.5 Flash (Image)', desc: 'Lightning fast multi-modal image generation (Recommended)' },
+    { id: 'gemini-3.1-flash-image-preview', name: 'Gemini 3.1 Flash (Preview)', desc: 'Reasoning-capable 4k model (Requires proper billing quota)' },
+    { id: 'imagen-4.0-generate-001', name: 'Imagen 4.0', desc: 'Text-to-image focus' }
+  ];
 
   // Auth UI State
   const [authEmail, setAuthEmail] = useState('');
@@ -600,8 +633,8 @@ const App = () => {
       const { error } = await SupabaseAuth.signIn(authEmail, authPass);
       if (error) throw error;
       dispatch({ type: 'ADD_LOG', payload: { message: "Signed in successfully", type: 'success' } });
-    } catch (e: any) {
-      dispatch({ type: 'ADD_LOG', payload: { message: `Sign In Failed: ${e.message}`, type: 'error' } });
+    } catch (e: unknown) {
+      dispatch({ type: 'ADD_LOG', payload: { message: `Sign In Failed: ${getErrorMessage(e)}`, type: 'error' } });
     } finally {
       setIsAuthLoading(false);
     }
@@ -612,8 +645,8 @@ const App = () => {
     try {
       await SupabaseAuth.signOut();
       dispatch({ type: 'ADD_LOG', payload: { message: "Signed out successfully", type: 'info' } });
-    } catch (e: any) {
-      dispatch({ type: 'ADD_LOG', payload: { message: `Sign Out Failed: ${e.message}`, type: 'error' } });
+    } catch (e: unknown) {
+      dispatch({ type: 'ADD_LOG', payload: { message: `Sign Out Failed: ${getErrorMessage(e)}`, type: 'error' } });
     } finally {
       setIsAuthLoading(false);
     }
@@ -626,8 +659,8 @@ const App = () => {
       // In Native Electron mode, ignore Web Handlers to avoid double-sync or conflicts
       if (window.electronAPI || !state.saveDirectoryHandle) return;
 
-      // @ts-ignore
-      if ((await state.saveDirectoryHandle.queryPermission({ mode: 'read' })) !== 'granted') return;
+      const saveDirHandle = state.saveDirectoryHandle as PermissionAwareDirectoryHandle;
+      if (saveDirHandle.queryPermission && (await saveDirHandle.queryPermission({ mode: 'read' })) !== 'granted') return;
 
       try {
         // dispatch({ type: 'ADD_LOG', payload: { message: "Scanning external actors folder...", type: 'info' } });
@@ -635,17 +668,19 @@ const App = () => {
         let actorsDir;
         try {
           actorsDir = await state.saveDirectoryHandle.getDirectoryHandle('Actors', { create: false });
-        } catch (e) {
+        } catch {
           // Actors dir doesn't exist yet, nothing to sync
           return;
         }
 
         const externalActors: CastMember[] = [];
         // Iterate files
-        // @ts-ignore - FileSystemDirectoryHandle is iterable in modern browsers
-        for await (const entry of actorsDir.values()) {
+        const actorsDirWithValues = actorsDir as PermissionAwareDirectoryHandle;
+        if (!actorsDirWithValues.values) return;
+        for await (const entry of actorsDirWithValues.values()) {
           if (entry.kind === 'file' && entry.name.toLowerCase().endsWith('.png')) {
             try {
+              const fileEntry = entry as FileSystemFileHandle;
               // Parse filename: Actor-{index}-{safename}.png
               const nameParts = entry.name.match(/Actor-(\d+)-(.*)\.png/i);
               let displayName = entry.name.replace('.png', '');
@@ -663,7 +698,7 @@ const App = () => {
               // However, we can't easily check state inside async loop without updated ref or dependency
               // We'll filter later or hope state is fresh enough on mount
 
-              const file = await entry.getFile();
+              const file = await fileEntry.getFile();
               // Read as DataURL
               const reader = new FileReader();
               const dataUrl = await new Promise<string>((resolve) => {
@@ -761,9 +796,9 @@ const App = () => {
             dispatch({ type: 'ADD_LOG', payload: { message: `Synced ${externalActors.length} actors from disk.`, type: 'success' } });
           }
         }
-      } catch (e: any) {
+      } catch (e: unknown) {
         console.error("Disk sync error:", e);
-        dispatch({ type: 'ADD_LOG', payload: { message: `Disk scan failed: ${e.message}`, type: 'error' } });
+        dispatch({ type: 'ADD_LOG', payload: { message: `Disk scan failed: ${getErrorMessage(e)}`, type: 'error' } });
       }
     };
 
@@ -778,8 +813,10 @@ const App = () => {
     const rehydrateLibraryThumbnails = async () => {
       if (window.electronAPI || !state.saveDirectoryHandle || state.actorLibrary.length === 0) return;
 
-      // @ts-ignore
-      const permission = await state.saveDirectoryHandle.queryPermission({ mode: 'read' });
+      const saveDirHandle = state.saveDirectoryHandle as PermissionAwareDirectoryHandle;
+      const permission = saveDirHandle.queryPermission
+        ? await saveDirHandle.queryPermission({ mode: 'read' })
+        : 'granted';
       if (permission !== 'granted') return;
 
       const needsHydration = state.actorLibrary.filter(
@@ -811,7 +848,7 @@ const App = () => {
             updatedActors[index] = { ...updatedActors[index], previewUrl: blobUrl, url: blobUrl };
             hasChanges = true;
           }
-        } catch (err) {
+        } catch {
           // Gracefully skip missing WebFS files
         }
       }
@@ -822,7 +859,7 @@ const App = () => {
     };
 
     rehydrateLibraryThumbnails();
-  }, [state.saveDirectoryHandle, state.actorLibrary]);
+  }, [dispatch, state.saveDirectoryHandle, state.actorLibrary]);
 
   // --- NATIVE DISK SYNC (Electron) ---
   useEffect(() => {
@@ -1307,15 +1344,19 @@ const App = () => {
 
                               // WEB MODE
                               console.log("Requesting directory handle...");
-                              const handle = await (window as any).showDirectoryPicker();
+                              const webWindow = window as WindowWithDirectoryPicker;
+                              if (!webWindow.showDirectoryPicker) {
+                                throw new Error('Directory picker is not supported in this browser.');
+                              }
+                              const handle = await webWindow.showDirectoryPicker();
                               console.log("Directory handle received:", handle);
                               dispatch({ type: 'SET_SAVE_DIRECTORY', payload: handle });
                               await StorageService.save('nano_save_handle', handle);
                               dispatch({ type: 'ADD_LOG', payload: { message: `Save folder set: ${handle.name}`, type: 'success' } });
-                            } catch (e: any) {
+                            } catch (e: unknown) {
                               console.error("Directory picker error:", e);
-                              if (e.name !== 'AbortError') {
-                                dispatch({ type: 'ADD_LOG', payload: { message: `Failed to set folder: ${e.message}`, type: 'error' } });
+                              if ((e as { name?: string }).name !== 'AbortError') {
+                                dispatch({ type: 'ADD_LOG', payload: { message: `Failed to set folder: ${getErrorMessage(e)}`, type: 'error' } });
                               }
                             }
                           }}
@@ -1349,14 +1390,10 @@ const App = () => {
                     <div>
                       <label className="block text-xs font-bold text-gray-400 uppercase mb-2 tracking-wider">Active Engine</label>
                       <div className="grid grid-cols-1 gap-2">
-                        {[
-                          { id: 'gemini-2.5-flash-image', name: 'Gemini 2.5 Flash (Image)', desc: 'Lightning fast multi-modal image generation (Recommended)' },
-                          { id: 'gemini-3.1-flash-image-preview', name: 'Gemini 3.1 Flash (Preview)', desc: 'Reasoning-capable 4k model (Requires proper billing quota)' },
-                          { id: 'imagen-4.0-generate-001', name: 'Imagen 4.0', desc: 'Text-to-image focus' }
-                        ].map(m => (
+                        {modelOptions.map(m => (
                           <button
                             key={m.id}
-                            onClick={() => setTempModel(m.id as any)}
+                            onClick={() => setTempModel(m.id)}
                             className={`text-left p-3 rounded-lg border transition-all ${tempModel === m.id ? 'bg-yellow-500/10 border-yellow-500 ' : 'bg-[#09090b] border-[#27272a] hover:border-gray-600'}`}
                           >
                             <div className="flex justify-between items-center mb-1">

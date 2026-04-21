@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import {
     Package, RefreshCcw, Maximize, Sparkles,
     Download, X, Save, Upload, Trash2, ArrowRight
@@ -14,7 +14,24 @@ import { WearableAnchorEngine } from '../services/WearableAnchorEngine';
 import { WearableOverlayComposer } from '../services/WearableOverlayComposer';
 import { WearableRefinementValidator } from '../services/WearableRefinementValidator';
 import { WearableAdjustmentCanvas } from './WearableAdjustmentCanvas';
-import type { WearableAnchorContract, WearablePlacement } from '../services/WearableAnchorEngine';
+import type { WearableAnchorContract, WearablePlacement, WearableClass } from '../services/WearableAnchorEngine';
+
+type PermissionAwareDirectoryHandle = FileSystemDirectoryHandle & {
+    queryPermission?: (descriptor?: { mode?: 'read' | 'readwrite' }) => Promise<PermissionState>;
+    values?: () => AsyncIterableIterator<FileSystemHandle>;
+};
+
+type PendingGenerationError = Error & { generationId?: string };
+
+const getErrorMessage = (error: unknown): string => {
+    if (error instanceof Error) return error.message;
+    return String(error);
+};
+
+const isPendingGenerationError = (error: unknown): error is PendingGenerationError => {
+    if (!(error instanceof Error)) return false;
+    return error.name === 'TimeoutError' || error.message.includes('Pending');
+};
 
 async function materializeDisplayUrl(url: string | null | undefined): Promise<string> {
     if (!url) return '';
@@ -56,13 +73,12 @@ const PropAccessoryStudio = () => {
     const [adjustmentState, setAdjustmentState] = useState<{
         subjectUrl: string;
         propUrl: string;
-        fitClass: string;
+        fitClass: WearableClass;
         anchorContract: WearableAnchorContract;
         initialOffsetX?: number;
         initialOffsetY?: number;
         initialScale?: number;
     } | null>(null);
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const [lastConfirmedPlacement, setLastConfirmedPlacement] = useState<{
         placement: WearablePlacement;
         precompositeUrl: string;
@@ -108,7 +124,7 @@ const PropAccessoryStudio = () => {
         });
     };
 
-    const scanProps = async () => {
+    const scanProps = useCallback(async () => {
         // 1. NATIVE MODE
         if (isNativeParams() && state.saveDirectoryPath) {
             try {
@@ -134,7 +150,7 @@ const PropAccessoryStudio = () => {
                     }
                 }
                 dispatch({ type: 'SET_PROP_ITEMS', payload: items.sort((a, b) => b.timestamp - a.timestamp) });
-            } catch (e) {
+            } catch {
                 // Folder might not exist yet, which is fine
             }
             return;
@@ -143,15 +159,16 @@ const PropAccessoryStudio = () => {
         // 2. WEB MODE
         if (!state.saveDirectoryHandle) return;
         try {
-            // @ts-ignore
-            if ((await state.saveDirectoryHandle.queryPermission({ mode: 'read' })) !== 'granted') return;
+            const saveDirectoryHandle = state.saveDirectoryHandle as PermissionAwareDirectoryHandle;
+            if (saveDirectoryHandle.queryPermission && (await saveDirectoryHandle.queryPermission({ mode: 'read' })) !== 'granted') return;
 
             const propsHandle = await state.saveDirectoryHandle.getDirectoryHandle('props', { create: true });
             const items: PropItem[] = [];
-            // @ts-ignore
-            for await (const entry of (propsHandle as any).values()) {
+            const iterablePropsHandle = propsHandle as PermissionAwareDirectoryHandle;
+            if (!iterablePropsHandle.values) return;
+            for await (const entry of iterablePropsHandle.values()) {
                 if (entry.kind === 'file' && /\.(png|jpg|jpeg|webp)$/i.test(entry.name)) {
-                    const file = await entry.getFile();
+                    const file = await (entry as FileSystemFileHandle).getFile();
                     const reader = new FileReader();
                     const dataUrl = await new Promise<string>((resolve) => {
                         reader.onload = () => resolve(reader.result as string);
@@ -167,10 +184,10 @@ const PropAccessoryStudio = () => {
                 }
             }
             dispatch({ type: 'SET_PROP_ITEMS', payload: items.sort((a, b) => b.timestamp - a.timestamp) });
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Props scan failed: ${e.message}`, type: 'error' } });
+        } catch (error: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Props scan failed: ${getErrorMessage(error)}`, type: 'error' } });
         }
-    };
+    }, [dispatch, state.saveDirectoryHandle, state.saveDirectoryPath]);
 
 
 
@@ -201,8 +218,8 @@ const PropAccessoryStudio = () => {
             if (selectedProp?.id === item.id) setSelectedProp(null);
             dispatch({ type: 'ADD_LOG', payload: { message: `Deleted prop: ${item.name}`, type: 'success' } });
 
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Delete failed: ${e.message}`, type: 'error' } });
+        } catch (error: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Delete failed: ${getErrorMessage(error)}`, type: 'error' } });
         } finally {
             setConfirmDelete(null);
         }
@@ -270,8 +287,8 @@ const PropAccessoryStudio = () => {
             };
             reader.readAsDataURL(file);
 
-        } catch (err: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Upload failed: ${err.message}`, type: 'error' } });
+        } catch (error: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Upload failed: ${getErrorMessage(error)}`, type: 'error' } });
         } finally {
             // Reset input
             if (fileInputRef.current) fileInputRef.current.value = '';
@@ -280,10 +297,10 @@ const PropAccessoryStudio = () => {
 
     useEffect(() => {
         scanProps();
-    }, [state.saveDirectoryHandle, state.saveDirectoryPath]); // Add path dep
+    }, [scanProps]);
     // --- Reference Slot quick-bind (Shift+Click power-user shortcut) ---
     const bindToFirstEmptyRefSlot = (url: string, name: string) => {
-        const slots: any[] = (state as any).referenceSlots || [];
+        const slots = state.referenceSlots || [];
         if (!slots.length) {
             dispatch({ type: 'ADD_LOG', payload: { message: 'No reference slots available to bind.', type: 'error' } });
             return;
@@ -336,8 +353,8 @@ const PropAccessoryStudio = () => {
             // Immediate local pivot
             if (mat.url) setDesignerImage(mat.url);
             dispatch({ type: 'ADD_LOG', payload: { message: `Prop saved to library: ${mat.filename || "Storage"}`, type: 'success' } });
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Failed to save prop: ${e.message}`, type: 'error' } });
+        } catch (error: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Failed to save prop: ${getErrorMessage(error)}`, type: 'error' } });
         }
     };
 
@@ -422,10 +439,7 @@ extra objects, duplicate prop, altered proportions, floating parts, text, label,
 
             if (actualGenId) dispatch({ type: 'REMOVE_BACKGROUND_JOB', payload: actualGenId });
 
-            const rawUrl =
-                typeof res === 'string'
-                    ? res
-                    : (res && typeof res === 'object' ? (res as any).asset_url || '' : '');
+            const rawUrl = res;
 
             let safeUrl = rawUrl;
             try {
@@ -436,13 +450,12 @@ extra objects, duplicate prop, altered proportions, floating parts, text, label,
 
             setDesignerImage(safeUrl);
             dispatch({ type: 'ADD_LOG', payload: { message: "Prop generated on black studio background.", type: 'success' } });
-        } catch (e: any) {
-            const isTimeout = e.name === 'TimeoutError' || e.message?.includes('Pending');
-            if (isTimeout && e.generationId) {
-                dispatch({ type: 'UPDATE_BACKGROUND_JOB', payload: { id: e.generationId, updates: { status: 'pending_background', timing: { submittedAt, edgeAcceptedAt: actualAcceptedAt, clientTimeoutAt: Date.now() } } } });
+        } catch (error: unknown) {
+            if (isPendingGenerationError(error) && error.generationId) {
+                dispatch({ type: 'UPDATE_BACKGROUND_JOB', payload: { id: error.generationId, updates: { status: 'pending_background', timing: { submittedAt, edgeAcceptedAt: actualAcceptedAt, clientTimeoutAt: Date.now() } } } });
                 dispatch({ type: 'ADD_LOG', payload: { message: "Job shifted to background due to long queue.", type: 'info' } });
             } else {
-                dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });
+                dispatch({ type: 'ADD_LOG', payload: { message: getErrorMessage(error), type: 'error' } });
             }
         } finally {
             clearInterval(progressInterval);
@@ -453,7 +466,7 @@ extra objects, duplicate prop, altered proportions, floating parts, text, label,
 
 
 
-    const executeRefinement = async (fitClass: string, subjectUrl: string, propUrl: string, lockedPlacement: WearablePlacement, precompositeUrl: string) => {
+    const executeRefinement = async (fitClass: WearableClass, subjectUrl: string, propUrl: string, lockedPlacement: WearablePlacement, precompositeUrl: string) => {
         console.warn(`[DEBUG_PATH] executeRefinement called for ${fitClass}`);
         let finalUrl = precompositeUrl;
         let refinementAccepted = false;
@@ -507,7 +520,7 @@ oversized wearable, resized wearable, moved wearable, floating wearable, theatri
             const refinedRes = await GeminiService.generateImage(
                 lockedRefinementPrompt,
                 state.apiKey,
-                state.model as any,
+                state.model,
                 [
                     { url: subjectUrl, label: 'Subject Reference' },
                     { url: propUrl, label: `${fitClass} Reference` },
@@ -524,16 +537,14 @@ oversized wearable, resized wearable, moved wearable, floating wearable, theatri
                 }
             );
 
-            const refinedRaw = typeof refinedRes === 'string'
-                ? refinedRes
-                : (refinedRes && typeof refinedRes === 'object' ? (refinedRes as any).asset_url || '' : '');
+            const refinedRaw = refinedRes;
 
             if (refinedRaw) {
                 const materializedRefined = await materializeDisplayUrl(refinedRaw);
                 const isValid = await WearableRefinementValidator.validate({
                     refinedUrl: materializedRefined,
                     lockedPlacement,
-                    fitClass: fitClass as any
+                    fitClass
                 });
 
                 if (isValid) {
@@ -598,8 +609,8 @@ oversized wearable, resized wearable, moved wearable, floating wearable, theatri
             } else {
                 await executeRefinement(fitClass, subjectUrl, propUrl, placement, precompositeUrl);
             }
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });
+        } catch (error: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: getErrorMessage(error), type: 'error' } });
         } finally {
             clearInterval(progressInterval);
             dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
@@ -788,10 +799,7 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
 
                 if (actualGenId) dispatch({ type: 'REMOVE_BACKGROUND_JOB', payload: actualGenId });
 
-                const rawUrl =
-                    typeof res === 'string'
-                        ? res
-                        : (res && typeof res === 'object' ? (res as any).asset_url || '' : '');
+                const rawUrl = res;
 
                 let safeUrl = rawUrl;
                 try {
@@ -804,13 +812,12 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                 dispatch({ type: 'ADD_LOG', payload: { message: "Prop integrated.", type: 'info' } });
             }
 
-        } catch (e: any) {
-            const isTimeout = e.name === 'TimeoutError' || e.message?.includes('Pending');
-            if (isTimeout && e.generationId) {
-                dispatch({ type: 'UPDATE_BACKGROUND_JOB', payload: { id: e.generationId, updates: { status: 'pending_background', timing: { submittedAt, edgeAcceptedAt: actualAcceptedAt, clientTimeoutAt: Date.now() } } } });
+        } catch (error: unknown) {
+            if (isPendingGenerationError(error) && error.generationId) {
+                dispatch({ type: 'UPDATE_BACKGROUND_JOB', payload: { id: error.generationId, updates: { status: 'pending_background', timing: { submittedAt, edgeAcceptedAt: actualAcceptedAt, clientTimeoutAt: Date.now() } } } });
                 dispatch({ type: 'ADD_LOG', payload: { message: "Job shifted to background due to long queue.", type: 'info' } });
             } else {
-                dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });
+                dispatch({ type: 'ADD_LOG', payload: { message: getErrorMessage(error), type: 'error' } });
             }
         } finally {
             clearInterval(progressInterval);
@@ -863,8 +870,8 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
             if (mat.previewUrl) setAppliedImage(mat.previewUrl);
             
             dispatch({ type: 'ADD_LOG', payload: { message: `Saved to Actors Library: ${mat.filename || "Storage"}`, type: 'success' } });
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Failed to save actor: ${e.message}`, type: 'error' } });
+        } catch (error: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Failed to save actor: ${getErrorMessage(error)}`, type: 'error' } });
         }
     };
 
@@ -901,7 +908,7 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                             <div
                                 key={item.id}
                                 onClick={(e) => {
-                                    if ((e as any).shiftKey) {
+                                    if (e.shiftKey) {
                                         bindToFirstEmptyRefSlot(item.url, item.name || 'Prop');
                                         return;
                                     }
@@ -1059,7 +1066,7 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                                         {appliedImage && (
                                             <div className="flex items-center gap-2 animate-in fade-in duration-300">
                                                 <button onClick={(e) => {
-                                                    if ((e as any).shiftKey) {
+                                                    if (e.shiftKey) {
                                                         const finalUrl = appliedImage;
                                                         if (finalUrl) bindToFirstEmptyRefSlot(finalUrl, `${selectedCharacter?.name || 'Subject'} + Prop Result`);
                                                         return;

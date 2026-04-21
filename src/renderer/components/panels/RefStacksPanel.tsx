@@ -1,11 +1,11 @@
 
 import { RotateCw, Pencil, X, Upload } from 'lucide-react';
 import { SidebarPanel } from '../ui/SidebarPanel';
-import type { ReferenceSlot } from '../../context/AppContext';
+import type { Action, AppState, ReferenceSlot } from '../../context/AppContext';
 
 interface RefStacksPanelProps {
- state: any;
- dispatch: (action: any) => void;
+ state: AppState;
+ dispatch: (action: Action) => void;
  collapsed: boolean;
  onToggle: (id: string) => void;
  onDragStart: (id: string) => void;

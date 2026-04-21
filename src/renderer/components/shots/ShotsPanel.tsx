@@ -59,6 +59,11 @@ const deriveShotsStyleLock = (qualityMode?: string): string => {
   }
 };
 
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  return String(error);
+};
+
 export const ShotsPanel: React.FC<ShotsPanelProps> = ({
   sceneId,
   apiKey,
@@ -278,12 +283,13 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
           status: 'queued'
         } as unknown as ShotVariant;
       });
-    } catch (compilationError: any) {
+    } catch (compilationError: unknown) {
+      const compilationErrorMessage = getErrorMessage(compilationError);
       console.error("[ShotsPanel] Failed to compile shot variants:", compilationError);
       dispatch({ 
         type: 'ADD_LOG', 
-        payload: { message: `Failed to compile scene snapshot: ${compilationError.message}`, type: 'error' } 
-      } as any);
+        payload: { message: `Failed to compile scene snapshot: ${compilationErrorMessage}`, type: 'error' } 
+      });
       setIsConfiguring(true);
       return;
     }
@@ -324,7 +330,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
 
       try {
         const preset = SHOT_PRESETS[variant.presetId];
-        const directedSlot = preparedSlots.find(s => s.id === (variant as any).slotId);
+        const directedSlot = preparedSlots.find(s => s.id === variant.slotId);
         
         const rawBlueprintUrl = await buildShotBlueprintImage({
             anchorImageUrl: effectiveResultImageUrl,
@@ -339,7 +345,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
                 sourceUrl: rawBlueprintUrl,
                 sceneId: sceneId,
                 variantId: variant.id,
-                kind: 'blueprint' as any,
+                kind: 'blueprint',
                 saveDirectoryPath: state.saveDirectoryPath
             });
             materializedBlueprintUrl = matBp.displayUrl;
@@ -371,8 +377,8 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
               presetId: variant.presetId,
               hasSubjectStyleAnalysis: !!safeSubjectActionText,
             });
-          } catch (err: any) {
-            const msg = String(err?.message || err || '');
+          } catch (err: unknown) {
+            const msg = getErrorMessage(err);
             if (/400|Bad Request|413|Payload/i.test(msg)) {
               console.warn('[ShotsPanel] Preview payload rejected. Original Error:', msg, 'Retrying thin payload for:', {
                 variantId: variant.id,
@@ -473,13 +479,14 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
             } : v)
           };
         });
-      } catch (err: any) {
+      } catch (err: unknown) {
+        const errorMessage = getErrorMessage(err);
         console.error("SHOTS PANEL FATAL:", err);
         onUpdateSession(sceneId, prev => {
           if (!prev) return prev;
           return {
             ...prev,
-            variants: prev.variants.map(v => v.id === variant.id ? { ...v, status: 'error', error: err.message } : v)
+            variants: prev.variants.map(v => v.id === variant.id ? { ...v, status: 'error', error: errorMessage } : v)
           };
         });
       }
@@ -534,7 +541,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
           actorIdentitySets: session.actorIdentitySets,
           shotsActorOptions,
           presetId: variant.presetId,
-          directedSlot: session.directedShots?.find(s => s.id === (variant as any).slotId),
+          directedSlot: session.directedShots?.find(s => s.id === variant.slotId),
           locks: { ...session.locks, identity: true, background: true, lighting: true },
           environmentText,
           subjectActionText: safeSubjectActionText,
@@ -545,7 +552,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
 
         let finalUrl: string | undefined;
         let attempts = 0;
-        let lastErr: any;
+        let lastErr: unknown;
         
         while (attempts < 3) {
           try {
@@ -561,9 +568,9 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
               options: { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, signal: abortControllerRef.current?.signal }
             });
             break; 
-          } catch (e: any) {
+          } catch (e: unknown) {
             lastErr = e;
-            const msg = e.message.toLowerCase();
+            const msg = getErrorMessage(e).toLowerCase();
             if (msg.includes('failed to fetch') || msg.includes('429') || msg.includes('timeout')) {
               attempts++;
               console.warn(`[ShotsPanel] 4K Render failed (network/rate limit). Retrying ${attempts}/3 in 6 seconds...`);
@@ -604,12 +611,13 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
             } : v)
           };
         });
-      } catch (err: any) {
+      } catch (err: unknown) {
+        const errorMessage = getErrorMessage(err);
         onUpdateSession(sceneId, prev => {
           if (!prev) return prev;
           return {
             ...prev,
-            variants: prev.variants.map(v => v.id === variant.id ? { ...v, status: 'error', error: err.message } : v)
+            variants: prev.variants.map(v => v.id === variant.id ? { ...v, status: 'error', error: errorMessage } : v)
           };
         });
       }
@@ -650,7 +658,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
     abortControllerRef.current = new AbortController();
 
     try {
-      const directedSlot = session.directedShots?.find(s => s.id === (variant as any).slotId);
+      const directedSlot = session.directedShots?.find(s => s.id === variant.slotId);
       const preset = SHOT_PRESETS[variant.presetId];
       
       let rawBlueprintUrl = variant.sourcePreviewUrl; // Fallback, will regenerate below if we can
@@ -697,8 +705,8 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
             presetId: variant.presetId,
             hasSubjectStyleAnalysis: false,
           });
-        } catch (err: any) {
-          const msg = String(err?.message || err || '');
+        } catch (err: unknown) {
+          const msg = getErrorMessage(err);
           if (/400|Bad Request|413|Payload/i.test(msg)) {
             console.warn('[ShotsPanel] Rich preview payload rejected; retrying thin payload', {
               variantId: variant.id,
@@ -789,12 +797,13 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
           } : v)
         };
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const errorMessage = getErrorMessage(err);
       onUpdateSession(sceneId, prev => {
         if (!prev) return prev;
         return {
           ...prev,
-          variants: prev.variants.map(v => v.id === variantId ? { ...v, status: 'error', error: err.message } : v)
+          variants: prev.variants.map(v => v.id === variantId ? { ...v, status: 'error', error: errorMessage } : v)
         };
       });
     }

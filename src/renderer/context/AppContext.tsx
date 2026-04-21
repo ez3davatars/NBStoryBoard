@@ -66,6 +66,13 @@ export interface CastMember {
     filename?: string;
     profile?: WhitelistProfile;
 }
+
+export interface HostedSession {
+    user?: {
+        id?: string;
+        email?: string | null;
+    } | null;
+}
 import type { SpatialAuthorityStatus, PlacementAuthority } from '../services/SpatialIntelligence';
 export type { SpatialAuthorityStatus, PlacementAuthority };
 
@@ -312,16 +319,17 @@ export interface RegionEditState {
 export const smartClone = <T,>(v: T): T => {
     if (v === null || typeof v !== 'object') return v;
     if (Array.isArray(v)) {
-        return v.map(smartClone) as any;
+        return v.map(item => smartClone(item)) as unknown as T;
     }
     // OOM Guard: Prevent deep cloning native binary objects which freezes the V8 thread
     if (ArrayBuffer.isView(v) || v instanceof ArrayBuffer) {
         return v;
     }
-    const cloned = {} as any;
-    for (const key in v) {
-        if (Object.prototype.hasOwnProperty.call(v, key)) {
-            const val = (v as any)[key];
+    const source = v as Record<string, unknown>;
+    const cloned: Record<string, unknown> = {};
+    for (const key in source) {
+        if (Object.prototype.hasOwnProperty.call(source, key)) {
+            const val = source[key];
             // Critical OOM Guard: Pass massive base64 URIs by reference instead of deep copying into V8 heap
             if (typeof val === 'string' && val.length > 500 && (key.toLowerCase().includes('url') || val.startsWith('data:'))) {
                 cloned[key] = val;
@@ -330,7 +338,7 @@ export const smartClone = <T,>(v: T): T => {
             }
         }
     }
-    return cloned;
+    return cloned as T;
 };
 
 export type SceneResultAnchor = {
@@ -508,7 +516,7 @@ export interface AppState {
     // BILLING & AUTH
     billingMode: 'hosted' | 'byok';
     billingEntitlements: Entitlements;
-    hostedSession: any | null;
+    hostedSession: HostedSession | null;
     hostedCredits: number | null;
     showCreditModal: boolean;
 
@@ -685,7 +693,7 @@ export type Action =
     | { type: 'SET_TEMPLATE_NOTES'; payload: { activeTemplateId?: string; templateNotes?: string } }
     | { type: 'SET_BILLING_MODE'; payload: 'hosted' | 'byok' }
     | { type: 'SET_BILLING_ENTITLEMENTS'; payload: Entitlements }
-    | { type: 'SET_HOSTED_SESSION'; payload: any | null }
+    | { type: 'SET_HOSTED_SESSION'; payload: HostedSession | null }
     | { type: 'SET_HOSTED_CREDITS'; payload: number | null }
     | { type: 'SET_CREDIT_MODAL'; payload: boolean }
     | { type: 'ADD_BACKGROUND_JOB'; payload: BackgroundJob }
@@ -714,7 +722,7 @@ const loadJson = <T,>(key: string, fallback: T): T => {
 
         // Objects: merge only when both are plain-ish objects
         if (typeof fallback === 'object' && fallback !== null && typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
-            return { ...(fallback as any), ...(parsed as any) } as T;
+            return { ...(fallback as Record<string, unknown>), ...(parsed as Record<string, unknown>) } as T;
         }
 
         // Primitives / fallback=null cases: return parsed as-is
@@ -858,7 +866,10 @@ const getInitialModel = (): AppState['model'] => {
         'gemini-2.5-flash-image',
         'gemini-3.1-flash-image-preview',
     ];
-    if (saved && valid.includes(saved as any)) return saved as AppState['model'];
+    if (saved) {
+        const maybeModel = saved as AppState['model'];
+        if (valid.includes(maybeModel)) return maybeModel;
+    }
     return 'gemini-3.1-flash-image-preview';
 };
 
@@ -1437,7 +1448,7 @@ export const reducer = (state: AppState, action: Action): AppState => {
                     ...smartClone(DEFAULT_REGION_EDIT),
                     ...(loaded.regionEdit || {}),
                     layers: loaded.regionEdit?.layers
-                        ? loaded.regionEdit.layers.map((layer: any, index: number) => ({
+                        ? loaded.regionEdit.layers.map((layer, index: number) => ({
                             ...smartClone(DEFAULT_REGION_EDIT.layers[index] || DEFAULT_REGION_EDIT.layers[0]),
                             ...layer
                         }))
@@ -2144,10 +2155,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
         const migrateOrLoad = async <T,>(
             key: string,
-            sanitize?: (v: any) => any
+            sanitize?: (v: T) => T
         ): Promise<T | null> => {
             // 1) try IndexedDB
-            const fromDb = await StorageService.load<T>(key, null as any);
+            const fromDb = await StorageService.load<T | null>(key, null);
             if (fromDb != null) {
                 // ✅ cleanup legacy localStorage regardless
                 if (localStorage.getItem(key) != null) localStorage.removeItem(key);
@@ -2159,7 +2170,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             if (!fromLsRaw) return null;
 
             try {
-                const parsed = JSON.parse(fromLsRaw);
+                const parsed = JSON.parse(fromLsRaw) as T;
                 const value = sanitize ? sanitize(parsed) : parsed;
                 await StorageService.save(key, value);
                 localStorage.removeItem(key);
@@ -2195,9 +2206,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                         let finalDisplayUrl: string | null = null;
 
                         // Native mode: rebuild thumbnail directly from disk into a data URL
-                        if (isNativeParams() && resolvedPath && (window as any).electronAPI?.readFile) {
+                        if (isNativeParams() && resolvedPath && window.electronAPI?.readFile) {
                             try {
-                                const base64 = await (window as any).electronAPI.readFile(resolvedPath);
+                                const base64 = await window.electronAPI.readFile(resolvedPath);
                                 if (base64) {
                                     finalDisplayUrl = `data:image/png;base64,${base64}`;
                                 }
@@ -2255,9 +2266,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                             resolvedPath = await nativeJoinPath(savePath, 'wardrobe', item.filename);
                         }
                         
-                        if (isNativeParams() && resolvedPath && (window as any).electronAPI?.readFile) {
+                        if (isNativeParams() && resolvedPath && window.electronAPI?.readFile) {
                             try {
-                                const base64 = await (window as any).electronAPI.readFile(resolvedPath);
+                                const base64 = await window.electronAPI.readFile(resolvedPath);
                                 if (base64) {
                                     return { ...item, localPath: resolvedPath, url: `data:image/png;base64,${base64}` };
                                 }
@@ -2270,7 +2281,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                             previewUrl: item.url
                         });
                         return { ...item, localPath: resolvedPath, url: finalDisplayUrl || item.url };
-                    } catch (e) {
+                    } catch {
                         return item;
                     }
                 }));
@@ -2284,9 +2295,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                             resolvedPath = await nativeJoinPath(savePath, 'props', item.filename);
                         }
                         
-                        if (isNativeParams() && resolvedPath && (window as any).electronAPI?.readFile) {
+                        if (isNativeParams() && resolvedPath && window.electronAPI?.readFile) {
                             try {
-                                const base64 = await (window as any).electronAPI.readFile(resolvedPath);
+                                const base64 = await window.electronAPI.readFile(resolvedPath);
                                 if (base64) {
                                     return { ...item, localPath: resolvedPath, url: `data:image/png;base64,${base64}` };
                                 }
@@ -2299,7 +2310,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                             previewUrl: item.url
                         });
                         return { ...item, localPath: resolvedPath, url: finalDisplayUrl || item.url };
-                    } catch (e) {
+                    } catch {
                         return item;
                     }
                 }));
@@ -2469,14 +2480,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const activeBlobsRef = useRef<Set<string>>(new Set());
 
     useEffect(() => {
-        const extractBlobs = (obj: any, blobs: Set<string>) => {
+        const extractBlobs = (obj: unknown, blobs: Set<string>) => {
             if (!obj) return;
             if (typeof obj === 'string') {
                 if (obj.startsWith('blob:')) blobs.add(obj);
             } else if (Array.isArray(obj)) {
                 obj.forEach(item => extractBlobs(item, blobs));
             } else if (typeof obj === 'object') {
-                Object.values(obj).forEach(val => extractBlobs(val, blobs));
+                Object.values(obj as Record<string, unknown>).forEach(val => extractBlobs(val, blobs));
             }
         };
 

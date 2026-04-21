@@ -4,7 +4,7 @@ interface PropertyFieldProps {
  label: string;
  value: string;
  onChange: (value: string) => void;
- icon?: any;
+ icon?: React.ComponentType<{ className?: string }>;
  type?: "text" | "textarea" | "number";
  placeholder?: string;
  debounceMs?: number;

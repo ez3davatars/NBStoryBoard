@@ -247,7 +247,7 @@ export const WearableAdjustmentCanvas = ({ subjectUrl, propUrl, anchorContract, 
                             ref={canvasRef}
                             className="max-w-full max-h-full object-contain pointer-events-none drop-shadow-2xl"
                                 style={{ 
-                                    imageRendering: 'high-quality' as any,
+                                    imageRendering: 'auto',
                                     filter: 'drop-shadow(0 0 20px rgba(0,0,0,0.8))'
                                 }}
                         />

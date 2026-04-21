@@ -22,16 +22,13 @@ export const ShotTile: React.FC<ShotTileProps> = ({ variant, onToggleSelected, o
     variant.sourcePreviewUrl ||
     null;
 
-  const [displayUrl, setDisplayUrl] = useState<string | null>(null);
+  const [displayUrl, setDisplayUrl] = useState<{ sourceUrl: string; value: string | null } | null>(null);
   const [localExpired, setLocalExpired] = useState(false);
   const [regenerateInstruction, setRegenerateInstruction] = useState('');
   const effectiveStatus = localExpired ? 'expired' : variant.status;
 
   useEffect(() => {
-    if (!rawUrl) {
-      setDisplayUrl(null);
-      return;
-    }
+    if (!rawUrl) return;
 
     let isMounted = true;
 
@@ -41,13 +38,13 @@ export const ShotTile: React.FC<ShotTileProps> = ({ variant, onToggleSelected, o
       previewUrl: variant.previewUrl,
       sourceFinalUrl: variant.sourceFinalUrl,
       sourcePreviewUrl: variant.sourcePreviewUrl,
-    } as any).then(resolved => {
+    }).then(resolved => {
       if (isMounted) {
-        setDisplayUrl(resolved || rawUrl);
+        setDisplayUrl({ sourceUrl: rawUrl, value: resolved });
       }
     }).catch(() => {
       if (isMounted) {
-        setDisplayUrl(rawUrl);
+        setDisplayUrl({ sourceUrl: rawUrl, value: rawUrl });
       }
     });
 
@@ -64,7 +61,9 @@ export const ShotTile: React.FC<ShotTileProps> = ({ variant, onToggleSelected, o
     rawUrl
   ]);
 
-  const effectiveUrl = displayUrl || rawUrl;
+  const effectiveUrl = rawUrl
+    ? (displayUrl?.sourceUrl === rawUrl ? (displayUrl.value || rawUrl) : rawUrl)
+    : null;
   const triggerRegenerate = () => {
     if (!onRegenerateOne) return;
     const instruction = regenerateInstruction.trim();

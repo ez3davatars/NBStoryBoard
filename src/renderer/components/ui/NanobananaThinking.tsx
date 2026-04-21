@@ -34,7 +34,7 @@ export const NanobananaThinking = ({ progress: localProgress }: { progress?: Pro
         <div className="flex items-center justify-center gap-3 w-full">
           <span className="h-[1px] flex-1 bg-gradient-to-r from-transparent to-yellow-500/50"></span>
           <p className="text-yellow-500 font-black tracking-[0.3em] uppercase text-[12px] animate-pulse whitespace-nowrap drop-shadow-md">
-            {progress ? `${(progress as any).phase || 'PROCESSING'} - ${Math.round(progress.percent)}%` : 'Nanobanana is thinking'}
+            {progress ? `${('phase' in progress ? progress.phase : 'PROCESSING') || 'PROCESSING'} - ${Math.round(progress.percent)}%` : 'Nanobanana is thinking'}
           </p>
           <span className="h-[1px] flex-1 bg-gradient-to-l from-transparent to-yellow-500/50"></span>
         </div>

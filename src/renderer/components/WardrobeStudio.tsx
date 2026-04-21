@@ -1,5 +1,5 @@
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Upload, RefreshCcw, Maximize, Shirt, Sparkles, Download,
@@ -21,6 +21,23 @@ import HelpTooltip from './ui/HelpTooltip';
 import InlineHint from './ui/InlineHint';
 import ConfirmDialog from './ui/ConfirmDialog';
 import { LibraryAssetMaterializer } from '../services/LibraryAssetMaterializer';
+
+type PermissionAwareDirectoryHandle = FileSystemDirectoryHandle & {
+    queryPermission?: (descriptor?: { mode?: 'read' | 'readwrite' }) => Promise<PermissionState>;
+    values?: () => AsyncIterableIterator<FileSystemHandle>;
+};
+
+type PendingGenerationError = Error & { generationId?: string };
+
+const getErrorMessage = (error: unknown): string => {
+    if (error instanceof Error) return error.message;
+    return String(error);
+};
+
+const isPendingGenerationError = (error: unknown): error is PendingGenerationError => {
+    if (!(error instanceof Error)) return false;
+    return error.name === 'TimeoutError' || error.message.includes('Pending');
+};
 
 async function materializeDisplayUrl(url: string | null | undefined): Promise<string> {
     if (!url) return '';
@@ -324,9 +341,9 @@ const WardrobeStudio = () => {
             setShowSaveModal(false);
             dispatch({ type: 'ADD_LOG', payload: { message: `Saved Actor: ${mat.filename || "Storage"}`, type: 'success' } });
 
-        } catch (err: any) {
-            console.error("Save Failed:", err);
-            dispatch({ type: 'ADD_LOG', payload: { message: `Save Failed: ${err.message}`, type: 'error' } });
+        } catch (error: unknown) {
+            console.error("Save Failed:", error);
+            dispatch({ type: 'ADD_LOG', payload: { message: `Save Failed: ${getErrorMessage(error)}`, type: 'error' } });
         }
     };
     const uiCanvasRef = useRef<HTMLCanvasElement>(null); // For Brush Cursor
@@ -521,14 +538,19 @@ const WardrobeStudio = () => {
     // EFFECT: Reset Restoration on New Image
     useEffect(() => {
         // When the main image changes, we MUST clear all manual edits
-        setRestorationLayer(null);
-        setRemoveTryOnBg(false); // Reset bg toggle
-        setIsBrushActive(false); // Reset brush tool
+        dispatch({
+            type: 'SET_WARDROBE_STATE',
+            payload: {
+                restorationLayer: null,
+                removeBg: false,
+                isBrushActive: false,
+                history: [],
+                historyIndex: -1
+            }
+        });
 
         // Clear History
-        setHistory([]);
         historyRef.current = [];
-        setHistoryIndex(-1);
         historyIndexRef.current = -1;
 
         // Clear Canvas
@@ -536,7 +558,7 @@ const WardrobeStudio = () => {
             const ctx = restorationCanvasRef.current.getContext('2d');
             ctx?.clearRect(0, 0, restorationCanvasRef.current.width, restorationCanvasRef.current.height);
         }
-    }, [fittedImage]);
+    }, [dispatch, fittedImage]);
 
     // EFFECT 1.5: Preload/Cache Static Images
     useEffect(() => {
@@ -566,7 +588,7 @@ const WardrobeStudio = () => {
     useEffect(() => {
         // If Remove BG is off, show nothing
         if (!removeTryOnBg) {
-            setProcessedTryOnUrl(null);
+            dispatch({ type: 'SET_WARDROBE_STATE', payload: { processedTryOnUrl: null } });
             return;
         }
 
@@ -584,7 +606,7 @@ const WardrobeStudio = () => {
             if (originalInput) {
                 compositeRestoration(baseInput, originalInput, restorationLayer).then(url => {
                     if (active) {
-                        setProcessedTryOnUrl(url);
+                        dispatch({ type: 'SET_WARDROBE_STATE', payload: { processedTryOnUrl: url } });
                     }
                 });
             }
@@ -593,7 +615,7 @@ const WardrobeStudio = () => {
         composite();
 
         return () => { active = false; };
-    }, [erodedUrl, tryOnMask, restorationLayer, removeTryOnBg, fittedImage]);
+    }, [erodedUrl, tryOnMask, restorationLayer, removeTryOnBg, fittedImage, dispatch]);
 
     // Simplified Isolation (Just triggers Img.ly and sets mask)
     const runTryOnIsolation = async (): Promise<string | null> => {
@@ -990,7 +1012,7 @@ const WardrobeStudio = () => {
         }
     }, [isBrushActive]);
 
-    const scanWardrobe = async () => {
+    const scanWardrobe = useCallback(async () => {
         // 1. Native Mode
         if (state.saveDirectoryPath) {
             try {
@@ -1029,19 +1051,19 @@ const WardrobeStudio = () => {
 
         if (!state.saveDirectoryHandle) return;
         try {
-            // @ts-ignore
-            if ((await state.saveDirectoryHandle.queryPermission({ mode: 'read' })) !== 'granted') return;
+            const saveDirectoryHandle = state.saveDirectoryHandle as PermissionAwareDirectoryHandle;
+            if (saveDirectoryHandle.queryPermission && (await saveDirectoryHandle.queryPermission({ mode: 'read' })) !== 'granted') return;
 
             const wardrobeHandle = await state.saveDirectoryHandle.getDirectoryHandle('wardrobe', { create: true });
             const items: WardrobeItem[] = [];
-            // @ts-ignore
-            // @ts-ignore
-            for await (const entry of (wardrobeHandle as any).values()) {
+            const iterableWardrobeHandle = wardrobeHandle as PermissionAwareDirectoryHandle;
+            if (!iterableWardrobeHandle.values) return;
+            for await (const entry of iterableWardrobeHandle.values()) {
                 if (entry.kind === 'file' && /\.(png|jpg|jpeg|webp)$/i.test(entry.name)) {
                     // Skip ComfyUI Designer sketches from polluting the library
                     if (entry.name.toLowerCase().includes('_designer_')) continue;
 
-                    const file = await entry.getFile();
+                    const file = await (entry as FileSystemFileHandle).getFile();
                     const reader = new FileReader();
                     const dataUrl = await new Promise<string>((resolve) => {
                         reader.onload = () => resolve(reader.result as string);
@@ -1059,10 +1081,10 @@ const WardrobeStudio = () => {
                 }
             }
             dispatch({ type: 'SET_WARDROBE_ITEMS', payload: items.sort((a, b) => b.timestamp - a.timestamp) });
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Wardrobe scan failed: ${e.message} `, type: 'error' } });
+        } catch (error: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Wardrobe scan failed: ${getErrorMessage(error)} `, type: 'error' } });
         }
-    };
+    }, [dispatch, state.saveDirectoryHandle, state.saveDirectoryPath]);
 
     const withLibraryTransition = (work: () => void | Promise<void>, minMs = 180) => {
         setLibraryLoading(true);
@@ -1077,7 +1099,7 @@ const WardrobeStudio = () => {
 
     useEffect(() => {
         scanWardrobe();
-    }, [state.saveDirectoryHandle]);
+    }, [scanWardrobe]);
 
     const saveToWardrobe = async (imageUrl: string, prompt: string) => {
         const hasStorage = !!state.saveDirectoryHandle || !!state.saveDirectoryPath;
@@ -1104,8 +1126,8 @@ const WardrobeStudio = () => {
 
             dispatch({ type: 'ADD_WARDROBE_ITEM', payload: newItem });
             dispatch({ type: 'ADD_LOG', payload: { message: `Costume saved to wardrobe: ${mat.filename || 'local storage'}`, type: 'success' } });
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Failed to save wardrobe item: ${e.message}`, type: 'error' } });
+        } catch (error: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Failed to save wardrobe item: ${getErrorMessage(error)}`, type: 'error' } });
         }
     };
 
@@ -1229,10 +1251,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
             if (actualGenId) dispatch({ type: 'REMOVE_BACKGROUND_JOB', payload: actualGenId });
 
-            const rawUrl =
-                typeof res === 'string'
-                    ? res
-                    : (res && typeof res === 'object' ? (res as any).asset_url || '' : '');
+            const rawUrl = res;
 
             let safeUrl = rawUrl;
             try {
@@ -1243,13 +1262,12 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
             setDesignerImage(safeUrl);
             dispatch({ type: 'ADD_LOG', payload: { message: "Costume generated (Costume Designer).", type: 'success' } });
-        } catch (e: any) {
-            const isTimeout = e.name === 'TimeoutError' || e.message?.includes('Pending');
-            if (isTimeout && e.generationId) {
-                dispatch({ type: 'UPDATE_BACKGROUND_JOB', payload: { id: e.generationId, updates: { status: 'pending_background' } } });
+        } catch (error: unknown) {
+            if (isPendingGenerationError(error) && error.generationId) {
+                dispatch({ type: 'UPDATE_BACKGROUND_JOB', payload: { id: error.generationId, updates: { status: 'pending_background' } } });
                 dispatch({ type: 'ADD_LOG', payload: { message: "Job shifted to background due to long queue.", type: 'info' } });
             } else {
-                dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });
+                dispatch({ type: 'ADD_LOG', payload: { message: getErrorMessage(error), type: 'error' } });
             }
         } finally {
             clearInterval(progressInterval);
@@ -1307,8 +1325,8 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
             };
             reader.readAsDataURL(file);
 
-        } catch (err: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Upload failed: ${err.message} `, type: 'error' } });
+        } catch (error: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Upload failed: ${getErrorMessage(error)} `, type: 'error' } });
         }
     };
 
@@ -1343,8 +1361,8 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
             if (selectedCostume?.id === item.id) setSelectedCostume(null);
             dispatch({ type: 'ADD_LOG', payload: { message: `Deleted costume: ${item.name} | ${diag}`, type: 'success' } });
 
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Delete failed: ${e.message}`, type: 'error' } });
+        } catch (error: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Delete failed: ${getErrorMessage(error)}`, type: 'error' } });
         } finally {
             setConfirmDelete(null);
         }
@@ -1595,10 +1613,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                     }
                 );
 
-                const rawUrl =
-                    typeof res === 'string'
-                        ? res
-                        : (res && typeof res === 'object' ? (res as any).asset_url || '' : '');
+                const rawUrl = res;
 
                 let safeUrl = rawUrl;
                 try {
@@ -1833,9 +1848,9 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
             setActiveTryOnView('sheetFB');
 
             dispatch({ type: 'ADD_LOG', payload: { message: "Turnaround complete (2 sheets generated: FB + LR).", type: 'success' } });
-        } catch (e: any) {
-            const isTimeout = e.name === 'TimeoutError' || e.message?.includes('Pending');
-            dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: isTimeout ? 'info' : 'error' } });
+        } catch (error: unknown) {
+            const logType = isPendingGenerationError(error) ? 'info' : 'error';
+            dispatch({ type: 'ADD_LOG', payload: { message: getErrorMessage(error), type: logType } });
         } finally {
             clearInterval(progressInterval);
             dispatch({ type: 'SET_PROCESSING', payload: false });

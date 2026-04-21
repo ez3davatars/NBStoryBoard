@@ -1,12 +1,12 @@
 import { SidebarPanel } from '../ui/SidebarPanel';
 import { Sparkles, RefreshCcw } from 'lucide-react';
 import { GeminiService } from '../../services/GeminiService';
-import type { GroundingAudit } from '../../context/AppContext';
+import type { Action, AppState, GroundingAudit } from '../../context/AppContext';
 import { DebouncedTextarea } from '../ui/DebouncedTextarea';
 
 interface ActorIntelligencePanelProps {
-    state: any;
-    dispatch: (action: any) => void;
+    state: AppState;
+    dispatch: (action: Action) => void;
     authorityStatus: string;
     analyzingTokenId: string | null;
     setAnalyzingTokenId: (id: string | null) => void;
@@ -146,7 +146,7 @@ export const ActorIntelligencePanel = ({
                         No actors on stage.
                     </div>
                 ) : (
-                    state.tokens.map((token: any) => (
+                    state.tokens.map((token) => (
                         <div key={token.id} className="bg-[#18181b] border border-[#27272a] rounded-lg p-3 group">
                             <div className="flex items-center justify-between mb-2">
                                 <span className="text-[11px] font-bold text-white uppercase">{token.tag}</span>

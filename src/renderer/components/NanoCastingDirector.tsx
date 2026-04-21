@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { nativeJoinPath, nativeListFiles, nativeReadFile } from '../utils/NativeFileAssets';
 import { nativeSelectFolder } from '../utils/NativeFileAssets';
-import type { CastMember } from '../context/AppContext';
+import type { CastMember, WardrobeItem } from '../context/AppContext';
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
 import { resolveDisplayUrl } from '../utils/assetUrlResolver';
@@ -145,6 +145,56 @@ const SCOPE_COST: Record<BodyScope, { gpu: string; note: string }> = {
 
 // Types for Phases
 type Phase = 1 | 2 | 3 | 4 | 5;
+type MorphVariant = 'masc' | 'fem' | 'youth_masc' | 'youth_fem';
+type ReferenceLayout = 'form_focus' | 'face_focus' | 'split_focus';
+type RefSheetStyleId = keyof typeof REF_SHEET_STYLES;
+type ArchetypeOption = {
+    id: string;
+    name: string;
+    desc: string;
+    icon: typeof Swords;
+    defaultImage: string;
+};
+
+type ActorMetadata = {
+    id?: string;
+    name?: string;
+    style?: string;
+};
+
+type PermissionAwareDirectoryHandle = FileSystemDirectoryHandle & {
+    queryPermission?: (descriptor?: { mode?: 'read' | 'readwrite' }) => Promise<PermissionState>;
+    values?: () => AsyncIterableIterator<FileSystemHandle>;
+};
+
+type WindowWithDirectoryPicker = Window & {
+    showDirectoryPicker?: (options?: { mode?: 'read' | 'readwrite'; startIn?: string }) => Promise<FileSystemDirectoryHandle>;
+};
+
+const getErrorMessage = (error: unknown): string => {
+    if (error instanceof Error) return error.message;
+    return String(error);
+};
+
+type FaceMeshResult = {
+    multiFaceLandmarks?: Array<Array<{ x: number; y: number; z?: number }>>;
+};
+
+const MORPH_VARIANTS: Array<{ id: MorphVariant; label: string }> = [
+    { id: 'masc', label: 'Masculine' },
+    { id: 'fem', label: 'Feminine' },
+    { id: 'youth_masc', label: 'Youth (Boy)' },
+    { id: 'youth_fem', label: 'Youth (Girl)' }
+];
+
+const REF_LAYOUT_OPTIONS: Array<{ id: ReferenceLayout; label: string }> = [
+    { id: 'form_focus', label: 'Body Focus' },
+    { id: 'face_focus', label: 'Expressions' },
+    { id: 'split_focus', label: 'Hybrid' }
+];
+
+const REF_SHEET_STYLE_IDS = Object.keys(REF_SHEET_STYLES) as RefSheetStyleId[];
+const isRefSheetStyleId = (value: string): value is RefSheetStyleId => REF_SHEET_STYLE_IDS.includes(value as RefSheetStyleId);
 
 const formatHeight = (inches: number) => {
     const ft = Math.floor(inches / 12);
@@ -185,7 +235,7 @@ const NanoCastingDirector = () => {
     const [phase, setPhase] = useState<Phase>(1);
 
     // --- WARDROBE LIBRARY HANDLERS ---
-    const [confirmDelete, setConfirmDelete] = useState<any | null>(null);
+    const [confirmDelete, setConfirmDelete] = useState<WardrobeItem | null>(null);
     const [showCoverDeleteConfirm, setShowCoverDeleteConfirm] = useState<string | null>(null);
     const [localBiometricSheetUrl, setLocalBiometricSheetUrl] = useState<string | null>(null);
 
@@ -195,7 +245,7 @@ const NanoCastingDirector = () => {
             try {
                 const wardrobePath = await nativeJoinPath(state.saveDirectoryPath, 'wardrobe');
                 const files = await nativeListFiles(wardrobePath);
-                const items: any[] = []; // Type as WardrobeItem if available
+                const items: WardrobeItem[] = [];
 
                 for (const file of files) {
                     if (/\.(png|jpg|jpeg|webp)$/i.test(file)) {
@@ -226,15 +276,16 @@ const NanoCastingDirector = () => {
 
         if (!state.saveDirectoryHandle) return;
         try {
-            // @ts-ignore
-            if ((await state.saveDirectoryHandle.queryPermission({ mode: 'read' })) !== 'granted') return;
+            const saveDirectoryHandle = state.saveDirectoryHandle as PermissionAwareDirectoryHandle;
+            if (saveDirectoryHandle.queryPermission && (await saveDirectoryHandle.queryPermission({ mode: 'read' })) !== 'granted') return;
 
             const wardrobeHandle = await state.saveDirectoryHandle.getDirectoryHandle('wardrobe', { create: true });
-            const items: any[] = [];
-            // @ts-ignore
-            for await (const entry of (wardrobeHandle as any).values()) {
+            const items: WardrobeItem[] = [];
+            const iterableWardrobeHandle = wardrobeHandle as PermissionAwareDirectoryHandle;
+            if (!iterableWardrobeHandle.values) return;
+            for await (const entry of iterableWardrobeHandle.values()) {
                 if (entry.kind === 'file' && /\.(png|jpg|jpeg|webp)$/i.test(entry.name)) {
-                    const file = await entry.getFile();
+                    const file = await (entry as FileSystemFileHandle).getFile();
                     const reader = new FileReader();
                     const dataUrl = await new Promise<string>((resolve) => {
                         reader.onload = () => resolve(reader.result as string);
@@ -253,13 +304,13 @@ const NanoCastingDirector = () => {
             }
             dispatch({ type: 'SET_WARDROBE_ITEMS', payload: items.sort((a, b) => b.timestamp - a.timestamp) });
             dispatch({ type: 'ADD_LOG', payload: { message: "Wardrobe Library Refreshed", type: 'success' } });
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Wardrobe scan failed: ${e.message}`, type: 'error' } });
+        } catch (error: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Wardrobe scan failed: ${getErrorMessage(error)}`, type: 'error' } });
         }
     };
 
     // --- ACTOR LIBRARY SCANNER (NATIVE) ---
-    const scanActorLibrary = async () => {
+    const scanActorLibrary = useCallback(async () => {
         if (!state.saveDirectoryPath) return;
 
         try {
@@ -292,7 +343,7 @@ const NanoCastingDirector = () => {
 
                         // Check for Sidecar JSON
                         const jsonName = `${baseName}.json`;
-                        let metadata: any = null;
+                        let metadata: ActorMetadata | null = null;
 
                         if (files.includes(jsonName)) {
                             const jsonPath = await nativeJoinPath(catPath, jsonName);
@@ -309,7 +360,7 @@ const NanoCastingDirector = () => {
                                         jsonStr = atob(base64);
                                     }
                                     metadata = JSON.parse(jsonStr);
-                                } catch (e) {
+                                } catch {
                                     console.warn("Invalid JSON for actor:", baseName);
                                 }
                             }
@@ -347,7 +398,7 @@ const NanoCastingDirector = () => {
         } catch (err) {
             console.error("Failed to scan native Actor Library:", err);
         }
-    };
+    }, [dispatch, state.saveDirectoryPath]);
 
     // Auto-Scan on Mount / Path Change (Legacy Fallback Only)
     useEffect(() => {
@@ -355,7 +406,7 @@ const NanoCastingDirector = () => {
         if (state.saveDirectoryPath && state.actorLibrary.length === 0) {
             scanActorLibrary();
         }
-    }, [state.saveDirectoryPath, state.actorLibrary.length]);
+    }, [state.saveDirectoryPath, state.actorLibrary.length, scanActorLibrary]);
 
     const handleUploadCostume = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (!e.target.files || e.target.files.length === 0 || !state.saveDirectoryHandle) return;
@@ -363,7 +414,7 @@ const NanoCastingDirector = () => {
 
         try {
             // DUPLICATE CHECK
-            if (state.wardrobeItems.some((i: any) => i.id.includes(file.name) || i.name === file.name.split('.')[0])) {
+            if (state.wardrobeItems.some((item) => item.id.includes(file.name) || item.name === file.name.split('.')[0])) {
                 showToast("Item already exists in library.");
                 return;
             }
@@ -396,8 +447,8 @@ const NanoCastingDirector = () => {
             };
             reader.readAsDataURL(file);
 
-        } catch (err: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Upload failed: ${err.message}`, type: 'error' } });
+        } catch (error: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Upload failed: ${getErrorMessage(error)}`, type: 'error' } });
         }
     };
 
@@ -420,13 +471,13 @@ const NanoCastingDirector = () => {
 
             if (!deleted) throw new Error("File deletion failed or permission denied on disk.");
 
-            const newItems = state.wardrobeItems.filter((i: any) => i.id !== item.id);
+            const newItems = state.wardrobeItems.filter((wardrobeItem) => wardrobeItem.id !== item.id);
             dispatch({ type: 'SET_WARDROBE_ITEMS', payload: newItems });
             if (selectedWardrobeItem?.id === item.id) setSelectedWardrobeItem(null);
             dispatch({ type: 'ADD_LOG', payload: { message: `Deleted costume: ${item.name}`, type: 'success' } });
 
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Delete failed: ${e.message}`, type: 'error' } });
+        } catch (error: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Delete failed: ${getErrorMessage(error)}`, type: 'error' } });
         } finally {
             setConfirmDelete(null);
         }
@@ -434,20 +485,25 @@ const NanoCastingDirector = () => {
 
     // --- PHASE 2: BODY ARCHETYPE STATE ---
     const [selectedBody, setSelectedBody] = useState<string | null>(null);
-    const [morphVariant, setMorphVariant] = useState<'masc' | 'fem' | 'youth_masc' | 'youth_fem'>('masc');
+    const [morphVariant, setMorphVariant] = useState<MorphVariant>('masc');
 
     // --- CUSTOM COVERS STATE ---
     const [customArchetypeCovers, setCustomArchetypeCovers] = useState<Record<string, string>>({});
+    const customArchetypeCoversRef = useRef(customArchetypeCovers);
     // const [isLoadingCovers, setIsLoadingCovers] = useState(true); // Unused for now
+
+    useEffect(() => {
+        customArchetypeCoversRef.current = customArchetypeCovers;
+    }, [customArchetypeCovers]);
 
     // Load covers from IndexedDB on mount
     // Load covers from Disk on mount/change
     useEffect(() => {
         // Revoke old URLs to prevent memory leaks
         return () => {
-            Object.values(customArchetypeCovers).forEach(url => URL.revokeObjectURL(url));
+            Object.values(customArchetypeCoversRef.current).forEach(url => URL.revokeObjectURL(url));
         };
-    }, []);
+    }, [dispatch]);
 
     useEffect(() => {
         const loadCovers = async () => {
@@ -542,7 +598,7 @@ const NanoCastingDirector = () => {
         }
     };
 
-    const getArchetypes = (variant: 'masc' | 'fem' | 'youth_masc' | 'youth_fem') => {
+    const getArchetypes = (variant: MorphVariant): ArchetypeOption[] => {
         switch (variant) {
             case 'fem': return [
                 { id: 'titan', name: 'The Amazon', desc: 'Tall, athletic strength, powerful feminine build', icon: Zap, defaultImage: titanFem },
@@ -604,7 +660,7 @@ const NanoCastingDirector = () => {
     }, [selectedStyle, bodyScope]);
 
     // --- STYLE CONFIGURATION BY CATEGORY ---
-    const getStyleMatrix = (_variant: 'masc' | 'fem' | 'youth_masc' | 'youth_fem') => {
+    const getStyleMatrix = (_variant: MorphVariant) => {
         // Unified active images mapping
         const activeImages = {
             pixar: coverPixar,
@@ -666,13 +722,13 @@ const NanoCastingDirector = () => {
     // --- REF SHEET GENERATOR STATE ---
     const [showRefSheet, setShowRefSheet] = useState(false);
     const [refSheetUrl, setRefSheetUrl] = useState<string | null>(null);
-    const [refLayout, setRefLayout] = useState<'form_focus' | 'face_focus' | 'split_focus'>('form_focus');
-    const [refStyle, setRefStyle] = useState<keyof typeof REF_SHEET_STYLES>('family_3d');
+    const [refLayout, setRefLayout] = useState<ReferenceLayout>('form_focus');
+    const [refStyle, setRefStyle] = useState<RefSheetStyleId>('family_3d');
 
     // Inherit the style choice from Phase 3 (Style Synthesis)
     useEffect(() => {
-        if (selectedStyle && Object.keys(REF_SHEET_STYLES).includes(selectedStyle)) {
-            setRefStyle(selectedStyle as keyof typeof REF_SHEET_STYLES);
+        if (selectedStyle && isRefSheetStyleId(selectedStyle)) {
+            setRefStyle(selectedStyle);
         }
     }, [selectedStyle]);
 
@@ -771,7 +827,7 @@ const NanoCastingDirector = () => {
     }, [isProcessing, progress.phase, state.imageResolution]);
 
     // Explicit setter to handle cleanup
-    const setAngle = (angle: keyof typeof capturedAngles, url: string | null) => {
+    const setAngle = useCallback((angle: keyof typeof capturedAngles, url: string | null) => {
         setCapturedAngles(prev => {
             const oldUrl = prev[angle];
             if (oldUrl && oldUrl !== url) {
@@ -779,7 +835,7 @@ const NanoCastingDirector = () => {
             }
             return { ...prev, [angle]: url };
         });
-    };
+    }, []);
 
     // Refs for stable access inside callbacks without re-triggering
     const capturedAnglesRef = useRef(capturedAngles);
@@ -803,6 +859,7 @@ const NanoCastingDirector = () => {
     const lastUpdateRef = useRef(0);
     const STABILITY_THRESHOLD = 15; // Frames to hold steady
     const SCAN_COOLDOWN_MS = 1500;
+    const captureCurrentFrameRef = useRef<((sector: keyof typeof capturedAngles) => Promise<void> | void) | null>(null);
 
     // Helper: Convert Base64 to Blob URL for memory efficiency
     const base64ToBlobUrl = (base64: string) => {
@@ -827,7 +884,7 @@ const NanoCastingDirector = () => {
     }, [capturedAngles]);
 
     // FaceMesh Setup
-    const onResults = useCallback((results: any) => {
+    const onResults = useCallback((results: FaceMeshResult) => {
         // Throttle updates to ~10fps to reduce React render load
         const now = Date.now();
         if (now - lastUpdateRef.current < 100) return;
@@ -905,7 +962,7 @@ const NanoCastingDirector = () => {
             setStabilityProgress(progress);
 
             if (sectorStableFramesRef.current > STABILITY_THRESHOLD) {
-                captureCurrentFrame(currentSector);
+                captureCurrentFrameRef.current?.(currentSector);
             }
         } else {
             // Reset stability if lost sector
@@ -914,7 +971,7 @@ const NanoCastingDirector = () => {
         }
     }, []);
 
-    const captureCurrentFrame = async (sector: keyof typeof capturedAngles) => {
+    const captureCurrentFrame = useCallback(async (sector: keyof typeof capturedAngles) => {
         console.log("Attempting Capture:", sector);
         if (!webcamRef.current) { console.log("No Webcam Ref"); return; }
         const imageSrc = webcamRef.current.getScreenshot();
@@ -938,12 +995,9 @@ const NanoCastingDirector = () => {
             // Auto-Save Logic (Async)
             if (stateRef.current.saveDirectoryHandle) {
                 try {
-                    // @ts-ignore - File System Access API
                     const scansDir = await stateRef.current.saveDirectoryHandle.getDirectoryHandle('Scans', { create: true });
                     const filename = `Scan_${sector.toUpperCase()}_${Date.now()}.png`;
-                    // @ts-ignore
                     const fileHandle = await scansDir.getFileHandle(filename, { create: true });
-                    // @ts-ignore
                     const writable = await fileHandle.createWritable();
 
                     // Convert Base64 to Blob
@@ -964,7 +1018,11 @@ const NanoCastingDirector = () => {
                 // dispatch({ type: 'ADD_LOG', payload: { message: "Scan not saved: No save folder set in Settings.", type: 'error' } });
             }
         }
-    };
+    }, [setAngle]);
+
+    useEffect(() => {
+        captureCurrentFrameRef.current = captureCurrentFrame;
+    }, [captureCurrentFrame]);
 
     useEffect(() => {
         let camera: Camera | null = null;
@@ -1063,8 +1121,8 @@ const NanoCastingDirector = () => {
 
             dispatch({ type: 'ADD_ACTOR_LIBRARY', payload: newActor });
             dispatch({ type: 'ADD_LOG', payload: { message: `Saved to Actors: ${mat.filename || "Storage"}`, type: 'success' } });
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Actor save failed: ${e.message}`, type: 'error' } });
+        } catch (error: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Actor save failed: ${getErrorMessage(error)}`, type: 'error' } });
         }
     };
 
@@ -1092,11 +1150,10 @@ const NanoCastingDirector = () => {
                 timestamp: Date.now()
             };
 
-            // @ts-ignore
             dispatch({ type: 'ADD_WARDROBE_ITEM', payload: newItem });
             dispatch({ type: 'ADD_LOG', payload: { message: `Saved to Wardrobe: ${mat.filename || "Storage"}`, type: 'success' } });
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Wardrobe save failed: ${e.message}`, type: 'error' } });
+        } catch (error: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Wardrobe save failed: ${getErrorMessage(error)}`, type: 'error' } });
         }
     };
 
@@ -1118,7 +1175,7 @@ const NanoCastingDirector = () => {
         try {
             let garment = "";
 
-            const timeoutPromise = (ms: number) => new Promise<string>((_, reject) => setTimeout(() => reject(new Error('Request timed out')), ms));
+            const timeoutPromise = (ms: number): Promise<never> => new Promise((_, reject) => setTimeout(() => reject(new Error('Request timed out')), ms));
             const getTimeoutMs = () => state.imageResolution === '4K' ? 120000 : (state.imageResolution === '2K' ? 90000 : 45000);
 
             // 1. Determine Garment Source
@@ -1186,11 +1243,11 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                     timeoutPromise(getTimeoutMs())
                 ]);
 
-                const rawFittedUrl = typeof fitted === 'string' ? fitted : (fitted && typeof fitted === 'object' ? (fitted as any).asset_url || '' : '');
+                const rawFittedUrl = fitted;
                 let safeFittedUrl = rawFittedUrl;
                 try {
                     safeFittedUrl = await materializeDisplayUrl(rawFittedUrl);
-                } catch(e) {}
+                } catch {}
                 setFinalCharacterUrl(prev => {
                     if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev);
                     return safeFittedUrl;
@@ -1198,8 +1255,8 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                 dispatch({ type: 'ADD_LOG', payload: { message: "Virtual fitting complete.", type: 'success' } });
             }
 
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: e.message, type: 'error' } });
+        } catch (error: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: getErrorMessage(error), type: 'error' } });
         } finally {
             setIsProcessing(false);
             setProgress({ phase: '', percent: 0, detail: "" });
@@ -1212,7 +1269,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
 
     // New: Pack Mode State
     const [generatePackMode] = useState(true);
-    const [selectedWardrobeItem, setSelectedWardrobeItem] = useState<any | null>(null);
+    const [selectedWardrobeItem, setSelectedWardrobeItem] = useState<WardrobeItem | null>(null);
 
     // --- TOAST NOTIFICATIONS ---
     const [notification, setNotification] = useState<string | null>(null);
@@ -1406,7 +1463,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
             // 3. Call Gemini
             setProgress({ phase: 'synthesis', percent: 5, detail: "Generative Matrix Active..." });
 
-            const timeoutPromise = (ms: number) => new Promise<string>((_, reject) => setTimeout(() => reject(new Error('Generation request timed out')), ms));
+            const timeoutPromise = (ms: number): Promise<never> => new Promise((_, reject) => setTimeout(() => reject(new Error('Generation request timed out')), ms));
             const getTimeoutMs = () => state.imageResolution === '4K' ? 120000 : (state.imageResolution === '2K' ? 90000 : 45000);
 
             let synthPercent = 5;
@@ -1427,7 +1484,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                     GeminiService.generateImage(prompt, state.apiKey, state.model, referenceImages, { imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements }),
                     timeoutPromise(getTimeoutMs())
                 ]);
-                resultUrl = typeof res === 'string' ? res : (res && typeof res === 'object' ? (res as any).asset_url || '' : '');
+                resultUrl = res;
             } finally {
                 clearInterval(synthInterval);
             }
@@ -1602,7 +1659,6 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                 }
             };
             
-            // @ts-ignore
             dispatch({ type: 'ADD_ACTOR_LIBRARY', payload: newActor });
 
             if (mat.previewUrl) {
@@ -1617,9 +1673,9 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
             setShowSaveModal(false);
             if (saveMode === 'ref_sheet') setShowRefSheet(false);
 
-        } catch (err: any) {
-            console.error("Save to Library Failed:", err);
-            showToast("Save Failed: " + err.message);
+        } catch (error: unknown) {
+            console.error("Save to Library Failed:", error);
+            showToast("Save Failed: " + getErrorMessage(error));
         }
     };
 
@@ -1688,7 +1744,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
             console.error("Failed to load nano_refsheet_handoff", e);
             localStorage.removeItem("nano_refsheet_handoff");
         }
-    }, []);
+    }, [dispatch]);
 
     const generateLocalBiometricSheet = async () => {
         dispatch({ type: 'SET_PROCESSING', payload: true });
@@ -1767,10 +1823,10 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                 if (blobUrl) {
                     try {
                         const img = await loadImage(blobUrl);
-                        let sW = img.width;
-                        let sH = img.height;
-                        let tW = w;
-                        let tH = h;
+                        const sW = img.width;
+                        const sH = img.height;
+                        const tW = w;
+                        const tH = h;
 
                         let cW = sW;
                         let cH = sW * (tH/tW);
@@ -1778,8 +1834,8 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                             cH = sH;
                             cW = sH * (tW/tH);
                         }
-                        let cX = (sW - cW) / 2;
-                        let cY = (sH - cH) / 2;
+                        const cX = (sW - cW) / 2;
+                        const cY = (sH - cH) / 2;
 
                         ctx.drawImage(img, cX, cY, cW, cH, box.x, box.y, tW, tH);
                     } catch (e) {
@@ -1889,7 +1945,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
 
             if (res) {
                 dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: 100, text: "Forensic Matrix Complete" } });
-                const rawUrl = typeof res === 'string' ? res : (res && typeof res === 'object' ? (res as any).asset_url || '' : '');
+                const rawUrl = res;
                 let safeUrl = rawUrl;
                 try {
                     safeUrl = await materializeDisplayUrl(rawUrl);
@@ -1914,10 +1970,10 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                 throw new Error("No image data returned from Nano-Engine.");
             }
 
-        } catch (err: any) {
-            console.error(err);
+        } catch (error: unknown) {
+            console.error(error);
             showToast("Forensic Generation Failed.");
-            dispatch({ type: 'ADD_LOG', payload: { message: `Generation failed: ${err.message}`, type: 'error' } });
+            dispatch({ type: 'ADD_LOG', payload: { message: `Generation failed: ${getErrorMessage(error)}`, type: 'error' } });
         } finally {
             dispatch({ type: 'SET_PROCESSING', payload: false });
         }
@@ -2163,7 +2219,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
 
             // --- C. BODY & STYLE ---
             // --- C. BODY & STYLE ---
-            const isRealisticMode = ['premium_cg', 'exact_studio'].includes(targetStyleKey as any);
+            const isRealisticMode = targetStyleKey === 'premium_cg' || targetStyleKey === 'exact_studio';
             const isPhotoMode = targetStyleKey === 'exact_studio'; // Strict Photography
             const isCGMode = targetStyleKey === 'premium_cg'; // High-End 3D
 
@@ -2309,7 +2365,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
             const timeoutMs = getTimeoutMs();
 
             // Timeout Helper
-            const timeoutPromise = (ms: number) => new Promise((_, reject) => setTimeout(() => reject(new Error('Request timed out')), ms));
+            const timeoutPromise = (ms: number): Promise<never> => new Promise((_, reject) => setTimeout(() => reject(new Error('Request timed out')), ms));
 
             // --- PROGRESS SIMULATION TIMER ---
             let currentPercent = 5;
@@ -2318,8 +2374,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
             const updateMs = 1000;
             const increment = (updateMs / etaMs) * 100;
 
-            let progressInterval: NodeJS.Timeout | undefined;
-            progressInterval = setInterval(() => {
+            const progressInterval: NodeJS.Timeout = setInterval(() => {
                 currentPercent = Math.min(95, currentPercent + increment);
                 let text = "Neural Matrix Synthesizing";
                 if (currentPercent > 50) text = "Arranging Panel Layouts...";
@@ -2340,9 +2395,10 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                         timeoutPromise(timeoutMs) // Dynamic Timeout
                     ]);
                     break; // Success
-                } catch (err: any) {
-                    const isTimeout = err.message?.includes('timed out');
-                    const isOverloaded = err.message?.includes('503') || err.message?.includes('overloaded');
+                } catch (error: unknown) {
+                    const message = getErrorMessage(error);
+                    const isTimeout = message.includes('timed out');
+                    const isOverloaded = message.includes('503') || message.includes('overloaded');
                     if ((isTimeout || isOverloaded) && attempts < maxRetries) {
                         attempts++;
                         const reason = isTimeout ? "Request Packet Dropped (Timeout)" : "Server Overloaded (503)";
@@ -2351,16 +2407,16 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                         dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text: `Retracting Pulse (${attempts}/${maxRetries})` } });
                         await new Promise(resolve => setTimeout(resolve, 2000));
                     } else {
-                        throw err;
+                        throw error;
                     }
                 }
             }
 
-            if (progressInterval) clearInterval(progressInterval);
+            clearInterval(progressInterval);
             dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: 100, text: "Decoding Cast Sheet" } });
             await new Promise(r => setTimeout(r, 500));
 
-            const rawUrl = typeof res === 'string' ? res : (res && typeof res === 'object' ? (res as any).asset_url || '' : '');
+            const rawUrl = res as string;
             let safeRefSheetUrl = rawUrl;
             try {
                 safeRefSheetUrl = await materializeDisplayUrl(rawUrl);
@@ -2374,8 +2430,8 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
             });
             setShowRefSheet(true);
             dispatch({ type: 'ADD_LOG', payload: { message: "Reference Sheet Generated.", type: 'success' } });
-        } catch (e: any) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Ref Sheet failed: ${e.message}`, type: 'error' } });
+        } catch (error: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Ref Sheet failed: ${getErrorMessage(error)}`, type: 'error' } });
         } finally {
             dispatch({ type: 'SET_PROCESSING', payload: false });
             dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
@@ -2578,13 +2634,17 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                                     }
 
                                                     // WEB MODE
-                                                    // @ts-ignore
-                                                    const handle = await window.showDirectoryPicker({ mode: 'readwrite', startIn: 'documents' });
+                                                    const windowWithPicker = window as WindowWithDirectoryPicker;
+                                                    if (!windowWithPicker.showDirectoryPicker) {
+                                                        dispatch({ type: 'ADD_LOG', payload: { message: "Directory picker is not supported in this browser.", type: 'error' } });
+                                                        return;
+                                                    }
+                                                    const handle = await windowWithPicker.showDirectoryPicker({ mode: 'readwrite', startIn: 'documents' });
                                                     if (handle) {
                                                         dispatch({ type: 'SET_SAVE_DIRECTORY', payload: handle });
                                                         dispatch({ type: 'ADD_LOG', payload: { message: "Storage Link Established", type: 'success' } });
                                                     }
-                                                } catch (e) {
+                                                } catch {
                                                     console.log("Folder selection cancelled");
                                                 }
                                             }}
@@ -2801,7 +2861,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                                 </div>
 
                                                 <div className="grid grid-cols-2 gap-2 max-h-[400px] overflow-y-auto pr-1">
-                                                    {state.wardrobeItems.map((item: any) => (
+                                                    {state.wardrobeItems.map((item) => (
                                                         <div
                                                             key={item.id}
                                                             onClick={() => setSelectedWardrobeItem(item)}
@@ -2814,7 +2874,6 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                                                     onClick={(e) => {
                                                                         e.preventDefault();
                                                                         e.stopPropagation();
-                                                                        // @ts-ignore
                                                                         dispatch({ type: 'SET_INSPECT_IMAGE', payload: item.url });
                                                                     }}
                                                                     className="bg-blue-500/80 hover:bg-blue-500 text-white p-1.5 rounded-full cursor-pointer"
@@ -3169,15 +3228,10 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
 
                                     {/* VARIANT SELECTOR */}
                                     <div className="flex justify-center gap-4 mt-8">
-                                        {[
-                                            { id: 'masc', label: 'Masculine' },
-                                            { id: 'fem', label: 'Feminine' },
-                                            { id: 'youth_masc', label: 'Youth (Boy)' },
-                                            { id: 'youth_fem', label: 'Youth (Girl)' }
-                                        ].map((v) => (
+                                        {MORPH_VARIANTS.map((v) => (
                                             <button
                                                 key={v.id}
-                                                onClick={() => setMorphVariant(v.id as any)}
+                                                onClick={() => setMorphVariant(v.id)}
                                                 className={`px-6 py-2 rounded-full text-xs font-bold uppercase tracking-widest transition-all ${morphVariant === v.id
                                                     ? 'bg-yellow-500/10 text-yellow-500 border border-yellow-500 -[0_0_20px_rgba(234,179,8,0.4)] scale-105'
                                                     : 'bg-surface border border-border text-muted hover:text-white hover:border-accent/50'
@@ -3194,6 +3248,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                         // Scope cover by variant so 'titan' (masc) is different from 'titan' (fem)
                                         const storageKey = `${morphVariant}_${type.id}`;
                                         const customCover = customArchetypeCovers[storageKey];
+                                        const coverImage = customCover || type.defaultImage;
 
                                         return (
                                             <div key={type.id} className="relative group h-96 w-full rounded-2xl overflow-hidden border border-white/10 transition-all hover:scale-[1.02] hover:border-white/30 cursor-pointer" onClick={() => setSelectedBody(type.id)}>
@@ -3235,8 +3290,8 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                                 </div>
 
                                                 {/* Background Image */}
-                                                {(customCover || (type as any).defaultImage) ? (
-                                                    <img src={customCover || (type as any).defaultImage} className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
+                                                {coverImage ? (
+                                                    <img src={coverImage} className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
                                                 ) : (
                                                     <div className={`absolute inset-0 bg-gradient-to-br transition-all duration-300 ${selectedBody === type.id ? 'from-gray-800 to-black' : 'from-gray-900 to-black'}`}>
                                                         {/* Fallback pattern if no image */}
@@ -3599,14 +3654,10 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                         {/* Reference Sheet Section */}
                                         <div className="col-span-2 pt-2 border-t border-border mt-2 space-y-3">
                                             <div className="flex gap-2">
-                                                {[
-                                                    { id: 'form_focus', label: 'Body Focus' },
-                                                    { id: 'face_focus', label: 'Expressions' },
-                                                    { id: 'split_focus', label: 'Hybrid' }
-                                                ].map((l) => (
+                                                {REF_LAYOUT_OPTIONS.map((l) => (
                                                     <button
                                                         key={l.id}
-                                                        onClick={() => setRefLayout(l.id as any)}
+                                                        onClick={() => setRefLayout(l.id)}
                                                         className={`flex-1 py-2 rounded text-[9px] font-bold uppercase transition-all border ${refLayout === l.id
                                                             ? 'bg-accent/20 border-accent text-accent -[0_0_10px_rgba(250,204,21,0.2)]'
                                                             : 'bg-surface-2 border-border text-muted hover:border-white/50'
@@ -3623,7 +3674,12 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                                 <div className="relative">
                                                     <select
                                                         value={refStyle}
-                                                        onChange={(e) => setRefStyle(e.target.value as any)}
+                                                        onChange={(e) => {
+                                                            const nextStyle = e.target.value;
+                                                            if (isRefSheetStyleId(nextStyle)) {
+                                                                setRefStyle(nextStyle);
+                                                            }
+                                                        }}
                                                         className="w-full appearance-none bg-bg border border-border rounded-xl px-3 py-2 text-[10px] font-bold uppercase text-white outline-none focus:border-accent transition-colors cursor-pointer"
                                                     >
                                                         {Object.values(REF_SHEET_STYLES).map((s) => (
@@ -3776,7 +3832,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                     <div className="w-full p-3 border-t border-white/10 bg-[#18181b] flex-shrink-0 sticky bottom-0 flex justify-end gap-3 z-10">
                                         <button
                                             onClick={() => {
-                                                const newMember = {
+                                                const newMember: CastMember = {
                                                     id: `nano_ref_${Date.now()}`,
                                                     url: refSheetUrl,
                                                     previewUrl: refSheetUrl,
@@ -3790,7 +3846,6 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                                         style: "Technical"
                                                     }
                                                 };
-                                                // @ts-ignore
                                                 dispatch({ type: 'ADD_CAST', payload: newMember });
                                                 showToast("Added to Cast Assets");
                                             }}

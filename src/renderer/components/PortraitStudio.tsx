@@ -8,6 +8,7 @@ import { Dropdown } from "./ui/Dropdown";
 import type { CharacterDNA } from "../../types/characterDNA";
 import { computeBMI, deriveBuildDescription } from "../../types/characterDNA";
 import { useAppContext } from "../context/AppContext";
+import type { CastMember } from "../context/AppContext";
 import { GeminiService } from "../services/GeminiService";
 import { NanobananaThinking } from "./ui/NanobananaThinking";
 import ConfirmDialog from "./ui/ConfirmDialog";
@@ -89,6 +90,38 @@ const LIFE_STAGES = {
     adult: { min: 20, max: 59, label: "Adult" },
     elder: { min: 60, max: 90, label: "Elder" }
 };
+type LifeStage = CharacterDNA["identity"]["lifeStage"];
+
+const LIFE_STAGE_OPTIONS: Array<{ type: "option"; label: string; value: LifeStage }> = [
+    { type: "option", label: "Child", value: "child" },
+    { type: "option", label: "Teen", value: "teen" },
+    { type: "option", label: "Adult", value: "adult" },
+    { type: "option", label: "Elder", value: "elder" }
+];
+
+const isLifeStage = (value: string): value is LifeStage => {
+    return value in LIFE_STAGES;
+};
+
+type FacePreset = {
+    key: string;
+    label: string;
+    prompt: string;
+    disabled?: boolean;
+};
+
+const FACE_FEATURES: Array<{
+    label: string;
+    field: keyof CharacterDNA["face"];
+    presets: FacePreset[];
+    placeholder: string;
+}> = [
+    { label: "Face Shape", field: "faceShape", presets: FACE_SHAPE_PRESETS, placeholder: "e.g. Oval" },
+    { label: "Eyes", field: "eyes", presets: EYE_PRESETS, placeholder: "e.g. Blue" },
+    { label: "Nose", field: "nose", presets: NOSE_PRESETS, placeholder: "e.g. Straight" },
+    { label: "Lips", field: "lips", presets: LIP_PRESETS, placeholder: "e.g. Full" },
+    { label: "Jawline", field: "jaw", presets: JAW_PRESETS, placeholder: "e.g. Soft" }
+];
 
 // Local component for solid panels to ensure rendering stability
 function SolidPanel({ children, className = "" }: { children: React.ReactNode; className?: string }) {
@@ -129,7 +162,7 @@ export default function PortraitStudio() {
         try {
             const parsed = JSON.parse(saved);
             return parsed.dna || DEFAULT_DNA;
-        } catch (e) {
+        } catch {
             return DEFAULT_DNA;
         }
     });
@@ -153,6 +186,43 @@ export default function PortraitStudio() {
     const [isGenerating, setIsGenerating] = useState(false);
     const [isCompiling, setIsCompiling] = useState(false);
     const [isInspecting, setIsInspecting] = useState(false);
+
+    const getErrorMessage = (error: unknown): string => {
+        if (error instanceof Error) {
+            return error.message;
+        }
+
+        return String(error);
+    };
+
+    const setReferenceImageFromFile = (file: File | undefined) => {
+        if (!file || !file.type.startsWith("image/")) {
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = () => {
+            const result = reader.result;
+            if (typeof result === "string") {
+                setDna(prev => ({ ...prev, referenceImageUrl: result }));
+            }
+        };
+        reader.readAsDataURL(file);
+    };
+
+    const openReferenceImagePicker = () => {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = "image/*";
+        input.onchange = (event: Event) => {
+            if (!(event.target instanceof HTMLInputElement)) {
+                return;
+            }
+
+            setReferenceImageFromFile(event.target.files?.[0]);
+        };
+        input.click();
+    };
     // --- CHARACTER STATE ---
     const remoteUrlToDataUrl = async (url: string): Promise<string> => {
         if (!url) return url;
@@ -287,14 +357,14 @@ export default function PortraitStudio() {
     };
 
     // --- DNA UPDATERS ---
-    const updateIdentity = (key: keyof CharacterDNA["identity"], value: any) => {
+    const updateIdentity = <K extends keyof CharacterDNA["identity"]>(key: K, value: CharacterDNA["identity"][K]) => {
         setDna((prev) => ({
             ...prev,
             identity: { ...prev.identity, [key]: value },
             // Auto-sync skin age if it matches chronological age (heuristic)
             skin:
                 key === "age" && prev.skin.dermalAge === prev.identity.age
-                    ? { ...prev.skin, dermalAge: Number(value) }
+                    ? { ...prev.skin, dermalAge: typeof value === "number" ? value : prev.skin.dermalAge }
                     : prev.skin,
         }));
     };
@@ -306,7 +376,7 @@ export default function PortraitStudio() {
         }));
     };
 
-    const setLifeStage = (stage: "child" | "teen" | "adult" | "elder") => {
+    const setLifeStage = (stage: LifeStage) => {
         setDna((prev) => {
             const range = LIFE_STAGES[stage];
             let newAge = prev.identity.age;
@@ -320,9 +390,9 @@ export default function PortraitStudio() {
         });
     };
 
-    const updateMorphology = (key: keyof CharacterDNA["morphology"], value: any) => {
+    const updateMorphology = <K extends keyof CharacterDNA["morphology"]>(key: K, value: CharacterDNA["morphology"][K]) => {
         setDna((prev) => {
-            const nextMorph = { ...prev.morphology, [key]: value };
+            const nextMorph = { ...prev.morphology, [key]: value } as CharacterDNA["morphology"];
             // Recompute BMI
             if (key === "heightCm" || key === "weightKg") {
                 nextMorph.bmi = computeBMI(nextMorph.heightCm, nextMorph.weightKg);
@@ -332,19 +402,19 @@ export default function PortraitStudio() {
         });
     };
 
-    const updateFace = (key: keyof CharacterDNA["face"], value: any) => {
+    const updateFace = <K extends keyof CharacterDNA["face"]>(key: K, value: CharacterDNA["face"][K]) => {
         setDna((prev) => ({ ...prev, face: { ...prev.face, [key]: value } }));
     };
 
-    const updateSkin = (key: keyof CharacterDNA["skin"], value: any) => {
+    const updateSkin = <K extends keyof CharacterDNA["skin"]>(key: K, value: CharacterDNA["skin"][K]) => {
         setDna((prev) => ({ ...prev, skin: { ...prev.skin, [key]: value } }));
     };
 
-    const updateHair = (key: keyof CharacterDNA["hair"], value: any) => {
+    const updateHair = <K extends keyof CharacterDNA["hair"]>(key: K, value: CharacterDNA["hair"][K]) => {
         setDna((prev) => ({ ...prev, hair: { ...prev.hair, [key]: value } }));
     };
 
-    const updateRender = (key: keyof CharacterDNA["render"], value: any) => {
+    const updateRender = <K extends keyof CharacterDNA["render"]>(key: K, value: CharacterDNA["render"][K]) => {
         setDna((prev) => ({ ...prev, render: { ...prev.render, [key]: value } }));
     };
 
@@ -511,8 +581,8 @@ export default function PortraitStudio() {
             dispatch({ type: "SET_LAST_CASTED_IMAGE", payload: stableDisplayUrl });
             dispatch({ type: "SET_LAST_CASTED_PROMPT", payload: compiledPrompt });
             dispatch({ type: "ADD_LOG", payload: { message: "Portrait Generated", type: "success" } });
-        } catch (e: any) {
-            dispatch({ type: "ADD_LOG", payload: { message: `Generation failed: ${e.message}`, type: "error" } });
+        } catch (error: unknown) {
+            dispatch({ type: "ADD_LOG", payload: { message: `Generation failed: ${getErrorMessage(error)}`, type: "error" } });
         } finally {
             clearInterval(progressInterval);
             setProgress(null);
@@ -725,34 +795,12 @@ export default function PortraitStudio() {
                                         {!dna.referenceImageUrl ? (
                                             <div
                                                 className="min-h-[140px] border-2 border-dashed border-white/10 rounded-2xl bg-[#0f1117] hover:bg-white/[0.02] hover:border-blue-500/30 transition-all flex flex-col items-center justify-center gap-3 cursor-pointer group"
-                                                onClick={() => {
-                                                    const input = document.createElement('input');
-                                                    input.type = 'file';
-                                                    input.accept = 'image/*';
-                                                    input.onchange = (e: any) => {
-                                                        const file = e.target.files[0];
-                                                        if (file) {
-                                                            const reader = new FileReader();
-                                                            reader.onload = (re: any) => {
-                                                                setDna(prev => ({ ...prev, referenceImageUrl: re.target.result }));
-                                                            };
-                                                            reader.readAsDataURL(file);
-                                                        }
-                                                    };
-                                                    input.click();
-                                                }}
+                                                onClick={openReferenceImagePicker}
                                                 onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
                                                 onDrop={(e) => {
                                                     e.preventDefault();
                                                     e.stopPropagation();
-                                                    const file = e.dataTransfer.files[0];
-                                                    if (file && file.type.startsWith('image/')) {
-                                                        const reader = new FileReader();
-                                                        reader.onload = (re: any) => {
-                                                            setDna(prev => ({ ...prev, referenceImageUrl: re.target.result }));
-                                                        };
-                                                        reader.readAsDataURL(file);
-                                                    }
+                                                    setReferenceImageFromFile(e.dataTransfer.files?.[0]);
                                                 }}
                                             >
                                                 <div className="w-10 h-10 rounded-full bg-blue-500/10 flex items-center justify-center text-blue-400 group-hover:scale-110 transition-transform">
@@ -768,22 +816,7 @@ export default function PortraitStudio() {
                                                 <img src={dna.referenceImageUrl} alt="Reference" className="max-w-full max-h-[200px] object-contain" />
                                                 <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-4">
                                                     <button
-                                                        onClick={() => {
-                                                            const input = document.createElement('input');
-                                                            input.type = 'file';
-                                                            input.accept = 'image/*';
-                                                            input.onchange = (e: any) => {
-                                                                const file = e.target.files[0];
-                                                                if (file) {
-                                                                    const reader = new FileReader();
-                                                                    reader.onload = (re: any) => {
-                                                                        setDna(prev => ({ ...prev, referenceImageUrl: re.target.result }));
-                                                                    };
-                                                                    reader.readAsDataURL(file);
-                                                                }
-                                                            };
-                                                            input.click();
-                                                        }}
+                                                        onClick={openReferenceImagePicker}
                                                         className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg text-[10px] font-bold uppercase tracking-wider transition-colors border border-white/10"
                                                     >
                                                         Replace
@@ -825,14 +858,13 @@ export default function PortraitStudio() {
                                     <div className="flex flex-col gap-1.5 relative z-20">
                                         <label className="text-xs font-bold text-gray-500 uppercase tracking-widest pl-1">Life Stage</label>
                                         <Dropdown
-                                            options={[
-                                                { type: "option", label: "Child", value: "child" },
-                                                { type: "option", label: "Teen", value: "teen" },
-                                                { type: "option", label: "Adult", value: "adult" },
-                                                { type: "option", label: "Elder", value: "elder" }
-                                            ]}
+                                            options={LIFE_STAGE_OPTIONS}
                                             value={dna.identity.lifeStage}
-                                            onChange={(val) => setLifeStage(val as any)}
+                                            onChange={(val) => {
+                                                if (isLifeStage(val)) {
+                                                    setLifeStage(val);
+                                                }
+                                            }}
                                         />
                                     </div>
 
@@ -904,17 +936,16 @@ export default function PortraitStudio() {
 
                                     <div className="flex flex-col gap-1.5 relative z-20">
                                         <label className="text-xs font-bold text-gray-500 uppercase tracking-widest pl-1">Life Stage</label>
-                                        <Dropdown
-                                            options={[
-                                                { type: "option", label: "Child", value: "child" },
-                                                { type: "option", label: "Teen", value: "teen" },
-                                                { type: "option", label: "Adult", value: "adult" },
-                                                { type: "option", label: "Elder", value: "elder" }
-                                            ]}
-                                            value={dna.identity.lifeStage}
-                                            onChange={(val) => setLifeStage(val as any)}
-                                        />
-                                    </div>
+                                    <Dropdown
+                                        options={LIFE_STAGE_OPTIONS}
+                                        value={dna.identity.lifeStage}
+                                        onChange={(val) => {
+                                            if (isLifeStage(val)) {
+                                                setLifeStage(val);
+                                            }
+                                        }}
+                                    />
+                                </div>
 
                                     <Slider
                                         label="Chronological Age"
@@ -1055,16 +1086,9 @@ export default function PortraitStudio() {
 
 
                             {/* Feature Selectors */}
-                            {[
-                                { label: "Face Shape", field: "faceShape" as const, presets: FACE_SHAPE_PRESETS, placeholder: "e.g. Oval" },
-                                { label: "Eyes", field: "eyes" as const, presets: EYE_PRESETS, placeholder: "e.g. Blue" },
-                                { label: "Nose", field: "nose" as const, presets: NOSE_PRESETS, placeholder: "e.g. Straight" },
-                                { label: "Lips", field: "lips" as const, presets: LIP_PRESETS, placeholder: "e.g. Full" },
-                                { label: "Jawline", field: "jaw" as const, presets: JAW_PRESETS, placeholder: "e.g. Soft" }
-                            ].map((feature) => {
+                            {FACE_FEATURES.map((feature) => {
                                 const currentValue = dna.face[feature.field];
-                                // We trust the presets are structured correctly, but we cast to any to silence the implicit any error in map
-                                const isPreset = feature.presets.some((p: any) => p.key === currentValue);
+                                const isPreset = feature.presets.some((preset) => preset.key === currentValue);
                                 const dropdownValue = isPreset ? (currentValue as string) : "custom_input";
 
                                 const isStructuralField = feature.field === "faceShape" || feature.field === "nose" || feature.field === "jaw";
@@ -1076,7 +1100,7 @@ export default function PortraitStudio() {
                                         <div className="flex flex-col gap-2">
                                             <Dropdown
                                                 options={[
-                                                    ...feature.presets.map((p: any) => ({ type: "option" as const, label: p.label, value: p.key })),
+                                                    ...feature.presets.map((preset) => ({ type: "option" as const, label: preset.label, value: preset.key })),
                                                     { type: "option" as const, label: "Custom...", value: "custom_input" }
                                                 ]}
                                                 value={dropdownValue}
@@ -1511,7 +1535,7 @@ export default function PortraitStudio() {
                     <div className="fixed bottom-12 left-1/2 -translate-x-1/2 flex gap-4 z-[2001] bg-black/40 backdrop-blur-2xl border border-white/10 p-2 rounded-2xl " onClick={(e) => e.stopPropagation()}>
                         <button
                             onClick={() => {
-                                const newCast: any = {
+                                const newCast: CastMember = {
                                     id: `cast-insp-${Date.now()}`,
                                     url: generatedImage,
                                     previewUrl: generatedImage,

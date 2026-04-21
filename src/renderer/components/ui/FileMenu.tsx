@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useAppContext } from '../../context/AppContext';
 import { SessionService } from '../../services/SessionService';
@@ -17,6 +17,10 @@ export const FileMenu = () => {
 
     // Hardcoded absolute positioning prevents disturbing the header flexbox
     const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 });
+    const getErrorMessage = (error: unknown): string => {
+        if (error instanceof Error) return error.message;
+        return String(error);
+    };
 
     useEffect(() => {
         const handleClickOutside = (e: MouseEvent) => {
@@ -43,7 +47,7 @@ export const FileMenu = () => {
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, [isOpen]);
 
-    const doSave = async (isSaveAs: boolean = false): Promise<boolean> => {
+    const doSave = useCallback(async (isSaveAs: boolean = false): Promise<boolean> => {
         if (!window.electronAPI) {
             dispatch({ type: 'ADD_LOG', payload: { message: "File API not available in Browser environment.", type: 'error' } });
             return false;
@@ -97,12 +101,13 @@ export const FileMenu = () => {
                 dispatch({ type: 'ADD_LOG', payload: { message: "Failed to save session.", type: 'error' } });
                 return false;
             }
-        } catch (error: any) {
+        } catch (error: unknown) {
+            const message = getErrorMessage(error);
             console.error("Session Save Error:", error);
-            dispatch({ type: 'ADD_LOG', payload: { message: `Save error: ${error.message || error}`, type: 'error' } });
+            dispatch({ type: 'ADD_LOG', payload: { message: `Save error: ${message}`, type: 'error' } });
             return false;
         }
-    };
+    }, [dispatch, state]);
 
     const doOpen = async () => {
         try {
@@ -146,9 +151,10 @@ export const FileMenu = () => {
                     }
                 }
             }
-        } catch (error: any) {
+        } catch (error: unknown) {
+            const message = getErrorMessage(error);
             console.error("Session Open Error:", error);
-            dispatch({ type: 'ADD_LOG', payload: { message: `Open error: ${error.message || error}`, type: 'error' } });
+            dispatch({ type: 'ADD_LOG', payload: { message: `Open error: ${message}`, type: 'error' } });
         }
     };
 

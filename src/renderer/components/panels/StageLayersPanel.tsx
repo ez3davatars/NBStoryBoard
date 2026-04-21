@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { Layers, Eye, EyeOff, GripVertical, UserPlus, StickyNote, BoxSelect, MoveUpRight, Trash2, ArrowUpToLine, ArrowUp, ArrowDown, ArrowDownToLine } from 'lucide-react';
 import { SidebarPanel } from '../ui/SidebarPanel';
+import type { Action, AppState, StageAnnotation, StageToken } from '../../context/AppContext';
 
 interface StageLayersPanelProps {
- state: any;
- dispatch: (action: any) => void;
+ state: AppState;
+ dispatch: React.Dispatch<Action>;
  collapsed: boolean;
  onToggle: (id: string) => void;
  draggedLayerId: string | null;
@@ -12,6 +13,15 @@ interface StageLayersPanelProps {
  setDraggedPanelId: (id: string | null) => void;
  handlePanelDrop: (id: string) => void;
 }
+
+type TokenLayer = StageToken & { type: 'token' };
+type AnnotationLayer = Omit<StageAnnotation, 'type'> & { type: 'annotation'; subtype: StageAnnotation['type'] };
+type StageLayer = TokenLayer | AnnotationLayer;
+
+const buildStageLayers = (tokens: StageToken[], annotations: StageAnnotation[]): StageLayer[] => [
+ ...tokens.map((t): TokenLayer => ({ ...t, type: 'token' })),
+ ...annotations.map((a): AnnotationLayer => ({ ...a, type: 'annotation', subtype: a.type }))
+];
 
 export const StageLayersPanel = ({
  state,
@@ -41,12 +51,13 @@ export const StageLayersPanel = ({
  rightElement={<span className="text-[9px] text-gray-600 font-mono">{stageItemsCount} Items</span>}
  >
  <div className="space-y-1 max-h-[400px] overflow-y-auto custom-scrollbar pr-1">
- {[...state.tokens.map((t: any) => ({ ...t, type: 'token' })), ...state.annotations.map((a: any) => ({ ...a, type: 'annotation' }))]
- .sort((a: any, b: any) => b.zIndex - a.zIndex)
- .map((layer: any) => {
+ {buildStageLayers(state.tokens, state.annotations)
+ .sort((a, b) => b.zIndex - a.zIndex)
+ .map((layer) => {
  const isSelected = state.selection === layer.id;
  const isDragging = draggedLayerId === layer.id;
  const isEditing = editingId === layer.id;
+ const layerLabel = layer.type === 'token' ? layer.tag : (layer.text || layer.subtype);
 
  return (
  <div
@@ -64,8 +75,8 @@ export const StageLayersPanel = ({
  e.preventDefault();
  if (!draggedLayerId || draggedLayerId === layer.id) return;
  // Capture current state of full list sorted by Z
- const allLayers = [...state.tokens.map((t: any) => ({ ...t, type: 'token' })), ...state.annotations.map((a: any) => ({ ...a, type: 'annotation' }))]
- .sort((a: any, b: any) => b.zIndex - a.zIndex);
+ const allLayers = buildStageLayers(state.tokens, state.annotations)
+ .sort((a, b) => b.zIndex - a.zIndex);
  const fromIndex = allLayers.findIndex(l => l.id === draggedLayerId);
  const toIndex = allLayers.findIndex(l => l.id === layer.id);
  if (fromIndex === -1 || toIndex === -1) return;
@@ -119,7 +130,7 @@ export const StageLayersPanel = ({
  onChange={(e) => setEditValue(e.target.value)}
  onBlur={() => {
  setEditingId(null);
- if (editValue.trim() && editValue.trim() !== (layer.tag || layer.text || layer.type)) {
+ if (editValue.trim() && editValue.trim() !== layerLabel) {
  if (layer.type === 'token') {
  dispatch({ type: 'UPDATE_TOKEN', payload: { id: layer.id, tag: editValue.trim() } });
  } else {
@@ -143,12 +154,12 @@ export const StageLayersPanel = ({
  onDoubleClick={(e) => {
  e.stopPropagation();
  setEditingId(layer.id);
- setEditValue(layer.tag || layer.text || layer.type || '');
+ setEditValue(layerLabel || '');
  }}
  className={`text-[9px] font-bold uppercase truncate flex-1 cursor-text select-text ${isSelected ? 'text-orange-400' : 'text-gray-400'}`}
  title="Double-click to rename"
  >
- {layer.tag || layer.text || layer.type}
+ {layerLabel}
  </span>
  )}
  <span className="text-[9px] font-mono text-gray-600 mr-2">Z:{layer.zIndex}</span>
