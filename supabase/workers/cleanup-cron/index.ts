@@ -23,6 +23,11 @@ const r2 = new S3Client({
   },
 });
 
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  return String(error);
+};
+
 async function runCleanup() {
   console.log('[CleanupWorker] Starting expired assets cleanup pass...');
   try {
@@ -61,8 +66,8 @@ async function runCleanup() {
             })
           );
           console.log(`[CleanupWorker] R2 Deleted successfully: ${job.asset_storage_path}`);
-        } catch (s3Err: any) {
-          console.error(`[CleanupWorker] Failed R2 deletion for ${job.asset_storage_path}:`, s3Err.message);
+        } catch (s3Err: unknown) {
+          console.error(`[CleanupWorker] Failed R2 deletion for ${job.asset_storage_path}:`, getErrorMessage(s3Err));
           failCount++;
           continue; // Skip DB update if delete failed so we can retry later safely
         }
@@ -90,8 +95,8 @@ async function runCleanup() {
     }
     
     console.log(`[CleanupWorker] Pass complete. Success/DB Nullified: ${successCount}. R2/DB Fails: ${failCount}. Skipped: ${skippedCount}.`);
-  } catch (err: any) {
-    console.error('[CleanupWorker] Error during cleanup pass:', err.message);
+  } catch (err: unknown) {
+    console.error('[CleanupWorker] Error during cleanup pass:', getErrorMessage(err));
   } finally {
     // Re-schedule based on load or a fixed interval
     setTimeout(runCleanup, 60 * 1000 * 15); // Check every 15 minutes

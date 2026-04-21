@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import { DeleteObjectCommand, S3Client } from "npm:@aws-sdk/client-s3@3.1024.0";
@@ -10,6 +9,11 @@ const R2_BUCKET_NAME = Deno.env.get('R2_BUCKET_NAME') ?? '';
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? '';
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
 const CLEANUP_INVOCATION_SECRET = Deno.env.get('CLEANUP_INVOCATION_SECRET');
+
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  return String(error);
+};
 
 serve(async (req) => {
   try {
@@ -76,8 +80,8 @@ serve(async (req) => {
             Key: job.asset_storage_path,
           })
         );
-      } catch (s3Err: any) {
-        console.error(`[CleanupEdge] Failed R2 deletion for ${job.asset_storage_path}:`, s3Err.message);
+      } catch (s3Err: unknown) {
+        console.error(`[CleanupEdge] Failed R2 deletion for ${job.asset_storage_path}:`, getErrorMessage(s3Err));
         failCount++;
         continue; // Leave the row intact so it gets picked up on retry
       }
@@ -107,8 +111,9 @@ serve(async (req) => {
         headers: { "Content-Type": "application/json" }
     });
 
-  } catch (err: any) {
-    console.error("Cleanup Run Error:", err.message);
-    return new Response(JSON.stringify({ error: err.message }), { status: 500 });
+  } catch (err: unknown) {
+    const message = getErrorMessage(err);
+    console.error("Cleanup Run Error:", message);
+    return new Response(JSON.stringify({ error: message }), { status: 500 });
   }
 });

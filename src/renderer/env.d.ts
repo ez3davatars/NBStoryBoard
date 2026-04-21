@@ -11,6 +11,21 @@ interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
 
+interface DialogFilter {
+  name: string;
+  extensions: string[];
+}
+
+interface SaveDialogOptions {
+  title?: string;
+  defaultPath?: string;
+  filters?: DialogFilter[];
+}
+
+interface OpenDialogOptions extends SaveDialogOptions {
+  properties?: string[];
+}
+
 declare module '*.png' {
   const value: string;
   export default value;
@@ -45,8 +60,8 @@ interface ElectronAPI {
   confirmDiscardSession?: () => void;
   onRequestAppClose?: (callback: () => void) => void;
   confirmClose?: () => void;
-  showSaveDialog?: (options: any) => Promise<string | null>;
-  showOpenDialog?: (options: any) => Promise<string[] | null>;
+  showSaveDialog?: (options: SaveDialogOptions) => Promise<string | null>;
+  showOpenDialog?: (options: OpenDialogOptions) => Promise<string[] | null>;
   deleteFile?: (path: string) => Promise<boolean>;
   renameFile?: (oldPath: string, newPath: string) => Promise<boolean>;
 }

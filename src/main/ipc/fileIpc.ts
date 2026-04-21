@@ -95,8 +95,8 @@ export function registerFileIpcHandlers() {
     try {
       await fs.unlink(filePath);
       return true;
-    } catch (error: any) {
-      if (error.code !== 'ENOENT') {
+    } catch (error: unknown) {
+      if ((error as { code?: string }).code !== 'ENOENT') {
         console.error("Delete Error:", error);
       }
       return false;

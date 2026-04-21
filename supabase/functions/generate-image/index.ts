@@ -1,6 +1,3 @@
-// @ts-nocheck
-// Disables IDE Node.js compiler errors for Deno-specific globals (Deno, https imports)
-
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 
@@ -10,18 +7,27 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-idempotency-key',
 };
 
-const withTimeout = (promise: Promise<any>, ms: number, name: string) => {
+type GenerationJob = {
+  id: string;
+  request_fingerprint: string;
+  status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'CANCELED' | string;
+  asset_url?: string | null;
+};
+
+type GenerateImageRequestBody = {
+  payload?: {
+    model?: string;
+    requestBody?: unknown;
+  };
+  executionFingerprint?: string;
+  options?: unknown;
+};
+
+const withTimeout = <T>(promise: Promise<T>, ms: number, name: string): Promise<T> => {
     return Promise.race([
         promise,
         new Promise((_, reject) => setTimeout(() => reject(new Error(`DIAGNOSTIC HANG DETECTED: [${name}] timed out after ${ms}ms`)), ms))
-    ]);
-};
-
-const decodeJwtPayload = (jwt: string) => {
-  const parts = jwt.split('.');
-  if (parts.length !== 3) throw new Error('Malformed JWT');
-  const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
-  return payload;
+    ]) as Promise<T>;
 };
 
 serve(async (req) => {
@@ -34,9 +40,6 @@ serve(async (req) => {
         } 
     });
   }
-
-  let job: any = null;
-  let supabaseService: any = null;
 
   try {
     const authHeader = req.headers.get('Authorization');
@@ -94,12 +97,15 @@ serve(async (req) => {
     }
 
     // Service client ONLY
-    supabaseService = createClient(supabaseUrl, supabaseServerKey);
+    const supabaseService = createClient(supabaseUrl, supabaseServerKey);
     
     const userId = userData.user.id;
 
-    const payloadRaw = await withTimeout(req.json(), 15000, "req.json");
-    const { payload, options, executionFingerprint } = payloadRaw;
+    const payloadRaw = await withTimeout(req.json() as Promise<unknown>, 15000, "req.json");
+    const { payload, executionFingerprint } = (payloadRaw ?? {}) as GenerateImageRequestBody;
+    if (!payload?.model || !executionFingerprint) {
+      throw new Error("Invalid request payload: missing payload.model or executionFingerprint");
+    }
     
     const idempotencyKey = req.headers.get('x-idempotency-key');
     if (!idempotencyKey) throw new Error("Missing X-Idempotency-Key header");
@@ -120,7 +126,8 @@ serve(async (req) => {
     );
 
     if (startErr) throw new Error(`start_generation failed: ${startErr.message}`);
-    job = jobData;
+    const job = jobData as GenerationJob | null;
+    if (!job) throw new Error("start_generation returned no job");
 
     // 2. Ownership & Replay Check
     if (job.request_fingerprint !== executionFingerprint) {
@@ -163,17 +170,19 @@ serve(async (req) => {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     });
 
-  } catch (err: any) {
-    console.error("Generate Image Orchestration Error:", err.message, err.stack);
+  } catch (err: unknown) {
+    const errMessage = err instanceof Error ? err.message : String(err);
+    const errStack = err instanceof Error ? err.stack : undefined;
+    console.error("Generate Image Orchestration Error:", errMessage, errStack);
     
     let status = 400;
-    if (err.message?.includes('Unauthorized')) status = 401;
-    if (err.message && err.message.includes('Idempotency')) status = 409;
-    if (err.message && err.message.includes('Missing X-Idempotency-Key header')) status = 400;
-    if (err.message && err.message.includes('req.json')) status = 400; // Json parse timeouts/errors
+    if (errMessage.includes('Unauthorized')) status = 401;
+    if (errMessage.includes('Idempotency')) status = 409;
+    if (errMessage.includes('Missing X-Idempotency-Key header')) status = 400;
+    if (errMessage.includes('req.json')) status = 400; // Json parse timeouts/errors
 
     // fail_generation relies on generation payload isolation
-    return new Response(JSON.stringify({ error: err.message, code: 'INTERNAL_ERROR', stack: err.stack }), {
+    return new Response(JSON.stringify({ error: errMessage, code: 'INTERNAL_ERROR', stack: errStack }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       status,
     });

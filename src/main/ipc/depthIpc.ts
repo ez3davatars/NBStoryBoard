@@ -157,9 +157,9 @@ export function registerDepthIpcHandlers() {
           reject(new Error(`Failed to start Python inference. Ensure 'python' is in PATH.`));
         });
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("[IPC] Depth Generation Error:", err);
-      throw err;
+      throw err instanceof Error ? err : new Error(String(err));
     }
   });
 }
