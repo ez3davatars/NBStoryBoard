@@ -125,7 +125,7 @@ const normalizeStyleId = (id: string) => {
 // --- CONFIGURATION CONSTANTS ---
 const STYLE_SCOPE_RULES: Record<string, { default: BodyScope; allowed: BodyScope[] }> = {
     pixar: { default: 'full', allowed: ['full', 'torso'] },
-    retro_anime: { default: 'full', allowed: ['full'] },
+    retro_anime: { default: 'full', allowed: ['head', 'torso', 'full'] },
     comic_book: { default: 'torso', allowed: ['torso', 'full'] },
     cyberpunk: { default: 'torso', allowed: ['head', 'torso', 'full'] },
     hyper_real: { default: 'head', allowed: ['head', 'torso', 'full'] },
@@ -2122,12 +2122,12 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
             // --- B. COSTUME / WARDROBE ---
 
             if (wardrobeMode === 'wardrobe_asset' && wardrobeRefIndex > 0) {
-                finalPrompt += `COSTUME DIRECTIVE (PILOT PROTOCOL):\n`;
-                finalPrompt += `Wear the outfit shown in [IMAGE ${wardrobeRefIndex}].\n`;
-                finalPrompt += `1. PILOT IN COCKPIT: Treat [IMAGE 1] as a pilot sitting INSIDE the costume [IMAGE ${wardrobeRefIndex}]. The suit is a rigid exterior shell.\n`;
-                finalPrompt += `2. CLEAN SLATE: Strip all external gear (helmets, goggles) from [IMAGE 1] first. Use only bare skin/face.\n`;
-                finalPrompt += `3. RIGID SILHOUETTE LOCK: Do NOT elongate or stretch the costume. Maintain its thick, chunky proportions exactly.\n`;
-                finalPrompt += `4. FORBIDDEN: Do NOT place the human face in the mascot's mouth. The face must stay in the neck/throat area below the suit's chin.\n\n`;
+                finalPrompt += `WARDROBE LOCK (MANDATORY LIBRARY ASSET):\n`;
+                finalPrompt += `The character MUST be wearing the EXACT garment/clothing design shown in [IMAGE ${wardrobeRefIndex}].\n`;
+                finalPrompt += `1. EXACT REPLICATION: You must strictly replicate the neckline, bust cut, collar structure, sleeves, fabric texture, drapery, colors, embroidery, and stylistic details of this exact garment.\n`;
+                finalPrompt += `2. NO RE-DESIGN: Do not reinterpret, lower, or reimagine the cut of the dress or suit. It is not an inspiration; it is the final approved technical asset.\n`;
+                finalPrompt += `3. FIT TO CHARACTER: The clothing should naturally fit the character's body type while maintaining its original geometry and structural cut exactly.\n`;
+                finalPrompt += `4. CLEAN SLATE: Completely replace whatever the character is wearing in [IMAGE 1] with the garment from [IMAGE ${wardrobeRefIndex}].\n\n`;
 
                 if (identitySource === 'biometric') {
                     finalPrompt += `RE-ASSERTING IDENTITY LOCK:\n`;
@@ -3540,7 +3540,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                         </div>
                                         <div className="flex justify-between text-[9px] uppercase tracking-widest text-white/50">
                                             <span>Sim-Date: {new Date().toLocaleDateString()}</span>
-                                            <span>Nano-Banana Pro</span>
+                                            <span>Nanobanana 2</span>
                                         </div>
                                     </div>
                                 </div>

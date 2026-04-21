@@ -52,3 +52,9 @@ urls.json
 tmp-*.js
 tmp-*.ts
 *.tgz
+
+# Local scratch notes / backups
+best_*.tsx
+effect*.txt
+mask_logic.txt
+*_history.txt

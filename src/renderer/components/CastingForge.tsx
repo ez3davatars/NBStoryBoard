@@ -482,8 +482,91 @@ const CastingForge = () => {
   const cachedBaseImgRef = useRef<HTMLImageElement | null>(null);
   const cachedOriginalImgRef = useRef<HTMLImageElement | null>(null);
 
-  // MANUAL MASK CONTROLS
-  // These states were removed as per instruction.
+  ﻿  // EFFECT 1: Handle Erosion (Slow)
+  useEffect(() => {
+    if (!removeBg || !state.lastCastedMask) {
+      setErodedUrl(null);
+      setIsIsolating(false); // SAFETY RESET
+      return;
+    }
+
+    if (fringeSize === 0) {
+      setErodedUrl(state.lastCastedMask);
+      setIsIsolating(false); // SAFETY RESET
+      return;
+    }
+
+    setIsIsolating(true);
+    let active = true;
+    const t = setTimeout(() => {
+      generateErodedMask(state.lastCastedMask!, fringeSize).then(url => {
+        if (active) {
+          setErodedUrl(url);
+          setIsIsolating(false);
+        }
+      });
+    }, 100);
+
+    return () => {
+      active = false;
+      clearTimeout(t);
+    };
+  }, [state.lastCastedMask, fringeSize, removeBg]);
+
+  // EFFECT 1.5: Preload/Cache Static Images
+  useEffect(() => {
+    cachedBaseImgRef.current = null;
+    const base = erodedUrl || state.lastCastedMask;
+    if (base && typeof base === 'string') {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.src = base;
+      img.onload = () => { cachedBaseImgRef.current = img; };
+    }
+  }, [erodedUrl, state.lastCastedMask]);
+
+  useEffect(() => {
+    cachedOriginalImgRef.current = null;
+    if (state.lastCastedImage) {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.src = state.lastCastedImage;
+      img.onload = () => { cachedOriginalImgRef.current = img; };
+    }
+  }, [state.lastCastedImage]);
+
+  // EFFECT 2: Handle Composition (Fast)
+  useEffect(() => {
+    if (!removeBg) {
+      setProcessedPreviewUrl(null);
+      return;
+    }
+
+    if (!erodedUrl && !state.lastCastedMask) {
+      setProcessedPreviewUrl(null);
+      return;
+    }
+
+    const base = erodedUrl || state.lastCastedMask;
+    if (!base) return;
+
+    let active = true;
+    if (restorationLayer && state.lastCastedImage) {
+      // USE CACHED IMAGES IF AVAILABLE
+      const baseInput = cachedBaseImgRef.current || base;
+      const originalInput = cachedOriginalImgRef.current || state.lastCastedImage;
+
+      compositeRestoration(baseInput, originalInput, restorationLayer).then(url => {
+        if (active) {
+          setProcessedPreviewUrl(url);
+        }
+      });
+    } else {
+      setProcessedPreviewUrl(base);
+    }
+    return () => { active = false; };
+  }, [erodedUrl, restorationLayer, removeBg, state.lastCastedImage, state.lastCastedMask]);
+
 
   // EFFECT: Reset Restoration on New Image
   useEffect(() => {
@@ -910,7 +993,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
 
         dispatch({ type: 'ADD_LOG', payload: { message: "Running local AI isolation...", type: 'info' } });
 
-        const { cutoutUrl } = await CutoutService.processImage(safeResolvedUrl);
+        const { cutoutUrl } = await CutoutService.processImage(safeResolvedUrl, undefined, undefined, true);
 
         if (generationIdRef.current === currentGenId) {
           dispatch({ type: 'SET_LAST_CASTED_MASK', payload: cutoutUrl });
@@ -1724,7 +1807,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
 
           try {
             dispatch({ type: 'ADD_LOG', payload: { message: "Isolating character silhouette locally...", type: 'info' } });
-            const { cutoutUrl } = await CutoutService.processImage(standardizedUrl);
+            const { cutoutUrl } = await CutoutService.processImage(standardizedUrl, undefined, undefined, true);
 
             if (generationIdRef.current === currentGenId) {
               dispatch({ type: 'SET_LAST_CASTED_MASK', payload: cutoutUrl });
@@ -1797,7 +1880,8 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
       finalPrompt += "\nSTRICT NEGATIVE ADDENDUM: double-head, two heads on one body, conjoined anatomy, fused torso, ghost body, mirrored twin body, duplicate neck, duplicate torso, extra body in slot, empty panel slot, panel overlap artifacts.\n";
 
       // BRANDING INJECTION
-      const inputImages = [{ url: state.lastCastedImage, label: 'Character Reference' }];
+      const targetReferenceUrl = processedPreviewUrl || state.lastCastedImage;
+      const inputImages = [{ url: targetReferenceUrl, label: 'Character Reference' }];
 
       if (brandingLogo) {
         inputImages.push({ url: brandingLogo, label: 'Branding Logo' });
@@ -2779,14 +2863,14 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
                     src={state.lastCastedImage}
                     crossOrigin="anonymous"
                     className={processedPreviewUrl ? 'invisible absolute pointer-events-none' : 'absolute inset-0 w-full h-full object-contain pointer-events-none py-4 sm:py-8 px-1 sm:px-2'}
-                    style={(removeBg && !!state.lastCastedMask) ? undefined : { filter: 'drop-shadow(0 0 2px rgba(255,255,255,0.25)) drop-shadow(0 8px 15px rgba(0,0,0,0.8)) drop-shadow(0 -8px 15px rgba(0,0,0,0.8))' }}
+                    style={{ filter: (removeBg && !!state.lastCastedMask) ? 'none' : 'drop-shadow(0 0 2px rgba(255,255,255,0.25)) drop-shadow(0 8px 15px rgba(0,0,0,0.8)) drop-shadow(0 -8px 15px rgba(0,0,0,0.8))' }}
                   />
                   {processedPreviewUrl && (
                     <img
                       ref={previewImgRef}
                       src={processedPreviewUrl}
                       className="absolute inset-0 w-full h-full object-contain pointer-events-none py-4 sm:py-8 px-1 sm:px-2"
-                      style={(removeBg && !!state.lastCastedMask) ? undefined : { filter: 'drop-shadow(0 0 2px rgba(255,255,255,0.25)) drop-shadow(0 8px 15px rgba(0,0,0,0.8)) drop-shadow(0 -8px 15px rgba(0,0,0,0.8))' }}
+                      style={{ filter: (removeBg && !!state.lastCastedMask) ? 'none' : 'drop-shadow(0 0 2px rgba(255,255,255,0.25)) drop-shadow(0 8px 15px rgba(0,0,0,0.8)) drop-shadow(0 -8px 15px rgba(0,0,0,0.8))' }}
                     />
                   )}
                   {state.lastCastedMask && (
@@ -3004,7 +3088,8 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
                                     undefined,
                                     (_key: string, current: number, total: number) => {
                                       if (total) setIsolationProgress(Math.round((current / total) * 100));
-                                    }
+                                    },
+                                    true
                                   );
                                   dispatch({ type: 'SET_LAST_CASTED_MASK', payload: cutoutUrl });
                                   dispatch({ type: 'ADD_LOG', payload: { message: "Isolation Complete", type: 'success' } });

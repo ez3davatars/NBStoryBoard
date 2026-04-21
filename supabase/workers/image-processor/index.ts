@@ -201,7 +201,22 @@ async function executeJob(job: JobRecord) {
                const storagePath = part.hosted_reference_path;
                
                console.log(`[Worker ${WORKER_ID}] Downloading high-fidelity reference bypass: ${storagePath}`);
-               const { data, error } = await supabase.storage.from('reference_images').download(storagePath);
+               
+               let data: Blob | null = null;
+               let error: any = null;
+               let retries = 3;
+               
+               while (retries > 0) {
+                 const res = await supabase.storage.from('reference_images').download(storagePath);
+                 data = res.data;
+                 error = res.error;
+                 
+                 if (!error && data) break;
+                 
+                 console.warn(`[Worker ${WORKER_ID}] Download failed (${error?.message || 'No data'}). Retrying ${storagePath}... (${retries - 1} attempts left)`);
+                 await new Promise(r => setTimeout(r, 2000));
+                 retries--;
+               }
                
                if (error || !data) {
                   failCode = 'STORAGE_ERROR';
@@ -249,7 +264,7 @@ async function executeJob(job: JobRecord) {
       throw new Error(`Google API Failed (${providerResponse.status}): ${errText}`);
     }
 
-    const result = await providerResponse.json();
+    const result: any = await providerResponse.json();
     const imgData = result?.candidates?.[0]?.content?.parts?.find(
       (p: any) => p?.inlineData?.data
     )?.inlineData?.data;

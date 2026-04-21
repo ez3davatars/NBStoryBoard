@@ -6,7 +6,14 @@ import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  globalIgnores([
+    'dist',
+    'out',
+    'build',
+    'node_modules',
+    'tmp',
+    'best_CastingForge.tsx',
+  ]),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [

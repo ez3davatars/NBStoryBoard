@@ -130,7 +130,8 @@ export class CutoutService {
     static async processImage(
         imageUrl: string,
         onProgress?: (msg: string) => void,
-        onModelProgress?: (key: string, current: number, total: number) => void
+        onModelProgress?: (key: string, current: number, total: number) => void,
+        bypassRefinement: boolean = false
     ): Promise<CutoutResult> {
         try {
             if (onProgress) onProgress("Fetching image...");
@@ -162,7 +163,9 @@ export class CutoutService {
             console.log(`[CutoutService] Booting imgly with resolved publicPath: "${config.publicPath}"`);
             
             const rawCutoutBlob = await removeBackground(blob, config);
-            const blobResult = await this.refineCutoutForForegroundPreservation(blob, rawCutoutBlob);
+            const blobResult = bypassRefinement 
+                ? rawCutoutBlob 
+                : await this.refineCutoutForForegroundPreservation(blob, rawCutoutBlob);
 
             // 3. Create Cutout URL
             const cutoutUrl = URL.createObjectURL(blobResult);

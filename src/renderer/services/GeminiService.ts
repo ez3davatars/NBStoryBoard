@@ -111,20 +111,26 @@ export const GeminiService = {
       const MAX_SIZE = maxSize || 3072; // Gemini multi-image payload limit logic
       let targetW = img.width;
       let targetH = img.height;
+      const needsFlattening = resolvedMimeType.includes('png') || resolvedMimeType.includes('webp');
       
-      if (targetW > MAX_SIZE || targetH > MAX_SIZE) {
-          const ratio = Math.min(MAX_SIZE / targetW, MAX_SIZE / targetH);
-          targetW = Math.round(targetW * ratio);
-          targetH = Math.round(targetH * ratio);
+      if (targetW > MAX_SIZE || targetH > MAX_SIZE || needsFlattening) {
+          if (targetW > MAX_SIZE || targetH > MAX_SIZE) {
+              const ratio = Math.min(MAX_SIZE / targetW, MAX_SIZE / targetH);
+              targetW = Math.round(targetW * ratio);
+              targetH = Math.round(targetH * ratio);
+          }
           
           const canvas = document.createElement('canvas');
           canvas.width = targetW;
           canvas.height = targetH;
           const ctx = canvas.getContext('2d');
           if (ctx) {
+              // Paint solid black background for transparent pixels to prevent encoder hallucination
+              ctx.fillStyle = '#000000';
+              ctx.fillRect(0, 0, targetW, targetH);
               ctx.drawImage(img, 0, 0, targetW, targetH);
               // Re-encode as JPEG for highly aggressive JSON payload reduction over IPC
-              const optimizedUrl = canvas.toDataURL('image/jpeg', 0.85);
+              const optimizedUrl = canvas.toDataURL('image/jpeg', 0.90);
               resolvedMimeType = 'image/jpeg';
               resolvedData = optimizedUrl.split('base64,')[1];
           }
