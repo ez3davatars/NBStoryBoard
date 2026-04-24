@@ -165,8 +165,9 @@ export const AnchorRefPanel = ({
                 
                 <div className="flex flex-col gap-1">
                     <div className="flex gap-2">
-                        <input
-                            className="flex-1 bg-[#18181b] border border-[#27272a] rounded px-2 py-1 text-[10px] text-gray-300 resize-none focus:border-blue-500 outline-none"
+                        <textarea
+                            rows={2}
+                            className="min-w-0 flex-1 min-h-[2.5rem] max-h-24 bg-[#18181b] border border-[#27272a] rounded px-2 py-1 text-[10px] text-gray-300 resize-y overflow-y-auto custom-scrollbar focus:border-blue-500 outline-none leading-snug"
                             placeholder="Optional lighting, mood, or scene notes..."
                             value={bgPrompt}
                             onChange={(e) => setBgPrompt(e.target.value)}

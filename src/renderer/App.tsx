@@ -341,6 +341,9 @@ const App = () => {
   // Track previous credits locally for debug metrics without breaking useEffect dependencies
   const prevCreditsRef = useRef(state.hostedCredits);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const backgroundPollInFlightRef = useRef(false);
+  const backgroundPollErrorCountsRef = useRef<Record<string, number>>({});
+  const backgroundPollLastWarnAtRef = useRef<Record<string, number>>({});
   
   useEffect(() => { prevCreditsRef.current = state.hostedCredits; }, [state.hostedCredits]);
 
@@ -418,31 +421,91 @@ const App = () => {
     const pendingJobs = state.backgroundJobs.filter(j => j.status === 'pending_background');
     if (pendingJobs.length === 0) return;
 
-    const poller = setInterval(async () => {
-      const { supabase } = await import('./services/SupabaseClient');
-      if (!supabase) return;
+    const POLL_INTERVAL_MS = 5000;
+    const BACKGROUND_STALE_MS = 20 * 60 * 1000;
+    const MAX_POLL_ERRORS = 24;
+    const MAX_NOT_FOUND_ERRORS = 6;
+    const WARN_THROTTLE_MS = 30000;
 
-      for (const job of pendingJobs) {
-        const { data, error } = await supabase.from('generations').select('status, asset_url, timing_metrics').eq('id', job.id).single();
-        if (error) {
-          console.error('[BackgroundPoller] Supabase error:', error);
-        }
-        if (data) {
-          if (data.status === 'COMPLETED') {
+    const poller = setInterval(async () => {
+      if (backgroundPollInFlightRef.current) return;
+      backgroundPollInFlightRef.current = true;
+
+      try {
+        const { supabase } = await import('./services/SupabaseClient');
+        if (!supabase) return;
+
+        const now = Date.now();
+        for (const job of pendingJobs) {
+          const startedAt = job.timing?.submittedAt || job.startedAt || now;
+          const ageMs = now - startedAt;
+          if (ageMs > BACKGROUND_STALE_MS) {
+            dispatch({ type: 'FAIL_BACKGROUND_JOB', payload: { id: job.id, errorMessage: 'Background render timed out while polling.' } });
+            dispatch({ type: 'ADD_LOG', payload: { message: `Background job timed out after ${Math.round(ageMs / 1000)}s: ${job.context}`, type: 'error' } });
+            delete backgroundPollErrorCountsRef.current[job.id];
+            delete backgroundPollLastWarnAtRef.current[job.id];
+            continue;
+          }
+
+          const { data, error } = await supabase
+            .from('generations')
+            .select('status, asset_url, timing_metrics')
+            .eq('id', job.id)
+            .single();
+
+          if (error) {
+            console.error('[BackgroundPoller] Supabase error:', error);
+            const previousErrors = backgroundPollErrorCountsRef.current[job.id] || 0;
+            const nextErrors = previousErrors + 1;
+            backgroundPollErrorCountsRef.current[job.id] = nextErrors;
+
+            const errorCode = String((error as { code?: string } | null)?.code || '').toUpperCase();
+            const errorMessage = (error as { message?: string } | null)?.message || 'Unknown polling error.';
+            const notFoundLike = errorCode === 'PGRST116' || /no rows|multiple/.test(errorMessage.toLowerCase());
+            const shouldFail = nextErrors >= MAX_POLL_ERRORS || (notFoundLike && nextErrors >= MAX_NOT_FOUND_ERRORS);
+
+            if (shouldFail) {
+              dispatch({ type: 'FAIL_BACKGROUND_JOB', payload: { id: job.id, errorMessage } });
+              dispatch({ type: 'ADD_LOG', payload: { message: `Background job polling failed (${job.context}): ${errorMessage}`, type: 'error' } });
+              delete backgroundPollErrorCountsRef.current[job.id];
+              delete backgroundPollLastWarnAtRef.current[job.id];
+              continue;
+            }
+
+            const lastWarnAt = backgroundPollLastWarnAtRef.current[job.id] || 0;
+            if (now - lastWarnAt >= WARN_THROTTLE_MS) {
+              dispatch({ type: 'ADD_LOG', payload: { message: `Background job still polling (${job.context})...`, type: 'info' } });
+              backgroundPollLastWarnAtRef.current[job.id] = now;
+            }
+            continue;
+          }
+
+          delete backgroundPollErrorCountsRef.current[job.id];
+          delete backgroundPollLastWarnAtRef.current[job.id];
+
+          if (!data) continue;
+          const status = String(data.status || '').toUpperCase();
+
+          if (status === 'COMPLETED') {
             const observedCompletedAt = Date.now();
             const t = job.timing;
             const db = (data.timing_metrics || {}) as GenerationTimingMetrics;
 
-            let finalAssetUrl = data.asset_url;
-            if (job.context === 'scene_render' && finalAssetUrl) {
-                finalAssetUrl = await materializeDisplayUrl(finalAssetUrl);
+            let finalAssetUrl = data.asset_url || '';
+            if (!finalAssetUrl) {
+              dispatch({ type: 'FAIL_BACKGROUND_JOB', payload: { id: job.id, errorMessage: 'Completed job missing output asset URL.' } });
+              dispatch({ type: 'ADD_LOG', payload: { message: `Background job missing output URL: ${job.context}`, type: 'error' } });
+              continue;
+            }
+
+            if (job.context === 'scene_render') {
+              finalAssetUrl = await materializeDisplayUrl(finalAssetUrl);
             }
 
             dispatch({ type: 'COMPLETE_BACKGROUND_JOB', payload: { id: job.id, assetUrl: finalAssetUrl } });
             dispatch({ type: 'ADD_LOG', payload: { message: `Background job finished: ${job.context}`, type: 'success' } });
             window.dispatchEvent(new CustomEvent('refresh-credits'));
 
-            // Pipeline Diagnostics
             const d = {
               '1. Edge Queue Delay (ms)': (db.worker_claimed_at && t?.edgeAcceptedAt) ? db.worker_claimed_at - t.edgeAcceptedAt : 'N/A',
               '2. Gemini Provider Latency (ms)': (db.provider_finished_at && db.provider_started_at) ? db.provider_finished_at - db.provider_started_at : 'N/A',
@@ -451,24 +514,34 @@ const App = () => {
               'Total End-to-End Time (ms)': t?.submittedAt ? observedCompletedAt - t.submittedAt : 'N/A',
               'Post-Timeout Overrun (ms)': t?.clientTimeoutAt ? observedCompletedAt - t.clientTimeoutAt : 'N/A'
             };
-            console.groupCollapsed(`🚀 [HOSTED AUDIT] Generation ${job.id} Timings`);
+            console.groupCollapsed(`[HOSTED AUDIT] Generation ${job.id} Timings`);
             console.table(d);
             console.log("Raw Metric Dump:", { client: t, edge: { accepted: t?.edgeAcceptedAt }, worker: db, observationTime: observedCompletedAt });
             console.groupEnd();
-          } else if (data.status === 'FAILED' || data.status === 'CANCELED' || data.status === 'EXPIRED') {
+          } else if (status === 'FAILED' || status === 'CANCELED' || status === 'EXPIRED') {
             dispatch({ type: 'FAIL_BACKGROUND_JOB', payload: { id: job.id, errorMessage: 'Provider rejected or failed' } });
             dispatch({ type: 'ADD_LOG', payload: { message: `Background job failed: ${job.context}`, type: 'error' } });
             window.dispatchEvent(new CustomEvent('refresh-credits'));
             const errorMsg = data.timing_metrics?.error || data.timing_metrics?.error_message || '';
-            if (data.status === 'FAILED' && errorMsg.toLowerCase().includes('insufficient')) {
+            if (status === 'FAILED' && errorMsg.toLowerCase().includes('insufficient')) {
               dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
             }
+          } else if (status !== 'PENDING' && status !== 'PROCESSING') {
+            dispatch({ type: 'FAIL_BACKGROUND_JOB', payload: { id: job.id, errorMessage: `Unexpected background status: ${status}` } });
+            dispatch({ type: 'ADD_LOG', payload: { message: `Background job entered unexpected status (${status}): ${job.context}`, type: 'error' } });
           }
         }
+      } catch (error: unknown) {
+        console.error('[BackgroundPoller] Unexpected polling failure:', error);
+      } finally {
+        backgroundPollInFlightRef.current = false;
       }
-    }, 5000);
+    }, POLL_INTERVAL_MS);
 
-    return () => clearInterval(poller);
+    return () => {
+      clearInterval(poller);
+      backgroundPollInFlightRef.current = false;
+    };
   }, [state.backgroundJobs, dispatch]);
 
   // Sync Supabase Hosted Auth Session
@@ -1420,7 +1493,6 @@ const App = () => {
                         </button>
                       </div>
 
-                      {/* GEMINI 3.1 OPTIMIZATIONS */}
                       <div>
                         <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Image Resolution (Gemini 3.1)</label>
                         <select
@@ -1505,6 +1577,3 @@ const App = () => {
 };
 
 export default App;
-
-
-

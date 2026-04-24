@@ -19,7 +19,7 @@ export const DirectedShotCard: React.FC<DirectedShotCardProps> = ({ slot, actors
   const flavors: CameraFlavor[] = ['neutral', 'dramatic', 'procedural', 'commercial_clean', 'intimate', 'kinetic'];
 
   return (
-    <div className="flex flex-col gap-2 p-3 bg-gray-900 border border-gray-800 rounded text-xs text-gray-200">
+    <div className="flex min-w-0 flex-col gap-2 p-3 bg-gray-900 border border-gray-800 rounded text-xs text-gray-200">
       <div className="flex items-center justify-between font-medium text-gray-400">
         <span>Shot {slot.index + 1}</span>
         {slot.targetType === 'pair' && !slot.secondaryActorId && (
@@ -28,12 +28,12 @@ export const DirectedShotCard: React.FC<DirectedShotCardProps> = ({ slot, actors
       </div>
       
       {/* Top Row: Type & Target */}
-      <div className="flex gap-2">
+      <div className="grid grid-cols-[minmax(0,1fr)_minmax(5.5rem,7rem)] gap-2">
         <select
           value={slot.shotType}
           onChange={e => update({ shotType: e.target.value as ShotPresetId })}
           disabled={disabled}
-          className="bg-gray-800 border-gray-700 rounded px-2 py-1 outline-none flex-1"
+          className="min-w-0 bg-gray-800 border-gray-700 rounded px-2 py-1 outline-none"
         >
           {presetEntries.map(([id, preset]) => (
             <option key={id} value={id}>{preset.label}</option>
@@ -48,7 +48,7 @@ export const DirectedShotCard: React.FC<DirectedShotCardProps> = ({ slot, actors
             else update({ targetType: tType });
           }}
           disabled={disabled}
-          className="bg-gray-800 border-gray-700 rounded px-2 py-1 outline-none w-24"
+          className="min-w-0 bg-gray-800 border-gray-700 rounded px-2 py-1 outline-none"
         >
           <option value="actor">Actor</option>
           <option value="scene">Scene</option>
@@ -59,16 +59,16 @@ export const DirectedShotCard: React.FC<DirectedShotCardProps> = ({ slot, actors
 
       {/* Target Ref Selectors */}
       {slot.targetType !== 'scene' && slot.targetType !== 'object' && (
-        <div className="flex gap-2">
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(9rem,1fr))] gap-2">
           {actors.length === 0 ? (
-            <div className="bg-gray-800 border-gray-700 rounded px-2 py-1 flex-1 text-gray-500 italic">No named actors available</div>
+            <div className="min-w-0 bg-gray-800 border-gray-700 rounded px-2 py-1 text-gray-500 italic">No named actors available</div>
           ) : (
             <>
               <select
             value={slot.targetActorId || ''}
             onChange={e => update({ targetActorId: e.target.value })}
             disabled={disabled}
-            className="bg-gray-800 border-gray-700 rounded px-2 py-1 outline-none flex-1 truncate"
+            className="min-w-0 bg-gray-800 border-gray-700 rounded px-2 py-1 outline-none truncate"
           >
             <option value="">Select Primary Actor...</option>
             {actors.map(a => (
@@ -81,7 +81,7 @@ export const DirectedShotCard: React.FC<DirectedShotCardProps> = ({ slot, actors
               value={slot.secondaryActorId || ''}
               onChange={e => update({ secondaryActorId: e.target.value })}
               disabled={disabled}
-              className="bg-gray-800 border-gray-700 rounded px-2 py-1 outline-none flex-1 truncate"
+              className="min-w-0 bg-gray-800 border-gray-700 rounded px-2 py-1 outline-none truncate"
             >
               <option value="">Select Secondary Actor...</option>
               {actors.map(a => (
@@ -105,12 +105,12 @@ export const DirectedShotCard: React.FC<DirectedShotCardProps> = ({ slot, actors
       />
 
       {/* Bottom Row: Flavor & Notes */}
-      <div className="flex gap-2">
+      <div className="grid grid-cols-[minmax(7rem,0.45fr)_minmax(0,1fr)] gap-2">
         <select
           value={slot.cameraFlavor || 'neutral'}
           onChange={e => update({ cameraFlavor: e.target.value as CameraFlavor })}
           disabled={disabled}
-          className="bg-gray-800 border-gray-700 rounded px-2 py-1 outline-none w-1/3 capitalize"
+          className="min-w-0 bg-gray-800 border-gray-700 rounded px-2 py-1 outline-none capitalize"
         >
           {flavors.map(f => (
             <option key={f} value={f}>{f.replace('_', ' ')}</option>
@@ -123,7 +123,7 @@ export const DirectedShotCard: React.FC<DirectedShotCardProps> = ({ slot, actors
           value={slot.shotNotes || ''}
           onChange={e => update({ shotNotes: e.target.value })}
           disabled={disabled}
-          className="bg-gray-800 border border-gray-700 rounded px-2 py-1 flex-1 outline-none"
+          className="min-w-0 bg-gray-800 border border-gray-700 rounded px-2 py-1 outline-none"
         />
       </div>
     </div>

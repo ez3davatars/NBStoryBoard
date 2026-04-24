@@ -79,7 +79,7 @@ export const SceneDirectorPanel = ({
  />
  </div>
 
- <div className="grid grid-cols-2 gap-3">
+ <div className="grid grid-cols-[repeat(auto-fit,minmax(120px,1fr))] gap-3">
  <div className="flex flex-col gap-1">
  <label className="text-[10px] uppercase font-bold text-gray-500">Lighting</label>
  <Dropdown
@@ -98,7 +98,7 @@ export const SceneDirectorPanel = ({
  </div>
  </div>
 
- <div className="grid grid-cols-2 gap-3">
+ <div className="grid grid-cols-[repeat(auto-fit,minmax(120px,1fr))] gap-3">
  <div className="flex flex-col gap-1">
  <label className="text-[10px] uppercase font-bold text-gray-500">Layout</label>
  <Dropdown

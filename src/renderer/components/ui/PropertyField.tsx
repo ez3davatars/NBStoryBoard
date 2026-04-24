@@ -46,14 +46,14 @@ export const PropertyField = ({
  <label className="text-[10px] uppercase font-bold text-gray-500 flex items-center gap-1">
  {Icon && <Icon className="w-3 h-3" />} {label}
  </label>
- {type === "textarea" ? (
- <textarea
- value={localValue}
- onChange={handleChange}
- placeholder={placeholder}
- rows={2}
- className="w-full bg-[#18181b] border border-[#27272a] text-xs text-white p-2 rounded focus:border-yellow-500 outline-none resize-none"
- />
+  {type === "textarea" ? (
+  <textarea
+  value={localValue}
+  onChange={handleChange}
+  placeholder={placeholder}
+  rows={2}
+  className="w-full min-h-[4.5rem] max-h-40 bg-[#18181b] border border-[#27272a] text-xs text-white p-2 rounded focus:border-yellow-500 outline-none resize-y overflow-y-auto custom-scrollbar leading-relaxed"
+  />
  ) : (
  <input
  type={type}

@@ -1610,6 +1610,21 @@ export const reducer = (state: AppState, action: Action): AppState => {
                 newState.resultImage = action.payload.assetUrl;
                 newState.latestCompositeSource = 'directorCanvas';
                 newState.latestCompositeResultUrl = action.payload.assetUrl;
+                if (newState.activeShotId) {
+                    newState.shots = (newState.shots || []).map((shot) =>
+                        shot.id === newState.activeShotId
+                            ? {
+                                ...shot,
+                                promotedResultAnchor: { kind: 'generated_result', imageUrl: action.payload.assetUrl },
+                                latestCompositeResultUrl: action.payload.assetUrl,
+                                latestCompositeSource: 'directorCanvas',
+                                latestCompositeStage: 'generate',
+                                latestCompositeTimestamp: new Date().toISOString(),
+                                updatedAt: Date.now()
+                            }
+                            : shot
+                    );
+                }
             }
 
             // Remove the completed job
@@ -1977,6 +1992,34 @@ export type ShotsActorOption = {
     isActiveInScene?: boolean;
 };
 
+const pickPrimaryReferenceSlotForActor = (referenceSlots: ReferenceSlot[], castId: string): ReferenceSlot | undefined => {
+    const slots = referenceSlots
+        .filter(s => s.castId === castId && s.active)
+        .sort((a, b) => a.index - b.index);
+
+    if (slots.length === 0) return undefined;
+    return slots.find(s => s.name?.trim()) || slots.find(s => s.target?.trim()) || slots[0];
+};
+
+const resolveReferenceActorLabel = (
+    slot: ReferenceSlot | undefined,
+    castName: string | undefined,
+    fallbackIndex: number
+): string => {
+    const alias = slot?.name?.trim();
+    if (alias) return alias;
+
+    const target = slot?.target?.trim();
+    if (target) return target;
+
+    if (slot?.index !== undefined) return `Reference ${slot.index}`;
+
+    const normalizedCastName = castName?.trim();
+    if (normalizedCastName) return normalizedCastName;
+
+    return `Actor ${fallbackIndex}`;
+};
+
 export function getShotsActorOptionsForScene(state: AppState, sceneId: string): ShotsActorOption[] {
     let tokens = state.tokens || [];
     let referenceSlots = state.referenceSlots || [];
@@ -2005,13 +2048,10 @@ export function getShotsActorOptionsForScene(state: AppState, sceneId: string): 
         // Rule: Only include if linked to the current scene
         if (!hasToken && !hasRefSlot) continue;
 
-        const slot = referenceSlots.find(s => s.castId === actor.id && s.active);
+        const slot = pickPrimaryReferenceSlotForActor(referenceSlots, actor.id);
         const targetInAnchor = slot?.target || undefined;
 
-        let parsedLabel = actor.name || targetInAnchor;
-        if (!parsedLabel || parsedLabel.trim() === '') {
-            parsedLabel = `Actor ${options.length + 1}`;
-        }
+        const parsedLabel = resolveReferenceActorLabel(slot, actor.name, options.length + 1);
 
         options.push({
             actorId: actor.id,
@@ -2052,7 +2092,9 @@ export function getActorIdentityReferenceSetsForScene(state: AppState, sceneId: 
     
     for (const castId of Array.from(activeCastIds)) {
         const actor = castMembers.find(c => c?.id === castId);
-        const slots = referenceSlots.filter(s => s?.castId === castId && s?.url && s?.active);
+        const slots = referenceSlots
+            .filter(s => s?.castId === castId && s?.url && s?.active)
+            .sort((a, b) => a.index - b.index);
         
         if (slots.length > 0) {
             let primaryFaceAnchor: string | undefined = undefined;
@@ -2093,7 +2135,8 @@ export function getActorIdentityReferenceSetsForScene(state: AppState, sceneId: 
 
             referenceSets.push({
                 actorId: castId as string,
-                actorLabel: actor?.name || undefined,
+                // Keep generation identity labels stable to cast identity; alias labels are UI-only in shot selector.
+                actorLabel: actor?.name?.trim() || resolveReferenceActorLabel(slots[0], actor?.name, referenceSets.length + 1),
                 primaryFaceAnchor,
                 angleFaceAnchors,
                 supportIdentityRefs,
@@ -2123,11 +2166,14 @@ export function getActorIdentityReferencesForScene(state: AppState, sceneId: str
     for (const castId of Array.from(activeCastIds)) {
         const actor = castMembers.find(c => c?.id === castId);
         // Find reference slots for this castId
-        const slots = referenceSlots.filter(s => s?.castId === castId && s?.url && s?.active);
+        const slots = referenceSlots
+            .filter(s => s?.castId === castId && s?.url && s?.active)
+            .sort((a, b) => a.index - b.index);
         if (slots.length > 0) {
             references.push({
                 actorId: castId,
-                actorLabel: actor?.name || undefined,
+                // Keep generation identity labels stable to cast identity; alias labels are UI-only in shot selector.
+                actorLabel: actor?.name?.trim() || resolveReferenceActorLabel(slots[0], actor?.name, references.length + 1),
                 referenceImageUrls: slots.map(s => s.url!),
                 referenceStackId: `stack_for_${castId}`
             });

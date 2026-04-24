@@ -474,9 +474,16 @@ const SceneCanvas = () => {
     const [bgPrompt, setBgPrompt] = useState('');
 
     const activeReferences = useMemo(() => getActiveReferenceSlots(state.referenceSlots), [state.referenceSlots]);
+    const promptIdentitySets = useMemo(
+        () => getActorIdentityReferenceSetsForScene(state, state.activeShotId || 'default'),
+        [state]
+    );
     
     const compiledPrompt = useMemo(() => {
-        if (!strictMode) return compileV3DirectorPrompt(state.director, state.referenceSlots, state.tokens, bgPrompt);
+        const forceStrictReplace = state.director.replaceAnchorSubjects;
+        if (!strictMode && !forceStrictReplace) {
+            return compileV3DirectorPrompt(state.director, state.referenceSlots, state.tokens, bgPrompt);
+        }
         return buildStrictAnchorReplacementPrompt({
             bgPrompt: bgPrompt || state.director.subject,
             mergeStrategy: state.director.mergeStrategy,
@@ -485,9 +492,10 @@ const SceneCanvas = () => {
             globalReplaceTarget: state.director.globalReplaceTarget,
             hasDepthMap: !!state.depthMapUrl,
             activeRefs: activeReferences,
+            actorIdentitySets: promptIdentitySets,
             tokens: state.tokens
         });
-    }, [strictMode, bgPrompt, state.director, state.depthMapUrl, state.referenceSlots, activeReferences, state.tokens]);
+    }, [strictMode, bgPrompt, state.director, state.depthMapUrl, state.referenceSlots, activeReferences, promptIdentitySets, state.tokens]);
 
 
     const [dragItem, setDragItem] = useState<{ id: string, type: 'token' | 'annotation', startX: number, startY: number, initialX: number, initialY: number } | null>(null);
@@ -1006,16 +1014,11 @@ Output: environment plate only.
 
                 const ratio = parseAspectRatioToNumber(state.director.aspectRatio);
 
-                let w = cw;
-                let h = w / ratio;
-
-                if (h > ch) {
-                    h = ch;
-                    w = h * ratio;
-                }
-
+                const gutter = 24;
+                const w = Math.max(10, cw - gutter);
+                const h = w / ratio;
                 const x = (cw - w) / 2;
-                const y = (ch - h) / 2;
+                const y = h <= ch ? (ch - h) / 2 : 0;
 
                 setViewportBox((prev) => {
                     const changed =
@@ -1068,7 +1071,10 @@ Output: environment plate only.
         });
     };
 
-    const buildAnchorPlate = async (regionPlan: ReturnType<typeof buildRegionPlan>): Promise<string> => {
+    const buildAnchorPlate = async (
+        regionPlan: ReturnType<typeof buildRegionPlan>,
+        backgroundUrlOverride?: string
+    ): Promise<string> => {
         const canvas = document.createElement('canvas');
         const STAGE_W = 960;
         const STAGE_H = 540;
@@ -1087,8 +1093,9 @@ Output: environment plate only.
         ctx.fillRect(0, 0, STAGE_W, STAGE_H);
 
         // Background
-        if (state.backgroundUrl) {
-            const bg = await loadDataUrlImage(state.backgroundUrl);
+        const bgSourceUrl = backgroundUrlOverride || state.backgroundUrl;
+        if (bgSourceUrl) {
+            const bg = await loadDataUrlImage(bgSourceUrl);
             const imgRatio = bg.width / bg.height;
             const boxRatio = STAGE_W / STAGE_H;
             let dw = STAGE_W;
@@ -1107,320 +1114,107 @@ Output: environment plate only.
             ctx.drawImage(bg, dx, dy, dw, dh);
         }
 
-        // Draw tokens
-        const tokensByDepth = [...regionPlan].sort((a, b) => a.token.zIndex - b.token.zIndex);
-        for (const r of tokensByDepth) {
-            try {
+        if (!state.director.replaceAnchorSubjects) {
+            // Draw staged tokens for non-replace compositing mode.
+            const tokensByDepth = [...regionPlan].sort((a, b) => a.token.zIndex - b.token.zIndex);
+            for (const r of tokensByDepth) {
+                try {
+                    const t = r.token;
+
+                    const vw = viewportBox.w > 0 ? viewportBox.w : STAGE_W;
+                    const vh = viewportBox.h > 0 ? viewportBox.h : STAGE_H;
+                    const scaleX = STAGE_W / vw;
+                    const scaleY = STAGE_H / vh;
+
+                    const normX = t.x * scaleX;
+                    const normY = t.y * scaleY;
+                    const normW = t.width * scaleX;
+                    const normH = t.height * scaleY;
+
+                    const img = await loadDataUrlImage(t.url);
+
+                    const ax = t.anchorX ?? 0.5;
+                    const ay = t.anchorY ?? 0.8;
+
+                    const imgRatio = img.width / img.height;
+                    const boxRatio = normW / normH;
+                    let drawW = normW;
+                    let drawH = normH;
+                    let offX = 0;
+                    let offY = 0;
+
+                    if (imgRatio > boxRatio) {
+                        drawW = normW;
+                        drawH = normW / imgRatio;
+                        offY = (normH - drawH) / 2;
+                    } else {
+                        drawH = normH;
+                        drawW = normH * imgRatio;
+                        offX = (normW - drawW) / 2;
+                    }
+
+                    ctx.save();
+                    ctx.translate(normX, normY);
+                    ctx.rotate((t.rotation * Math.PI) / 180);
+                    ctx.scale(t.scaleX, t.scaleY || 1);
+                    ctx.drawImage(img, (-normW * ax) + offX, (-normH * ay) + offY, drawW, drawH);
+                    ctx.restore();
+                } catch (e) {
+                    console.warn("Failed to draw token on anchor plate", r.token.id, e);
+                }
+            }
+        } else {
+            // Replace mode: keep anonymized structural scaffolding (pose/gaze/lighting cues)
+            // while removing identity detail to prevent head-swap behavior.
+            const scaffoldSnapshot = document.createElement('canvas');
+            scaffoldSnapshot.width = STAGE_W;
+            scaffoldSnapshot.height = STAGE_H;
+            const scaffoldCtx = scaffoldSnapshot.getContext('2d');
+            if (scaffoldCtx) {
+                scaffoldCtx.drawImage(canvas, 0, 0, STAGE_W, STAGE_H);
+            }
+
+            const tokensByDepth = [...regionPlan].sort((a, b) => a.token.zIndex - b.token.zIndex);
+            for (const r of tokensByDepth) {
                 const t = r.token;
-                
+
                 const vw = viewportBox.w > 0 ? viewportBox.w : STAGE_W;
                 const vh = viewportBox.h > 0 ? viewportBox.h : STAGE_H;
                 const scaleX = STAGE_W / vw;
                 const scaleY = STAGE_H / vh;
-                
+
                 const normX = t.x * scaleX;
                 const normY = t.y * scaleY;
                 const normW = t.width * scaleX;
                 const normH = t.height * scaleY;
 
-                const img = await loadDataUrlImage(t.url);
-
                 const ax = t.anchorX ?? 0.5;
                 const ay = t.anchorY ?? 0.8;
-
-                const imgRatio = img.width / img.height;
-                const boxRatio = normW / normH;
-                let drawW = normW;
-                let drawH = normH;
-                let offX = 0;
-                let offY = 0;
-
-                if (imgRatio > boxRatio) {
-                    drawW = normW;
-                    drawH = normW / imgRatio;
-                    offY = (normH - drawH) / 2;
-                } else {
-                    drawH = normH;
-                    drawW = normH * imgRatio;
-                    offX = (normW - drawW) / 2;
-                }
+                const left = -normW * ax;
+                const top = -normH * ay;
 
                 ctx.save();
                 ctx.translate(normX, normY);
                 ctx.rotate((t.rotation * Math.PI) / 180);
                 ctx.scale(t.scaleX, t.scaleY || 1);
-                ctx.drawImage(img, (-normW * ax) + offX, (-normH * ay) + offY, drawW, drawH);
+                if (scaffoldCtx) {
+                    // Preserve coarse body orientation/gaze flow and local light cues,
+                    // but destroy fine identity details.
+                    ctx.filter = 'blur(7px) saturate(0.12) contrast(0.82) brightness(0.92)';
+                    ctx.drawImage(scaffoldSnapshot, left, top, normW, normH, left, top, normW, normH);
+                    ctx.filter = 'none';
+                }
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.34)';
+                ctx.fillRect(left, top, normW, normH);
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.72)';
+                ctx.lineWidth = 1.5;
+                ctx.setLineDash([6, 4]);
+                ctx.strokeRect(left, top, normW, normH);
                 ctx.restore();
-            } catch (e) {
-                console.warn("Failed to draw token on anchor plate", r.token.id, e);
             }
         }
 
         return canvas.toDataURL('image/png');
-    };
-
-    const getAssignedZoneForActor = (token: StageToken) => {
-        const zones = [...state.annotations]
-            .filter((a) => a.type === 'zone' && a.visible !== false)
-            .sort((a, b) => a.zIndex - b.zIndex);
-
-        if (!zones.length) return null;
-
-        const refs = state.referenceSlots || [];
-        
-        // Match 1: Explicit castId matching if available (deterministic root)
-        let exactSlot = refs.find((r) => r.castId && token.castId && r.castId === token.castId);
-        
-        // Match 2: Name lookup matching (fallback if slots lost castId references)
-        if (!exactSlot && token.castId && state.cast) {
-            const castMember = state.cast.find((c) => c.id === token.castId);
-            if (castMember && castMember.name) {
-                const searchName = castMember.name.toLowerCase();
-                exactSlot = refs.find((r) => `${r.name || ''} ${r.analysis || ''} ${r.target || ''}`.toLowerCase().includes(searchName));
-            }
-        }
-        
-        // Match 3: Label lookup matching (fallback for anonymous single-shot items)
-        if (!exactSlot && token.tag) {
-             const searchName = token.tag.toLowerCase();
-             exactSlot = refs.find((r) => `${r.name || ''} ${r.analysis || ''} ${r.target || ''}`.toLowerCase().includes(searchName));
-        }
-
-        // If we found a slot, parse its target for zone assignment
-        if (exactSlot) {
-            const text = `${exactSlot.name || ''} ${exactSlot.analysis || ''} ${exactSlot.target || ''}`.toLowerCase();
-            const zoneMatch = text.match(/zone\s*(\d+)/i);
-            if (zoneMatch) {
-                const zoneIndex = Math.max(0, parseInt(zoneMatch[1], 10) - 1);
-                if (zones[zoneIndex]) return zones[zoneIndex];
-            }
-        }
-        
-        // If there is ONLY ONE zone on the screen, heavily bias to using it for the primary token constraint
-        if (zones.length === 1) return zones[0];
-
-        return null;
-    };
-
-    const computeZoneFitPlacement = async (
-        actorUrl: string,
-        zone: StageAnnotation
-    ): Promise<{
-        x: number;
-        y: number;
-        width: number;
-        height: number;
-        anchorX: number;
-        anchorY: number;
-    }> => {
-        const img = await loadImage(actorUrl);
-
-        const zoneW = Math.max(1, zone.width);
-        const zoneH = Math.max(1, zone.height);
-
-        const imgAspect = img.width / img.height;
-        const zoneAspect = zoneW / zoneH;
-
-        let fittedW = zoneW;
-        let fittedH = zoneH;
-
-        if (imgAspect > zoneAspect) {
-            fittedW = zoneW;
-            fittedH = zoneW / imgAspect;
-        } else {
-            fittedH = zoneH;
-            fittedW = zoneH * imgAspect;
-        }
-
-        const anchorX = 0.5;
-        const anchorY = 1.0;
-
-        const x = zone.x + zoneW / 2;
-        const y = zone.y + zoneH;
-
-        return {
-            x,
-            y,
-            width: fittedW,
-            height: fittedH,
-            anchorX,
-            anchorY
-        };
-    };
-
-    const buildDeterministicComposite = async (
-        backgroundUrl: string,
-        actorUrl: string,
-        placement: { x: number; y: number; width: number; height: number; anchorX: number; anchorY: number }
-    ): Promise<{
-        compositeUrl: string;
-        actorMaskUrl: string;
-    }> => {
-        const canvas = document.createElement('canvas');
-        const w = Math.max(1, Math.round(viewportBox.w));
-        const h = Math.max(1, Math.round(viewportBox.h));
-        canvas.width = w;
-        canvas.height = h;
-
-        const ctx = canvas.getContext('2d');
-        if (!ctx) throw new Error('Canvas context unavailable.');
-
-        ctx.fillStyle = '#000';
-        ctx.fillRect(0, 0, w, h);
-
-        const bg = await loadImage(backgroundUrl);
-        ctx.drawImage(bg, 0, 0, w, h);
-
-        const actorImg = await loadImage(actorUrl);
-
-        const left = placement.x - placement.width * placement.anchorX;
-        const top = placement.y - placement.height * placement.anchorY;
-
-        ctx.drawImage(actorImg, left, top, placement.width, placement.height);
-
-        const compositeUrl = canvas.toDataURL('image/png');
-
-        // build actor mask
-        const maskCanvas = document.createElement('canvas');
-        maskCanvas.width = w;
-        maskCanvas.height = h;
-        const maskCtx = maskCanvas.getContext('2d');
-        if (!maskCtx) throw new Error('Mask canvas context unavailable.');
-
-        maskCtx.fillStyle = '#000';
-        maskCtx.fillRect(0, 0, w, h);
-        maskCtx.drawImage(actorImg, left, top, placement.width, placement.height);
-
-        const actorMaskUrl = maskCanvas.toDataURL('image/png');
-
-        return { compositeUrl, actorMaskUrl };
-    };
-
-    const buildIntegrationOnlyPrompt = () => `
-INTEGRATION-ONLY PASS (DO NOT REPOSITION SUBJECT)
-
-You are given a pre-composited scene where the actor has already been placed exactly.
-Your job is to improve realism and integration only.
-
-NON-NEGOTIABLE:
-- Do NOT move the actor.
-- Do NOT rescale the actor.
-- Do NOT change the actor pose.
-- Do NOT change the framing.
-- Do NOT replace the actor.
-- Do NOT alter the actor silhouette.
-- Do NOT move feet away from the planted ground position.
-- Preserve exact silhouette geometry exactly!
-- Preserve exact scale precisely!
-- Preserve exact foot placement!
-- Preserve exact body occupancy in frame!
-- No regeneration of anatomy or costume proportions!
-
-ALLOWED:
-- contact shadows
-- ambient occlusion
-- lighting harmonization
-- edge blending
-- atmospheric integration
-- texture unification
-- color balance
-- grounding realism
-
-Preserve exact actor placement and exact actor size.
-`;
-
-    const splitReferenceInstruction = (raw?: string) => {
-        const text = (raw || '').trim();
-        if (!text) {
-            return {
-                identityStyle: '',
-                placementAction: ''
-            };
-        }
-
-        const placementPatterns = [
-            /\bzone\s*\d+\b/i,
-            /\bfit\b/i,
-            /\binside\b/i,
-            /\boverflow\b/i,
-            /\bfull body\b/i,
-            /\bfeet\b/i,
-            /\bbottom edge\b/i,
-            /\bface\b/i,
-            /\bfacing\b/i,
-            /\bspeaks?\b/i,
-            /\btalks?\b/i,
-            /\bdoorway\b/i,
-            /\bleft\b/i,
-            /\bright\b/i,
-            /\bcenter\b/i,
-            /\bforeground\b/i,
-            /\bbackground\b/i,
-            /\bin front of\b/i,
-            /\bbehind\b/i
-        ];
-
-        const sentences = text
-            .split(/(?<=[.!?])\s+|\n+/)
-            .map(s => s.trim())
-            .filter(Boolean);
-
-        const placementAction: string[] = [];
-        const identityStyle: string[] = [];
-
-        for (const sentence of sentences) {
-            const isPlacement = placementPatterns.some(rx => rx.test(sentence));
-            if (isPlacement) placementAction.push(sentence);
-            else identityStyle.push(sentence);
-        }
-
-        return {
-            identityStyle: identityStyle.join(' ').trim(),
-            placementAction: placementAction.join(' ').trim()
-        };
-    };
-
-    const buildReferenceDirectiveBlocks = () => {
-        const refs = (state.referenceSlots || []).filter((r) => r.active && (r.url || r.name || r.analysis || r.target));
-        if (!refs.length) {
-            return {
-                identityBlock: '',
-                placementBlock: ''
-            };
-        }
-
-        const identityLines: string[] = [];
-        const placementLines: string[] = [];
-
-        identityLines.push('REFERENCE IDENTITY / STYLE DNA:');
-        placementLines.push('REFERENCE PLACEMENT / ACTION DIRECTIVES (HIGH PRIORITY):');
-
-        refs.forEach((slot, idx: number) => {
-            const actorAlias =
-                (slot.name && slot.name.trim()) ||
-                (slot.target && slot.target.trim()) ||
-                `Reference ${slot.index || idx + 1}`;
-
-            const combined = [slot.analysis, slot.target].filter(Boolean).join(' ').trim();
-            const split = splitReferenceInstruction(combined);
-
-            if (split.identityStyle) {
-                identityLines.push(`- ${actorAlias}: ${split.identityStyle}`);
-            }
-
-            if (split.placementAction) {
-                placementLines.push(`- ${actorAlias}: ${split.placementAction}`);
-            }
-        });
-
-        const identityBlock = identityLines.length > 1 ? `${identityLines.join('\n')}\n\n` : '';
-        const placementBlock = placementLines.length > 1 ? `${placementLines.join('\n')}\n\n` : '';
-
-        return { identityBlock, placementBlock };
-    };
-
-    const buildZoneFitPromptBlock = () => {
-        return '';
     };
 
     // Unified Workflow Generate Button
@@ -1438,6 +1232,16 @@ Preserve exact actor placement and exact actor size.
         setViewMode('result');
 
         let currentPercent = 5;
+        const generationStartedAt = Date.now();
+        const stageUiWaitWindowMs = state.billingEntitlements.effectiveBillingMode === 'hosted'
+            ? (state.imageResolution === '4K' ? 180000 : 120000)
+            : undefined;
+        const formatDurationLabel = (totalSeconds: number) => {
+            const clamped = Math.max(0, totalSeconds);
+            const minutes = Math.floor(clamped / 60);
+            const seconds = clamped % 60;
+            return `${minutes}:${String(seconds).padStart(2, '0')}`;
+        };
         dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text: "Initializing Staging Render" } });
         const etaMs = state.imageResolution === '4K' ? 45000 : 30000;
         const increment = (1000 / etaMs) * 100;
@@ -1449,74 +1253,24 @@ Preserve exact actor placement and exact actor size.
             if (currentPercent > 20) text = "Building Spatial Composition Plan...";
             if (currentPercent > 40) text = "Compiling Director Prompt...";
             if (currentPercent > 60) text = "Rendering Cinematic Shot...";
-            if (currentPercent >= 95) text = "Rendering Cinematic Shot... (Still working, please wait)";
+            if (currentPercent >= 95) {
+                const elapsedSec = Math.floor((Date.now() - generationStartedAt) / 1000);
+                const elapsedLabel = formatDurationLabel(elapsedSec);
+                if (stageUiWaitWindowMs) {
+                    const remainingSec = Math.ceil(Math.max(0, stageUiWaitWindowMs - (Date.now() - generationStartedAt)) / 1000);
+                    const remainingLabel = formatDurationLabel(remainingSec);
+                    text = remainingSec > 0
+                        ? `Rendering Cinematic Shot... (Queue delay ${elapsedLabel}. Auto-background in ${remainingLabel})`
+                        : `Rendering Cinematic Shot... (Queue delay ${elapsedLabel}. Shifting to background...)`;
+                } else {
+                    text = `Rendering Cinematic Shot... (Queue delay ${elapsedLabel})`;
+                }
+            }
 
             dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text } });
         }, 1000);
 
         try {
-            const primaryToken = state.tokens.find(t => t.visible !== false && (t.elementType === 'actor' || !t.elementType));
-            const assignedZone = primaryToken ? getAssignedZoneForActor(primaryToken) : null;
-
-            if (primaryToken && assignedZone && activeBgUrl) {
-                // Determine source cutoutUrl, abort fallback if none exist (Hard Constraint #3/#4)
-                const actorUrl = primaryToken.cutoutUrl;
-                if (!actorUrl) {
-                    console.warn('[DeterministicCompositor] Primary actor token lacks cutoutUrl transparency. Falling back to Generative Staging mode to natively extract silhouette.');
-                } else {
-                    const fitted = await computeZoneFitPlacement(actorUrl, assignedZone);
-                    dispatch({
-                        type: 'UPDATE_TOKEN',
-                        payload: {
-                            id: primaryToken.id,
-                            x: fitted.x,
-                            y: fitted.y,
-                            width: fitted.width,
-                            height: fitted.height,
-                            anchorX: fitted.anchorX,
-                            anchorY: fitted.anchorY,
-                            hasConfirmedPlacement: true
-                        }
-                    });
-
-                    // Pass actorUrl and fitted strictly
-                    const { compositeUrl, actorMaskUrl } = await buildDeterministicComposite(activeBgUrl, actorUrl, fitted);
-
-                    const integrationPrompt = buildIntegrationOnlyPrompt();
-
-                    const refined = await GeminiService.editImageWithMask(
-                        compositeUrl,
-                        actorMaskUrl,
-                        integrationPrompt,
-                        state.apiKey,
-                        state.model as string,
-                        [],
-                        {
-                            aspectRatio: state.director.aspectRatio,
-                            billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', 
-                            entitlements: state.billingEntitlements 
-                        }
-                    );
-
-                    const finalUrl = await normalizeGeneratedImageUrl(refined);
-
-                    dispatch({ type: 'SET_RESULT_IMAGE', payload: finalUrl });
-                    dispatch({
-                        type: 'SET_COMPOSITE_METADATA',
-                        payload: {
-                            latestCompositeSource: 'directorCanvas',
-                            latestCompositeResultUrl: finalUrl
-                        }
-                    });
-                    setViewMode('result');
-                    dispatch({ type: 'ADD_LOG', payload: { message: 'Deterministic composite + integration pass complete.', type: 'success' } });
-                    
-                    window.clearInterval(progressInterval);
-                    dispatch({ type: 'SET_PROCESSING', payload: false });
-                    return; // EXIT EARLY
-                }
-            }
-
             let dnaForRender = anchorDNA;
 
             // In Strict Mode, we attempt to refresh the Anchor DNA if it is missing
@@ -1535,9 +1289,6 @@ Preserve exact actor placement and exact actor size.
 
             const tokenOverrides = await ensureTokenProfiles(state.tokens, { force: autoTokenProfiles });
 
-            const { identityBlock, placementBlock } = buildReferenceDirectiveBlocks();
-            const zoneFitBlock = buildZoneFitPromptBlock();
-
             const { buildStrictPrompt, buildLoosePrompt } = await import('../utils/promptHelpers');
             const { sanitizeStyleForStrictIdentity } = await import('../utils/analysisSanitizers');
 
@@ -1550,52 +1301,396 @@ Preserve exact actor placement and exact actor size.
                 console.warn(`[IdentityPrecedence] Subject/style analysis demoted in STAGE generation because strict actor refs are present`);
             }
 
-            if (strictMode) {
+            const shouldUseStrictPipeline = strictMode || state.director.replaceAnchorSubjects;
+
+            if (shouldUseStrictPipeline) {
                 const plan = buildRegionPlan({ token: tokenOverrides });
+                const isReplaceMode = state.director.replaceAnchorSubjects;
+                const sceneNotesForStrict = (bgPrompt || state.director.subject || '').trim();
+                const hasExplicitTargetMap = activeReferences.some((ref) => (ref.target || '').trim().length > 0);
+                const isSingleSubjectReplaceFallback = isReplaceMode
+                    && plan.length === 0
+                    && !hasExplicitTargetMap
+                    && activeReferences.length === 1;
+
+                if (!strictMode && isReplaceMode) {
+                    dispatch({
+                        type: 'ADD_LOG',
+                        payload: {
+                            message: 'Replace Anchor Subjects is active: using strict replacement pipeline for deterministic identity mapping.',
+                            type: 'info'
+                        }
+                    });
+                }
+
+                // Safety gate: without either staged regions or explicit per-reference targets,
+                // strict replace can devolve into random subject placement.
+                if (isReplaceMode && plan.length === 0 && !hasExplicitTargetMap && !isSingleSubjectReplaceFallback) {
+                    dispatch({
+                        type: 'ADD_LOG',
+                        payload: {
+                            message: 'Replace Anchor Subjects requires mapping. Add staged actors on canvas or set target text in each Reference Stack.',
+                            type: 'error'
+                        }
+                    });
+                    setViewMode('stage');
+                    window.clearInterval(progressInterval);
+                    dispatch({ type: 'SET_PROCESSING', payload: false });
+                    return;
+                }
+                if (isSingleSubjectReplaceFallback) {
+                    dispatch({
+                        type: 'ADD_LOG',
+                        payload: {
+                            message: 'No staged mapping found. Using single-subject dominant replacement fallback from the active Reference Stack.',
+                            type: 'info'
+                        }
+                    });
+                }
+
+                if (isReplaceMode && plan.length > 0 && activeReferences.length > 1 && !hasExplicitTargetMap) {
+                    const mappedCastIds = new Set(
+                        activeReferences
+                            .map((ref) => ref.castId)
+                            .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+                    );
+                    const unmatched = plan.filter((entry) => {
+                        const castId = entry.token.castId || '';
+                        return !castId || !mappedCastIds.has(castId);
+                    });
+
+                    if (unmatched.length > 0) {
+                        dispatch({
+                            type: 'ADD_LOG',
+                            payload: {
+                                message: 'Replace Anchor Subjects requires deterministic actor mapping. Link each staged actor to a matching Reference Stack cast, or add explicit target text per reference.',
+                                type: 'error'
+                            }
+                        });
+                        setViewMode('stage');
+                        window.clearInterval(progressInterval);
+                        dispatch({ type: 'SET_PROCESSING', payload: false });
+                        return;
+                    }
+                }
+
+                if (isReplaceMode && plan.length > 0) {
+                    let runningBgUrl = activeBgUrl || '';
+                    if (!runningBgUrl) {
+                        dispatch({
+                            type: 'ADD_LOG',
+                            payload: {
+                                message: 'Replace Anchor Subjects requires an active source scene.',
+                                type: 'error'
+                            }
+                        });
+                        setViewMode('stage');
+                        window.clearInterval(progressInterval);
+                        dispatch({ type: 'SET_PROCESSING', payload: false });
+                        return;
+                    }
+
+                    const sortedRefs = [...activeReferences]
+                        .filter((ref) => !!ref.url)
+                        .sort((a, b) => a.index - b.index);
+
+                    const findRefForRegion = (regionEntry: ReturnType<typeof buildRegionPlan>[number]) => {
+                        const castId = regionEntry.token.castId || '';
+                        if (castId) {
+                            const byCast = sortedRefs.find((ref) => ref.castId === castId);
+                            if (byCast) return byCast;
+                        }
+                        // Never silently re-map identities in multi-region replace mode.
+                        // If cast linkage is missing, we fail loudly below instead of guessing.
+                        if (sortedRefs.length === 1 && plan.length === 1) return sortedRefs[0];
+                        return undefined;
+                    };
+
+                    const passPlan = plan
+                        .map((regionEntry) => ({ regionEntry, ref: findRefForRegion(regionEntry) }))
+                        .filter((entry) => !!entry.ref && !!entry.ref.url);
+
+                    if (passPlan.length !== plan.length) {
+                        dispatch({
+                            type: 'ADD_LOG',
+                            payload: {
+                                message: 'Replace Anchor Subjects mapping incomplete. Ensure each staged actor has a valid mapped Reference Stack.',
+                                type: 'error'
+                            }
+                        });
+                        setViewMode('stage');
+                        window.clearInterval(progressInterval);
+                        dispatch({ type: 'SET_PROCESSING', payload: false });
+                        return;
+                    }
+
+                    dispatch({
+                        type: 'ADD_LOG',
+                        payload: {
+                            message: `Running deterministic replace passes (${passPlan.length}) to prevent identity blending.`,
+                            type: 'info'
+                        }
+                    });
+
+                    for (const pass of passPlan) {
+                        const passAnchorPlate = await buildAnchorPlate([pass.regionEntry], runningBgUrl);
+                        const passReference = pass.ref!;
+                        const passRefLabel = `REFERENCE_${passReference.index}`;
+                        const passCastId = pass.regionEntry.token.castId || passReference.castId || '';
+                        const passIdentitySet = passCastId ? identitySets.find((set) => set.actorId === passCastId) : undefined;
+                        const passPromptBase = buildStrictAnchorReplacementPrompt({
+                            bgPrompt: sceneNotesForStrict,
+                            mergeStrategy: state.director.mergeStrategy,
+                            sceneLock: state.director.sceneLock,
+                            replaceAnchorSubjects: true,
+                            globalReplaceTarget: state.director.globalReplaceTarget,
+                            hasDepthMap: !!state.depthMapUrl,
+                            activeRefs: [passReference],
+                            actorIdentitySets: passIdentitySet ? [passIdentitySet] : undefined,
+                            tokens: [pass.regionEntry.token]
+                        });
+
+                        const passRefs = [
+                            { url: passAnchorPlate, label: 'ANCHOR_GUIDE' },
+                            { url: runningBgUrl, label: 'CLEAN_BG_PLATE' },
+                            { url: passReference.url!, label: passRefLabel }
+                        ];
+                        const passRefUrlSet = new Set(passRefs.map((r) => r.url));
+                        const passSupportLabels: string[] = [];
+                        if (passIdentitySet) {
+                            const supportIdentityUrls = buildOrderedActorIdentityInputs(passIdentitySet);
+                            for (const url of supportIdentityUrls) {
+                                if (!url || passRefUrlSet.has(url)) continue;
+                                if (passRefs.length >= 14) break;
+                                const label = `ACTOR_ID_${passSupportLabels.length + 1}`;
+                                passRefs.push({ url, label });
+                                passRefUrlSet.add(url);
+                                passSupportLabels.push(label);
+                            }
+                        }
+
+                        const allowedIdentityLabels = [passRefLabel, ...passSupportLabels];
+                        const passPrompt = `${passPromptBase}\n\n### SINGLE-REGION REPLACEMENT LOCK (HARD)\n- This pass may edit ONLY REGION ${pass.regionEntry.region}.\n- REGION ${pass.regionEntry.region} may use ONLY identity references labeled ${allowedIdentityLabels.join(', ')}.\n- Treat ${passRefLabel} as the primary identity anchor for this region.\n- Do NOT alter identity or pose of people outside REGION ${pass.regionEntry.region} in CLEAN_BG_PLATE.\n- Preserve all non-target pixels exactly.\n- GAZE/HEAD POSE LOCK: Match the target subject head yaw/pitch/roll and eye gaze direction from CLEAN_BG_PLATE in this region. If the anchor subject is not looking at camera, the replacement must also NOT look at camera.\n- LIGHTING LOCK: Match local key/fill direction, contrast ratio, and color temperature from neighboring CLEAN_BG_PLATE pixels around the region boundary. Do not use portrait/studio lighting from identity references.\n- NO LOOKALIKE SUBSTITUTION: If uncertain, preserve mapped identity references over aesthetic similarity.`;
+
+                        let passJobId = '';
+                        const passRes = await GeminiService.generateImage(
+                            passPrompt,
+                            state.apiKey!,
+                            state.model,
+                            passRefs,
+                            {
+                                aspectRatio: state.director.aspectRatio,
+                                imageSize: state.imageResolution,
+                                thinkingLevel: state.enableImageThinking,
+                                googleGrounding: state.enableGoogleGrounding,
+                                strictMode: true,
+                                billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
+                                entitlements: state.billingEntitlements,
+                                onJobAccepted: (id) => {
+                                    passJobId = id;
+                                    dispatch({ type: 'ADD_BACKGROUND_JOB', payload: { id, status: 'polling_foreground', context: 'scene_render', startedAt: Date.now() } });
+                                }
+                            }
+                        );
+                        runningBgUrl = await normalizeGeneratedImageUrl(passRes);
+                        if (passJobId) dispatch({ type: 'REMOVE_BACKGROUND_JOB', payload: passJobId });
+                    }
+
+                    await applyStagingResult(runningBgUrl, {
+                        prompt: sceneNotesForStrict || bgPrompt || state.director.subject,
+                        surface: 'result',
+                        suggestedName: 'staging_replace_result',
+                        stage: 'generate'
+                    });
+                    dispatch({ type: 'ADD_LOG', payload: { message: "Staging strictly rendered (deterministic replace passes).", type: 'success' } });
+                    return;
+                }
+
                 const anchorPlate = await buildAnchorPlate(plan);
-                
-                const strictPromptBase = buildStrictPrompt(
-                    plan, 
-                    dnaForRender, 
-                    compiledPrompt, // reusing real-time compiledPrompt as notes
-                    state.tokens, 
-                    state.annotations, 
-                    state.referenceSlots, 
-                    state.director,
-                    safeExtractedStyle
-                );
 
-                const strictPromptText = `${placementBlock}${zoneFitBlock}${identityBlock}ANCHOR GUIDE RULES:
-[ANCHOR_GUIDE] contains the hard placement boxes and foot-anchor points.
-Placement / Action directives must be obeyed before general scene styling.
-Identity / Style DNA must preserve who the subject is and how they look.
-Do not ignore zone-fit instructions for the constrained primary actor.
-
-${strictPromptBase}`;
+                const strictPromptBase = isReplaceMode
+                    ? compiledPrompt
+                    : buildStrictPrompt(
+                        plan,
+                        dnaForRender,
+                        sceneNotesForStrict,
+                        state.tokens,
+                        state.annotations,
+                        state.referenceSlots,
+                        state.director,
+                        safeExtractedStyle
+                    );
 
                 const refs: { url: string; label: string }[] = [];
                 refs.push({ url: anchorPlate, label: "ANCHOR_GUIDE" });
-
                 if (activeBgUrl) refs.push({ url: activeBgUrl, label: "CLEAN_BG_PLATE" });
-                for (const r of plan) refs.push({ url: r.token.url, label: `REGION_${r.region}_REF` });
-
                 const urls = new Set(refs.map(r => r.url));
-                
-                for (const set of identitySets) {
-                    if (!hasStrongFaceAnchor(set)) {
-                         console.warn(`[IdentityLock] Missing face anchor for generation request`, { actorId: set.actorId, path: 'scene-strict' });
-                    }
-                    const orderedUrls = buildOrderedActorIdentityInputs(set);
-                    for (const url of orderedUrls) {
-                        if (!url) continue;
-                        if (refs.length >= 14) break;
-                        if (urls.has(url)) continue;
-                        refs.push({ url, label: `ACTOR IDENTITY ANCHOR` });
+
+                if (isReplaceMode) {
+                    for (const ref of activeReferences) {
+                        const url = ref.url;
+                        if (!url || urls.has(url)) continue;
+                        refs.push({ url, label: `REFERENCE_${ref.index}` });
                         urls.add(url);
                     }
                 }
 
+                const actorIdentityLabelsByActorId = new Map<string, string[]>();
+                const orderedIdentityLabelGroups: string[][] = [];
+                const toLabelKey = (raw: string) =>
+                    raw
+                        .replace(/[^a-zA-Z0-9]+/g, '_')
+                        .replace(/^_+|_+$/g, '')
+                        .toUpperCase()
+                        .slice(0, 28) || 'ACTOR';
+
+                if (isReplaceMode) {
+                    const sortedRefs = [...activeReferences].sort((a, b) => a.index - b.index);
+                    const identitySetByActorId = new Map(identitySets.map((set) => [set.actorId, set]));
+                    for (const ref of sortedRefs) {
+                        const label = `REFERENCE_${ref.index}`;
+                        const group = [label];
+                        const linkedIdentitySet = ref.castId ? identitySetByActorId.get(ref.castId) : undefined;
+                        const actorKey = toLabelKey(linkedIdentitySet?.actorLabel || ref.name || ref.castId || `REF_${ref.index}`);
+                        let supportCounter = 0;
+
+                        if (linkedIdentitySet) {
+                            const orderedUrls = buildOrderedActorIdentityInputs(linkedIdentitySet);
+                            for (const url of orderedUrls) {
+                                if (!url || url === ref.url) continue;
+                                if (refs.length >= 14) break;
+                                const existingRef = refs.find((r) => r.url === url);
+                                if (existingRef) {
+                                    if (!group.includes(existingRef.label)) group.push(existingRef.label);
+                                    continue;
+                                }
+                                const supportLabel = `${actorKey}_ID_${supportCounter + 1}`;
+                                refs.push({ url, label: supportLabel });
+                                urls.add(url);
+                                group.push(supportLabel);
+                                supportCounter += 1;
+                            }
+                        }
+                        orderedIdentityLabelGroups.push(group);
+                        if (ref.castId) {
+                            actorIdentityLabelsByActorId.set(ref.castId, group);
+                        }
+                    }
+                } else {
+                    for (const set of identitySets) {
+                        if (!hasStrongFaceAnchor(set)) {
+                             console.warn(`[IdentityLock] Missing face anchor for generation request`, { actorId: set.actorId, path: 'scene-strict' });
+                        }
+                        const orderedUrls = buildOrderedActorIdentityInputs(set);
+                        const actorKey = toLabelKey(set.actorLabel || set.actorId || 'ACTOR');
+                        const setLabels: string[] = [];
+                        for (const url of orderedUrls) {
+                            if (!url) continue;
+                            if (refs.length >= 14) break;
+                            const existingRef = refs.find((r) => r.url === url);
+                            if (existingRef) {
+                                if (!setLabels.includes(existingRef.label)) setLabels.push(existingRef.label);
+                                continue;
+                            }
+                            const label = `${actorKey}_ID_${setLabels.length + 1}`;
+                            refs.push({ url, label });
+                            setLabels.push(label);
+                            urls.add(url);
+                        }
+                        if (setLabels.length > 0) {
+                            actorIdentityLabelsByActorId.set(set.actorId, setLabels);
+                            orderedIdentityLabelGroups.push(setLabels);
+                        }
+                    }
+                }
+                // In Replace Anchor Subjects mode, avoid injecting staged token pixels as region references:
+                // they can leak identity/lighting/clothing from source cutouts.
+                if (!isReplaceMode) {
+                    // Region references are useful for blocking/wardrobe continuity in non-replace mode.
+                    for (const r of plan) {
+                        if (refs.length >= 14) break;
+                        if (!r.token.url || urls.has(r.token.url)) continue;
+                        refs.push({ url: r.token.url, label: `REGION_${r.region}_REF` });
+                        urls.add(r.token.url);
+                    }
+                }
+
                 const limitedRefs = refs.slice(0, 14);
+                const routingLines: string[] = [];
+                const usedFallbackIdentityGroups = new Set<number>();
+                const missingIdentityMappings: string[] = [];
+                for (const region of plan) {
+                    const actorId = region.token.castId || '';
+                    let labels = actorIdentityLabelsByActorId.get(actorId) || [];
+                    if (labels.length === 0 && !isReplaceMode) {
+                        const fallbackIndex = orderedIdentityLabelGroups.findIndex((group, idx) => group.length > 0 && !usedFallbackIdentityGroups.has(idx));
+                        if (fallbackIndex >= 0) {
+                            labels = orderedIdentityLabelGroups[fallbackIndex];
+                            usedFallbackIdentityGroups.add(fallbackIndex);
+                        }
+                    }
+                    if (labels.length === 0) {
+                        if (isReplaceMode) {
+                            const regionActorLabel = region.cast?.name || region.token.tag || `Actor ${region.region}`;
+                            missingIdentityMappings.push(`Region ${region.region} (${regionActorLabel})`);
+                        }
+                        continue;
+                    }
+                    const regionActorLabel = region.cast?.name || region.token.tag || `Actor ${region.region}`;
+                    routingLines.push(`- REGION ${region.region} (${regionActorLabel}) may use ONLY identity references labeled: ${labels.join(', ')}`);
+                    if (isReplaceMode) {
+                        routingLines.push(`- REGION ${region.region}: Use CLEAN_BG_PLATE at this BBOX as pose/gaze/wardrobe/lighting source. Do not import these attributes from identity references.`);
+                    } else {
+                        routingLines.push(`- REGION ${region.region}: Treat REGION_${region.region}_REF as pose/wardrobe continuity only. Never copy face/head/body morphology from REGION_${region.region}_REF.`);
+                    }
+                }
+
+                const refIndexMapLines: string[] = [];
+                let singleSubjectFallbackBlock = '';
+                if (isReplaceMode) {
+                    if (missingIdentityMappings.length > 0) {
+                        dispatch({
+                            type: 'ADD_LOG',
+                            payload: {
+                                message: `Replace Anchor Subjects mapping incomplete for: ${missingIdentityMappings.join('; ')}. Assign matching Reference Stack cast links before generating.`,
+                                type: 'error'
+                            }
+                        });
+                        setViewMode('stage');
+                        window.clearInterval(progressInterval);
+                        dispatch({ type: 'SET_PROCESSING', payload: false });
+                        return;
+                    }
+                    for (const ref of activeReferences) {
+                        const labels = ref.castId
+                            ? (actorIdentityLabelsByActorId.get(ref.castId) || [])
+                            : [`REFERENCE_${ref.index}`];
+                        if (labels.length === 0) continue;
+                        const refLabel = ref.name || `Reference ${ref.index}`;
+                        refIndexMapLines.push(`- REFERENCE ${ref.index} (${refLabel}) corresponds to identity labels: ${labels.join(', ')}`);
+                    }
+                    if (isSingleSubjectReplaceFallback) {
+                        const primaryRef = activeReferences[0];
+                        const fallbackLabels = primaryRef?.castId
+                            ? (actorIdentityLabelsByActorId.get(primaryRef.castId) || [`REFERENCE_${primaryRef.index}`])
+                            : (primaryRef ? [`REFERENCE_${primaryRef.index}`] : []);
+                        if (primaryRef && fallbackLabels.length > 0) {
+                            const refLabel = primaryRef.name || `Reference ${primaryRef.index}`;
+                            singleSubjectFallbackBlock = `### SINGLE-SUBJECT TARGET LOCK (HARD)\n- Replace the single most visually dominant human subject in CLEAN_BG_PLATE with the identity defined by ${fallbackLabels.join(', ')}.\n- Treat REFERENCE_${primaryRef.index} (${refLabel}) as the primary identity anchor.\n- Preserve the anchor subject's pose, gaze direction, wardrobe, props, background, and framing.\n- If the anchor subject differs from the reference in sex presentation, age appearance, skin texture, or face/head geometry, those anchor traits must be fully overwritten to match the reference-defined identity.\n- Do NOT invent a similar-looking substitute.\n- Leave all secondary/background people unchanged.`;
+                        }
+                    }
+                }
+
+                const strictPromptText = [
+                    strictPromptBase,
+                    routingLines.length > 0
+                        ? `### REGION-TO-IDENTITY ROUTING LOCK (HARD)\n${routingLines.join('\n')}\n- Do NOT swap identities between regions.\n- Do NOT blend identity/body traits across different region subjects.\n- Do NOT keep anchor body morphology and only replace heads.\n- If uncertain, preserve region assignment over stylistic similarity.`
+                        : '',
+                    singleSubjectFallbackBlock,
+                    refIndexMapLines.length > 0
+                        ? `### REFERENCE-LABEL MAPPING LOCK (HARD)\n${refIndexMapLines.join('\n')}\n- Use the REFERENCE index mapping above when interpreting replacement map directives.\n- If a REFERENCE index conflicts with visual similarity, trust the mapped labels above.`
+                        : ''
+                ].filter(Boolean).join('\n\n');
 
                 let actualGenId = '';
                 const res = await GeminiService.generateImage(
@@ -1604,7 +1699,7 @@ ${strictPromptBase}`;
                     state.model,
                     limitedRefs,
                     { 
-                        aspectRatio: state.director.aspectRatio, imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements,
+                        aspectRatio: state.director.aspectRatio, imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, uiWaitWindowMs: stageUiWaitWindowMs,
                         onJobAccepted: (id) => {
                             actualGenId = id;
                             dispatch({ type: 'ADD_BACKGROUND_JOB', payload: { id, status: 'polling_foreground', context: 'scene_render', startedAt: Date.now() } });
@@ -1616,9 +1711,13 @@ ${strictPromptBase}`;
 
                 if (actualGenId) dispatch({ type: 'REMOVE_BACKGROUND_JOB', payload: actualGenId });
 
-                dispatch({ type: 'SET_RESULT_IMAGE', payload: img });
-                dispatch({ type: 'SET_COMPOSITE_METADATA', payload: { latestCompositeSource: 'directorCanvas', latestCompositeResultUrl: img } });
-                setViewMode('result');
+                await applyStagingResult(img, {
+                    prompt: bgPrompt || state.director.subject,
+                    generationId: actualGenId || undefined,
+                    surface: 'result',
+                    suggestedName: 'staging_result',
+                    stage: 'generate'
+                });
                 dispatch({ type: 'ADD_LOG', payload: { message: "Staging strictly rendered.", type: 'success' } });
             } else {
                 const references: { url: string; label: string }[] = [];
@@ -1657,7 +1756,7 @@ ${strictPromptBase}`;
                     references.push({ url: safeCast[0].url, label: "Style Reference" });
                 }
 
-                const loosePromptBase = buildLoosePrompt(
+                const loosePromptText = buildLoosePrompt(
                     dnaForRender,
                     state.tokens,
                     state.annotations,
@@ -1667,14 +1766,6 @@ ${strictPromptBase}`;
                     bgPrompt
                 );
 
-                const loosePromptText = `${placementBlock}${zoneFitBlock}${identityBlock}ANCHOR GUIDE RULES:
-[ANCHOR_GUIDE] contains the hard placement boxes and foot-anchor points.
-Placement / Action directives must be obeyed before general scene styling.
-Identity / Style DNA must preserve who the subject is and how they look.
-Do not ignore zone-fit instructions for the constrained primary actor.
-
-${loosePromptBase}`;
-
                 let actualGenId = '';
                 const res = await GeminiService.generateImage(
                     loosePromptText,
@@ -1682,7 +1773,7 @@ ${loosePromptBase}`;
                     state.model,
                     references.slice(0, 14),
                     { 
-                        aspectRatio: state.director.aspectRatio, imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements,
+                        aspectRatio: state.director.aspectRatio, imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, uiWaitWindowMs: stageUiWaitWindowMs,
                         onJobAccepted: (id) => {
                             actualGenId = id;
                             dispatch({ type: 'ADD_BACKGROUND_JOB', payload: { id, status: 'polling_foreground', context: 'scene_render', startedAt: Date.now() } });
@@ -1694,9 +1785,13 @@ ${loosePromptBase}`;
 
                 if (actualGenId) dispatch({ type: 'REMOVE_BACKGROUND_JOB', payload: actualGenId });
 
-                dispatch({ type: 'SET_RESULT_IMAGE', payload: img });
-                dispatch({ type: 'SET_COMPOSITE_METADATA', payload: { latestCompositeSource: 'directorCanvas', latestCompositeResultUrl: img } });
-                setViewMode('result');
+                await applyStagingResult(img, {
+                    prompt: bgPrompt || state.director.subject,
+                    generationId: actualGenId || undefined,
+                    surface: 'result',
+                    suggestedName: 'staging_result',
+                    stage: 'generate'
+                });
                 dispatch({ type: 'ADD_LOG', payload: { message: "Staging (loose) rendered.", type: 'success' } });
             }
         } catch (e: unknown) {
@@ -1860,6 +1955,53 @@ ${loosePromptBase}`;
     const shots = state.shots as Shot[] | undefined;
     const activeShotId = state.activeShotId;
     const activeShot = shots?.find(s => s.id === activeShotId) || null;
+
+    const applyStagingResult = useCallback(async (
+        imageUrl: string,
+        options?: {
+            prompt?: string;
+            generationId?: string;
+            surface?: string;
+            suggestedName?: string;
+            stage?: 'generate' | 'refine';
+        }
+    ): Promise<string> => {
+        const displayUrl = imageUrl;
+
+        dispatch({ type: 'SET_RESULT_IMAGE', payload: displayUrl });
+        dispatch({
+            type: 'SET_COMPOSITE_METADATA',
+            payload: {
+                latestCompositeSource: 'directorCanvas',
+                latestCompositeResultUrl: displayUrl
+            }
+        });
+
+        if (activeShotId) {
+            dispatch({
+                type: 'UPDATE_SHOT_META',
+                payload: {
+                    id: activeShotId,
+                    updates: {
+                        latestCompositeResultUrl: displayUrl,
+                        latestCompositeSource: 'directorCanvas',
+                        latestCompositeStage: options?.stage || 'generate',
+                        latestCompositeTimestamp: new Date().toISOString()
+                    }
+                }
+            });
+            dispatch({
+                type: 'SET_SCENE_RESULT_ANCHOR',
+                payload: {
+                    sceneId: activeShotId,
+                    anchor: { kind: 'generated_result', imageUrl: displayUrl }
+                }
+            });
+        }
+
+        setViewMode('result');
+        return displayUrl;
+    }, [activeShotId, dispatch]);
 
     useEffect(() => {
         setActiveShotNameDraft(activeShot?.name || '');
@@ -2359,18 +2501,12 @@ ${loosePromptBase}`;
 
             // Critical: normalize the returned image before pushing it into UI state
             const finalEditedUrl = await normalizeGeneratedImageUrl(base);
-
-            dispatch({ type: 'SET_RESULT_IMAGE', payload: finalEditedUrl });
-            dispatch({
-                type: 'SET_COMPOSITE_METADATA',
-                payload: {
-                    latestCompositeSource: 'directorCanvas',
-                    latestCompositeResultUrl: finalEditedUrl
-                }
+            await applyStagingResult(finalEditedUrl, {
+                prompt: activeLayer?.prompt || 'Region Edit Result',
+                surface: 'region_edit',
+                suggestedName: 'staging_region_edit',
+                stage: 'refine'
             });
-
-            // Show the edited result immediately
-            setViewMode('result');
 
             dispatch({ type: 'ADD_LOG', payload: { message: 'Region Edit complete.', type: 'success' } });
         } catch (e: unknown) {
@@ -2508,7 +2644,8 @@ ${loosePromptBase}`;
 
                 if (cast && cast.url) {
                     console.log('[handleRefSlotDrop] Calling setSlotFromUrl for ID:', cast.id);
-                    await setSlotFromUrl(index, cast.previewUrl || cast.url, cast.name || cast.tag, cast.id, cast.localPath, cast.sourceUrl || cast.url);
+                    // Use full-quality cast URL for identity fidelity; preview thumbnails are too weak for strict matching.
+                    await setSlotFromUrl(index, cast.url || cast.previewUrl || '', cast.name || cast.tag, cast.id, cast.localPath, cast.sourceUrl || cast.url);
                 } else {
                     console.error('[handleRefSlotDrop] Cast or cast.url missing!', cast);
                 }
@@ -3975,8 +4112,8 @@ ${loosePromptBase}`;
                             <span className="text-[9px] bg-purple-500/10 px-1.5 py-0.5 rounded text-purple-400 font-mono border border-purple-500/20">{(state.cast || []).length}</span>
                         }
                     >
-                        <div className="p-3 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-800 scrollbar-track-transparent">
-                            <div className="grid grid-cols-3 gap-2 pb-2">
+                        <div className="p-3 max-h-[45vh] min-h-0 overflow-y-auto custom-scrollbar">
+                            <div className="grid grid-cols-[repeat(auto-fit,minmax(72px,1fr))] gap-2 pb-2">
                                 {(state.cast || []).map(c => (
                                     <div
                                         key={c.id}
@@ -4332,13 +4469,27 @@ ${loosePromptBase}`;
                                  link.click();
                                  dispatch({ type: 'ADD_LOG', payload: { message: 'Shot saved successfully.', type: 'success' } });
                               }}
+                              onSetAsStage={(url) => {
+                                 const activeSceneId = state.activeShotId || 'default';
+                                 dispatch({ type: 'SET_BG', payload: url });
+                                 dispatch({ type: 'SET_RESULT_IMAGE', payload: url });
+                                 dispatch({
+                                    type: 'SET_SCENE_RESULT_ANCHOR',
+                                    payload: {
+                                      sceneId: activeSceneId,
+                                      anchor: { kind: 'generated_result', imageUrl: url }
+                                    }
+                                 });
+                                 setViewMode('stage');
+                                 dispatch({ type: 'ADD_LOG', payload: { message: 'Shot variant promoted to Stage Scene.', type: 'success' } });
+                              }}
                            />
                         </div>
                         );
                     })() : (
                     <div
                         ref={stageRef}
-                        className="flex-1 bg-[#09090b] border border-[#27272a] rounded-xl relative overflow-hidden group"
+                        className="flex-1 min-h-0 bg-[#09090b] border border-[#27272a] rounded-xl relative overflow-auto custom-scrollbar overscroll-contain group"
                         onDragOver={handleDragOver}
                         onDrop={handleDrop}
                         onMouseMove={handleStageMouseMove}
@@ -4703,16 +4854,16 @@ ${loosePromptBase}`;
                                         </div>
                                     )}
                                     {note.type === 'note' && (
-                                        <div className="w-full h-full flex flex-col border-2 border-yellow-400 bg-yellow-900/40 backdrop-blur-sm rounded-lg overflow-hidden">
+                                        <div className="w-full h-full min-w-0 min-h-0 flex flex-col border-2 border-yellow-400 bg-yellow-900/40 backdrop-blur-sm rounded-lg overflow-hidden">
                                             {/* Fixed Header Label - Outside the note content area */}
-                                            <div className="bg-yellow-400 text-black px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider flex items-center justify-between shrink-0 select-none">
-                                                <span>Director Note</span>
+                                            <div className="bg-yellow-400 text-black px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider flex items-center justify-between gap-2 shrink-0 select-none min-w-0">
+                                                <span className="truncate">Director Note</span>
                                                 <Pencil className="w-2.5 h-2.5 opacity-50" />
                                             </div>
 
                                             {/* Content Area */}
                                             <div
-                                                className="flex-1 p-2 overflow-hidden bg-black/40"
+                                                className="flex-1 min-h-0 p-2 overflow-auto custom-scrollbar bg-black/40"
                                                 onDoubleClick={(e) => {
                                                     e.stopPropagation();
                                                     setEditingAnnotationId(note.id);
@@ -4721,7 +4872,7 @@ ${loosePromptBase}`;
                                                 {editingAnnotationId === note.id ? (
                                                     <textarea
                                                         autoFocus
-                                                        className="w-full h-full bg-transparent text-yellow-100 font-bold font-mono text-[11px] resize-none outline-none leading-relaxed placeholder:text-yellow-500/30"
+                                                        className="block w-full h-full min-h-full bg-transparent text-yellow-100 font-bold font-mono text-[11px] resize-none outline-none leading-relaxed placeholder:text-yellow-500/30 overflow-y-auto custom-scrollbar"
                                                         value={note.text || ''}
                                                         onChange={(e) => dispatch({
                                                             type: 'UPDATE_ANNOTATION',
@@ -4733,7 +4884,7 @@ ${loosePromptBase}`;
                                                         placeholder="Type instructions..."
                                                     />
                                                 ) : (
-                                                    <p className="text-yellow-100 font-bold font-mono text-[11px] whitespace-pre-wrap leading-relaxed select-none pointer-events-none break-words min-h-[1em]">
+                                                    <p className="max-h-full overflow-y-auto custom-scrollbar text-yellow-100 font-bold font-mono text-[11px] whitespace-pre-wrap leading-relaxed select-none pointer-events-none break-words min-h-[1em]">
                                                         {note.text || ''}
                                                     </p>
                                                 )}

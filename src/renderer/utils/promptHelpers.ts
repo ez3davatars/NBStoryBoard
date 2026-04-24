@@ -195,26 +195,27 @@ export const compileV3DirectorPrompt = (director: DirectorSettings, slots: Refer
 
     // 2. Spatial Token Inference Fallback (if they didn't manually assign text targets)
     if (specificMaps.length === 0 && tokens.length > 0) {
-      tokens.forEach(token => {
-        const ref = activeRefs.find(r => r.castId === token.castId);
+      const orderedRefs = [...activeRefs].sort((a, b) => a.index - b.index);
+      tokens.forEach((token, tokenIndex) => {
+        const ref = activeRefs.find(r => r.castId === token.castId) || orderedRefs[tokenIndex];
         if (ref) {
-          const center = token.x + token.width / 2;
-          const relX = center / STAGE_W;
-          let posH = "center";
-          if (relX < 0.38) posH = "left side";
-          else if (relX > 0.62) posH = "right side";
+          const x = Math.round(Number(token.x) || 0);
+          const y = Math.round(Number(token.y) || 0);
+          const w = Math.round(Number(token.width) || 0);
+          const h = Math.round(Number(token.height) || 0);
+          const tag = (token.tag || '').trim();
           
           let dnaMandate = '';
           if (ref.analysis && ref.analysis.trim()) {
               dnaMandate = ` CRITICAL BIOMETRIC OVERRIDE: Specifically alter the generated subject's physical body, height, weight, and traits to perfectly match this DNA profile: "${ref.analysis.trim()}".`;
           }
-          specificMaps.push(`- The character physically positioned on the ${posH} of the frame MUST be replaced by the subject in Reference ${ref.index} (${ref.name || 'Subject'}).${dnaMandate}`);
+          specificMaps.push(`- The subject occupying anchor BBOX [${x}, ${y}, ${w}, ${h}]${tag ? ` ("${tag}")` : ''} MUST be replaced by the subject in Reference ${ref.index} (${ref.name || 'Subject'}).${dnaMandate}`);
         }
       });
     }
 
     if (specificMaps.length > 0) {
-      segments.push(`CRITICAL REPLACEMENT MAP (MANDATORY IDENTITY TARGETING):\n${specificMaps.join('\n')}\nWARNING: You MUST enforce this exact positioning. DO NOT rely on visual similarity between the reference faces and the original anchor bodies to decide who goes where. You MUST strictly swap the identities into the physical locations defined above. Randomly swapping these characters is a FAILURE.\nOMNIPOTENT OBLITERATION DIRECTIVE: When replacing subjects, you are FORBIDDEN from preserving the anchor's original facial structure, hair, or head shape. You MUST completely overwrite their biological traits to match the Reference Subject and their Biometric Profile, EVEN IF it breaks the original silhouette.\nWARDROBE CONTINUITY (CRITICAL): Unless the Biometric Override explicitly requests a different outfit, you MUST perfectly preserve the EXACT original clothing, suits, and attire worn by the humans in the anchor image. Re-dress your generated subjects in those exact anchor outfits. Do NOT use the casual clothing from the Reference images. Maintain exact environment details.`);
+      segments.push(`CRITICAL REPLACEMENT MAP (MANDATORY IDENTITY TARGETING):\n${specificMaps.join('\n')}\nWARNING: You MUST enforce this exact positioning. DO NOT rely on visual similarity between the reference faces and the original anchor bodies to decide who goes where. You MUST strictly swap the identities into the physical locations defined above. Randomly swapping these characters is a FAILURE.\nFULL-SUBJECT REPLACEMENT LOCK (NON-NEGOTIABLE): This is NOT a face-swap. You MUST replace each target subject's full visible identity: face, head shape, hairline, neck, shoulder width, torso build, arm thickness, and overall body proportions to match the reference subject.\nOMNIPOTENT OBLITERATION DIRECTIVE: When replacing subjects, you are FORBIDDEN from preserving the anchor's original facial structure, hair, head shape, or body build. You MUST completely overwrite their biological traits to match the Reference Subject and their Biometric Profile, EVEN IF it breaks the original silhouette.\nWARDROBE CONTINUITY (CRITICAL): Unless the Biometric Override explicitly requests a different outfit, you MUST perfectly preserve the EXACT original clothing, suits, and attire worn by the humans in the anchor image. Re-dress your generated subjects in those exact anchor outfits. Do NOT use the casual clothing from the Reference images. Maintain exact environment details.`);
     } else {
       const t = director.globalReplaceTarget ? `"${director.globalReplaceTarget.trim()}"` : 'any characters/subjects';
       segments.push(
@@ -434,7 +435,15 @@ export const buildStrictPrompt = (
         const actorLabel = r.actorLabel || r.cast?.name || t.tag || `Actor ${r.region}`;
 
         const boundsBlock = `BBOX_ABS: [${Math.round(t.x)}, ${Math.round(t.y)}, ${Math.round(t.width)}, ${Math.round(t.height)}]`;
-        let profile = typeof r.profile === 'string' ? r.profile : (r.profile ? JSON.stringify(r.profile) : `You MUST perfectly match the facial identity, skin tone, hair, and clothing of the subject in the attached image labeled "REGION_${r.region}_REF"`);
+        let profile = typeof r.profile === 'string'
+            ? r.profile
+            : (r.profile
+                ? JSON.stringify(r.profile)
+                : (
+                    director.replaceAnchorSubjects
+                        ? `Use CLEAN_BG_PLATE at this region as the source of pose, gaze direction, body orientation, and wardrobe continuity. Do NOT copy facial identity or body morphology from anchor occupants. Identity and biometric morphology (face + head + neck + body build) must come from the mapped actor identity references for this region.`
+                        : `You MUST perfectly match the facial identity, skin tone, hair, and clothing of the subject in the attached image labeled "REGION_${r.region}_REF"`
+                ));
         if (t.intelligence) profile += `\nMANDATORY ACTION/POSE: ${t.intelligence}`;
 
         return `REGION ${r.region} (${actorLabel}):\n- Position: ${boundsBlock}\n- Description: ${profile}`;
@@ -460,13 +469,38 @@ export const buildStrictPrompt = (
         "CRITICAL COMMANDS (ZERO TOLERANCE):",
         "1. SINGLE IMAGE OUTPUT: Generate ONLY the final rendered scene. Do NOT render a collage, sidebar, dashboard, or layout showing the references. If the output is not a single clean 16:9 scene, it is a FAILURE.",
         "- UNIFORM ENVIRONMENT: All background details (walls, props, lighting) must remain 100% identical to the CLEAN_BG_PLATE outside of the character regions.",
-        "- SEAMLESS BLENDING: The ANCHOR_GUIDE contains a rough composite of the characters. Your job is to blend them naturally into the scene. Match the lighting, shadows, and color grading of the background.",
+        director.replaceAnchorSubjects
+            ? "- SEAMLESS BLENDING: ANCHOR_GUIDE provides region/layout guidance. Use CLEAN_BG_PLATE as the canonical scene for pose, gaze, wardrobe, and lighting continuity."
+            : "- SEAMLESS BLENDING: The ANCHOR_GUIDE contains a rough composite of the characters. Your job is to blend them naturally into the scene. Match the lighting, shadows, and color grading of the background.",
         "- LIGHTING OVERRIDE: Absolutely DO NOT carry over the original lighting from the character references. You MUST re-light the characters entirely from scratch to naturally match the environment's ambient light and the specified Cinematography lighting.",
+        director.replaceAnchorSubjects
+            ? "- POSE/GAZE LOCK FROM ANCHOR: For each mapped subject, preserve the anchor subject's gaze direction, head angle, torso orientation, and stance at that location unless explicitly overridden."
+            : "",
+        director.replaceAnchorSubjects
+            ? "- WARDROBE SOURCE LOCK: Wardrobe must come from the anchor subject in CLEAN_BG_PLATE for that mapped location. Never import clothing from identity reference images."
+            : "",
+        director.replaceAnchorSubjects
+            ? "- HEADWEAR FIT LOCK: If the mapped anchor subject wears a hat/cap/headwear, preserve that exact item fit and geometry (crown height, brim curvature, tilt angle, forehead sit, and scalp contact). Do not reshape it loosely."
+            : "",
+        director.replaceAnchorSubjects
+            ? "- LOGO/EMBLEM LOCK: Preserve visible logos/insignia/embroidered marks from the mapped anchor wardrobe item exactly at the same relative location and scale. Do not remove, blur out, or substitute a different mark."
+            : "",
+        director.replaceAnchorSubjects
+            ? "- REFERENCE SOURCE POLICY: Identity references provide face/body identity only. CLEAN_BG_PLATE provides pose, gaze, wardrobe, and scene lighting."
+            : "",
         "- NEGATIVE SPACE: Ignore any solid or white studio backgrounds present in the REGION_REFS. Treat flat white areas (such as inside a hollow helmet, or between arms and torso) as transparent, and fill them perfectly with the scene environment.",
         "- NO OUTLINES: Do NOT draw any boxes, boundaries, or outlines around the characters. The final image must look like a natural photograph or movie frame.",
         "- NO Hallucinations: Do not add any extra objects, people, or details not requested in the Director Brief or Region Plan.",
-        "- ASPECT RATIO LOCK: DO NOT STRETCH OR SQUASH. If a character cutout does not perfectly fill its assigned BBOX_ABS, DO NOT distort the character. Maintain natural proportions and fill any remainder with pixels from the CLEAN_BG_PLATE.",
+        director.replaceAnchorSubjects
+            ? "- MORPHOLOGY OVERRIDE (REPLACE MODE): You may change in-region body silhouette/proportions to match the mapped reference subject. Preserve placement intent and ground contact, but do NOT force anchor-body shape retention."
+            : "- ASPECT RATIO LOCK: DO NOT STRETCH OR SQUASH. If a character cutout does not perfectly fill its assigned BBOX_ABS, DO NOT distort the character. Maintain natural proportions and fill any remainder with pixels from the CLEAN_BG_PLATE.",
         "- OVERLAP LOCK: If the ANCHOR_GUIDE shows subjects overlapping, maintain that exact occlusion.",
+        director.replaceAnchorSubjects
+            ? "- FULL-SUBJECT REPLACEMENT LOCK: This is NOT a face transplant. Replace face + head + neck + body build to match the mapped reference subject. Keeping anchor bodies and only swapping heads is a hard failure."
+            : "",
+        director.replaceAnchorSubjects
+            ? "- WARDROBE CARRYOVER LOCK: Keep anchor clothing/suits/attire and fit that wardrobe naturally to the replacement subject's body proportions."
+            : "",
         "",
         dnaBlock ? `### ANCHOR DNA:\n${dnaBlock}\n` : "",
         notes ? `### DIRECTOR NOTES (EXPLICIT USER REQUEST - MANDATORY LOCATION/SCENE):\n${notes}\n` : "",
@@ -487,18 +521,30 @@ ANTI-STYLE-DRIFT GUARDRAIL: This style envelope MUST ONLY affect the rendering l
         lightingProtocol,
         "",
         "### IDENTITY PRECEDENCE",
-        buildIdentityPrecedenceBlock({
-            hasFaceAnchors: refStackActive.length > 0,
-            hasActorReferences: refStackActive.length > 0,
-            hasSubjectStyleAnalysis: !!extractedStyle
-        }),
-        "### FACE IDENTITY LOCK",
+        director.replaceAnchorSubjects
+            ? [
+                "Use actor reference stacks as the definitive source of full-subject identity, not just facial identity.",
+                "Treat style analysis as secondary guidance only.",
+                "If any conflict exists, preserve reference-defined full-subject morphology over anchor-body retention.",
+                "NO FACE-SWAP POLICY: Do not keep anchor bodies and replace only heads."
+            ].join('\n')
+            : buildIdentityPrecedenceBlock({
+                hasFaceAnchors: refStackActive.length > 0,
+                hasActorReferences: refStackActive.length > 0,
+                hasSubjectStyleAnalysis: !!extractedStyle
+            }),
+        director.replaceAnchorSubjects ? "### FULL-SUBJECT IDENTITY LOCK" : "### FACE IDENTITY LOCK",
         buildStrictFaceIdentityLockBlock({
             actorIdentitySets: refStackActive.map(r => ({ actorId: String(r.castId || r.index), angleFaceAnchors: [], supportIdentityRefs: [], wardrobeRefs: [], primaryFaceAnchor: r.url!, identityPriority: 'strict' })),
-            allowWardrobeChange: true,
+            allowWardrobeChange: !director.replaceAnchorSubjects,
             multiActor: refStackActive.length > 1
         }),
-        "IDENTITY LOCK: FACE_STRICT"
+        director.replaceAnchorSubjects
+            ? "### BODY IDENTITY LOCK\nPreserve replacement subject body morphology from references (height impression, shoulder width, neck thickness, torso/limb build) while keeping anchor-scene pose, placement, and wardrobe continuity."
+            : "",
+        director.replaceAnchorSubjects
+            ? "### NO FACE-SWAP PROTOCOL\n- Hard failure if output keeps anchor body and changes only head/face.\n- Hard failure if neck/shoulder/torso build remains anchor-like while only facial features are replaced.\n- Required behavior: full-subject biometric remap (face + head + neck + body build) with anchor wardrobe continuity.\n- Preserve anchor pose/gaze orientation at each mapped location.\nIDENTITY LOCK: FULL_SUBJECT_STRICT\nNO_FACE_SWAP: TRUE\nBODY_MORPH_REQUIRED: TRUE\nPOSE_GAZE_LOCK: TRUE\nLIGHTING_FROM_SCENE_ONLY: TRUE\nWARDROBE_FROM_ANCHOR_ONLY: TRUE\nHEADWEAR_FIT_LOCK: TRUE\nLOGO_EMBLEM_LOCK: TRUE"
+            : "IDENTITY LOCK: FACE_STRICT"
     ].filter(Boolean).join("\n");
 
     return rules;
@@ -692,17 +738,54 @@ export const buildStrictAnchorReplacementPrompt = (p: {
     globalReplaceTarget: string,
     hasDepthMap: boolean,
     activeRefs: ReferenceSlot[],
+    actorIdentitySets?: ActorIdentityReferenceSet[],
     tokens?: StageToken[]
 }): string => {
+    const strictIdentitySets = (p.actorIdentitySets && p.actorIdentitySets.length > 0)
+        ? p.actorIdentitySets
+        : p.activeRefs
+            .filter((r) => !!r.url)
+            .map((r) => ({
+                actorId: String(r.castId || r.index),
+                actorLabel: r.name || `Reference ${r.index}`,
+                primaryFaceAnchor: r.url,
+                angleFaceAnchors: [],
+                supportIdentityRefs: [],
+                wardrobeRefs: [],
+                biometricProfile: r.analysis,
+                identityPriority: 'strict' as const
+            }));
 
-    const refLines = p.activeRefs.map(r => `[REFERENCE: ${r.name || `Ref ${r.index}`}]: Use this exact image to define the identity, clothing, and traits of the target subject.`);
+    const refLines = p.activeRefs.map(r => {
+        if (p.replaceAnchorSubjects) {
+            return `[REFERENCE: ${r.name || `Ref ${r.index}`}]: Use this exact image to define the target subject's identity and biometric morphology (face + head + neck + body build). Do NOT copy reference clothing, headwear fit, or logos unless explicitly requested.`;
+        }
+        return `[REFERENCE: ${r.name || `Ref ${r.index}`}]: Use this exact image to define the identity, clothing, and traits of the target subject.`;
+    });
+
+    const identityFingerprintLines = p.activeRefs.map((r) => {
+        const refLabel = r.name || `Ref ${r.index}`;
+        const biometricText = (r.analysis || '').trim();
+        const biometricClause = biometricText
+            ? ` Use these biometric traits as mandatory identity anchors: "${biometricText}".`
+            : '';
+        return `- REFERENCE ${r.index} (${refLabel}): MUST be the exact same person as the reference stack. Preserve age appearance, sex presentation, skin texture, facial proportions, and distinctive face geometry exactly. No lookalike substitutions, no beautification, no rejuvenation, no ethnicity drift.${biometricClause}`;
+    });
 
     let prompt = `You are a Strict Geometry Compositor. Your ONLY job is to replace the specified blank regions (silhouettes/cutouts) with the requested subjects.
 
 CRITICAL DIRECTIVES:
 1. Do NOT touch, alter, or hallucinate anything in the background. The background is pre-rendered and MUST remain identical.
-2. Fill ONLY the boundaries of the provided target regions.
-3. Obey the exact pose, scale, and lighting implied by the empty silhouette.`;
+2. Stay inside each target region coverage area, but in REPLACE mode you may remap subject silhouette/body proportions to match the mapped reference subject.
+3. Preserve scene placement intent, feet/ground contact, and lighting integration; do NOT lock to anchor-body shape or exact anchor-body scale.
+4. This is NOT a face-swap task. Replace full-subject identity and body morphology, not just the head.
+5. SOURCE POLICY (REPLACE MODE): Identity references define WHO the subject is (face/head/body morphology). CLEAN_BG_PLATE defines HOW they are posed, where they are looking, what they are wearing, and how they are lit.
+6. WARDROBE DETAIL LOCK (REPLACE MODE): Preserve anchor wardrobe details exactly, including hat/cap fit and any visible logo/emblem placement on that wardrobe item.
+7. MASK SUPREMACY (REPLACE MODE): ANCHOR_GUIDE masked/cutout regions are hard replacement zones. Re-render full subjects from scratch inside those zones. Do NOT preserve anchor face/head/skin pixels within the masked regions.
+8. PIXEL SOURCE LOCK (REPLACE MODE): CLEAN_BG_PLATE is environment/wardrobe/lighting context only. Never keep original anchor identity pixels inside replacement regions.
+9. IDENTITY FINGERPRINT LOCK (REPLACE MODE): Each replacement subject MUST remain the exact person from its mapped reference stack. Randomly generating a similar person is a hard failure.
+10. GAZE/HEAD POSE LOCK (REPLACE MODE): Match each target subject's head orientation and eye gaze from CLEAN_BG_PLATE at that location. Do NOT default to camera-facing portrait orientation unless the anchor subject is camera-facing.
+11. LIGHTING LOCK (REPLACE MODE): Match local scene lighting from CLEAN_BG_PLATE at region boundaries (key/fill direction, shadow softness, color temperature). Do NOT import lighting style from identity references.`;
 
     if (p.sceneLock) {
         prompt += `\n4. SCENE LOCK ACTIVE: ${SCENE_LOCK_NEGATIVE_TOKENS}`;
@@ -714,6 +797,9 @@ CRITICAL DIRECTIVES:
 
     if (p.replaceAnchorSubjects) {
         const specificMaps: string[] = [];
+        const hasTokenTargets = Boolean(p.tokens && p.tokens.length > 0);
+        const hasExplicitTargets = p.activeRefs.some((ref) => (ref.target || '').trim().length > 0);
+        const dominantSingleSubjectFallback = p.activeRefs.length === 1 && !hasExplicitTargets && !hasTokenTargets;
         
         // Explicit UI Target Overrides
         p.activeRefs.forEach(ref => {
@@ -729,32 +815,66 @@ CRITICAL DIRECTIVES:
 
         // Spatial Token Inference Fallback
         if (specificMaps.length === 0 && p.tokens && p.tokens.length > 0) {
-            p.tokens.forEach(token => {
-                const ref = p.activeRefs.find(r => r.castId === token.castId);
+            const orderedRefs = [...p.activeRefs].sort((a, b) => a.index - b.index);
+            p.tokens.forEach((token, tokenIndex) => {
+                const ref = p.activeRefs.find(r => r.castId === token.castId) || orderedRefs[tokenIndex];
                 if (ref) {
-                    const center = token.x + token.width / 2;
-                    const relX = center / STAGE_W;
-                    let posH = "center";
-                    if (relX < 0.38) posH = "left side";
-                    else if (relX > 0.62) posH = "right side";
+                    const x = Math.round(Number(token.x) || 0);
+                    const y = Math.round(Number(token.y) || 0);
+                    const w = Math.round(Number(token.width) || 0);
+                    const h = Math.round(Number(token.height) || 0);
+                    const tag = (token.tag || '').trim();
                     
                     let dnaMandate = '';
                     if (ref.analysis && ref.analysis.trim()) {
                         dnaMandate = ` CRITICAL BIOMETRIC OVERRIDE: Specifically alter the generated subject's physical body, height, weight, and traits to perfectly match this DNA profile: "${ref.analysis.trim()}".`;
                     }
-                    specificMaps.push(`- The character physically positioned on the ${posH} of the frame MUST be replaced by the subject in Reference ${ref.index} (${ref.name || 'Subject'}).${dnaMandate}`);
+                    specificMaps.push(`- The subject occupying anchor BBOX [${x}, ${y}, ${w}, ${h}]${tag ? ` ("${tag}")` : ''} MUST be replaced by the subject in Reference ${ref.index} (${ref.name || 'Subject'}).${dnaMandate}`);
                 }
             });
         }
 
         if (specificMaps.length > 0) {
-            prompt += `\n6. CRITICAL REPLACEMENT MAP (MANDATORY IDENTITY TARGETING):\n${specificMaps.join('\n')}\nWARNING: You MUST enforce this exact positioning. DO NOT rely on visual similarity between the reference faces and the original anchor bodies to decide who goes where. You MUST strictly swap the identities into the physical locations defined above. Randomly swapping these characters is a FAILURE.\nOMNIPOTENT OBLITERATION DIRECTIVE: When replacing subjects, you are FORBIDDEN from preserving the anchor's original facial structure, hair, or head shape. You MUST completely overwrite their biological traits to match the Reference Subject and their Biometric Profile, EVEN IF it breaks the original silhouette.\nWARDROBE CONTINUITY (CRITICAL): Unless the Biometric Override explicitly requests a different outfit, you MUST perfectly preserve the EXACT original clothing, suits, and attire worn by the humans in the anchor image. Re-dress your generated subjects in those exact anchor outfits. Do NOT use the casual clothing from the Reference images.`;
+            prompt += `\n6. CRITICAL REPLACEMENT MAP (MANDATORY IDENTITY TARGETING):\n${specificMaps.join('\n')}\nWARNING: You MUST enforce this exact positioning. DO NOT rely on visual similarity between the reference faces and the original anchor bodies to decide who goes where. You MUST strictly swap the identities into the physical locations defined above. Randomly swapping these characters is a FAILURE.\nFULL-SUBJECT REPLACEMENT LOCK (NON-NEGOTIABLE): This is NOT a face-swap. Replace each target subject's full visible identity and build (face, head shape, hairline, neck, shoulder width, torso build, limb thickness, overall body proportions). Keeping the anchor body and only changing the head is a hard failure.\nOMNIPOTENT OBLITERATION DIRECTIVE: When replacing subjects, you are FORBIDDEN from preserving the anchor's original facial structure, hair, head shape, or body build. You MUST completely overwrite their biological traits to match the Reference Subject and their Biometric Profile, EVEN IF it breaks the original silhouette.\nWARDROBE CONTINUITY (CRITICAL): Unless the Biometric Override explicitly requests a different outfit, you MUST perfectly preserve the EXACT original clothing, suits, and attire worn by the humans in the anchor image. Re-dress your generated subjects in those exact anchor outfits. Do NOT use the casual clothing from the Reference images.\nHEADWEAR/LOGO CONTINUITY (CRITICAL): If the anchor subject wears a hat/cap/headwear, preserve its fit geometry and visible logo/emblem exactly (position, scale, and orientation).\nGAZE/HEAD POSE CONTINUITY (CRITICAL): Preserve head yaw/pitch/roll and eye gaze direction from the mapped anchor subject at this location. Do NOT make subjects face camera unless the anchor subject does.\nLIGHTING CONTINUITY (CRITICAL): Match local key/fill and color temperature from CLEAN_BG_PLATE pixels around the mapped region boundary.\nANTI-HEAD-SWAP PIXEL RULE (CRITICAL): Inside each mapped replacement region, do NOT keep anchor facial/head/skin pixels. Re-synthesize the entire subject body from the mapped identity references while preserving anchor pose, gaze, wardrobe, and lighting continuity.`;
+        } else if (dominantSingleSubjectFallback) {
+            const onlyRef = p.activeRefs[0];
+            prompt += `\n6. SINGLE-SUBJECT DOMINANT REPLACEMENT LOCK (MANDATORY): Identify the single most prominent, camera-dominant human subject in the anchor image and replace that exact subject entirely with the person from Reference ${onlyRef.index} (${onlyRef.name || 'Subject'}).\n- This is a one-person identity overwrite, not a vibe match.\n- Preserve the anchor subject's pose, gaze direction, framing, wardrobe, props, and background.\n- Overwrite the anchor subject's face, head shape, hairline, neck, shoulder width, and body build to match Reference ${onlyRef.index} exactly.\n- If the anchor subject differs from Reference ${onlyRef.index} in sex presentation, age appearance, facial structure, skin texture, or ethnicity-presenting features, those anchor traits must be replaced by the reference-defined identity.\n- Do NOT keep the anchor body and only change the head.\n- Do NOT invent a similar-looking new person.\n- If multiple humans are visible, replace only the most visually dominant human subject and leave all others unchanged.`;
         } else {
-            prompt += `\n6. REPLACE ANCHOR SUBJECTS: Disregard the original subjects defined in the anchor plate. Completely overwrite them with the new Reference/Subject identities.`;
+            prompt += `\n6. REPLACE ANCHOR SUBJECTS: Disregard the original subjects defined in the anchor plate. Completely overwrite them with the new Reference/Subject identities. This is a full-subject biometric replacement, not a loose resemblance transfer. Do NOT invent a lookalike.`;
         }
     }
 
     prompt += `\n\n=== REFERENCES ===\n${refLines.length > 0 ? refLines.join('\n') : "No direct image references provided. Rely on text description."}`;
+    if (identityFingerprintLines.length > 0) {
+        prompt += `\n\n=== PER-REFERENCE IDENTITY FINGERPRINT LOCK ===\n${identityFingerprintLines.join('\n')}`;
+    }
+    if (strictIdentitySets.length > 0) {
+        prompt += `\n\n### IDENTITY PRECEDENCE\n`;
+        prompt += p.replaceAnchorSubjects
+            ? [
+                "Use actor reference stacks as the definitive source of full-subject identity, not just facial identity.",
+                "Treat any style analysis or anchor-body resemblance as secondary guidance only.",
+                "If any conflict exists, preserve reference-defined identity over anchor-body retention.",
+                "NO LOOKALIKE POLICY: Never generate a new person who merely resembles the reference."
+            ].join('\n')
+            : buildIdentityPrecedenceBlock({
+                hasFaceAnchors: strictIdentitySets.length > 0,
+                hasActorReferences: strictIdentitySets.length > 0,
+                hasSubjectStyleAnalysis: p.activeRefs.some((r) => !!(r.analysis || '').trim())
+            });
+        prompt += `\n\n### ${p.replaceAnchorSubjects ? 'FULL-SUBJECT IDENTITY LOCK' : 'FACE IDENTITY LOCK'}\n`;
+        prompt += buildStrictFaceIdentityLockBlock({
+            actorIdentitySets: strictIdentitySets,
+            allowWardrobeChange: !p.replaceAnchorSubjects,
+            multiActor: strictIdentitySets.length > 1
+        });
+        if (p.replaceAnchorSubjects) {
+            prompt += `\n\n### BODY IDENTITY LOCK\nPreserve replacement subject body morphology from references (height impression, shoulder width, neck thickness, torso build, limb thickness, and overall silhouette tendencies) while keeping anchor-scene pose, placement, wardrobe continuity, and camera framing.`;
+            prompt += `\n\n### NO FACE-SWAP PROTOCOL\n- Hard failure if output keeps anchor body and changes only head/face.\n- Hard failure if neck/shoulder/torso build remains anchor-like while only facial features are replaced.\n- Required behavior: full-subject biometric remap (face + head + neck + body build) with anchor wardrobe continuity.\n- Preserve anchor pose/gaze orientation at each mapped location.\nIDENTITY LOCK: FULL_SUBJECT_STRICT\nNO_FACE_SWAP: TRUE\nBODY_MORPH_REQUIRED: TRUE\nPOSE_GAZE_LOCK: TRUE\nLIGHTING_FROM_SCENE_ONLY: TRUE\nWARDROBE_FROM_ANCHOR_ONLY: TRUE`;
+        } else {
+            prompt += `\n\nIDENTITY LOCK: FACE_STRICT`;
+        }
+    }
 
     prompt += `\n\n=== OVERALL SCENE & STYLE ===\n${p.bgPrompt || "A generic scene."}`;
 

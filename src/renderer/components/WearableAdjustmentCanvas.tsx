@@ -216,7 +216,7 @@ export const WearableAdjustmentCanvas = ({ subjectUrl, propUrl, anchorContract, 
     };
 
     return (
-        <div className="absolute inset-0 flex flex-col bg-black overflow-hidden animate-in fade-in z-20 rounded-2xl">
+        <div className="absolute inset-0 flex min-h-0 min-w-0 flex-col bg-black overflow-hidden animate-in fade-in z-20 rounded-2xl">
             {/* Header */}
             <div className="h-14 border-b border-gray-800 bg-[#09090b] flex flex-col justify-center px-6 shrink-0 shadow-lg relative z-30">
                 <div className="flex items-center justify-between">
@@ -228,9 +228,9 @@ export const WearableAdjustmentCanvas = ({ subjectUrl, propUrl, anchorContract, 
             </div>
 
             {/* Content Split */}
-            <div className="flex-grow flex min-h-0 relative z-10">
+            <div className="flex-grow flex min-h-0 min-w-0 relative z-10">
                 {/* Visual Canvas (takes majority) */}
-                <div className="flex-grow flex items-center justify-center p-8 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-gray-900/50 to-black overflow-hidden relative">
+                <div className="flex-grow min-w-0 min-h-0 flex items-center justify-center p-4 lg:p-8 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-gray-900/50 to-black overflow-auto custom-scrollbar relative">
                     
                     {/* CONFIRM MODE BADGE */}
                     <div className="absolute top-4 left-4 bg-purple-600/90 text-white px-4 py-2 rounded-lg font-black text-xs tracking-widest uppercase z-50 shadow-[0_0_15px_rgba(147,51,234,0.5)] border border-purple-400/50 pointer-events-none">
@@ -243,9 +243,9 @@ export const WearableAdjustmentCanvas = ({ subjectUrl, propUrl, anchorContract, 
                             <span className="text-xs font-black text-gray-500 uppercase tracking-widest animate-pulse">Prepping Overlay...</span>
                         </div>
                     ) : (
-                        <canvas 
+                        <canvas
                             ref={canvasRef}
-                            className="max-w-full max-h-full object-contain pointer-events-none drop-shadow-2xl"
+                            className="max-w-full max-h-full min-h-[18rem] object-contain pointer-events-none drop-shadow-2xl"
                                 style={{ 
                                     imageRendering: 'auto',
                                     filter: 'drop-shadow(0 0 20px rgba(0,0,0,0.8))'
@@ -255,7 +255,7 @@ export const WearableAdjustmentCanvas = ({ subjectUrl, propUrl, anchorContract, 
                 </div>
 
                 {/* Right Panel: Controls */}
-                <div className="w-80 shrink-0 bg-[#09090b] border-l border-gray-800 flex flex-col p-6 space-y-8 shadow-[inset_1px_0_10px_rgba(0,0,0,0.5)] z-20">
+                <div className="w-80 shrink-0 min-h-0 overflow-y-auto custom-scrollbar bg-[#09090b] border-l border-gray-800 flex flex-col p-6 space-y-8 shadow-[inset_1px_0_10px_rgba(0,0,0,0.5)] z-20">
                     <div>
                         <h3 className="text-xs font-black text-gray-400 uppercase mb-6 tracking-widest">Adjust Anchors</h3>
                         

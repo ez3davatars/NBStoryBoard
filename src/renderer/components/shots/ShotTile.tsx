@@ -9,18 +9,19 @@ interface ShotTileProps {
   onSave?: (variantId: string) => void;
   onRegenerateOne?: (variantId: string, instruction?: string) => void;
   onInspect?: (variantId: string) => void;
+  onSetAsStage?: (variantId: string) => void;
 }
 
-export const ShotTile: React.FC<ShotTileProps> = ({ variant, onToggleSelected, onSave, onRegenerateOne, onInspect }) => {
+export const ShotTile: React.FC<ShotTileProps> = ({ variant, onToggleSelected, onSave, onRegenerateOne, onInspect, onSetAsStage }) => {
   const isGenerating = variant.status === 'queued' || variant.status === 'generating';
   const isRerendering = variant.status === 'rerendering';
-  const hasImage = !!variant.previewUrl || !!variant.finalUrl;
   const rawUrl =
     variant.finalUrl ||
     variant.previewUrl ||
     variant.sourceFinalUrl ||
     variant.sourcePreviewUrl ||
     null;
+  const hasImage = !!rawUrl;
 
   const [displayUrl, setDisplayUrl] = useState<{ sourceUrl: string; value: string | null } | null>(null);
   const [localExpired, setLocalExpired] = useState(false);
@@ -216,6 +217,37 @@ export const ShotTile: React.FC<ShotTileProps> = ({ variant, onToggleSelected, o
                       <polyline points="9 21 3 21 3 15" />
                       <line x1="21" y1="3" x2="14" y2="10" />
                       <line x1="3" y1="21" x2="10" y2="14" />
+                    </svg>
+                  </span>
+                </button>
+              )}
+
+              {onSetAsStage && (
+                <button
+                  onClick={() => onSetAsStage(variant.id)}
+                  className="bg-[#1a1a1c] border border-[#3f3f46] hover:bg-[#27272a] hover:border-green-400 transition-colors w-8 h-8 flex items-center justify-center rounded shadow-lg group/btn"
+                  title="Use as Stage Scene"
+                  style={{ color: '#ffffff', WebkitTextFillColor: '#ffffff' }}
+                >
+                  <span
+                    className="w-4 h-4 flex items-center justify-center pointer-events-none group-hover/btn:scale-110 transition-transform"
+                    style={{ minWidth: 16, minHeight: 16 }}
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="#ffffff"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="block drop-shadow-md"
+                    >
+                      <path d="M12 16V8" />
+                      <polyline points="8 12 12 8 16 12" />
+                      <rect x="4" y="16" width="16" height="4" rx="1" />
                     </svg>
                   </span>
                 </button>

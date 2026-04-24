@@ -876,9 +876,9 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
     };
 
     return (
-        <div className="h-full bg-[#0f0f11] flex overflow-hidden">
-            <div className="w-96 border-r border-gray-800 bg-[#18181b] flex flex-col ">
-                <div className="p-4 border-b border-gray-800 flex justify-between items-center">
+        <div className="h-full min-h-0 min-w-0 bg-[#0f0f11] flex overflow-hidden">
+            <div className="w-96 border-r border-gray-800 bg-[#18181b] flex flex-col min-h-0">
+                <div className="p-4 border-b border-gray-800 flex justify-between items-center shrink-0">
                     <h2 className="text-sm font-black text-white tracking-widest uppercase">Prop Library</h2>
                     <div className="flex gap-1.5">
                         <input
@@ -898,73 +898,77 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                     </div>
                 </div>
 
-                <div className="flex-grow overflow-y-auto p-4 grid grid-cols-2 gap-2 content-start">
-                    {libraryLoading ? (
-                        Array.from({ length: 8 }).map((_, i) => (
-                            <PropLibrarySkeletonCard key={`prop-skeleton-${i}`} />
-                        ))
-                    ) : (
-                        state.propItems.map(item => (
-                            <div
-                                key={item.id}
-                                onClick={(e) => {
-                                    if (e.shiftKey) {
-                                        bindToFirstEmptyRefSlot(item.url, item.name || 'Prop');
-                                        return;
-                                    }
-                                    setSelectedProp(item);
-                                }}
-                                className={`aspect-square rounded-lg border overflow-hidden transition-all group relative cursor-pointer ${selectedProp?.id === item.id ? 'border-blue-500 border-2' : 'border-gray-800 hover:border-gray-600'}`}
-                            >
-                                <img src={item.url} className="w-full h-full object-contain" />
-                                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-                                    <button
-                                        onClick={(e) => {
-                                            e.preventDefault();
-                                            e.stopPropagation();
-                                            dispatch({ type: 'SET_INSPECT_IMAGE', payload: item.url });
-                                        }}
-                                        onKeyDown={(e) => {
-                                            if (e.key === 'Enter' || e.key === ' ') {
+                <div className="flex-grow min-h-0 overflow-y-auto custom-scrollbar p-4 space-y-4">
+                    <div className="grid grid-cols-2 gap-2">
+                        {libraryLoading ? (
+                            Array.from({ length: 8 }).map((_, i) => (
+                                <PropLibrarySkeletonCard key={`prop-skeleton-${i}`} />
+                            ))
+                        ) : (
+                            state.propItems.map(item => (
+                                <div
+                                    key={item.id}
+                                    onClick={(e) => {
+                                        if (e.shiftKey) {
+                                            bindToFirstEmptyRefSlot(item.url, item.name || 'Prop');
+                                            return;
+                                        }
+                                        setSelectedProp(item);
+                                    }}
+                                    className={`aspect-square rounded-lg border overflow-hidden transition-all group relative cursor-pointer ${selectedProp?.id === item.id ? 'border-blue-500 border-2' : 'border-gray-800 hover:border-gray-600'}`}
+                                >
+                                    <img src={item.url} className="w-full h-full transition-transform group-hover:scale-110 object-contain" draggable={false} />
+                                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                                        <button
+                                            onClick={(e) => {
                                                 e.preventDefault();
                                                 e.stopPropagation();
                                                 dispatch({ type: 'SET_INSPECT_IMAGE', payload: item.url });
-                                            }
-                                        }}
-                                        className="bg-blue-500/80 hover:bg-blue-500 text-white p-1.5 rounded-full"
-                                        title="Inspect Large"
-                                    >
-                                        <Maximize className="w-3.5 h-3.5" />
-                                    </button>
+                                            }}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter' || e.key === ' ') {
+                                                    e.preventDefault();
+                                                    e.stopPropagation();
+                                                    dispatch({ type: 'SET_INSPECT_IMAGE', payload: item.url });
+                                                }
+                                            }}
+                                            className="bg-blue-500/80 hover:bg-blue-500 text-white p-1.5 rounded-full"
+                                            title="Inspect Large"
+                                        >
+                                            <Maximize className="w-3.5 h-3.5" />
+                                        </button>
 
-                                    <button
-                                        onClick={(e) => { e.stopPropagation(); setConfirmDelete(item); }}
-                                        className="bg-red-500/80 hover:bg-red-500 text-white p-1.5 rounded-full transition-transform hover:scale-110"
-                                        title="Delete Prop"
-                                    >
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                    </button>
+                                        <button
+                                            onClick={(e) => { e.stopPropagation(); setConfirmDelete(item); }}
+                                            className="bg-red-500/80 hover:bg-red-500 text-white p-1.5 rounded-full transition-transform hover:scale-110"
+                                            title="Delete Prop"
+                                        >
+                                            <Trash2 className="w-3.5 h-3.5" />
+                                        </button>
+                                    </div>
+
+                                    <span className="text-[8px] font-bold text-white uppercase truncate absolute bottom-2 left-2 right-2 text-center">{item.name}</span>
                                 </div>
-                            </div>
-                        ))
-                    )}
+                            ))
+                        )}
+                    </div>
                 </div>
             </div>
 
-            <div className="flex-grow flex flex-col bg-[#09090b]">
-                <div className="flex bg-[#18181b] px-4 pt-4 gap-4 border-b border-gray-800">
+            <div className="flex-grow min-w-0 flex flex-col bg-[#09090b]">
+                <div className="flex shrink-0 overflow-x-auto custom-scrollbar bg-[#18181b] px-4 pt-4 gap-4 border-b border-gray-800">
                     <button onClick={() => setActiveTab('designer')} className={`pb-3 px-4 text-xs font-bold uppercase tracking-widest border-b-2 transition-all ${activeTab === 'designer' ? 'border-blue-500 text-blue-500' : 'border-transparent text-gray-500 hover:text-gray-300'}`}>Prop Designer</button>
                     <button onClick={() => setActiveTab('library')} className={`pb-3 px-4 text-xs font-bold uppercase tracking-widest border-b-2 transition-all ${activeTab === 'library' ? 'border-blue-500 text-blue-500' : 'border-transparent text-gray-500 hover:text-gray-300'}`}>Application Room</button>
                 </div>
 
                 <div className="flex-grow min-h-0 overflow-hidden p-4 flex flex-col">
                     {activeTab === 'designer' ? (
-                        <div className="w-full h-full flex gap-6 min-h-0">
+                        <div className="w-full h-full flex gap-6 min-h-0 min-w-0 overflow-hidden">
                             {/* LEFT: DESIGN CONTROLS */}
-                            <div className="w-[380px] shrink-0 flex flex-col h-full min-h-0">
-                                <div className="bg-[#18181b] p-6 rounded-2xl border border-gray-800 flex flex-col min-h-0">
+                            <div className="w-[clamp(18rem,34vw,380px)] shrink-0 flex flex-col h-full min-h-0">
+                                <div className="flex-1 bg-[#18181b] p-6 rounded-2xl border border-gray-800 flex flex-col min-h-0">
                                     <h3 className="text-xs font-black text-gray-400 uppercase mb-4 tracking-widest">Designer Workshop</h3>
-                                    <textarea value={designerPrompt} onChange={(e) => setDesignerPrompt(e.target.value)} className="w-full bg-[#09090b] border border-[#27272a] p-4 rounded-xl text-sm text-gray-200 flex-grow resize-none mb-4 focus:border-blue-500 focus:outline-none" placeholder="Describe the object..." />
+                                    <textarea value={designerPrompt} onChange={(e) => setDesignerPrompt(e.target.value)} className="w-full min-h-[10rem] bg-[#09090b] border border-[#27272a] p-4 rounded-xl text-sm text-gray-200 flex-grow resize-y overflow-y-auto custom-scrollbar mb-4 focus:border-blue-500 focus:outline-none" placeholder="Describe the object..." />
                                     <button onClick={handleDesignerGenerate} disabled={
                                         state.isProcessing || !designerPrompt ||
                                         (state.billingEntitlements.effectiveBillingMode === 'byok' && !state.apiKey)
@@ -973,7 +977,7 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                             </div>
 
                             {/* RIGHT: LARGE VIEWPORT */}
-                            <div className="flex-grow min-w-0 h-full bg-black rounded-2xl border border-gray-800 flex items-center justify-center overflow-hidden relative group">
+                            <div className="flex-grow min-w-0 min-h-0 h-full bg-black rounded-2xl border border-gray-800 flex items-center justify-center overflow-auto custom-scrollbar relative group">
                                 {designerImage ? (
                                     <div className="relative w-full h-full">
                                         <img src={designerImage} className="w-full h-full object-contain" />
@@ -991,19 +995,19 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                             </div>
                         </div>
                     ) : (
-                        <div className="w-full h-full flex gap-4 min-h-0">
+                        <div className="w-full h-full flex gap-4 min-h-0 min-w-0 overflow-hidden">
                             {/* LEFT COLUMN: Inputs (Split into 2 cards) */}
-                            <div className="w-80 shrink-0 flex flex-col space-y-4 h-full overflow-hidden">
+                            <div className="w-80 shrink-0 flex flex-col space-y-4 h-full min-h-0 overflow-y-auto custom-scrollbar pr-1">
                                 {/* Card A: Clean Selections */}
-                                <div className="bg-[#18181b] p-6 rounded-2xl border border-gray-800 shrink-0">
+                                <div className="bg-[#18181b] p-4 lg:p-6 rounded-2xl border border-gray-800 shrink-0">
                                     <h3 className="text-xs font-black text-gray-400 uppercase mb-4 tracking-widest">1. Subject</h3>
-                                    <div className="grid grid-cols-4 gap-2 mb-6 h-32 overflow-y-auto custom-scrollbar">
+                                    <div className="grid grid-cols-[repeat(auto-fit,minmax(56px,1fr))] gap-2 mb-5 h-[clamp(5rem,16vh,8rem)] overflow-y-auto custom-scrollbar">
                                         {state.cast.map(c => (
                                             <button key={c.id} onClick={() => setSelectedCharacter(c)} className={`aspect-square rounded-lg border-2 overflow-hidden transition-all ${selectedCharacter?.id === c.id ? 'border-green-500 ring-1 ring-green-500 scale-95' : 'border-gray-800 hover:border-gray-600'}`}><img src={c.previewUrl || c.url} className="w-full h-full object-cover" /></button>
                                         ))}
                                     </div>
-                                    <h3 className="text-xs font-black text-gray-400 uppercase mb-4 tracking-widest border-t border-gray-800 pt-6">2. Active Prop</h3>
-                                    <div className="h-48 bg-[#09090b] rounded-xl border border-gray-800 flex items-center justify-center overflow-hidden relative group">
+                                    <h3 className="text-xs font-black text-gray-400 uppercase mb-4 tracking-widest border-t border-gray-800 pt-5">2. Active Prop</h3>
+                                    <div className="h-[clamp(7rem,22vh,12rem)] bg-[#09090b] rounded-xl border border-gray-800 flex items-center justify-center overflow-hidden relative group">
                                         {selectedProp ? (
                                             <>
                                                 <img src={selectedProp.url} className="w-full h-full object-contain p-2" />
@@ -1022,9 +1026,9 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                                 </div>
 
                                 {/* Card B: Action Area */}
-                                <div className="bg-[#18181b] p-6 rounded-2xl border border-gray-800 flex-grow flex flex-col min-h-0">
+                                <div className="bg-[#18181b] p-4 lg:p-6 rounded-2xl border border-gray-800 flex-1 min-h-[13rem] flex flex-col">
                                     <h3 className="text-xs font-black text-gray-400 uppercase mb-4 tracking-widest">3. Placement Notes</h3>
-                                    <textarea className="w-full bg-[#09090b] border border-[#27272a] p-3 rounded-lg text-xs text-gray-300 flex-grow mb-4 focus:border-blue-500 focus:outline-none resize-none min-h-[80px]" placeholder="Where should the prop be?..." value={applyNote} onChange={(e) => setApplyNote(e.target.value)} />
+                                    <textarea className="w-full bg-[#09090b] border border-[#27272a] p-3 rounded-lg text-xs text-gray-300 flex-1 min-h-[6rem] max-h-64 mb-4 focus:border-blue-500 focus:outline-none resize-y overflow-y-auto custom-scrollbar" placeholder="Where should the prop be?..." value={applyNote} onChange={(e) => setApplyNote(e.target.value)} />
                                     
 
 
@@ -1038,7 +1042,7 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                             </div>
 
                             {/* RESULT COLUMN */}
-                            <div className="flex-grow flex flex-row bg-[#09090b] rounded-2xl overflow-hidden border border-gray-800 relative min-w-0">
+                            <div className="flex-grow min-w-0 min-h-0 flex flex-row bg-[#09090b] rounded-2xl overflow-hidden border border-gray-800 relative">
                                 {adjustmentState && (
                                     <WearableAdjustmentCanvas
                                         subjectUrl={adjustmentState.subjectUrl}
@@ -1054,17 +1058,17 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                                         }}
                                     />
                                 )}
-                                <div className="flex-grow h-full bg-black flex flex-col border-r border-gray-800 relative overflow-hidden ">
+                                <div className="flex-grow min-w-0 min-h-0 h-full bg-black flex flex-col border-r border-gray-800 relative overflow-hidden">
                                     {/* Stage Header */}
-                                    <div className="h-14 border-b border-gray-800 bg-white/5 flex items-center justify-between px-6 shrink-0 backdrop-blur-md">
-                                        <div className="flex items-center gap-3">
+                                    <div className="min-h-[3.5rem] border-b border-gray-800 bg-white/5 flex items-center justify-between gap-3 px-4 lg:px-6 py-3 shrink-0 backdrop-blur-md">
+                                        <div className="flex min-w-0 items-center gap-3">
                                             <div className={`w-2 h-2 rounded-full ${appliedImage ? 'bg-emerald-500 -[0_0_8px_rgba(16,185,129,0.6)]' : 'bg-gray-600'}`} />
-                                            <span className="text-xs font-black uppercase tracking-widest text-gray-400">Preview Stage</span>
+                                            <span className="min-w-0 truncate text-xs font-black uppercase tracking-widest text-gray-400">Preview Stage</span>
                                         </div>
 
                                         {/* Header Actions */}
                                         {appliedImage && (
-                                            <div className="flex items-center gap-2 animate-in fade-in duration-300">
+                                            <div className="flex min-w-0 flex-wrap items-center justify-end gap-2 animate-in fade-in duration-300">
                                                 <button onClick={(e) => {
                                                     if (e.shiftKey) {
                                                         const finalUrl = appliedImage;
@@ -1084,13 +1088,13 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                                     </div>
 
                                     {/* Stage Content */}
-                                    <div className="flex-grow relative w-full flex items-center justify-center p-8 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-gray-900/50 to-black">
+                                    <div className="flex-1 min-h-0 relative w-full overflow-auto custom-scrollbar flex items-center justify-center p-4 lg:p-8 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-gray-900/50 to-black">
                                         {appliedImage ? (
-                                            <div className="relative w-full h-full flex items-center justify-center">
+                                            <div className="relative flex h-full min-h-[18rem] w-full items-center justify-center">
                                                 <img src={appliedImage} className={'max-w-full max-h-full object-contain '} />
                                             </div>
                                         ) : (
-                                            <div className="flex flex-col items-center gap-4 text-gray-800 select-none pointer-events-none">
+                                            <div className="flex min-h-[18rem] flex-col items-center justify-center gap-4 text-gray-800 select-none pointer-events-none">
                                                 <Package className="w-24 h-24 opacity-10" />
                                                 <span className="text-xs font-black uppercase tracking-widest opacity-20">Select Subject & Prop</span>
                                             </div>

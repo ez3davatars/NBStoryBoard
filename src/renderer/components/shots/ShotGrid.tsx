@@ -8,9 +8,10 @@ interface ShotGridProps {
   onSave?: (variantId: string) => void;
   onRegenerateOne?: (variantId: string, instruction?: string) => void;
   onInspect?: (variantId: string) => void;
+  onSetAsStage?: (variantId: string) => void;
 }
 
-export const ShotGrid: React.FC<ShotGridProps> = ({ variants, onToggleSelected, onSave, onRegenerateOne, onInspect }) => {
+export const ShotGrid: React.FC<ShotGridProps> = ({ variants, onToggleSelected, onSave, onRegenerateOne, onInspect, onSetAsStage }) => {
   if (!variants || variants.length === 0) {
     return (
       <div className="flex-grow flex items-center justify-center text-gray-500">
@@ -30,6 +31,7 @@ export const ShotGrid: React.FC<ShotGridProps> = ({ variants, onToggleSelected, 
             onSave={onSave}
             onRegenerateOne={onRegenerateOne}
             onInspect={onInspect}
+            onSetAsStage={onSetAsStage}
           />
         ))}
       </div>

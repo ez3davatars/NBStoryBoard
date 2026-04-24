@@ -1952,7 +1952,6 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                 } catch(e) {
                     console.warn(e);
                 }
-                
                 setFinalCharacterUrl(prev => {
                     if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev);
                     return safeUrl;
@@ -2423,7 +2422,6 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
             } catch(e) {
                 console.warn(e);
             }
-
             setRefSheetUrl(prev => {
                 if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev);
                 return safeRefSheetUrl;
@@ -2806,11 +2804,12 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
 
                                             <div className="pt-6 border-t border-border space-y-2">
                                                 <button
-                                                    onClick={handleSaveToActors}
+                                                    onClick={() => void handleSaveToActors()}
                                                     disabled={!finalCharacterUrl}
+                                                    title="Exports this selected image to your chosen Library folder."
                                                     className="w-full bg-surface-2 hover:bg-surface-3 text-white py-3 rounded-lg text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 border border-border transition-all hover:scale-[1.02]"
                                                 >
-                                                    <UserPlus className="w-4 h-4 text-emerald-500" /> Save Character
+                                                    <UserPlus className="w-4 h-4 text-emerald-500" /> Export Character
                                                 </button>
                                             </div>
                                         </div>
@@ -2835,11 +2834,12 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                                         {selectedWardrobeItem ? "Fit Selected Item" : "Generate & Fit"}
                                                     </button>
                                                     <button
-                                                        onClick={handleSaveToWardrobe}
+                                                        onClick={() => void handleSaveToWardrobe()}
                                                         disabled={!finalCharacterUrl}
+                                                        title="Exports this selected image to your chosen Library folder."
                                                         className="bg-surface-3 hover:bg-surface-2 text-white py-2 rounded-lg text-[10px] font-black uppercase tracking-wider border border-border"
                                                     >
-                                                        Save to Library
+                                                        Export to Library
                                                     </button>
                                                 </div>
                                             </div>
@@ -3620,10 +3620,11 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
 
                                         <button
                                             onClick={() => handleOpenSaveModal('actor')}
+                                            title="Exports this selected image to your chosen Library folder."
                                             className="col-span-1 py-4 bg-surface-2 hover:bg-surface text-purple-400 font-black uppercase tracking-widest text-xs rounded-xl transition-all border border-purple-500/30 hover:border-purple-500 flex flex-col items-center gap-1"
                                         >
                                             <FolderPlus className="w-5 h-5" />
-                                            Save Library
+                                            Export to Library
                                         </button>
 
                                         <button
@@ -3867,9 +3868,10 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                         </button>
                                         <button
                                             onClick={() => handleOpenSaveModal('ref_sheet')}
+                                            title="Exports this selected image to your chosen Library folder."
                                             className="bg-accent hover:bg-white text-green-900 px-6 py-2 rounded-lg font-bold uppercase tracking-widest text-xs transition-all flex items-center gap-2"
                                         >
-                                            <Share2 className="w-4 h-4" /> Save
+                                            <Share2 className="w-4 h-4" /> Export to Library
                                         </button>
                                         <button
                                             onClick={() => { setShowRefSheet(false); setRefSheetUrl(null); }}

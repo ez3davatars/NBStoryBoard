@@ -65,6 +65,7 @@ type HostedExecutionOptions = {
   imageSize?: '1K' | '2K' | '4K';
   expectedResponseType?: ExpectedResponseType;
   onJobAccepted?: (generationId: string, acceptedAt?: number) => void;
+  uiWaitWindowMs?: number;
   signal?: AbortSignal;
 };
 
@@ -73,6 +74,7 @@ type SharedGenerationOptions = {
   entitlements?: GenerationEntitlements;
   onJobAccepted?: (generationId: string, acceptedAt?: number) => void;
   expectedResponseType?: ExpectedResponseType;
+  uiWaitWindowMs?: number;
   signal?: AbortSignal;
 };
 
@@ -382,10 +384,13 @@ export const GeminiService = {
           window.dispatchEvent(new CustomEvent('refresh-credits'));
       }
 
+      const defaultUiWaitMs =
+        options.imageSize === '4K' ? 480000 :
+        options.imageSize === '2K' ? 360000 :
+        300000;
+      const uiWaitWindowMs = Math.max(10000, options.uiWaitWindowMs ?? defaultUiWaitMs);
       let attempts = 0;
-      let MAX_ATTEMPTS = 150; // 1K default (300s) to comfortably endure queuing delays
-      if (options.imageSize === '2K') MAX_ATTEMPTS = 180; // 360s
-      if (options.imageSize === '4K') MAX_ATTEMPTS = 240; // 480s
+      const MAX_ATTEMPTS = Math.max(1, Math.ceil(uiWaitWindowMs / 2000));
       
       while (attempts < MAX_ATTEMPTS) {
         if (options.signal?.aborted) throw new Error("AbortError: Canceled by user");
@@ -429,7 +434,8 @@ export const GeminiService = {
         }
       }
       
-      const timeoutErr = new Error('Hosted Generation Pending: Generation exceeded the current UI wait window and may still complete in the background.') as Error & { generationId?: string };
+      const timeoutSeconds = Math.round(uiWaitWindowMs / 1000);
+      const timeoutErr = new Error(`Hosted Generation Pending: Generation exceeded the current UI wait window (${timeoutSeconds}s) and may still complete in the background.`) as Error & { generationId?: string };
       timeoutErr.name = 'TimeoutError';
       timeoutErr.generationId = genId;
       throw timeoutErr;
@@ -449,7 +455,7 @@ export const GeminiService = {
     apiKey: string,
     model: string,
     referenceImages: { url: string; label: string }[] = [],
-    options: { aspectRatio?: string, imageSize?: '1K' | '2K' | '4K', thinkingLevel?: boolean | 'minimal' | 'low' | 'medium' | 'high', googleGrounding?: boolean, strictMode?: boolean, billingMode?: BillingMode, entitlements?: GenerationEntitlements, onJobAccepted?: (generationId: string, acceptedAt?: number) => void } = {}
+    options: { aspectRatio?: string, imageSize?: '1K' | '2K' | '4K', thinkingLevel?: boolean | 'minimal' | 'low' | 'medium' | 'high', googleGrounding?: boolean, strictMode?: boolean, billingMode?: BillingMode, entitlements?: GenerationEntitlements, onJobAccepted?: (generationId: string, acceptedAt?: number) => void, uiWaitWindowMs?: number } = {}
   ): Promise<string> {
 
     // --- API ACCESS LAYER ---

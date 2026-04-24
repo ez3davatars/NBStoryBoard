@@ -55,7 +55,7 @@ export const SidebarPanel = ({
  if (onDrop) onDrop(id);
  }
  }}
- className={`border border-[#27272a] rounded-xl overflow-hidden transition-all duration-300 shrink-0 ${collapsed ? 'h-[42px]' : 'bg-[#09090b]/80 backdrop-blur-md'}`}
+  className={`min-w-0 border border-[#27272a] rounded-xl overflow-hidden transition-all duration-300 shrink-0 ${collapsed ? 'h-[42px]' : 'bg-[#09090b]/80 backdrop-blur-md'}`}
  style={style}
  >
  <div
@@ -71,10 +71,10 @@ export const SidebarPanel = ({
  onClick={() => onToggle(id)}
  className={`flex items-center justify-between p-3 cursor-pointer select-none hover:bg-white/5 transition-colors ${activeBg}`}
  >
- <div className="flex items-center gap-2">
- {draggable && <GripVertical className={`w-3 h-3 ${gripStyle} opacity-50 cursor-grab active:cursor-grabbing`} />}
- {Icon && <Icon className={`w-3.5 h-3.5 ${iconStyle}`} />}
- <span className={`text-[10px] font-bold uppercase tracking-widest ${titleStyle}`}>{title}</span>
+  <div className="flex items-center gap-2 min-w-0">
+  {draggable && <GripVertical className={`w-3 h-3 ${gripStyle} opacity-50 cursor-grab active:cursor-grabbing`} />}
+  {Icon && <Icon className={`w-3.5 h-3.5 ${iconStyle}`} />}
+  <span className={`min-w-0 truncate text-[10px] font-bold uppercase tracking-widest ${titleStyle}`}>{title}</span>
  </div>
  <div className="flex items-center gap-2">
  {rightElement}
@@ -84,7 +84,7 @@ export const SidebarPanel = ({
  </div>
  </div>
  {!collapsed && (
- <div className="p-3 border-t border-[#27272a]">
+  <div className="min-w-0 p-3 border-t border-[#27272a]">
  {children}
  </div>
  )}

@@ -32,6 +32,7 @@ export type ShotsPanelProps = {
   onUpdateSession: (sceneId: string, updater: (prev?: ShotSession) => ShotSession | undefined) => void;
   onToggleVariantSelected: (sceneId: string, variantId: string, selected: boolean) => void;
   onSaveVariant?: (url: string, prefix: string) => void;
+  onSetAsStage?: (url: string) => void;
 };
 
 const deriveShotsStyleLock = (qualityMode?: string): string => {
@@ -80,6 +81,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
   onUpdateSession,
   onToggleVariantSelected,
   onSaveVariant,
+  onSetAsStage,
 }) => {
   const { state, dispatch } = useAppContext();
   
@@ -641,6 +643,17 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
     onSaveVariant(url, prefix);
   };
 
+  const handleSetVariantAsStage = (variantId: string) => {
+    if (!session || !onSetAsStage) return;
+    const variant = session.variants.find(v => v.id === variantId);
+    if (!variant) return;
+
+    const url = variant.finalUrl || variant.previewUrl || variant.sourceFinalUrl || variant.sourcePreviewUrl;
+    if (!url) return;
+
+    onSetAsStage(url);
+  };
+
   const handleRegenerateOne = async (variantId: string, instruction?: string) => {
     // Basic implementation for single tile retry
     if (!session || !effectiveResultImageUrl) return;
@@ -963,6 +976,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
             onSave={handleSaveVariant}
             onRegenerateOne={handleRegenerateOne}
             onInspect={setInspectVariantId}
+            onSetAsStage={handleSetVariantAsStage}
           />
         </div>
       )}
