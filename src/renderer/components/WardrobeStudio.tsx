@@ -21,6 +21,9 @@ import HelpTooltip from './ui/HelpTooltip';
 import InlineHint from './ui/InlineHint';
 import ConfirmDialog from './ui/ConfirmDialog';
 import { LibraryAssetMaterializer } from '../services/LibraryAssetMaterializer';
+import { useRecentGenerationsStore } from '../stores/useRecentGenerationsStore';
+import { RecentGenerationsCacheService } from '../services/RecentGenerationsCacheService';
+import RecentGenerationsStrip from './recent/RecentGenerationsStrip';
 
 type PermissionAwareDirectoryHandle = FileSystemDirectoryHandle & {
     queryPermission?: (descriptor?: { mode?: 'read' | 'readwrite' }) => Promise<PermissionState>;
@@ -218,6 +221,7 @@ const WardrobeStudio = () => {
         setDesignerRefName('');
         setDesignerImage(null);
         setDesignerMask(null);
+        useRecentGenerationsStore.getState().clearRecentGenerationsForStudio('wardrobe');
     };
 
 
@@ -1262,6 +1266,29 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
             setDesignerImage(safeUrl);
             dispatch({ type: 'ADD_LOG', payload: { message: "Costume generated (Costume Designer).", type: 'success' } });
+
+            // --- RECENT GENERATIONS: Cache result silently ---
+            const recentStore = useRecentGenerationsStore.getState();
+            if (recentStore.cacheDirPath && safeUrl) {
+                RecentGenerationsCacheService.cacheGeneration({
+                    imageDataUrl: safeUrl,
+                    studio: 'wardrobe',
+                    cacheDirPath: recentStore.cacheDirPath,
+                }).then((cacheResult) => {
+                    if (cacheResult.success && cacheResult.localCachePath && cacheResult.displayUrl) {
+                        recentStore.addRecentGeneration({
+                            studio: 'wardrobe',
+                            localCachePath: cacheResult.localCachePath,
+                            displayUrl: cacheResult.displayUrl,
+                            createdAt: Date.now(),
+                            prompt: designerPrompt || 'Generated Costume',
+                            mode: (state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok') || 'byok',
+                        });
+                    }
+                }).catch((e) => {
+                    console.warn('[Wardrobe] Recent generation caching failed:', e);
+                });
+            }
         } catch (error: unknown) {
             if (isPendingGenerationError(error) && error.generationId) {
                 dispatch({ type: 'UPDATE_BACKGROUND_JOB', payload: { id: error.generationId, updates: { status: 'pending_background' } } });
@@ -1447,36 +1474,80 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
             const isDesignRef = isDesignReferenceSelected(selectedCostume);
 
+            // Keyword hint for extra enclosure emphasis (NOT a gate — all fidelity rules always apply)
             const isEnclosureCostume =
-                /costume|mascot|onesie|full[- ]?body|character suit|banana|fruit|food|animal|creature|dinosaur|novelty|plush|foam suit|body suit|bodysuit|robe|shell|armor/i.test(costumeText);
+                /costume|mascot|onesie|full[- ]?body|character suit|banana|fruit|food|animal|creature|dinosaur|novelty|plush|foam suit|body suit|bodysuit|robe|shell|armor|helmet|mask|hood|visor|respirator|crown|headpiece|cloak|veil/i.test(costumeText);
 
-            const faceWindowLockBlock = isEnclosureCostume ? `
- FACE WINDOW LOCK (CRITICAL)
- - If the Costume Reference shows a dedicated face hole, face window, or face opening, the subject's face must appear only through that designed face window.
- - Preserve the exact position, size, shape, and border of the designed face window as shown in the Costume Reference.
- - Do NOT widen, shrink, move, reshape, split, or redesign the face window.
- - Do NOT place the face in any other cavity, mouth opening, cutout, gap, or decorative opening unless the reference clearly shows that it is the intended face window.
- - Decorative openings, cavities, or structural gaps must remain decorative unless the reference explicitly shows they are used for the face.
- - Adjust the subject internally to the costume rather than changing the costume opening.
- - Do NOT expose extra neck, chest, shoulders, wrists, ankles, hands, or feet unless explicitly visible in the Costume Reference.
+            const enclosureEmphasis = isEnclosureCostume ? `
+ ENCLOSURE EMPHASIS (keyword-detected wardrobe type)
+ - This costume appears to include enclosure, head-coverage, or structural body-wrapping elements.
+ - Pay extra attention to preserving face-window boundaries, helmet/hood closure, and full-body enclosure logic.
+ - If the Costume Reference shows a dedicated face hole, face window, or visor, the subject's face must appear ONLY through that designed opening.
+ - Adjust the subject internally to the costume rather than modifying the costume opening.
 ` : '';
 
-            const fittingBlock = isEnclosureCostume ? `
- COSTUME TRANSFER (HARD LOCK)
- - Transfer the costume onto the subject while preserving the original design exactly.
- - The costume may stretch or fit naturally to the person's body, but the designed structure must remain intact.
- - Preserve the exact silhouette, enclosure, coverage, padding, bulk, appendages, and visible openings shown in the Costume Reference.
- - Do NOT redesign any structural part of the costume in order to fit the subject.
- - If the face must be aligned to the designed face window, adjust the internal fit, neck length, or interior positioning rather than changing the costume opening itself.
- - Do NOT invent extra arm shapes, extra sleeve shapes, duplicate limb-like costume protrusions, extra glove logic, or extra foot logic.
- - Do NOT convert the costume into ordinary clothing or a body-contoured reinterpretation.
- ${faceWindowLockBlock}
-` : `
- GARMENT TRANSFER (STRICT)
+            // ─── UNIVERSAL WEARABLE FIDELITY CONTRACT ────────────────────────
+            // This contract applies to ALL wardrobe items — from open dresses to fully enclosed space suits.
+            const WEARABLE_FIDELITY_CONTRACT = `
+ WEARABLE FIDELITY CONTRACT (UNIVERSAL — ALWAYS ACTIVE)
+ This contract governs the physical relationship between the wardrobe item and the subject.
+ It applies equally to all costume types: helmets, masks, crowns, hoods, hats, veils, headwraps,
+ goggles, armor, cloaks, respirators, mascot suits, formal gowns, casual clothing, and any wearable.
+
+ CORE PRINCIPLE: Preserve the exact degree of openness or enclosure shown in the Costume Reference.
+ - An open neckline stays open. A helmet stays enclosed. A crown stays seated. A hood stays fitted.
+ - A mask keeps its exact face window. A cloak keeps its drape. A dress keeps its silhouette.
+ - Do NOT increase or decrease the costume's coverage, openness, or enclosure beyond what the reference shows.
+
+ COVERAGE & STRUCTURE PRESERVATION
+ - Preserve the exact silhouette, coverage area, layering, attachment points, and fit behavior shown in the Costume Reference.
+ - Preserve all structural elements: padding, bulk, armor plates, seams, closures, zippers, straps, buckles, and hardware.
+ - Do NOT simplify, flatten, or streamline complex costume geometry.
+ - Do NOT convert an enclosed or structured costume into a body-contoured reinterpretation.
+ - Do NOT invent extra appendages, extra sleeve shapes, duplicate glove logic, or extra foot logic.
+
+ HEAD & FACE COVERAGE RULE (CRITICAL)
+ - Analyze the Costume Reference image to determine how much of the head, face, hair, neck, and ears it covers.
+ - Reproduce that exact coverage in the output. No more visible, no less visible.
+ - If the costume fully encloses the head (helmet, mascot head, mask), the face appears ONLY through the designed face window or visor.
+ - If the costume partially frames the face (hood, crown, headwrap, brimmed hat, veil), preserve the exact framing geometry.
+ - If the costume leaves the head completely uncovered, the subject's hair and face appear naturally.
+ - Do NOT widen, shrink, move, reshape, or redesign any face opening or head coverage boundary.
+ - Do NOT expose additional hair, ears, forehead, jawline, or neck beyond what the costume physically allows.
+
+ BODY EXPOSURE DISCIPLINE
+ - Only show skin, hair, or body parts that are explicitly visible through the costume's openings in the reference.
+ - Do NOT expose extra neck, chest, shoulders, wrists, ankles, hands, or feet unless the Costume Reference explicitly shows them.
+ - If an area's coverage is ambiguous, keep it covered.
+
+ ${enclosureEmphasis}
+`;
+
+            // ─── COSTUME RELIGHTING CONTRACT ─────────────────────────────────
+            const COSTUME_RELIGHTING_CONTRACT = `
+ COSTUME-DRIVEN RELIGHTING (PHYSICAL INTEGRATION)
+ The subject's face and body must be lit as if they are physically inside or wearing the costume.
+
+ - If the costume creates an enclosed or semi-enclosed space around the head (helmet, hood, mask, visor, brim),
+   render believable occlusion shadows from the surrounding costume geometry onto the face.
+ - Apply contact shadows where face, neck, and skin meet garment edges and openings.
+ - Render material bounce and color reflection from nearby costume surfaces onto exposed skin.
+ - Match the color temperature of skin lighting to the costume's environment — metallic surfaces reflect cool light,
+   warm fabrics cast warm ambient light, dark interiors reduce overall face brightness.
+ - Reduce "portrait beauty lighting" when the costume physically constrains or shapes the light reaching the face.
+ - If the face is behind a visor or translucent material, render the appropriate tint, reflection, and diffusion.
+ - For open or minimal costumes, standard studio lighting is appropriate — do not force enclosure lighting.
+`;
+
+            // ─── FITTING BLOCK (universal, with enclosure emphasis when detected) ──
+            const fittingBlock = `
+ GARMENT TRANSFER (STRICT FIDELITY)
  - Transfer the exact garment from the Costume Reference onto the subject.
- - Preserve silhouette, proportions, colors, materials, and visible construction details.
- - Fit the garment naturally only insofar as needed to look physically worn.
- - Do NOT redesign the garment.
+ - The costume may stretch or fit naturally to the person's body, but the designed structure must remain intact.
+ - Preserve silhouette, proportions, coverage, padding, bulk, appendages, colors, materials, and visible construction details.
+ - Fit the garment naturally only insofar as needed to look physically worn — do NOT redesign.
+ - Do NOT convert structured or enclosed costumes into ordinary clothing or body-contoured reinterpretations.
+ - If the costume has a dedicated face window, adjust the subject internally rather than changing the costume opening.
 `;
 
             const designAssemblyBlock = isDesignRef ? `
@@ -1495,15 +1566,13 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
             const sideViewLockBlock = `
  SIDE-VIEW LOCK
  - The Canonical Front/Back Sheet is the absolute source of truth.
- - Side views must be rotations of the already-established costume, not reinterpretations.
+ - Side views must be rotations of the same physical garment in 3D space, not reinterpretations or redesigns.
  - Do NOT invent new openings, new exposed anatomy, new glove separation, new ankle shaping, new footwear logic, or new costume structure.
  - Do NOT reinterpret the original Costume Reference if it conflicts with the Canonical Front/Back Sheet.
  - If a side detail is not visible in the Canonical Front/Back Sheet, keep it structurally consistent and non-revealing.
 `;
 
-            const effectiveTryOnNote = isEnclosureCostume
-                ? `${tryOnNote ? `${tryOnNote}. ` : ''}Preserve the costume exactly. If the design has a dedicated face window, keep that opening exactly as shown and place the subject's face only there. Do not use any other cavity or decorative opening as the face opening.`
-                : (tryOnNote || "Transfer the garment exactly and preserve the visible design.");
+            const effectiveTryOnNote = tryOnNote || "Transfer the garment exactly and preserve the visible design.";
 
             const sourceAppearanceContinuityBlock = `
  SOURCE APPEARANCE CONTINUITY LOCK (CRITICAL)
@@ -1523,6 +1592,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  - Do NOT convert loose hair into a bun, ponytail, braid, pinned style, updo, or tied-back style unless explicitly shown in the source.
  - Preserve approximate hair length, fullness, parting, texture, and silhouette.
  - Hair continuity must coexist with all worn accessories and headwear.
+ - If the costume covers or constrains hair (helmet, hood, headwrap), only the hair visible through costume openings should be shown.
 `;
 
             let brandingInstruction = "";
@@ -1550,40 +1620,50 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                 const res = await GeminiService.generateImage(
                     `Perform a professional virtual try-on and fashion fitting.
 
- SUBJECT (IDENTITY LOCK)
- - Use the Subject Reference image(s) only to preserve the exact facial identity and likeness of the person.
- - Same face, same person, no morphing, no age change.
-
- STYLE MATCH
- - The final rendering style should match the Subject Reference style: ${subjectStyle}.
- - If the Subject Reference is a realistic photograph, render the fitted costume as realistic material with realistic texture and lighting.
+ === PRIORITY 1: WARDROBE PHYSICAL STRUCTURE ===
 
  COSTUME (HARD TRANSFER AUTHORITY)
- - The Costume Reference (${costumeName}) is the authority for the outfit.
+ - The Costume Reference (${costumeName}) is the absolute authority for the outfit.
  - Copy the costume exactly as shown.
  - Preserve the exact visible silhouette, enclosure, coverage, face-window placement, colors, textures, materials, and construction.
  - Do NOT reinterpret it into a more wearable, more fitted, more anatomical, or more revealing version.
  - IGNORE filename text if it conflicts with the image.
  ${designAssemblyBlock}
- ${faceWindowLockBlock}
+
+ ${WEARABLE_FIDELITY_CONTRACT}
+
+ ${fittingBlock}
+ - Remove existing clothing/accessories from the subject before fitting the costume.
 
  COLOR & MATERIAL LOCK
  - Preserve the exact costume colors from the Costume Reference.
  - Do NOT shift, mute, brighten, darken, replace, or reinterpret the costume colors.
  - Preserve the exact visible material finish and fabric appearance.
 
- SUBJECT IDENTITY
- - Preserve the subject's face and identity.
- - The body exists only to support the costume transfer.
- - Do NOT prioritize body contour over costume structure.
-
- ${fittingBlock}
- - Remove existing clothing/accessories from the subject before fitting the costume.
-
  FOOTWEAR (CONTEXTUAL MATCH)
  - If the Costume Reference explicitly shows shoes, feet, or foot coverings, copy them exactly.
  - Do NOT invent footwear logic not visible in the Costume Reference.
  - Do NOT expose feet unless explicitly visible in the Costume Reference.
+
+ === PRIORITY 2: COSTUME-DRIVEN RELIGHTING ===
+
+ ${COSTUME_RELIGHTING_CONTRACT}
+
+ === PRIORITY 3: SUBJECT IDENTITY (within costume limits) ===
+
+ SUBJECT (IDENTITY LOCK — SUBORDINATE TO COSTUME STRUCTURE)
+ - Use the Subject Reference image(s) to preserve the exact facial identity and likeness of the person.
+ - Same face, same person, no morphing, no age change.
+ - CRITICAL: Identity must be preserved WITHIN the physical limits imposed by the costume.
+ - If the costume covers, encloses, or restricts visibility of any body part, identity preservation must NOT cause
+   the costume to open, remove, simplify, or expose areas the Costume Reference does not physically allow.
+ - The body exists only to support the costume transfer. Do NOT prioritize body contour over costume structure.
+
+ === PRIORITY 4: STYLE & IMAGE QUALITY ===
+
+ STYLE MATCH
+ - The final rendering style should match the Subject Reference style: ${subjectStyle}.
+ - If the Subject Reference is a realistic photograph, render the fitted costume as realistic material with realistic texture and lighting.
 
  COMPOSITION
  - Single subject only. Full body visible. No cropping head/feet.
@@ -1594,12 +1674,14 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  [FITTING NOTES]: ${effectiveTryOnNote}
 
  NEGATIVE CONSTRAINTS:
+ opened costume that should be closed, removed headwear, exposed hair under helmet, widened face opening,
  face placed in wrong opening, face placed in decorative cavity, face placed in non-face opening,
  redesigned face hole, widened face window, shrunken face window, moved face window, broken face-window border,
  invented openings, extra cutouts, exposed neck when not shown, exposed wrists when not shown, exposed ankles when not shown, exposed hands when not shown, exposed feet when not shown,
  reshaped gloves, reshaped feet, anatomy contouring, body-hugging reinterpretation, bodysuit reinterpretation, costume redesign,
  extra limbs, duplicate arms, duplicate sleeves, duplicate glove forms, duplicate foot forms, extra costume appendages,
  altered costume colors, shifted palette, desaturated costume, brighter costume, darker costume, material reinterpretation,
+ portrait beauty lighting on enclosed face, missing occlusion shadows, missing contact shadows,
  flat cutout, bad photoshop, unnatural drape, floating clothes, modified design, text, watermark.`,
                     state.apiKey,
                     state.model,
@@ -1625,6 +1707,29 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                 setFittedImage(safeUrl);
                 setActiveTryOnView('front');
                 dispatch({ type: 'ADD_LOG', payload: { message: "Front view fitting complete.", type: 'success' } });
+
+                // --- RECENT GENERATIONS: Cache result silently ---
+                const recentStore = useRecentGenerationsStore.getState();
+                if (recentStore.cacheDirPath && safeUrl) {
+                    RecentGenerationsCacheService.cacheGeneration({
+                        imageDataUrl: safeUrl,
+                        studio: 'wardrobe',
+                        cacheDirPath: recentStore.cacheDirPath,
+                    }).then((cacheResult) => {
+                        if (cacheResult.success && cacheResult.localCachePath && cacheResult.displayUrl) {
+                            recentStore.addRecentGeneration({
+                                studio: 'wardrobe',
+                                localCachePath: cacheResult.localCachePath,
+                                displayUrl: cacheResult.displayUrl,
+                                createdAt: Date.now(),
+                                prompt: tryOnNote || 'Wardrobe try-on',
+                                mode: (state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok') || 'byok',
+                            });
+                        }
+                    }).catch((e) => {
+                        console.warn('[Wardrobe] Recent generation caching failed:', e);
+                    });
+                }
                 return;
             }
 
@@ -1645,22 +1750,19 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
  ${twoPanelFormat}
 
- SUBJECT (IDENTITY LOCK)
- - Use the Subject Reference image(s) only to preserve the exact facial identity and likeness.
- - The LEFT and RIGHT panels must depict the SAME person.
- - Do NOT let body anatomy override costume structure.
- ${sourceAppearanceContinuityBlock}
- ${hairConsistencyBlock}
+ === PRIORITY 1: WARDROBE PHYSICAL STRUCTURE ===
 
  COSTUME (HARD TRANSFER AUTHORITY)
- - The Costume Reference (${costumeName}) is the authority for the outfit.
+ - The Costume Reference (${costumeName}) is the absolute authority for the outfit.
  - Copy the costume exactly as shown.
  - Preserve the exact visible silhouette, enclosure, coverage, designed face-window placement, colors, textures, materials, and construction.
  - Do NOT reinterpret it into a more wearable, more fitted, more anatomical, or more revealing version.
  - IGNORE filename text if it conflicts with the image.
  ${designAssemblyBlock}
- ${faceWindowLockBlock}
- - If the costume has a dedicated face window, that is the only valid face placement location.
+
+ ${WEARABLE_FIDELITY_CONTRACT}
+
+ ${fittingBlock}
 
  COLOR & MATERIAL LOCK
  - Preserve the exact costume colors from the Costume Reference.
@@ -1678,22 +1780,36 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  - RIGHT PANEL: BACK view, straight-on.
 
  STRUCTURE RULE
- - The front and back panels must depict the same exact costume structure.
+ - The front and back panels must depict the same exact physical garment.
  - Any enclosure or coverage shown in front must remain structurally consistent in back unless the reference explicitly shows otherwise.
  - Do NOT create a back opening or exposed head/neck zone unless explicitly visible in the Costume Reference.
 
- ${fittingBlock}
+ === PRIORITY 2: COSTUME-DRIVEN RELIGHTING ===
+
+ ${COSTUME_RELIGHTING_CONTRACT}
+
+ === PRIORITY 3: SUBJECT IDENTITY (within costume limits) ===
+
+ SUBJECT (IDENTITY LOCK — SUBORDINATE TO COSTUME STRUCTURE)
+ - Use the Subject Reference image(s) to preserve the exact facial identity and likeness.
+ - The LEFT and RIGHT panels must depict the SAME person.
+ - CRITICAL: Identity must be preserved WITHIN the physical limits imposed by the costume.
+ - Do NOT let body anatomy or identity preservation override costume structure.
+ ${sourceAppearanceContinuityBlock}
+ ${hairConsistencyBlock}
 
  ${brandingInstruction}
 
  [FITTING NOTES]: ${effectiveTryOnNote}
 
  NEGATIVE:
+ opened costume that should be closed, removed headwear, exposed hair under helmet, widened face opening,
  face placed in wrong opening, face placed in decorative cavity, face placed in non-face opening,
  redesigned face hole, widened face window, shrunken face window, moved face window, broken face-window border,
  extra limbs, duplicate arms, duplicate sleeves, duplicate gloves, extra costume appendages, invented openings, extra cutouts, exposed neck when not shown, exposed wrists when not shown, exposed ankles when not shown, exposed hands when not shown, exposed feet when not shown, anatomy contouring, body-hugging reinterpretation, bodysuit reinterpretation, costume redesign, mascot redesign,
  missing worn accessory, removed accessory, dropped headwear, missing jewelry, removed jewelry, missing eyewear, removed eyewear, missing veil, removed veil, missing hood, removed hood, missing scarf, removed scarf, missing glove, removed glove, missing footwear, removed footwear, missing adornment, simplified adornment, omitted source appearance element, restyled hair, bun hairstyle, updo, tied-back hair, ponytail, braid, pinned hair, shorter hair, different hair volume, different hair silhouette,
  altered costume colors, shifted palette, desaturated costume, brighter costume, darker costume, material reinterpretation,
+ portrait beauty lighting on enclosed face, missing occlusion shadows, missing contact shadows,
  flat cutout, bad photoshop, unnatural drape, floating clothes, modified design, text, watermark.`,
                 state.apiKey,
                 state.model,
@@ -1723,22 +1839,17 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
  ${twoPanelFormat}
 
- SUBJECT IDENTITY (CRITICAL LOCK)
- - The LEFT and RIGHT panels must depict the exact same person.
- - Preserve face identity and neutral upright posture.
- - Do NOT let body anatomy override the costume structure established by the Canonical Front/Back Sheet.
- ${sourceAppearanceContinuityBlock}
- ${hairConsistencyBlock}
+ === PRIORITY 1: WARDROBE PHYSICAL STRUCTURE ===
 
  COSTUME & APPEARANCE CANON (ABSOLUTE LOCK)
  - The Canonical Front/Back Sheet is the absolute source of truth for the full worn look.
+ - These side views must depict the same physical garment rotated in 3D space — NOT reinterpretations or redesigns.
  - Preserve the same costume structure, same visible coverage, same accessories, same hairstyle state, same headwear, same worn adornments, and same footwear across all turnaround views.
  - Do NOT add, remove, restyle, simplify, or reinterpret any source-established appearance element.
- - Side and back views must be faithful rotations of the same exact appearance package.
  - If the source-established look contains multiple simultaneous elements, preserve all of them together.
  ${sideViewLockBlock}
- ${faceWindowLockBlock}
- - If the costume has a dedicated face window, that is the only valid face placement location.
+
+ ${WEARABLE_FIDELITY_CONTRACT}
 
  COLOR & MATERIAL LOCK
  - Preserve the exact costume colors established by the Canonical Front/Back Sheet.
@@ -1764,11 +1875,26 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  - If the subject is barefoot in the Front/Back Sheet, they MUST be barefoot in both profile views. NO EXCEPTIONS. Do NOT add shoes if they are barefoot.
  - Do NOT hallucinate different shoes for the profile view.
 
+ === PRIORITY 2: COSTUME-DRIVEN RELIGHTING ===
+
+ ${COSTUME_RELIGHTING_CONTRACT}
+
+ === PRIORITY 3: SUBJECT IDENTITY (within costume limits) ===
+
+ SUBJECT IDENTITY (CRITICAL LOCK — SUBORDINATE TO COSTUME STRUCTURE)
+ - The LEFT and RIGHT panels must depict the exact same person.
+ - Preserve face identity and neutral upright posture.
+ - CRITICAL: Identity must be preserved WITHIN the physical limits imposed by the costume.
+ - Do NOT let body anatomy or identity preservation override the costume structure established by the Canonical Front/Back Sheet.
+ ${sourceAppearanceContinuityBlock}
+ ${hairConsistencyBlock}
+
  ${brandingInstructionLR}
 
  [FITTING NOTES]: ${effectiveTryOnNote}
 
  NEGATIVE CONSTRAINTS (FORBIDDEN):
+ opened costume that should be closed, removed headwear, exposed hair under helmet, widened face opening,
  face placed in wrong opening, face placed in decorative cavity, face placed in non-face opening,
  redesigned face hole, widened face window, shrunken face window, moved face window, broken face-window border,
  extra limbs, duplicate arms, duplicate sleeves, duplicate gloves, extra costume appendages, invented openings, exposed neck when not shown, exposed wrists when not shown, exposed ankles when not shown,
@@ -1776,6 +1902,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  costume redesign, side-view reinterpretation, outfit mismatch,
  missing worn accessory, removed accessory, dropped headwear, missing jewelry, removed jewelry, missing eyewear, removed eyewear, missing veil, removed veil, missing hood, removed hood, missing scarf, removed scarf, missing glove, removed glove, missing footwear, removed footwear, missing adornment, simplified adornment, omitted source appearance element, restyled hair, bun hairstyle, updo, tied-back hair, ponytail, braid, pinned hair, shorter hair, different hair volume, different hair silhouette,
  altered costume colors, shifted palette, desaturated costume, brighter costume, darker costume, material reinterpretation,
+ portrait beauty lighting on enclosed face, missing occlusion shadows, missing contact shadows,
  text, watermark.`,
                 state.apiKey,
                 state.model,
@@ -1848,6 +1975,29 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
             setActiveTryOnView('sheetFB');
 
             dispatch({ type: 'ADD_LOG', payload: { message: "Turnaround complete (2 sheets generated: FB + LR).", type: 'success' } });
+
+            // --- RECENT GENERATIONS: Cache turnaround FB sheet silently ---
+            const recentStore = useRecentGenerationsStore.getState();
+            if (recentStore.cacheDirPath && safeFbSheet) {
+                RecentGenerationsCacheService.cacheGeneration({
+                    imageDataUrl: safeFbSheet,
+                    studio: 'wardrobe',
+                    cacheDirPath: recentStore.cacheDirPath,
+                }).then((cacheResult) => {
+                    if (cacheResult.success && cacheResult.localCachePath && cacheResult.displayUrl) {
+                        recentStore.addRecentGeneration({
+                            studio: 'wardrobe',
+                            localCachePath: cacheResult.localCachePath,
+                            displayUrl: cacheResult.displayUrl,
+                            createdAt: Date.now(),
+                            prompt: tryOnNote || 'Wardrobe turnaround',
+                            mode: (state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok') || 'byok',
+                        });
+                    }
+                }).catch((e) => {
+                    console.warn('[Wardrobe] Recent turnaround caching failed:', e);
+                });
+            }
         } catch (error: unknown) {
             const logType = isPendingGenerationError(error) ? 'info' : 'error';
             dispatch({ type: 'ADD_LOG', payload: { message: getErrorMessage(error), type: logType } });
@@ -2213,28 +2363,28 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                         />
 
                                         {/* ACTIONS */}
-                                        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex gap-3 z-50">
+                                        <div className="absolute top-4 left-4 flex gap-3 z-50">
                                             {designerImage ? (
                                                 <>
                                                     <button
                                                         onClick={() => saveToWardrobe(designerImage!, designerPrompt)}
-                                                        className="bg-blue-600 hover:bg-blue-500 text-white px-8 py-3 rounded-full font-black text-[10px] uppercase tracking-widest border border-blue-400 transition-all active:scale-95 flex items-center gap-3"
+                                                        className="bg-blue-600 hover:bg-blue-500 text-white !px-3 !py-1.5 !min-w-0 !min-h-0 !w-auto !h-auto rounded-full font-black text-[9px] uppercase tracking-widest border border-blue-400 transition-all active:scale-95 flex items-center gap-2"
                                                     >
-                                                        <Shirt className="w-4 h-4" /> Save to Wardrobe
+                                                        <Shirt className="w-3.5 h-3.5" /> Save to Wardrobe
                                                     </button>
                                                     <button
                                                         onClick={clearDesignerWorkspace}
-                                                        className="bg-red-600/80 hover:bg-red-500 text-white px-8 py-3 rounded-full font-black text-[10px] uppercase tracking-widest border border-red-500/50 transition-all active:scale-95 flex items-center gap-3"
+                                                        className="bg-red-600/80 hover:bg-red-500 text-white !px-3 !py-1.5 !min-w-0 !min-h-0 !w-auto !h-auto rounded-full font-black text-[9px] uppercase tracking-widest border border-red-500/50 transition-all active:scale-95 flex items-center gap-2"
                                                         title="Discard Generated Costume"
                                                     >
-                                                        <X className="w-4 h-4" /> Clear
+                                                        <X className="w-3.5 h-3.5" /> Clear
                                                     </button>
                                                     <button
                                                         onClick={() => downloadImage(designerImage!, `costume-${Date.now()}.png`)}
-                                                        className="bg-white/10 hover:bg-white/20 text-white p-3 rounded-full transition-all border border-white/10 active:scale-95"
+                                                        className="bg-white/10 hover:bg-white/20 text-white !px-3 !py-1.5 !min-w-0 !min-h-0 !w-auto !h-auto rounded-full transition-all border border-white/10 active:scale-95 flex items-center justify-center"
                                                         title="Download Generated Costume"
                                                     >
-                                                        <Download className="w-4 h-4" />
+                                                        <Download className="w-3.5 h-3.5" />
                                                     </button>
                                                 </>
                                             ) : (
@@ -2256,6 +2406,20 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                                 </>
                                             )}
                                         </div>
+                                        {/* RECENT GENERATIONS STRIP */}
+                                        <div className="absolute bottom-2 left-0 right-0 z-50 pointer-events-auto flex justify-center px-4">
+                                            <RecentGenerationsStrip
+                                                studio="wardrobe"
+                                                className="w-full max-w-3xl bg-black/80 backdrop-blur-md rounded-2xl border border-white/10"
+                                                onSelectGeneration={(gen) => {
+                                                    setDesignerImage(gen.displayUrl);
+                                                }}
+                                                onExportGeneration={(gen) => {
+                                                    setDesignerImage(gen.displayUrl);
+                                                }}
+                                            />
+                                        </div>
+
                                     </div>
                                 ) : (
                                     <div className="flex flex-col items-center opacity-20">
@@ -2432,8 +2596,22 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                             </div>
                                         )}
 
-
                                     </div>
+
+                                    {/* RECENT GENERATIONS STRIP (Try-On Room) */}
+                                    <div className="absolute bottom-2 left-0 right-0 z-50 pointer-events-auto flex justify-center px-4">
+                                        <RecentGenerationsStrip
+                                            studio="wardrobe"
+                                            className="w-full max-w-3xl bg-black/80 backdrop-blur-md rounded-2xl border border-white/10"
+                                            onSelectGeneration={(gen) => {
+                                                setFittedImage(gen.displayUrl);
+                                            }}
+                                            onExportGeneration={(gen) => {
+                                                setFittedImage(gen.displayUrl);
+                                            }}
+                                        />
+                                    </div>
+
                                 </div>
 
 
@@ -2677,7 +2855,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                         </button>
 
                                         <button onClick={handleOpenSaveModal} className="w-full bg-purple-500/10 hover:bg-purple-500 text-purple-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-purple-500/20 hover:-[0_0_15px_rgba(168,85,247,0.4)] text-[10px] font-black uppercase tracking-wider" title="Save to Actor Library">
-                                            <FolderPlus className="w-4 h-4" /> Save to Library
+                                            <FolderPlus className="w-4 h-4" /> Export to Library
                                         </button>
 
                                         <div className="grid grid-cols-2 gap-3">
@@ -2695,6 +2873,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                                     historyIndex: -1,
                                                     processedTryOnUrl: null
                                                 });
+                                                useRecentGenerationsStore.getState().clearRecentGenerationsForStudio('wardrobe');
                                             }} className="w-full bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-red-500/20 hover:-[0_0_15px_rgba(239,68,68,0.4)] text-[10px] font-black uppercase tracking-wider" title="Clear/Discard">
                                                 <X className="w-4 h-4" /> Clear
                                             </button>
@@ -2705,6 +2884,21 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                         </div>
                     )}
 
+                    {/* RECENT GENERATIONS STRIP */}
+                    <RecentGenerationsStrip
+                        studio="wardrobe"
+                        className="shrink-0 mt-2"
+                        onSelectGeneration={(gen) => {
+                            setFittedImage(gen.displayUrl);
+                            setActiveTryOnView('front');
+                        }}
+                        onExportGeneration={(gen) => {
+                            // Trigger the save modal flow with the selected generation
+                            setFittedImage(gen.displayUrl);
+                            handleOpenSaveModal();
+                            useRecentGenerationsStore.getState().markExported(gen.id);
+                        }}
+                    />
 
 
                     {/* SAVE TO LIBRARY MODAL (Refactored) */}

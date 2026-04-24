@@ -733,6 +733,63 @@ function registerFileIpcHandlers() {
       return null;
     }
   });
+  electron.ipcMain.handle("app:getRecentGenerationsPath", async () => {
+    try {
+      const cachePath = path__namespace.join(electron.app.getPath("userData"), "Recent Generations");
+      await fs__namespace.mkdir(cachePath, { recursive: true });
+      return cachePath;
+    } catch (error) {
+      console.error("getRecentGenerationsPath Error:", error);
+      return null;
+    }
+  });
+  electron.ipcMain.handle("app:cleanupRecentGenerations", async (_event, olderThanDays) => {
+    const retentionDays = typeof olderThanDays === "number" && olderThanDays > 0 ? olderThanDays : 30;
+    const cachePath = path__namespace.join(electron.app.getPath("userData"), "Recent Generations");
+    let deletedCount = 0;
+    try {
+      const resolvedCache = path__namespace.resolve(cachePath);
+      const entries = await fs__namespace.readdir(resolvedCache, { withFileTypes: true });
+      for (const entry of entries) {
+        const entryPath = path__namespace.join(resolvedCache, entry.name);
+        if (entry.isDirectory()) {
+          try {
+            const subEntries = await fs__namespace.readdir(entryPath, { withFileTypes: true });
+            for (const sub of subEntries) {
+              if (!sub.isFile()) continue;
+              const filePath = path__namespace.join(entryPath, sub.name);
+              try {
+                const stat = await fs__namespace.stat(filePath);
+                const ageMs = Date.now() - stat.mtimeMs;
+                const ageDays = ageMs / (1e3 * 60 * 60 * 24);
+                if (ageDays > retentionDays) {
+                  await fs__namespace.unlink(filePath);
+                  deletedCount++;
+                }
+              } catch {
+              }
+            }
+          } catch {
+          }
+        } else if (entry.isFile()) {
+          try {
+            const stat = await fs__namespace.stat(entryPath);
+            const ageMs = Date.now() - stat.mtimeMs;
+            const ageDays = ageMs / (1e3 * 60 * 60 * 24);
+            if (ageDays > retentionDays) {
+              await fs__namespace.unlink(entryPath);
+              deletedCount++;
+            }
+          } catch {
+          }
+        }
+      }
+      return { success: true, deletedCount };
+    } catch (error) {
+      console.error("cleanupRecentGenerations Error:", error);
+      return { success: false, deletedCount };
+    }
+  });
 }
 let depthIpcRegistered = false;
 function registerDepthIpcHandlers() {

@@ -1,6 +1,6 @@
 
 import { useState, useEffect, useMemo } from "react";
-import { RefreshCw, Terminal, Activity, Wand2, Sparkles, X, Download, UserPlus, Hammer, Fingerprint, Maximize2, Save, Calculator, ScanFace, Aperture, Check, RotateCcw, Copy, Lock, Unlock } from "lucide-react";
+import { RefreshCw, Terminal, Activity, Wand2, Sparkles, X, Download, UserPlus, Hammer, Fingerprint, Maximize2, Save, Calculator, ScanFace, Aperture, Check, RotateCcw, Copy, Lock, Unlock, FolderOutput } from "lucide-react";
 // Remove GlassCard import
 import { Input } from "./ui/Input";
 import { Slider } from "./ui/Slider";
@@ -12,6 +12,10 @@ import type { CastMember } from "../context/AppContext";
 import { GeminiService } from "../services/GeminiService";
 import { NanobananaThinking } from "./ui/NanobananaThinking";
 import ConfirmDialog from "./ui/ConfirmDialog";
+import { useRecentGenerationsStore } from "../stores/useRecentGenerationsStore";
+import { RecentGenerationsCacheService } from "../services/RecentGenerationsCacheService";
+import RecentGenerationsStrip from "./recent/RecentGenerationsStrip";
+import { LibraryAssetMaterializer } from "../services/LibraryAssetMaterializer";
 import {
     buildPortraitPrompt,
     LIGHTING_PRESETS,
@@ -581,6 +585,29 @@ export default function PortraitStudio() {
             dispatch({ type: "SET_LAST_CASTED_IMAGE", payload: stableDisplayUrl });
             dispatch({ type: "SET_LAST_CASTED_PROMPT", payload: compiledPrompt });
             dispatch({ type: "ADD_LOG", payload: { message: "Portrait Generated", type: "success" } });
+
+            // --- RECENT GENERATIONS: Cache result silently ---
+            const recentStore = useRecentGenerationsStore.getState();
+            if (recentStore.cacheDirPath && stableDisplayUrl) {
+                RecentGenerationsCacheService.cacheGeneration({
+                    imageDataUrl: stableDisplayUrl,
+                    studio: 'portrait',
+                    cacheDirPath: recentStore.cacheDirPath,
+                }).then((cacheResult) => {
+                    if (cacheResult.success && cacheResult.localCachePath && cacheResult.displayUrl) {
+                        recentStore.addRecentGeneration({
+                            studio: 'portrait',
+                            localCachePath: cacheResult.localCachePath,
+                            displayUrl: cacheResult.displayUrl,
+                            createdAt: Date.now(),
+                            prompt: compiledPrompt,
+                            mode: (state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok') || 'byok',
+                        });
+                    }
+                }).catch((e) => {
+                    console.warn('[Portrait] Recent generation caching failed:', e);
+                });
+            }
         } catch (error: unknown) {
             dispatch({ type: "ADD_LOG", payload: { message: `Generation failed: ${getErrorMessage(error)}`, type: "error" } });
         } finally {
@@ -1309,7 +1336,7 @@ export default function PortraitStudio() {
             </div>
 
             {/* RIGHT PANEL: CONSOLE */}
-            <div className="w-[480px] flex flex-col gap-4 shrink-0 pb-10 overflow-hidden pt-2">
+            <div className="w-[480px] flex flex-col gap-4 shrink-0 pb-10 overflow-y-auto pt-2 scrollbar-none">
 
                 {/* CHARACTER SUMMARY BLOCK (NEW) */}
                 <SolidPanel className="p-4 flex flex-col gap-2 shrink-0 border-white/10 relative">
@@ -1375,6 +1402,44 @@ export default function PortraitStudio() {
                         </div>
                     </SolidPanel>
                 )}
+
+                {/* RECENT GENERATIONS STRIP */}
+                <RecentGenerationsStrip
+                    studio="portrait"
+                    className="shrink-0"
+                    onSelectGeneration={(gen) => {
+                        setGeneratedImage(gen.displayUrl);
+                        dispatch({ type: "SET_LAST_CASTED_IMAGE", payload: gen.displayUrl });
+                    }}
+                    onExportGeneration={async (gen) => {
+                        try {
+                            const mat = await LibraryAssetMaterializer.materializeCastAsset({
+                                sourceUrl: gen.displayUrl,
+                                saveDirectoryPath: state.saveDirectoryPath,
+                                actorName: `Portrait ${dna.identity.sex} ${dna.identity.age}`,
+                                category: 'portrait',
+                            });
+                            if (mat.localPath) {
+                                const newActor: CastMember = {
+                                    id: crypto.randomUUID(),
+                                    name: `Portrait ${dna.identity.sex} ${dna.identity.age}`,
+                                    url: mat.previewUrl,
+                                    localPath: mat.localPath,
+                                    previewUrl: mat.previewUrl,
+                                    sourceUrl: mat.sourceUrl,
+                                    tag: 'front',
+                                    filename: mat.filename,
+                                    profile: { identity: dna.identity.ethnicity, wardrobe: '', accessories: '', style: 'Portrait' },
+                                };
+                                dispatch({ type: 'ADD_ACTOR_LIBRARY', payload: newActor });
+                                useRecentGenerationsStore.getState().markExported(gen.id);
+                                dispatch({ type: 'ADD_LOG', payload: { message: `Exported to Library: ${mat.filename || 'Actor'}`, type: 'success' } });
+                            }
+                        } catch (err) {
+                            dispatch({ type: 'ADD_LOG', payload: { message: `Export failed: ${err instanceof Error ? err.message : String(err)}`, type: 'error' } });
+                        }
+                    }}
+                />
 
                 {/* CONSOLE CARD */}
                 <SolidPanel className="flex-1 flex flex-col h-full border-white/5 bg-[#050505] -[inset_0_2px_20px_rgba(0,0,0,0.5)]">
@@ -1564,6 +1629,41 @@ export default function PortraitStudio() {
                             title="Send to Casting Forge"
                         >
                             <Hammer className="w-6 h-6 stroke-[2.5]" />
+                        </button>
+
+                        {/* Export to Library (Inspector) */}
+                        <button
+                            onClick={async () => {
+                                try {
+                                    const mat = await LibraryAssetMaterializer.materializeCastAsset({
+                                        sourceUrl: generatedImage!,
+                                        saveDirectoryPath: state.saveDirectoryPath,
+                                        actorName: `Portrait ${dna.identity.sex} ${dna.identity.age}`,
+                                        category: 'portrait',
+                                    });
+                                    if (mat.localPath) {
+                                        const newActor: CastMember = {
+                                            id: crypto.randomUUID(),
+                                            name: `Portrait ${dna.identity.sex} ${dna.identity.age}`,
+                                            url: mat.previewUrl,
+                                            localPath: mat.localPath,
+                                            previewUrl: mat.previewUrl,
+                                            sourceUrl: mat.sourceUrl,
+                                            tag: 'front',
+                                            filename: mat.filename,
+                                            profile: { identity: dna.identity.ethnicity, wardrobe: '', accessories: '', style: 'Portrait' },
+                                        };
+                                        dispatch({ type: 'ADD_ACTOR_LIBRARY', payload: newActor });
+                                        dispatch({ type: 'ADD_LOG', payload: { message: `Exported to Library: ${mat.filename || 'Actor'}`, type: 'success' } });
+                                    }
+                                } catch (err) {
+                                    dispatch({ type: 'ADD_LOG', payload: { message: `Export failed: ${err instanceof Error ? err.message : String(err)}`, type: 'error' } });
+                                }
+                            }}
+                            className="w-14 h-14 bg-blue-500/20 hover:bg-blue-500 text-blue-400 hover:text-white rounded-xl transition-all transform hover:scale-110 flex items-center justify-center border border-blue-500/30"
+                            title="Export to Library"
+                        >
+                            <FolderOutput className="w-6 h-6 stroke-[2.5]" />
                         </button>
 
                         <div className="w-px h-10 bg-white/10 my-auto mx-2" />

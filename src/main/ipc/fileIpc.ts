@@ -1,4 +1,4 @@
-import { ipcMain, dialog } from 'electron';
+import { ipcMain, dialog, app } from 'electron';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as crypto from 'crypto';
@@ -137,6 +137,74 @@ export function registerFileIpcHandlers() {
     } catch (error) {
       console.error("Hash Error:", error);
       return null;
+    }
+  });
+
+  // --- RECENT GENERATIONS CACHE ---
+
+  ipcMain.handle('app:getRecentGenerationsPath', async () => {
+    try {
+      const cachePath = path.join(app.getPath('userData'), 'Recent Generations');
+      await fs.mkdir(cachePath, { recursive: true });
+      return cachePath;
+    } catch (error) {
+      console.error('getRecentGenerationsPath Error:', error);
+      return null;
+    }
+  });
+
+  ipcMain.handle('app:cleanupRecentGenerations', async (_event, olderThanDays?: number) => {
+    const retentionDays = typeof olderThanDays === 'number' && olderThanDays > 0 ? olderThanDays : 30;
+    const cachePath = path.join(app.getPath('userData'), 'Recent Generations');
+    let deletedCount = 0;
+
+    try {
+      const resolvedCache = path.resolve(cachePath);
+      const entries = await fs.readdir(resolvedCache, { withFileTypes: true });
+
+      for (const entry of entries) {
+        const entryPath = path.join(resolvedCache, entry.name);
+
+        if (entry.isDirectory()) {
+          try {
+            const subEntries = await fs.readdir(entryPath, { withFileTypes: true });
+            for (const sub of subEntries) {
+              if (!sub.isFile()) continue;
+              const filePath = path.join(entryPath, sub.name);
+              try {
+                const stat = await fs.stat(filePath);
+                const ageMs = Date.now() - stat.mtimeMs;
+                const ageDays = ageMs / (1000 * 60 * 60 * 24);
+                if (ageDays > retentionDays) {
+                  await fs.unlink(filePath);
+                  deletedCount++;
+                }
+              } catch {
+                // Skip files we can't stat/delete
+              }
+            }
+          } catch {
+            // Skip directories we can't read
+          }
+        } else if (entry.isFile()) {
+          try {
+            const stat = await fs.stat(entryPath);
+            const ageMs = Date.now() - stat.mtimeMs;
+            const ageDays = ageMs / (1000 * 60 * 60 * 24);
+            if (ageDays > retentionDays) {
+              await fs.unlink(entryPath);
+              deletedCount++;
+            }
+          } catch {
+            // Skip files we can't stat/delete
+          }
+        }
+      }
+
+      return { success: true, deletedCount };
+    } catch (error) {
+      console.error('cleanupRecentGenerations Error:', error);
+      return { success: false, deletedCount };
     }
   });
 }

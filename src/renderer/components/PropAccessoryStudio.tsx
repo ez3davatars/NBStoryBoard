@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
     Package, RefreshCcw, Maximize, Sparkles,
-    Download, X, Save, Upload, Trash2, ArrowRight
+    Download, X, Save, Upload, Trash2, ArrowRight, FolderOutput
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
@@ -15,6 +15,9 @@ import { WearableOverlayComposer } from '../services/WearableOverlayComposer';
 import { WearableRefinementValidator } from '../services/WearableRefinementValidator';
 import { WearableAdjustmentCanvas } from './WearableAdjustmentCanvas';
 import type { WearableAnchorContract, WearablePlacement, WearableClass } from '../services/WearableAnchorEngine';
+import { useRecentGenerationsStore } from '../stores/useRecentGenerationsStore';
+import { RecentGenerationsCacheService } from '../services/RecentGenerationsCacheService';
+import RecentGenerationsStrip from './recent/RecentGenerationsStrip';
 
 type PermissionAwareDirectoryHandle = FileSystemDirectoryHandle & {
     queryPermission?: (descriptor?: { mode?: 'read' | 'readwrite' }) => Promise<PermissionState>;
@@ -450,6 +453,29 @@ extra objects, duplicate prop, altered proportions, floating parts, text, label,
 
             setDesignerImage(safeUrl);
             dispatch({ type: 'ADD_LOG', payload: { message: "Prop generated on black studio background.", type: 'success' } });
+
+            // --- RECENT GENERATIONS: Cache result silently ---
+            const recentStore = useRecentGenerationsStore.getState();
+            if (recentStore.cacheDirPath && safeUrl) {
+                RecentGenerationsCacheService.cacheGeneration({
+                    imageDataUrl: safeUrl,
+                    studio: 'props',
+                    cacheDirPath: recentStore.cacheDirPath,
+                }).then((cacheResult) => {
+                    if (cacheResult.success && cacheResult.localCachePath && cacheResult.displayUrl) {
+                        recentStore.addRecentGeneration({
+                            studio: 'props',
+                            localCachePath: cacheResult.localCachePath,
+                            displayUrl: cacheResult.displayUrl,
+                            createdAt: Date.now(),
+                            prompt: designerPrompt,
+                            mode: (state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok') || 'byok',
+                        });
+                    }
+                }).catch((e) => {
+                    console.warn('[PropDesigner] Recent generation caching failed:', e);
+                });
+            }
         } catch (error: unknown) {
             if (isPendingGenerationError(error) && error.generationId) {
                 dispatch({ type: 'UPDATE_BACKGROUND_JOB', payload: { id: error.generationId, updates: { status: 'pending_background', timing: { submittedAt, edgeAcceptedAt: actualAcceptedAt, clientTimeoutAt: Date.now() } } } });
@@ -810,6 +836,29 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
 
                 setAppliedImage(safeUrl);
                 dispatch({ type: 'ADD_LOG', payload: { message: "Prop integrated.", type: 'info' } });
+
+                // --- RECENT GENERATIONS: Cache applied prop result ---
+                const recentStore = useRecentGenerationsStore.getState();
+                if (recentStore.cacheDirPath && safeUrl) {
+                    RecentGenerationsCacheService.cacheGeneration({
+                        imageDataUrl: safeUrl,
+                        studio: 'props',
+                        cacheDirPath: recentStore.cacheDirPath,
+                    }).then((cacheResult) => {
+                        if (cacheResult.success && cacheResult.localCachePath && cacheResult.displayUrl) {
+                            recentStore.addRecentGeneration({
+                                studio: 'props',
+                                localCachePath: cacheResult.localCachePath,
+                                displayUrl: cacheResult.displayUrl,
+                                createdAt: Date.now(),
+                                prompt: applyNote || 'Prop application',
+                                mode: (state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok') || 'byok',
+                            });
+                        }
+                    }).catch((e) => {
+                        console.warn('[PropApp] Recent generation caching failed:', e);
+                    });
+                }
             }
 
         } catch (error: unknown) {
@@ -963,6 +1012,7 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
 
                 <div className="flex-grow min-h-0 overflow-hidden p-4 flex flex-col">
                     {activeTab === 'designer' ? (
+                        <>
                         <div className="w-full h-full flex gap-6 min-h-0 min-w-0 overflow-hidden">
                             {/* LEFT: DESIGN CONTROLS */}
                             <div className="w-[clamp(18rem,34vw,380px)] shrink-0 flex flex-col h-full min-h-0">
@@ -977,13 +1027,13 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                             </div>
 
                             {/* RIGHT: LARGE VIEWPORT */}
-                            <div className="flex-grow min-w-0 min-h-0 h-full bg-black rounded-2xl border border-gray-800 flex items-center justify-center overflow-auto custom-scrollbar relative group">
+                            <div className="flex-grow min-w-0 min-h-0 h-full bg-black rounded-2xl border border-gray-800 flex items-center justify-center overflow-hidden relative group">
                                 {designerImage ? (
                                     <div className="relative w-full h-full">
                                         <img src={designerImage} className="w-full h-full object-contain" />
                                         <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex gap-3 z-50">
-                                            <button onClick={() => { setDesignerPrompt(''); setDesignerImage(null); }} className="bg-red-600/80 hover:bg-red-500 text-white px-8 py-3 rounded-full font-black text-[10px] uppercase tracking-widest border border-red-500/50 transition-all active:scale-95 flex items-center gap-3"><X className="w-4 h-4" /> Clear</button>
-                                            <button onClick={() => saveToProps(designerImage!, designerPrompt)} className="bg-blue-600 hover:bg-blue-500 text-white px-8 py-3 rounded-full font-black text-[10px] uppercase tracking-widest border border-blue-400 transition-all active:scale-95 flex items-center gap-3"><Save className="w-4 h-4" /> Save to Library</button>
+                                            <button onClick={() => { setDesignerPrompt(''); setDesignerImage(null); useRecentGenerationsStore.getState().clearRecentGenerationsForStudio('props'); }} className="bg-red-600/80 hover:bg-red-500 text-white px-8 py-3 rounded-full font-black text-[10px] uppercase tracking-widest border border-red-500/50 transition-all active:scale-95 flex items-center gap-3"><X className="w-4 h-4" /> Clear</button>
+                                            <button onClick={() => saveToProps(designerImage!, designerPrompt)} className="bg-blue-600 hover:bg-blue-500 text-white px-8 py-3 rounded-full font-black text-[10px] uppercase tracking-widest border border-blue-400 transition-all active:scale-95 flex items-center gap-3"><FolderOutput className="w-4 h-4" /> Export to Library</button>
                                         </div>
                                     </div>
                                 ) : (
@@ -992,8 +1042,24 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                                         <span className="text-xs font-black uppercase tracking-widest text-[#a1a1aa]">Awaiting Design</span>
                                     </div>
                                 )}
+
+                                {/* RECENT GENERATIONS STRIP (Prop Designer viewport) */}
+                                <div className="absolute bottom-2 left-0 right-0 z-50 pointer-events-auto flex justify-center px-4">
+                                    <RecentGenerationsStrip
+                                        studio="props"
+                                        className="w-full max-w-3xl bg-black/80 backdrop-blur-md rounded-2xl border border-white/10"
+                                        onSelectGeneration={(gen) => {
+                                            setDesignerImage(gen.displayUrl);
+                                        }}
+                                        onExportGeneration={(gen) => {
+                                            saveToProps(gen.displayUrl, gen.prompt || designerPrompt);
+                                            useRecentGenerationsStore.getState().markExported(gen.id);
+                                        }}
+                                    />
+                                </div>
                             </div>
                         </div>
+                        </>
                     ) : (
                         <div className="w-full h-full flex gap-4 min-h-0 min-w-0 overflow-hidden">
                             {/* LEFT COLUMN: Inputs (Split into 2 cards) */}
@@ -1001,9 +1067,9 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                                 {/* Card A: Clean Selections */}
                                 <div className="bg-[#18181b] p-4 lg:p-6 rounded-2xl border border-gray-800 shrink-0">
                                     <h3 className="text-xs font-black text-gray-400 uppercase mb-4 tracking-widest">1. Subject</h3>
-                                    <div className="grid grid-cols-[repeat(auto-fit,minmax(56px,1fr))] gap-2 mb-5 h-[clamp(5rem,16vh,8rem)] overflow-y-auto custom-scrollbar">
+                                    <div className="flex gap-1.5 mb-4 flex-wrap max-h-14 overflow-y-auto custom-scrollbar">
                                         {state.cast.map(c => (
-                                            <button key={c.id} onClick={() => setSelectedCharacter(c)} className={`aspect-square rounded-lg border-2 overflow-hidden transition-all ${selectedCharacter?.id === c.id ? 'border-green-500 ring-1 ring-green-500 scale-95' : 'border-gray-800 hover:border-gray-600'}`}><img src={c.previewUrl || c.url} className="w-full h-full object-cover" /></button>
+                                            <button key={c.id} onClick={() => setSelectedCharacter(c)} className={`!p-0 !m-0 !min-w-0 !min-h-0 w-11 h-11 shrink-0 rounded-lg border-2 overflow-hidden transition-all ${selectedCharacter?.id === c.id ? 'border-green-500 ring-1 ring-green-500 scale-95' : 'border-gray-800 hover:border-gray-600'}`}><img src={c.previewUrl || c.url} className="w-full h-full object-cover" /></button>
                                         ))}
                                     </div>
                                     <h3 className="text-xs font-black text-gray-400 uppercase mb-4 tracking-widest border-t border-gray-800 pt-5">2. Active Prop</h3>
@@ -1082,7 +1148,7 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
 
                                                 <button onClick={handleSaveToActors} className="p-1.5 hover:bg-indigo-500/20 text-gray-400 hover:text-indigo-400 rounded-lg transition-colors" title="Save to Actors"><Save className="w-4 h-4" /></button>
                                                 <button onClick={() => { const l = document.createElement('a'); l.href = appliedImage!; l.download = "applied-prop.png"; l.click(); }} className="p-1.5 hover:bg-white/10 text-gray-400 hover:text-white rounded-lg transition-colors" title="Download"><Download className="w-4 h-4" /></button>
-                                                <button onClick={() => setAppliedImage(null)} className="p-1.5 hover:bg-red-500/20 text-gray-400 hover:text-red-400 rounded-lg transition-colors" title="Clear Stage"><X className="w-4 h-4" /></button>
+                                                <button onClick={() => { setAppliedImage(null); useRecentGenerationsStore.getState().clearRecentGenerationsForStudio('props'); }} className="p-1.5 hover:bg-red-500/20 text-gray-400 hover:text-red-400 rounded-lg transition-colors" title="Clear Stage"><X className="w-4 h-4" /></button>
                                             </div>
                                         )}
                                     </div>
@@ -1099,6 +1165,20 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                                                 <span className="text-xs font-black uppercase tracking-widest opacity-20">Select Subject & Prop</span>
                                             </div>
                                         )}
+                                    </div>
+                                    {/* RECENT GENERATIONS STRIP (Application Room) */}
+                                    <div className="absolute bottom-2 left-0 right-0 z-50 pointer-events-auto flex justify-center px-4">
+                                        <RecentGenerationsStrip
+                                            studio="props"
+                                            className="w-full max-w-3xl bg-black/80 backdrop-blur-md rounded-2xl border border-white/10"
+                                            onSelectGeneration={(gen) => {
+                                                setAppliedImage(gen.displayUrl);
+                                            }}
+                                            onExportGeneration={(gen) => {
+                                                saveToProps(gen.displayUrl, gen.prompt || applyNote || 'Applied prop');
+                                                useRecentGenerationsStore.getState().markExported(gen.id);
+                                            }}
+                                        />
                                     </div>
                                 </div>
                             </div>

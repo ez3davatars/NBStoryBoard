@@ -27,6 +27,7 @@ import { AppCloseDialog } from './components/ui/AppCloseDialog';
 import { HelpCenterDrawer } from './components/ui/HelpCenterDrawer';
 import { WelcomeModal } from './components/ui/WelcomeModal';
 import { CreditExhaustedModal } from './components/ui/CreditExhaustedModal';
+import { useRecentGenerationsStore } from './stores/useRecentGenerationsStore';
 
 import {
   Settings,
@@ -384,6 +385,29 @@ const App = () => {
 
   useEffect(() => {
     console.log('[NBStoryBoard] VITE_APP_ENV =', import.meta.env.VITE_APP_ENV ?? '(undefined)');
+  }, []);
+
+  // --- RECENT GENERATIONS: Init store & cleanup on startup ---
+  useEffect(() => {
+    const initRecentGenerations = async () => {
+      try {
+        await useRecentGenerationsStore.getState().initStore();
+        console.log('[RecentGenerations] Store initialized');
+      } catch (e) {
+        console.warn('[RecentGenerations] Store init failed:', e);
+      }
+
+      // Run 30-day cleanup silently
+      try {
+        const result = await window.electronAPI?.cleanupRecentGenerations?.(30);
+        if (result && result.deletedCount > 0) {
+          console.log(`[RecentGenerations] Cleaned up ${result.deletedCount} old cached files`);
+        }
+      } catch (e) {
+        console.warn('[RecentGenerations] Cleanup failed:', e);
+      }
+    };
+    initRecentGenerations();
   }, []);
 
   // Transient Status Auto-Clear

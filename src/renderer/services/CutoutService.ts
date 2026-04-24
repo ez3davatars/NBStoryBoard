@@ -331,22 +331,7 @@ export class CutoutService {
                             }
                         }
 
-                        if (isUniformBackground) {
-                            const dist = this.colorDistanceFromBorder(
-                                src[idx],
-                                src[idx + 1],
-                                src[idx + 2],
-                                profile
-                            );
-
-                            if (rawAlpha <= 40 && dist > hardDistThreshold) {
-                                refinedAlpha = Math.max(refinedAlpha, 220);
-                            } else if (rawAlpha <= 120 && dist > softDistThreshold) {
-                                refinedAlpha = Math.max(refinedAlpha, 175);
-                            } else if (rawAlpha <= 180 && dist > softDistThreshold + 8) {
-                                refinedAlpha = Math.max(refinedAlpha, 205);
-                            }
-                        }
+                            // Removed aggressive color-distance rescue logic that was causing inner-hole artifacts
                     }
 
                     out[idx] = src[idx];

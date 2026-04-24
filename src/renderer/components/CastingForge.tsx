@@ -27,7 +27,9 @@ import {
   verifyPermission
 } from '../utils/FileSystemAssets';
 import { isNativeParams, nativeLoadCover, nativeSaveCover, nativeWriteFile, nativeJoinPath } from '../utils/NativeFileAssets';
-
+import { useRecentGenerationsStore } from '../stores/useRecentGenerationsStore';
+import { RecentGenerationsCacheService } from '../services/RecentGenerationsCacheService';
+import RecentGenerationsStrip from './recent/RecentGenerationsStrip';
 
 import coverRealism from '../assets/cover-realism.png';
 import coverAnim from '../assets/cover-anim.png';
@@ -933,6 +935,50 @@ const CastingForge = () => {
 
       if (state.lastCastedImage) {
         dispatch({ type: 'ADD_LOG', payload: { message: "Applying stylization to character...", type: 'info' } });
+
+        // --- CACHE REFERENCE IMAGE BEFORE RESTYLIZING ---
+        const recentStore = useRecentGenerationsStore.getState();
+        const isAlreadyCached = recentStore.getRecentGenerationsForStudio('general').some(g => g.displayUrl === state.lastCastedImage || g.cloudUrl === state.lastCastedImage);
+        
+        if (!isAlreadyCached && recentStore.cacheDirPath) {
+            const cacheRefImage = async () => {
+                try {
+                    let dataUrlToCache = state.lastCastedImage!;
+                    // If the reference image is a blob or remote URL, convert it to base64 first
+                    if (!state.lastCastedImage!.startsWith('data:')) {
+                        const res = await fetch(state.lastCastedImage!);
+                        const blob = await res.blob();
+                        dataUrlToCache = await new Promise<string>((resolve, reject) => {
+                            const reader = new FileReader();
+                            reader.onloadend = () => resolve(reader.result as string);
+                            reader.onerror = reject;
+                            reader.readAsDataURL(blob);
+                        });
+                    }
+
+                    const cacheResult = await RecentGenerationsCacheService.cacheGeneration({
+                        imageDataUrl: dataUrlToCache!,
+                        studio: 'general',
+                        cacheDirPath: recentStore.cacheDirPath!,
+                    });
+                    
+                    if (cacheResult.success && cacheResult.localCachePath && cacheResult.displayUrl) {
+                        recentStore.addRecentGeneration({
+                            studio: 'general',
+                            localCachePath: cacheResult.localCachePath,
+                            displayUrl: cacheResult.displayUrl,
+                            createdAt: Date.now() - 1000,
+                            prompt: "Reference Image",
+                            mode: 'byok',
+                        });
+                    }
+                } catch (e) {
+                    console.warn("Failed to cache reference image:", e);
+                }
+            };
+            cacheRefImage();
+        }
+
         const stylizePrompt = `Create a single character portrait.
 
 SUBJECT LOCK
@@ -1010,15 +1056,15 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
       }
 
       try {
-        if (!aiMaskActive) return;
+        if (aiMaskActive) {
+          dispatch({ type: 'ADD_LOG', payload: { message: "Running local AI isolation...", type: 'info' } });
 
-        dispatch({ type: 'ADD_LOG', payload: { message: "Running local AI isolation...", type: 'info' } });
+          const { cutoutUrl } = await CutoutService.processImage(safeResolvedUrl, undefined, undefined, true);
 
-        const { cutoutUrl } = await CutoutService.processImage(safeResolvedUrl, undefined, undefined, true);
-
-        if (generationIdRef.current === currentGenId) {
-          dispatch({ type: 'SET_LAST_CASTED_MASK', payload: cutoutUrl });
-          dispatch({ type: 'ADD_LOG', payload: { message: "Subject Isolated Successfully", type: 'success' } });
+          if (generationIdRef.current === currentGenId) {
+            dispatch({ type: 'SET_LAST_CASTED_MASK', payload: cutoutUrl });
+            dispatch({ type: 'ADD_LOG', payload: { message: "Subject Isolated Successfully", type: 'success' } });
+          }
         }
       } catch (maskErr: unknown) {
         console.error("Isolation Failed:", maskErr);
@@ -1027,6 +1073,30 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
 
       const logMessage = state.lastCastedImage ? "Character stylized" : "Character generated";
       dispatch({ type: 'ADD_LOG', payload: { message: logMessage, type: 'success' } });
+
+      // --- RECENT GENERATIONS: Cache result silently ---
+      const recentStore = useRecentGenerationsStore.getState();
+      if (recentStore.cacheDirPath && safeResolvedUrl) {
+          RecentGenerationsCacheService.cacheGeneration({
+              imageDataUrl: safeResolvedUrl,
+              studio: 'general', // or 'portrait' if it maps better, but 'general'/'casting' works
+              cacheDirPath: recentStore.cacheDirPath,
+          }).then((cacheResult) => {
+              if (cacheResult.success && cacheResult.localCachePath && cacheResult.displayUrl) {
+                  recentStore.addRecentGeneration({
+                      studio: 'general',
+                      localCachePath: cacheResult.localCachePath,
+                      displayUrl: cacheResult.displayUrl,
+                      createdAt: Date.now(),
+                      prompt: effectivePrompt,
+                      mode: (state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok') || 'byok',
+                  });
+              }
+          }).catch((e) => {
+              console.warn('[CastingForge] Recent generation caching failed:', e);
+          });
+      }
+
       dispatch({ type: 'SET_LAST_CASTED_PROMPT', payload: '' }); // Clear input as requested
     } catch (e: unknown) {
       const err = e as { name?: string; message?: string; generationId?: string };
@@ -2440,9 +2510,10 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
   };
 
   const getUiPositions = () => {
-    if (!cropRect || !containerRef.current) return { tagsClass: '-bottom-8', toolClass: '-top-28' };
-    const containerHeight = containerRef.current.clientHeight;
-    const tagsClass = (cropRect.y + cropRect.h > containerHeight - 40) ? 'bottom-2 left-2' : '-bottom-8 left-0';
+    if (!cropRect || !containerRef.current) return { tagsClass: '-top-8 left-1/2 -translate-x-1/2', toolClass: '-top-28' };
+    void containerRef.current.clientHeight;
+    // Move tags to the top-center of the crop rect to avoid the Recent Generations panel at the bottom
+    const tagsClass = (cropRect.y < 40) ? 'top-2 left-1/2 -translate-x-1/2' : '-top-10 left-1/2 -translate-x-1/2';
     const toolClass = (cropRect.y < 130) ? 'top-2 right-2' : '-top-28 right-0';
     return { tagsClass, toolClass };
   };
@@ -2900,6 +2971,22 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
                       className="hidden"
                     />
                   )}
+
+                  {/* RECENT GENERATIONS STRIP */}
+                  <div className="absolute bottom-2 left-0 right-0 z-50 pointer-events-auto flex justify-center px-4">
+                      <RecentGenerationsStrip
+                          studio="general"
+                          className="w-full max-w-3xl bg-black/80 backdrop-blur-md rounded-2xl border border-white/10"
+                          onSelectGeneration={(gen) => {
+                              dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: gen.displayUrl });
+                          }}
+                          onExportGeneration={(gen) => {
+                              dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: gen.displayUrl });
+                              setShowSaveModal(true);
+                              useRecentGenerationsStore.getState().markExported(gen.id);
+                          }}
+                      />
+                  </div>
                 </>
               ) : (
                 <div className="flex flex-col items-center justify-center p-2 w-full h-full max-w-4xl mx-auto animate-in fade-in duration-700 font-sans">
@@ -3056,7 +3143,7 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
                   {cropRect.w > 20 && (
                     <div className={`absolute flex gap-1 pointer-events-auto z-40 ${tagsClass}`}>
                       {(['front', 'side', '3/4', 'back'] as const).map((tag) => (
-                        <button key={tag} onMouseDown={(e) => { e.stopPropagation(); finalizeCrop(); }} className="bg-[#18181b] text-white text-[10px] px-2 py-1 rounded border border-gray-600 hover:bg-yellow-500 hover:text-black uppercase font-bold">
+                        <button key={tag} onMouseDown={(e) => { e.stopPropagation(); finalizeCrop(); }} className="bg-[#18181b] text-white text-[10px] !px-3 !py-1.5 !min-w-0 !min-h-0 !w-auto !h-auto rounded-md border border-gray-600 hover:bg-yellow-500 hover:text-white uppercase font-bold transition-colors">
                           {tag}
                         </button>
                       ))}
@@ -3213,7 +3300,7 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
                     <button onClick={handleDownload} className="w-full bg-blue-600/10 hover:bg-blue-600 text-blue-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-blue-500/20 hover:-[0_0_15px_rgba(37,99,235,0.4)] text-[10px] font-black uppercase tracking-wider">
                       <Download className="w-4 h-4" /> Save
                     </button>
-                    <button onClick={() => dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: null })} className="w-full bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-red-500/20 hover:-[0_0_15px_rgba(239,68,68,0.4)] text-[10px] font-black uppercase tracking-wider">
+                    <button onClick={() => { dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: null }); useRecentGenerationsStore.getState().clearRecentGenerationsForStudio('general'); }} className="w-full bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-red-500/20 hover:-[0_0_15px_rgba(239,68,68,0.4)] text-[10px] font-black uppercase tracking-wider">
                       <X className="w-4 h-4" /> Clear
                     </button>
                   </div>
