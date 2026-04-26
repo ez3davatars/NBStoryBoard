@@ -1,6 +1,7 @@
 import type { VeoFivePartDraft, VeoAudioBlock } from '../promptEngine/veoFivePart';
 import type { ActorIdentityReferenceSet } from '../context/AppContext';
 import { buildOrderedActorIdentityInputs, hasStrongFaceAnchor } from '../utils/identityReferenceHelpers';
+import { SupabaseAuth, supabase } from './SupabaseClient';
 
 export type ExtractedStyle = {
   medium?: string;
@@ -330,7 +331,6 @@ export const GeminiService = {
         }
     }
 
-    const { SupabaseAuth, supabase } = await import('./SupabaseClient');
     const token = await SupabaseAuth.getValidJwt();
     const idempotencyKey = "batch_" + Date.now() + "_" + Math.floor(Math.random() * 1000);
 
@@ -476,16 +476,16 @@ export const GeminiService = {
 
       const contentsParts: GeminiPart[] = [];
 
-      // Debug log in dev
-      console.log("Multimodal images attached:", referenceImages.length);
+      if (import.meta.env.DEV) {
+        console.log("Multimodal images attached:", referenceImages.length);
+      }
 
       let host_supabase: HostedSupabaseClient | null = null;
       let host_uid: string = 'anon';
       const executionBatchId = crypto.randomUUID();
       
       if (options.billingMode === 'hosted') {
-         const clientRef = await import('./SupabaseClient');
-         host_supabase = clientRef.supabase as HostedSupabaseClient | null;
+         host_supabase = supabase as HostedSupabaseClient | null;
          if (!host_supabase) throw new Error("Supabase is not configured for hosted generation.");
          
          // Use strict getUser() specifically to guarantee fresh network validity instead of local session cache
@@ -1679,10 +1679,10 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
   }): Promise<string> {
     const { anchorImageUrl, shotBlueprintUrl, actorIdentitySets = [], prompt, aspectRatio, apiKey, model, sceneTruth, presetId, hasSubjectStyleAnalysis } = args;
     
-    if (sceneTruth) {
+    if (import.meta.env.DEV && sceneTruth) {
       console.log(`[GeminiService:generateShotPreview] Metadata Dump:`, {
          actorCount: sceneTruth.expectedActorCount,
-         orderedActors: sceneTruth.actors.sort((a,b)=> a.leftToRightIndex - b.leftToRightIndex).map(a => a.actorLabel),
+         orderedActors: sceneTruth.actors.slice().sort((a,b)=> a.leftToRightIndex - b.leftToRightIndex).map(a => a.actorLabel),
          presetId,
          cameraConstraints: sceneTruth.cameraConstraints,
          styleAnalysisDemoted: hasSubjectStyleAnalysis === false
@@ -1792,10 +1792,10 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
   }): Promise<string> {
     const { sourceResultUrl, selectedShotPreviewUrl, actorIdentitySets = [], prompt, aspectRatio, apiKey, model, sceneTruth, presetId, options } = args;
     
-    if (sceneTruth) {
+    if (import.meta.env.DEV && sceneTruth) {
       console.log(`[GeminiService:rerenderShotFinal] Metadata Dump:`, {
          actorCount: sceneTruth.expectedActorCount,
-         orderedActors: sceneTruth.actors.sort((a,b)=> a.leftToRightIndex - b.leftToRightIndex).map(a => a.actorLabel),
+         orderedActors: sceneTruth.actors.slice().sort((a,b)=> a.leftToRightIndex - b.leftToRightIndex).map(a => a.actorLabel),
          presetId,
          cameraConstraints: sceneTruth.cameraConstraints
       });

@@ -1,9 +1,8 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Check, FolderOutput, Clock, ChevronDown, ChevronUp } from 'lucide-react';
 import { useRecentGenerationsStore } from '../../stores/useRecentGenerationsStore';
 import type { RecentGenerationStudio, RecentGeneration } from '../../stores/useRecentGenerationsStore';
-import { useState } from 'react';
 
 // --- PROPS ---
 
@@ -35,8 +34,24 @@ export default function RecentGenerationsStrip({
     initialized,
   } = useRecentGenerationsStore();
 
+  // Filter generations for this studio
+  const studioGenerations = recentGenerations.filter((g) => g.studio === studio);
+  const activeId = activeRecentGenerationIdByStudio[studio] || null;
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [triggerState, setTriggerState] = useState(() => ({
+    studio,
+    count: studioGenerations.length,
+    hasTriggered: studioGenerations.length >= 2,
+  }));
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  let hasTriggered = triggerState.hasTriggered;
+  if (triggerState.studio !== studio || triggerState.count !== studioGenerations.length) {
+    hasTriggered =
+      studioGenerations.length >= 2 ||
+      (studioGenerations.length > 0 && triggerState.studio === studio && triggerState.hasTriggered);
+    setTriggerState({ studio, count: studioGenerations.length, hasTriggered });
+  }
 
   // Initialize store on first mount
   useEffect(() => {
@@ -44,10 +59,6 @@ export default function RecentGenerationsStrip({
       initStore();
     }
   }, [initialized, initStore]);
-
-  // Filter generations for this studio
-  const studioGenerations = recentGenerations.filter((g) => g.studio === studio);
-  const activeId = activeRecentGenerationIdByStudio[studio] || null;
 
   // Auto-scroll to the newest thumbnail when a new generation is added
   useEffect(() => {
@@ -74,21 +85,13 @@ export default function RecentGenerationsStrip({
   const thumbSize = compact ? 'w-12 h-12' : 'w-16 h-16';
   const thumbSizePx = compact ? 48 : 64;
 
-  const hasTriggeredRef = useRef(studioGenerations.length >= 2);
-
-  if (studioGenerations.length >= 2) {
-    hasTriggeredRef.current = true;
-  } else if (studioGenerations.length === 0) {
-    hasTriggeredRef.current = false;
-  }
-
   // --- EMPTY STATE ---
   if (studioGenerations.length === 0) {
     return null;
   }
   
   // Only hide on 1 generation IF we haven't crossed the 2+ threshold yet (to respect initial load preference)
-  if (!hasTriggeredRef.current && studioGenerations.length <= 1) {
+  if (!hasTriggered && studioGenerations.length <= 1) {
     return null;
   }
 

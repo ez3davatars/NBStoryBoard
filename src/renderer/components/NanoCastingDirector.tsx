@@ -2581,7 +2581,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                 initial={{ x: "100%" }}
                                 animate={{ x: 0 }}
                                 exit={{ x: "100%" }}
-                                className="absolute top-0 right-0 z-50 h-full w-80 bg-surface border-l border-border p-6 overflow-y-auto backdrop-blur-xl"
+                                className="absolute top-0 right-0 z-50 h-full w-[400px] max-w-[calc(100%-1rem)] bg-surface border-l border-border p-6 overflow-y-auto overflow-x-hidden backdrop-blur-xl"
                             >
                                 <div className="flex flex-col h-full">
                                     <div className="flex justify-between items-center mb-6">

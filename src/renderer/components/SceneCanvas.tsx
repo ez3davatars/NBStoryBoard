@@ -50,7 +50,16 @@ import type {
 import type { ShotVariant } from '../types/shots';
 import { GeminiService, type ExtractedStyle, type SceneIntent } from '../services/GeminiService';
 import { DepthService } from '../services/DepthService';
-import { compileV3DirectorPrompt, buildPlacementPrompt, getActiveReferenceSlots, buildStrictAnchorReplacementPrompt } from '../utils/promptHelpers';
+import {
+    compileV3DirectorPrompt,
+    buildPlacementPrompt,
+    getActiveReferenceSlots,
+    buildStrictAnchorReplacementPrompt,
+    buildEnvironmentOnlyPrompt,
+    buildStrictPrompt,
+    buildLoosePrompt
+} from '../utils/promptHelpers';
+import { sanitizeStyleForStrictIdentity } from '../utils/analysisSanitizers';
 import { LibraryAssetMaterializer } from '../services/LibraryAssetMaterializer';
 import { useProductionExports } from '../hooks/useProductionExports';
 import { useAdvancedRender } from '../hooks/useAdvancedRender';
@@ -695,7 +704,6 @@ const SceneCanvas = () => {
 
             let envPrompt = "";
             if (hasUserScenePrompt) {
-                const { buildEnvironmentOnlyPrompt } = await import('../utils/promptHelpers');
                 envPrompt = buildEnvironmentOnlyPrompt(intent, style, inferredCamera || state.director.camera, state.tokens, state.annotations);
             } else {
                 envPrompt = `
@@ -1288,9 +1296,6 @@ Output: environment plate only.
             }
 
             const tokenOverrides = await ensureTokenProfiles(state.tokens, { force: autoTokenProfiles });
-
-            const { buildStrictPrompt, buildLoosePrompt } = await import('../utils/promptHelpers');
-            const { sanitizeStyleForStrictIdentity } = await import('../utils/analysisSanitizers');
 
             const identitySets = getActorIdentityReferenceSetsForScene(state, state.activeShotId || 'default');
             const hasStrictIdentityRefs = identitySets.some(s => s.identityPriority === 'strict' && hasStrongFaceAnchor(s));

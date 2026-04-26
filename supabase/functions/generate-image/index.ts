@@ -82,18 +82,8 @@ serve(async (req) => {
     );
 
     if (userError || !userData?.user) {
-      const debugInfo = {
-        has_supabase_url: !!supabaseUrl,
-        has_anon_key: !!supabaseAnonKey,
-        has_secret_key: !!Deno.env.get('SUPABASE_SECRET_KEY'),
-        has_service_role_key: !!Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'),
-        url_preview: supabaseUrl.substring(0, 30),
-        auth_header_preview: authHeader.substring(0, 25) + '...',
-        jwt_segments: jwt.split('.').length,
-        userError_message: userError?.message || "User data missing"
-      };
-      console.log("[AUTH DEBUG]:", debugInfo);
-      throw new Error(`Unauthorized. Debug: ${JSON.stringify(debugInfo)}`);
+      console.warn('[AUTH] Unauthorized generation request:', userError?.message || 'User data missing');
+      throw new Error('Unauthorized');
     }
 
     // Service client ONLY
@@ -175,14 +165,27 @@ serve(async (req) => {
     const errStack = err instanceof Error ? err.stack : undefined;
     console.error("Generate Image Orchestration Error:", errMessage, errStack);
     
-    let status = 400;
-    if (errMessage.includes('Unauthorized')) status = 401;
-    if (errMessage.includes('Idempotency')) status = 409;
-    if (errMessage.includes('Missing X-Idempotency-Key header')) status = 400;
-    if (errMessage.includes('req.json')) status = 400; // Json parse timeouts/errors
+    let status = 500;
+    let publicMessage = 'Generation request failed';
+    if (errMessage.includes('Unauthorized') || errMessage.includes('Missing Authorization header')) {
+      status = 401;
+      publicMessage = 'Unauthorized';
+    } else if (errMessage.includes('Idempotency')) {
+      status = 409;
+      publicMessage = errMessage;
+    } else if (
+      errMessage.includes('Missing X-Idempotency-Key header') ||
+      errMessage.startsWith('Invalid request payload')
+    ) {
+      status = 400;
+      publicMessage = errMessage;
+    } else if (errMessage.includes('req.json')) {
+      status = 400;
+      publicMessage = 'Invalid request body';
+    }
 
     // fail_generation relies on generation payload isolation
-    return new Response(JSON.stringify({ error: errMessage, code: 'INTERNAL_ERROR', stack: errStack }), {
+    return new Response(JSON.stringify({ error: publicMessage, code: 'INTERNAL_ERROR' }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       status,
     });

@@ -6,13 +6,6 @@ export type CutoutResult = {
     alphaMaskUrl: string;
 };
 
-type BorderProfile = {
-    meanR: number;
-    meanG: number;
-    meanB: number;
-    maxStdDev: number;
-};
-
 export class CutoutService {
 
     /**
@@ -203,65 +196,10 @@ export class CutoutService {
         });
     }
 
-    private static computeBorderProfile(data: Uint8ClampedArray, width: number, height: number): BorderProfile {
-        const t = Math.max(2, Math.floor(Math.min(width, height) * 0.015));
-        let count = 0;
-        let sumR = 0, sumG = 0, sumB = 0;
-        let sumSqR = 0, sumSqG = 0, sumSqB = 0;
-
-        const addPixel = (x: number, y: number) => {
-            const i = (y * width + x) * 4;
-            const r = data[i];
-            const g = data[i + 1];
-            const b = data[i + 2];
-            count++;
-            sumR += r; sumG += g; sumB += b;
-            sumSqR += r * r; sumSqG += g * g; sumSqB += b * b;
-        };
-
-        for (let y = 0; y < t; y++) {
-            for (let x = 0; x < width; x++) addPixel(x, y);
-        }
-        for (let y = Math.max(t, height - t); y < height; y++) {
-            for (let x = 0; x < width; x++) addPixel(x, y);
-        }
-        for (let y = t; y < height - t; y++) {
-            for (let x = 0; x < t; x++) addPixel(x, y);
-            for (let x = Math.max(t, width - t); x < width; x++) addPixel(x, y);
-        }
-
-        if (count === 0) {
-            return { meanR: 0, meanG: 0, meanB: 0, maxStdDev: 0 };
-        }
-
-        const meanR = sumR / count;
-        const meanG = sumG / count;
-        const meanB = sumB / count;
-        const stdR = Math.sqrt(Math.max(0, (sumSqR / count) - meanR * meanR));
-        const stdG = Math.sqrt(Math.max(0, (sumSqG / count) - meanG * meanG));
-        const stdB = Math.sqrt(Math.max(0, (sumSqB / count) - meanB * meanB));
-        const maxStdDev = Math.max(stdR, stdG, stdB);
-
-        return { meanR, meanG, meanB, maxStdDev };
-    }
-
-    private static colorDistanceFromBorder(
-        r: number,
-        g: number,
-        b: number,
-        profile: BorderProfile
-    ): number {
-        const dr = r - profile.meanR;
-        const dg = g - profile.meanG;
-        const db = b - profile.meanB;
-        return Math.sqrt(dr * dr + dg * dg + db * db);
-    }
-
     /**
      * Conservative matte recovery pass:
      * - Preserves confident model output.
      * - Recovers edge pixels near confident foreground to reduce clipping.
-     * - If the background is near-uniform, rescues non-background colors that the model removed too aggressively.
      */
     private static async refineCutoutForForegroundPreservation(originalBlob: Blob, cutoutBlob: Blob): Promise<Blob> {
         try {
@@ -293,11 +231,6 @@ export class CutoutService {
             const matteImage = matteCtx.getImageData(0, 0, width, height);
             const src = srcImage.data;
             const matte = matteImage.data;
-
-            const profile = this.computeBorderProfile(src, width, height);
-            const isUniformBackground = profile.maxStdDev <= 20;
-            const softDistThreshold = Math.max(20, profile.maxStdDev * 2.2 + 16);
-            const hardDistThreshold = softDistThreshold + 18;
 
             const out = new Uint8ClampedArray(src.length);
             const maxX = width - 1;

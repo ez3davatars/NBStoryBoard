@@ -9,7 +9,7 @@ import PortraitStudio from './components/PortraitStudio';
 import VeoPromptStudio from './components/VeoPromptStudio';
 import { StorageService } from './services/StorageService';
 import { LOGO_BASE64 } from './assets/logo';
-import { SupabaseAuth } from './services/SupabaseClient';
+import { SupabaseAuth, supabase } from './services/SupabaseClient';
 
 import type {
   ViewMode,
@@ -352,12 +352,14 @@ const App = () => {
     if (state.billingEntitlements.effectiveBillingMode === 'hosted' && state.hostedSession?.user?.id) {
       const credits = await SupabaseAuth.fetchHostedCredits(state.hostedSession.user.id);
 
-      console.groupCollapsed('[Credit Sync] Refreshing Hosted Credits');
-      console.log('Authenticated User ID:', state.hostedSession.user.id);
-      console.log('Fetched Balance:', credits);
-      console.log('Previous Display:', prevCreditsRef.current);
-      console.log('Updated Display:', credits);
-      console.groupEnd();
+      if (import.meta.env.DEV) {
+        console.groupCollapsed('[Credit Sync] Refreshing Hosted Credits');
+        console.log('Authenticated User ID:', state.hostedSession.user.id);
+        console.log('Fetched Balance:', credits);
+        console.log('Previous Display:', prevCreditsRef.current);
+        console.log('Updated Display:', credits);
+        console.groupEnd();
+      }
 
       dispatch({ type: 'SET_HOSTED_CREDITS', payload: credits });
     }
@@ -456,7 +458,6 @@ const App = () => {
       backgroundPollInFlightRef.current = true;
 
       try {
-        const { supabase } = await import('./services/SupabaseClient');
         if (!supabase) return;
 
         const now = Date.now();
@@ -538,10 +539,12 @@ const App = () => {
               'Total End-to-End Time (ms)': t?.submittedAt ? observedCompletedAt - t.submittedAt : 'N/A',
               'Post-Timeout Overrun (ms)': t?.clientTimeoutAt ? observedCompletedAt - t.clientTimeoutAt : 'N/A'
             };
-            console.groupCollapsed(`[HOSTED AUDIT] Generation ${job.id} Timings`);
-            console.table(d);
-            console.log("Raw Metric Dump:", { client: t, edge: { accepted: t?.edgeAcceptedAt }, worker: db, observationTime: observedCompletedAt });
-            console.groupEnd();
+            if (import.meta.env.DEV) {
+              console.groupCollapsed(`[HOSTED AUDIT] Generation ${job.id} Timings`);
+              console.table(d);
+              console.log("Raw Metric Dump:", { client: t, edge: { accepted: t?.edgeAcceptedAt }, worker: db, observationTime: observedCompletedAt });
+              console.groupEnd();
+            }
           } else if (status === 'FAILED' || status === 'CANCELED' || status === 'EXPIRED') {
             dispatch({ type: 'FAIL_BACKGROUND_JOB', payload: { id: job.id, errorMessage: 'Provider rejected or failed' } });
             dispatch({ type: 'ADD_LOG', payload: { message: `Background job failed: ${job.context}`, type: 'error' } });
@@ -571,14 +574,10 @@ const App = () => {
   // Sync Supabase Hosted Auth Session
   useEffect(() => {
     const checkJwtDebug = async (session: unknown) => {
-      if (session) {
+      if (import.meta.env.DEV && session) {
         try {
           const jwt = await SupabaseAuth.getValidJwt();
-          console.group('🔐 [Phase 2A] JWT Retrieval Debug');
-          console.log('Token Exists:', !!jwt);
-          console.log('Token Prefix:', jwt.substring(0, 20) + '...');
-          console.log('Token Length:', jwt.length);
-          console.groupEnd();
+          console.debug('[Phase 2A] JWT retrieval', { tokenPresent: Boolean(jwt) });
         } catch (e) {
           console.error('[Phase 2A] JWT Retrieval failed:', e);
         }

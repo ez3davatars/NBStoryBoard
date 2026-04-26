@@ -18,10 +18,6 @@ const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY;
 const R2_BUCKET_NAME = process.env.R2_BUCKET_NAME;
 const R2_PUBLIC_URL = (process.env.R2_PUBLIC_URL || '').replace(/\/+$/, '');
 
-console.log('[Worker] SUPABASE_URL:', SUPABASE_URL);
-console.log('[Worker] service key present:', !!SUPABASE_SECRET_KEY);
-console.log('[Worker] key prefix raw:', SUPABASE_SECRET_KEY ? SUPABASE_SECRET_KEY.slice(0, 16) : 'none');
-
 if (
   !SUPABASE_URL ||
   !SUPABASE_SECRET_KEY ||
