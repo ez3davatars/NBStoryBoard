@@ -48,7 +48,7 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
 
         try {
             const raw = await GeminiService.analyzeImage(
-                "Analyze this image for a film director. Return a JSON object with 3 keys: 'environment' (string, concise setting/vibe), 'lighting' (string, e.g. 'Golden Hour', 'Neon', 'Dark/Moody'), and 'camera' (string, e.g. 'Wide Angle', 'Close Up', 'Drone'). Only return the JSON.",
+                "Analyze this image for a film compositor. Return JSON only with 3 keys: 'environment' (concise setting/vibe), 'lighting' (one concise but detailed sentence naming key light direction, fill/shadow ratio, color temperature, shadow softness, exposure/black level, and any visible colored practical/accent lights), and 'camera' (shot size/lens/framing). Only return the JSON.",
                 state.apiKey || '',
                 state.model,
                 state.backgroundUrl,

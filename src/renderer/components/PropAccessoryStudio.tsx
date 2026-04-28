@@ -8,6 +8,7 @@ import { GeminiService } from '../services/GeminiService';
 import { nativeJoinPath, nativeListFiles, nativeWriteFile, isNativeParams } from '../utils/NativeFileAssets';
 import type { PropItem, CastMember } from '../context/AppContext';
 import ConfirmDialog from './ui/ConfirmDialog';
+import ActorSaveModal from './ActorSaveModal';
 import { LibraryAssetMaterializer } from '../services/LibraryAssetMaterializer';
 import { WearableLandmarkService } from '../services/WearableLandmarkService';
 import { WearableAnchorEngine } from '../services/WearableAnchorEngine';
@@ -34,6 +35,21 @@ const getErrorMessage = (error: unknown): string => {
 const isPendingGenerationError = (error: unknown): error is PendingGenerationError => {
     if (!(error instanceof Error)) return false;
     return error.name === 'TimeoutError' || error.message.includes('Pending');
+};
+
+const actorLibraryStyleForCategory = (category: string): string => {
+    switch (category) {
+        case 'anim':
+            return 'family_3d';
+        case 'illustration':
+            return 'retro_anime';
+        case 'scifi':
+            return 'cyberpunk_neon';
+        case 'realism':
+        case 'uncategorized':
+        default:
+            return 'exact_studio';
+    }
 };
 
 async function materializeDisplayUrl(url: string | null | undefined): Promise<string> {
@@ -111,6 +127,12 @@ const PropAccessoryStudio = () => {
     const setSelectedCharacter = (val: CastMember | null) => setPropState({ selectedCharacter: val });
     const setAppliedImage = (val: string | null) => setPropState({ appliedImage: val });
     const setApplyNote = (val: string) => setPropState({ applyNote: val });
+    const [showActorSaveModal, setShowActorSaveModal] = useState(false);
+    const [pendingActorSave, setPendingActorSave] = useState<{
+        sourceUrl: string;
+        initialName: string;
+        recentGenerationId?: string;
+    } | null>(null);
 
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -883,16 +905,25 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
     };
 
 
-    const handleSaveToActors = async () => {
-        const finalUrl = appliedImage;
-        const hasStorage = !!state.saveDirectoryHandle || !!state.saveDirectoryPath;
-        if (!finalUrl || !hasStorage) return;
+    const openActorSaveModal = (sourceUrl = appliedImage || '', recentGenerationId?: string) => {
+        if (!sourceUrl) return;
+        setPendingActorSave({
+            sourceUrl,
+            initialName: `${selectedCharacter?.name || 'Prop Actor'} (Prop)`,
+            recentGenerationId,
+        });
+        setShowActorSaveModal(true);
+    };
+
+    const handleSaveToActors = async (name: string, category: string) => {
+        const finalUrl = pendingActorSave?.sourceUrl || appliedImage;
+        if (!finalUrl) return;
         try {
             const mat = await LibraryAssetMaterializer.materializeCastAsset({
                 sourceUrl: finalUrl,
                 saveDirectoryPath: state.saveDirectoryPath,
-                actorName: `${selectedCharacter?.name || 'PropActor'} (Prop)`,
-                category: 'uncategorized'
+                actorName: name,
+                category
             });
 
             dispatch({
@@ -905,20 +936,25 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                     previewUrl: mat.previewUrl,
                     filename: mat.filename,
                     tag: 'front',
-                    name: `${selectedCharacter?.name} (Prop)`,
+                    name,
                     profile: {
                         identity: selectedCharacter?.profile?.identity || "Unknown",
                         wardrobe: selectedCharacter?.profile?.wardrobe || "",
                         accessories: selectedProp?.name || "Prop",
-                        style: "Prop Application"
+                        style: actorLibraryStyleForCategory(category)
                     }
                 }
             });
             
             // Immediate UX pivot
-            if (mat.previewUrl) setAppliedImage(mat.previewUrl);
+            if (mat.previewUrl && finalUrl === appliedImage) setAppliedImage(mat.previewUrl);
+            if (pendingActorSave?.recentGenerationId) {
+                useRecentGenerationsStore.getState().markExported(pendingActorSave.recentGenerationId);
+            }
             
-            dispatch({ type: 'ADD_LOG', payload: { message: `Saved to Actors Library: ${mat.filename || "Storage"}`, type: 'success' } });
+            dispatch({ type: 'ADD_LOG', payload: { message: `Saved to Actor Library: ${mat.filename || name}`, type: 'success' } });
+            setShowActorSaveModal(false);
+            setPendingActorSave(null);
         } catch (error: unknown) {
             dispatch({ type: 'ADD_LOG', payload: { message: `Failed to save actor: ${getErrorMessage(error)}`, type: 'error' } });
         }
@@ -1146,7 +1182,7 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
 
                                                 <div className="h-4 w-px bg-gray-700 mx-2" />
 
-                                                <button onClick={handleSaveToActors} className="p-1.5 hover:bg-indigo-500/20 text-gray-400 hover:text-indigo-400 rounded-lg transition-colors" title="Save to Actors"><Save className="w-4 h-4" /></button>
+                                                <button onClick={() => openActorSaveModal()} className="p-1.5 hover:bg-indigo-500/20 text-gray-400 hover:text-indigo-400 rounded-lg transition-colors" title="Save to Actor Library"><Save className="w-4 h-4" /></button>
                                                 <button onClick={() => { const l = document.createElement('a'); l.href = appliedImage!; l.download = "applied-prop.png"; l.click(); }} className="p-1.5 hover:bg-white/10 text-gray-400 hover:text-white rounded-lg transition-colors" title="Download"><Download className="w-4 h-4" /></button>
                                                 <button onClick={() => { setAppliedImage(null); useRecentGenerationsStore.getState().clearRecentGenerationsForStudio('props'); }} className="p-1.5 hover:bg-red-500/20 text-gray-400 hover:text-red-400 rounded-lg transition-colors" title="Clear Stage"><X className="w-4 h-4" /></button>
                                             </div>
@@ -1175,8 +1211,8 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                                                 setAppliedImage(gen.displayUrl);
                                             }}
                                             onExportGeneration={(gen) => {
-                                                saveToProps(gen.displayUrl, gen.prompt || applyNote || 'Applied prop');
-                                                useRecentGenerationsStore.getState().markExported(gen.id);
+                                                setAppliedImage(gen.displayUrl);
+                                                openActorSaveModal(gen.displayUrl, gen.id);
                                             }}
                                         />
                                     </div>
@@ -1188,6 +1224,20 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                 </div>
             </div>
 
+
+            <ActorSaveModal
+                isOpen={showActorSaveModal}
+                initialName={pendingActorSave?.initialName || `${selectedCharacter?.name || 'Prop Actor'} (Prop)`}
+                onClose={() => {
+                    setShowActorSaveModal(false);
+                    setPendingActorSave(null);
+                }}
+                onSave={(name, category) => {
+                    void handleSaveToActors(name, category);
+                }}
+                title="Save to Actor Library"
+                description="Select a Studio Folder to organize this actor:"
+            />
 
             {/* DELETE CONFIRMATION MODAL */}
             <ConfirmDialog

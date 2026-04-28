@@ -33,6 +33,12 @@ export function buildSceneTruthSnapshot(args: {
     sortedTokens.forEach((t, i) => {
       const center = t.x + t.width / 2;
       const relX = center / 1024; // assume 1024 standard width
+      const anchorX = Number.isFinite(Number(t.anchorX)) ? Number(t.anchorX) : 0.5;
+      const anchorY = Number.isFinite(Number(t.anchorY)) ? Number(t.anchorY) : 0.8;
+      const left = (Number(t.x) || 0) - ((Number(t.width) || 0) * anchorX);
+      const top = (Number(t.y) || 0) - ((Number(t.height) || 0) * anchorY);
+      const width = Number(t.width) || 1;
+      const height = Number(t.height) || 1;
       
       let zone: 'left' | 'center' | 'right' | 'unknown' = 'center';
       if (relX < 0.38) zone = 'left';
@@ -56,6 +62,12 @@ export function buildSceneTruthSnapshot(args: {
         actorId,
         actorLabel,
         leftToRightIndex: i,
+        bbox: {
+          x: Math.max(0, Math.min(1, left / 1024)),
+          y: Math.max(0, Math.min(1, top / 576)),
+          width: Math.max(0.02, Math.min(1, width / 1024)),
+          height: Math.max(0.02, Math.min(1, height / 576))
+        },
         approxZone: zone,
         role,
         targetInScene: t.tag

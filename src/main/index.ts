@@ -126,7 +126,7 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window);
   });
 
-  // Enable SharedArrayBuffer for @imgly
+  // Enable SharedArrayBuffer for local browser-side model runtimes.
   const { session } = electron;
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     callback({

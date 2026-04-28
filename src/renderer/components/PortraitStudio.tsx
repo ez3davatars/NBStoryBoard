@@ -16,6 +16,7 @@ import { useRecentGenerationsStore } from "../stores/useRecentGenerationsStore";
 import { RecentGenerationsCacheService } from "../services/RecentGenerationsCacheService";
 import RecentGenerationsStrip from "./recent/RecentGenerationsStrip";
 import { LibraryAssetMaterializer } from "../services/LibraryAssetMaterializer";
+import ActorSaveModal from "./ActorSaveModal";
 import {
     buildPortraitPrompt,
     LIGHTING_PRESETS,
@@ -107,6 +108,21 @@ const isLifeStage = (value: string): value is LifeStage => {
     return value in LIFE_STAGES;
 };
 
+const actorLibraryStyleForCategory = (category: string): string => {
+    switch (category) {
+        case "anim":
+            return "family_3d";
+        case "illustration":
+            return "retro_anime";
+        case "scifi":
+            return "cyberpunk_neon";
+        case "realism":
+        case "uncategorized":
+        default:
+            return "exact_studio";
+    }
+};
+
 type FacePreset = {
     key: string;
     label: string;
@@ -190,6 +206,12 @@ export default function PortraitStudio() {
     const [isGenerating, setIsGenerating] = useState(false);
     const [isCompiling, setIsCompiling] = useState(false);
     const [isInspecting, setIsInspecting] = useState(false);
+    const [showActorSaveModal, setShowActorSaveModal] = useState(false);
+    const [pendingActorSave, setPendingActorSave] = useState<{
+        sourceUrl: string;
+        initialName: string;
+        recentGenerationId?: string;
+    } | null>(null);
 
     const getErrorMessage = (error: unknown): string => {
         if (error instanceof Error) {
@@ -197,6 +219,59 @@ export default function PortraitStudio() {
         }
 
         return String(error);
+    };
+
+    const openActorSaveModal = (sourceUrl: string, initialName?: string, recentGenerationId?: string) => {
+        if (!sourceUrl) return;
+        setPendingActorSave({
+            sourceUrl,
+            initialName: initialName || `Portrait ${dna.identity.sex} ${dna.identity.age}`,
+            recentGenerationId,
+        });
+        setShowActorSaveModal(true);
+    };
+
+    const savePendingActorToLibrary = async (name: string, category: string) => {
+        if (!pendingActorSave?.sourceUrl) return;
+
+        try {
+            const mat = await LibraryAssetMaterializer.materializeCastAsset({
+                sourceUrl: pendingActorSave.sourceUrl,
+                saveDirectoryPath: state.saveDirectoryPath,
+                actorName: name,
+                category,
+            });
+
+            const newActor: CastMember = {
+                id: crypto.randomUUID(),
+                name,
+                url: mat.previewUrl,
+                localPath: mat.localPath || undefined,
+                previewUrl: mat.previewUrl,
+                sourceUrl: mat.sourceUrl,
+                tag: 'front',
+                filename: mat.filename,
+                profile: {
+                    identity: dna.identity.ethnicity,
+                    wardrobe: '',
+                    accessories: '',
+                    style: actorLibraryStyleForCategory(category),
+                },
+            };
+
+            dispatch({ type: 'ADD_ACTOR_LIBRARY', payload: newActor });
+            if (pendingActorSave.sourceUrl === generatedImage && mat.previewUrl) {
+                setGeneratedImage(mat.previewUrl);
+            }
+            if (pendingActorSave.recentGenerationId) {
+                useRecentGenerationsStore.getState().markExported(pendingActorSave.recentGenerationId);
+            }
+            dispatch({ type: 'ADD_LOG', payload: { message: `Saved to Actor Library: ${mat.filename || name}`, type: 'success' } });
+            setShowActorSaveModal(false);
+            setPendingActorSave(null);
+        } catch (err) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Export failed: ${getErrorMessage(err)}`, type: 'error' } });
+        }
     };
 
     const setReferenceImageFromFile = (file: File | undefined) => {
@@ -1411,33 +1486,8 @@ export default function PortraitStudio() {
                         setGeneratedImage(gen.displayUrl);
                         dispatch({ type: "SET_LAST_CASTED_IMAGE", payload: gen.displayUrl });
                     }}
-                    onExportGeneration={async (gen) => {
-                        try {
-                            const mat = await LibraryAssetMaterializer.materializeCastAsset({
-                                sourceUrl: gen.displayUrl,
-                                saveDirectoryPath: state.saveDirectoryPath,
-                                actorName: `Portrait ${dna.identity.sex} ${dna.identity.age}`,
-                                category: 'portrait',
-                            });
-                            if (mat.localPath) {
-                                const newActor: CastMember = {
-                                    id: crypto.randomUUID(),
-                                    name: `Portrait ${dna.identity.sex} ${dna.identity.age}`,
-                                    url: mat.previewUrl,
-                                    localPath: mat.localPath,
-                                    previewUrl: mat.previewUrl,
-                                    sourceUrl: mat.sourceUrl,
-                                    tag: 'front',
-                                    filename: mat.filename,
-                                    profile: { identity: dna.identity.ethnicity, wardrobe: '', accessories: '', style: 'Portrait' },
-                                };
-                                dispatch({ type: 'ADD_ACTOR_LIBRARY', payload: newActor });
-                                useRecentGenerationsStore.getState().markExported(gen.id);
-                                dispatch({ type: 'ADD_LOG', payload: { message: `Exported to Library: ${mat.filename || 'Actor'}`, type: 'success' } });
-                            }
-                        } catch (err) {
-                            dispatch({ type: 'ADD_LOG', payload: { message: `Export failed: ${err instanceof Error ? err.message : String(err)}`, type: 'error' } });
-                        }
+                    onExportGeneration={(gen) => {
+                        openActorSaveModal(gen.displayUrl, `Portrait ${dna.identity.sex} ${dna.identity.age}`, gen.id);
                     }}
                 />
 
@@ -1633,33 +1683,7 @@ export default function PortraitStudio() {
 
                         {/* Export to Library (Inspector) */}
                         <button
-                            onClick={async () => {
-                                try {
-                                    const mat = await LibraryAssetMaterializer.materializeCastAsset({
-                                        sourceUrl: generatedImage!,
-                                        saveDirectoryPath: state.saveDirectoryPath,
-                                        actorName: `Portrait ${dna.identity.sex} ${dna.identity.age}`,
-                                        category: 'portrait',
-                                    });
-                                    if (mat.localPath) {
-                                        const newActor: CastMember = {
-                                            id: crypto.randomUUID(),
-                                            name: `Portrait ${dna.identity.sex} ${dna.identity.age}`,
-                                            url: mat.previewUrl,
-                                            localPath: mat.localPath,
-                                            previewUrl: mat.previewUrl,
-                                            sourceUrl: mat.sourceUrl,
-                                            tag: 'front',
-                                            filename: mat.filename,
-                                            profile: { identity: dna.identity.ethnicity, wardrobe: '', accessories: '', style: 'Portrait' },
-                                        };
-                                        dispatch({ type: 'ADD_ACTOR_LIBRARY', payload: newActor });
-                                        dispatch({ type: 'ADD_LOG', payload: { message: `Exported to Library: ${mat.filename || 'Actor'}`, type: 'success' } });
-                                    }
-                                } catch (err) {
-                                    dispatch({ type: 'ADD_LOG', payload: { message: `Export failed: ${err instanceof Error ? err.message : String(err)}`, type: 'error' } });
-                                }
-                            }}
+                            onClick={() => openActorSaveModal(generatedImage!, `Portrait ${dna.identity.sex} ${dna.identity.age}`)}
                             className="w-14 h-14 bg-blue-500/20 hover:bg-blue-500 text-blue-400 hover:text-white rounded-xl transition-all transform hover:scale-110 flex items-center justify-center border border-blue-500/30"
                             title="Export to Library"
                         >
@@ -1692,6 +1716,20 @@ export default function PortraitStudio() {
                     </div>
                 </div>
             )}
+
+            <ActorSaveModal
+                isOpen={showActorSaveModal}
+                initialName={pendingActorSave?.initialName || `Portrait ${dna.identity.sex} ${dna.identity.age}`}
+                onClose={() => {
+                    setShowActorSaveModal(false);
+                    setPendingActorSave(null);
+                }}
+                onSave={(name, category) => {
+                    void savePendingActorToLibrary(name, category);
+                }}
+                title="Save to Actor Library"
+                description="Select a Studio Folder to organize this actor:"
+            />
 
             <ConfirmDialog
                 isOpen={!!deleteTarget}

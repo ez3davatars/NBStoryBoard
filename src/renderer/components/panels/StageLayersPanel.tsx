@@ -18,6 +18,11 @@ type TokenLayer = StageToken & { type: 'token' };
 type AnnotationLayer = Omit<StageAnnotation, 'type'> & { type: 'annotation'; subtype: StageAnnotation['type'] };
 type StageLayer = TokenLayer | AnnotationLayer;
 
+const toFiniteNumber = (value: unknown, fallback: number): number => {
+ const numeric = Number(value);
+ return Number.isFinite(numeric) ? numeric : fallback;
+};
+
 const buildStageLayers = (tokens: StageToken[], annotations: StageAnnotation[]): StageLayer[] => [
  ...tokens.map((t): TokenLayer => ({ ...t, type: 'token' })),
  ...annotations.map((a): AnnotationLayer => ({ ...a, type: 'annotation', subtype: a.type }))
@@ -52,12 +57,13 @@ export const StageLayersPanel = ({
  >
  <div className="space-y-1 max-h-[400px] overflow-y-auto custom-scrollbar pr-1">
  {buildStageLayers(state.tokens, state.annotations)
- .sort((a, b) => b.zIndex - a.zIndex)
+ .sort((a, b) => toFiniteNumber(b.zIndex, 0) - toFiniteNumber(a.zIndex, 0))
  .map((layer) => {
  const isSelected = state.selection === layer.id;
  const isDragging = draggedLayerId === layer.id;
  const isEditing = editingId === layer.id;
  const layerLabel = layer.type === 'token' ? layer.tag : (layer.text || layer.subtype);
+ const layerZIndex = toFiniteNumber(layer.zIndex, 0);
 
  return (
  <div
@@ -76,7 +82,7 @@ export const StageLayersPanel = ({
  if (!draggedLayerId || draggedLayerId === layer.id) return;
  // Capture current state of full list sorted by Z
  const allLayers = buildStageLayers(state.tokens, state.annotations)
- .sort((a, b) => b.zIndex - a.zIndex);
+ .sort((a, b) => toFiniteNumber(b.zIndex, 0) - toFiniteNumber(a.zIndex, 0));
  const fromIndex = allLayers.findIndex(l => l.id === draggedLayerId);
  const toIndex = allLayers.findIndex(l => l.id === layer.id);
  if (fromIndex === -1 || toIndex === -1) return;
@@ -88,7 +94,7 @@ export const StageLayersPanel = ({
  const maxZ = allLayers.length;
  allLayers.forEach((l, idx) => {
  const newZ = maxZ - idx;
- if (l.zIndex !== newZ) {
+ if (toFiniteNumber(l.zIndex, 0) !== newZ) {
  if (l.type === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: l.id, zIndex: newZ } });
  else dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: l.id, zIndex: newZ } });
  }
@@ -162,7 +168,7 @@ export const StageLayersPanel = ({
  {layerLabel}
  </span>
  )}
- <span className="text-[9px] font-mono text-gray-600 mr-2">Z:{layer.zIndex}</span>
+ <span className="text-[9px] font-mono text-gray-600 mr-2">Z:{layerZIndex}</span>
 
  {isSelected && (
  <div className="flex items-center gap-1">
@@ -196,7 +202,7 @@ export const StageLayersPanel = ({
  onClick={() => {
  if (!state.selection) return;
  const all = [...state.tokens, ...state.annotations];
- const maxZ = all.length > 0 ? Math.max(...all.map(i => i.zIndex)) : 0;
+ const maxZ = all.length > 0 ? Math.max(...all.map(i => toFiniteNumber(i.zIndex, 0))) : 0;
  if (state.selectionType === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: state.selection, zIndex: maxZ + 1 } });
  else dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: state.selection, zIndex: maxZ + 1 } });
  }}
@@ -211,8 +217,8 @@ export const StageLayersPanel = ({
  if (!state.selection) return;
  const item = [...state.tokens, ...state.annotations].find(i => i.id === state.selection);
  if (!item) return;
- if (state.selectionType === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: state.selection, zIndex: item.zIndex + 1 } });
- else dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: state.selection, zIndex: item.zIndex + 1 } });
+ if (state.selectionType === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: state.selection, zIndex: toFiniteNumber(item.zIndex, 0) + 1 } });
+ else dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: state.selection, zIndex: toFiniteNumber(item.zIndex, 0) + 1 } });
  }}
  className="bg-[#18181b] hover:bg-orange-500/20 text-gray-400 hover:text-orange-400 border border-[#27272a] rounded p-1.5 flex items-center justify-center disabled:opacity-30"
  title="Bring Forward"
@@ -225,8 +231,8 @@ export const StageLayersPanel = ({
  if (!state.selection) return;
  const item = [...state.tokens, ...state.annotations].find(i => i.id === state.selection);
  if (!item) return;
- if (state.selectionType === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: state.selection, zIndex: item.zIndex - 1 } });
- else dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: state.selection, zIndex: item.zIndex - 1 } });
+ if (state.selectionType === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: state.selection, zIndex: toFiniteNumber(item.zIndex, 0) - 1 } });
+ else dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: state.selection, zIndex: toFiniteNumber(item.zIndex, 0) - 1 } });
  }}
  className="bg-[#18181b] hover:bg-orange-500/20 text-gray-400 hover:text-orange-400 border border-[#27272a] rounded p-1.5 flex items-center justify-center disabled:opacity-30"
  title="Send Backward"
@@ -238,7 +244,7 @@ export const StageLayersPanel = ({
  onClick={() => {
  if (!state.selection) return;
  const all = [...state.tokens, ...state.annotations];
- const minZ = all.length > 0 ? Math.min(...all.map(i => i.zIndex)) : 0;
+ const minZ = all.length > 0 ? Math.min(...all.map(i => toFiniteNumber(i.zIndex, 0))) : 0;
  if (state.selectionType === 'token') dispatch({ type: 'UPDATE_TOKEN', payload: { id: state.selection, zIndex: minZ - 1 } });
  else dispatch({ type: 'UPDATE_ANNOTATION', payload: { id: state.selection, zIndex: minZ - 1 } });
  }}

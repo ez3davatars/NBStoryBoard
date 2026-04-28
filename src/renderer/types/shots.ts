@@ -54,6 +54,13 @@ export type ShotVariantStatus =
   | 'rerendering'
   | 'expired';
 
+export type ShotIntegrityStatus =
+  | 'unchecked'
+  | 'verified'
+  | 'needs_review'
+  | 'fallback'
+  | 'unverified';
+
 export type ShotActorReferenceInput = {
   actorId: string;
   actorLabel?: string;
@@ -65,6 +72,12 @@ export type SceneTruthActor = {
   actorId?: string;
   actorLabel?: string;
   leftToRightIndex: number;
+  bbox?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
   approxZone: 'left' | 'center' | 'right' | 'background' | 'unknown';
   role: 'seated' | 'standing' | 'unknown';
   targetInScene?: string;
@@ -90,6 +103,13 @@ export type ShotVariant = {
   slotId: string;
   slotIndex: number;
   presetId: ShotPresetId;
+  renderMode?: 'continuity_reframe' | 'ai_camera_move';
+  integrity?: {
+    status: ShotIntegrityStatus;
+    score?: number;
+    issues?: string[];
+    attempts?: number;
+  };
   label: string;
   description: string;
   prompt: string;

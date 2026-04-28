@@ -3,14 +3,12 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Upload, RefreshCcw, Maximize, Shirt, Sparkles, Download,
-    UserPlus, X, Eraser, Trash2, Undo2, Redo2, CheckCircle2, FolderPlus, Zap, HelpCircle
+    UserPlus, X, Trash2, CheckCircle2, FolderPlus, Zap, HelpCircle
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
 import type { WardrobeItem, CastMember, WardrobeState } from '../context/AppContext';
-import { nativeJoinPath, nativeListFiles, nativeWriteFile, safeFetchBlob } from '../utils/NativeFileAssets';
-import { removeBackground } from "@imgly/background-removal";
-import { CutoutService } from "../services/CutoutService";
+import { nativeJoinPath, nativeListFiles, nativeWriteFile } from '../utils/NativeFileAssets';
 // Style Imports for Save Modal
 import styleRealism from '../assets/cover-realism.png';
 import styleAnimation from '../assets/cover-anim.png';
@@ -87,7 +85,7 @@ const WardrobeStudio = () => {
     const {
         fittedImage, tryOnMask, restorationLayer, removeBg: removeTryOnBg,
         fringeSize, brushSize, history, historyIndex, isBrushActive: globalIsBrushActive,
-        tryOnNote, processedTryOnUrl, brandingLogo, logoPosition,
+        tryOnNote, brandingLogo, logoPosition,
         tryOnOutputMode, tryOnViews, tryOnSheetFB, tryOnSheetLR, activeTryOnView
     } = state.wardrobeState;
 
@@ -101,11 +99,8 @@ const WardrobeStudio = () => {
     const setTryOnMask = (val: string | null) => updateState({ tryOnMask: val });
     const setRestorationLayer = (val: string | null) => updateState({ restorationLayer: val });
     const setRemoveTryOnBg = (val: boolean) => updateState({ removeBg: val });
-    const setFringeSize = (val: number) => updateState({ fringeSize: val });
-    const setBrushSize = (val: number) => updateState({ brushSize: val });
     const setHistory = (val: string[]) => updateState({ history: val });
     const setHistoryIndex = (val: number) => updateState({ historyIndex: val });
-    const setIsBrushActive = (val: boolean) => updateState({ isBrushActive: val });
     const setTryOnNote = (val: string) => updateState({ tryOnNote: val });
     const setProcessedTryOnUrl = (val: string | null) => updateState({ processedTryOnUrl: val });
     const setBrandingLogo = (val: string | null) => updateState({ brandingLogo: val });
@@ -142,15 +137,10 @@ const WardrobeStudio = () => {
     const [designerRefName, setDesignerRefName] = useState<string>('');
     const [designerDropActive, setDesignerDropActive] = useState(false);
 
-    const [bgToolTab, setBgToolTab] = useState<'isolate' | 'restore'>('isolate');
-
-
-
     // Derived / Transient
     const [erodedUrl, setErodedUrl] = useState<string | null>(null);
-    // processedTryOnUrl is now global
     const [isIsolating, setIsIsolating] = useState(false);
-    const [isolationProgress, setIsolationProgress] = useState(0);
+    const [isolationProgress] = useState(0);
     const [notification, setNotification] = useState<string | null>(null);
 
     const showToast = (msg: string) => {
@@ -272,15 +262,18 @@ const WardrobeStudio = () => {
 
     // Refs
     const tryOnImgRef = useRef<HTMLImageElement>(null); // The Base Image (Fitted)
-    const previewImgRef = useRef<HTMLImageElement>(null); // The Composite Result
-
     // --- SAVE TO ACTOR LIBRARY STATE ---
     const [showSaveModal, setShowSaveModal] = useState(false);
     const [saveCategory, setSaveCategory] = useState("realism");
     const [newActorName, setNewActorName] = useState("");
+    const [saveSourceImage, setSaveSourceImage] = useState<string | null>(null);
+    const [saveRecentGenerationId, setSaveRecentGenerationId] = useState<string | null>(null);
 
-    const handleOpenSaveModal = () => {
-        if (!fittedImage) return;
+    const handleOpenSaveModal = (sourceOverride?: string, recentGenerationId?: string) => {
+        const source = sourceOverride || fittedImage;
+        if (!source) return;
+        setSaveSourceImage(source);
+        setSaveRecentGenerationId(recentGenerationId || null);
         setNewActorName("Fitted Character");
         setShowSaveModal(true);
     };
@@ -289,16 +282,13 @@ const WardrobeStudio = () => {
         const targetName = nameOverride || newActorName;
         const targetCategory = categoryOverride || saveCategory;
 
-        const hasStorage = !!state.saveDirectoryHandle || !!state.saveDirectoryPath;
+        const sourceImage = saveSourceImage || fittedImage;
 
-        if (!hasStorage || !fittedImage) {
-            showToast("Save Folder & Image Required");
-            dispatch({ type: 'ADD_LOG', payload: { message: "Save Failed: Missing Save Folder or Image", type: 'error' } });
+        if (!sourceImage) {
+            showToast("Image Required");
+            dispatch({ type: 'ADD_LOG', payload: { message: "Save Failed: Missing image", type: 'error' } });
             return;
         }
-
-        // FIX: Use Processed URL (BG Removed) if available, otherwise fallback to Original
-        const sourceImage = processedTryOnUrl || fittedImage;
 
         // Map Category to a valid Style for Library Filtering
         const catToStyle: Record<string, string> = {
@@ -341,8 +331,13 @@ const WardrobeStudio = () => {
                 // Immediately swap Hosted preview URL for durable local loaded URL
                 setFittedImage(mat.previewUrl);
             }
+            if (saveRecentGenerationId) {
+                useRecentGenerationsStore.getState().markExported(saveRecentGenerationId);
+            }
 
             setShowSaveModal(false);
+            setSaveSourceImage(null);
+            setSaveRecentGenerationId(null);
             dispatch({ type: 'ADD_LOG', payload: { message: `Saved Actor: ${mat.filename || "Storage"}`, type: 'success' } });
 
         } catch (error: unknown) {
@@ -363,7 +358,6 @@ const WardrobeStudio = () => {
         historyIndexRef.current = historyIndex;
     }, [history, historyIndex]);
     const isSyncingRef = useRef(false); // Track async canvas sync state
-    const syncRequestId = useRef(0); // Track migration/sync requests to avoid race conditions
     const lastPaintPos = useRef<{ x: number, y: number } | null>(null);
     const lastScreenPos = useRef<{ x: number, y: number } | null>(null);
     const cachedBaseImgRef = useRef<HTMLImageElement | null>(null);
@@ -378,7 +372,8 @@ const WardrobeStudio = () => {
 
     // PHASE 1: EROSION (Heavy - CPU)
     const generateErodedMask = async (srcUrl: string, pixels: number): Promise<string> => {
-        if (pixels === 0) return srcUrl;
+        const safePixels = Math.max(0, Math.min(4, pixels));
+        if (safePixels === 0) return srcUrl;
 
         return new Promise((resolve) => {
             const img = new Image();
@@ -405,9 +400,9 @@ const WardrobeStudio = () => {
                 }
 
                 // SUB-PIXEL EROSION
-                const rBase = Math.floor(pixels);
+                const rBase = Math.floor(safePixels);
                 const rExt = rBase + 1;
-                const fraction = pixels - rBase;
+                const fraction = safePixels - rBase;
 
                 for (let y = 0; y < h; y++) {
                     for (let x = 0; x < w; x++) {
@@ -590,7 +585,6 @@ const WardrobeStudio = () => {
 
     // EFFECT 2: Handle Composition (Fast)
     useEffect(() => {
-        // If Remove BG is off, show nothing
         if (!removeTryOnBg) {
             dispatch({ type: 'SET_WARDROBE_STATE', payload: { processedTryOnUrl: null } });
             return;
@@ -620,38 +614,6 @@ const WardrobeStudio = () => {
 
         return () => { active = false; };
     }, [erodedUrl, tryOnMask, restorationLayer, removeTryOnBg, fittedImage, dispatch]);
-
-    // Simplified Isolation (Just triggers Img.ly and sets mask)
-    const runTryOnIsolation = async (): Promise<string | null> => {
-        if (!fittedImage) return null; // removeTryOnBg check removed to allow manual run even if off? No, safer to keep logic consistent but Cast allows run if null.
-
-        try {
-            setIsIsolating(true);
-            setIsolationProgress(0);
-
-            const blob = await safeFetchBlob(fittedImage);
-
-            const config = await CutoutService.getImglyConfig(
-                (_key: string, current: number, total: number) => {
-                    if (total > 0) setIsolationProgress(Math.round((current / total) * 100));
-                }
-            );
-
-            const blobResult = await removeBackground(blob, config);
-
-            const url = URL.createObjectURL(blobResult);
-            setTryOnMask(url);
-            setRemoveTryOnBg(true); // Auto-enable
-            return url;
-        } catch (e) {
-            console.error("Isolation failed", e);
-            dispatch({ type: 'ADD_LOG', payload: { message: "Isolation failed. Please try again.", type: 'error' } });
-            return null;
-        } finally {
-            setIsIsolating(false);
-            setIsolationProgress(0);
-        }
-    };
 
     // EFFECT: Handle Erosion (Slow)
     useEffect(() => {
@@ -684,85 +646,6 @@ const WardrobeStudio = () => {
 
     // --- INTERACTION HANDLERS ---
 
-    // SAFE SYNC REF CANVAS (Async Locked)
-    const syncRefCanvas = (url: string | null) => {
-        // Note: Wardrobe uses 'tryOnImgRef' as the dimension source
-        if (!tryOnImgRef.current) return;
-
-        // Ensure Dimension Sync
-        const requiredW = tryOnImgRef.current.naturalWidth;
-        const requiredH = tryOnImgRef.current.naturalHeight;
-
-        if (!restorationCanvasRef.current || restorationCanvasRef.current.width !== requiredW) {
-            console.log("SyncRef initializing canvas:", requiredW, requiredH);
-            const c = document.createElement('canvas');
-            c.width = requiredW;
-            c.height = requiredH;
-            restorationCanvasRef.current = c;
-        }
-
-        const ctx = restorationCanvasRef.current.getContext('2d');
-        if (!ctx) return;
-
-        const currentId = ++syncRequestId.current;
-
-        if (url) {
-            isSyncingRef.current = true;
-            const img = new Image();
-            img.onload = () => {
-                if (currentId === syncRequestId.current) {
-                    if (restorationCanvasRef.current) {
-                        // Re-verify dimensions on load just in case
-                        if (restorationCanvasRef.current.width !== img.width && img.width > 0) {
-                            restorationCanvasRef.current.width = img.width;
-                            restorationCanvasRef.current.height = img.height;
-                        }
-
-                        const ctx = restorationCanvasRef.current.getContext('2d');
-                        ctx?.clearRect(0, 0, restorationCanvasRef.current.width, restorationCanvasRef.current.height);
-                        ctx?.drawImage(img, 0, 0);
-                    }
-                }
-                isSyncingRef.current = false;
-            };
-            img.onerror = () => {
-                console.error("Failed to load history snapshot in SyncRef");
-                isSyncingRef.current = false;
-            }
-            img.src = url;
-        } else {
-            ctx.clearRect(0, 0, restorationCanvasRef.current.width, restorationCanvasRef.current.height);
-        }
-    };
-
-    const handleUndo = () => {
-        const currentIndex = historyIndexRef.current;
-        // Allow undoing if we are at least at index 0 (1st item) to go back to -1 (Empty)
-        if (currentIndex >= 0) {
-            const newIndex = currentIndex - 1;
-            const snapshot = newIndex >= 0 ? historyRef.current[newIndex] : null;
-
-            historyIndexRef.current = newIndex;
-            setHistoryIndex(newIndex);
-            setRestorationLayer(snapshot);
-            syncRefCanvas(snapshot);
-        }
-    };
-
-    const handleRedo = () => {
-        const currentIndex = historyIndexRef.current;
-        const currentHist = historyRef.current;
-        if (currentIndex < currentHist.length - 1) {
-            const newIndex = currentIndex + 1;
-            const snapshot = currentHist[newIndex];
-
-            historyIndexRef.current = newIndex;
-            setHistoryIndex(newIndex);
-            setRestorationLayer(snapshot);
-            syncRefCanvas(snapshot);
-        }
-    };
-
     // HELPER: Purge Restoration State
     const purgeRestorationState = () => {
         setRestorationLayer(null);
@@ -778,65 +661,54 @@ const WardrobeStudio = () => {
 
     // handlePanelMouseDown removed
 
+    const getRenderedImageRect = (img: HTMLImageElement) => {
+        const rect = img.getBoundingClientRect();
+        const style = window.getComputedStyle(img);
+        const padLeft = parseFloat(style.paddingLeft) || 0;
+        const padTop = parseFloat(style.paddingTop) || 0;
+        const padRight = parseFloat(style.paddingRight) || 0;
+        const padBottom = parseFloat(style.paddingBottom) || 0;
+
+        const contentLeft = rect.left + padLeft;
+        const contentTop = rect.top + padTop;
+        const contentWidth = Math.max(1, rect.width - padLeft - padRight);
+        const contentHeight = Math.max(1, rect.height - padTop - padBottom);
+        const naturalWidth = img.naturalWidth || 1;
+        const naturalHeight = img.naturalHeight || 1;
+        const fitScale = Math.min(contentWidth / naturalWidth, contentHeight / naturalHeight);
+        const width = naturalWidth * fitScale;
+        const height = naturalHeight * fitScale;
+
+        return {
+            left: contentLeft + (contentWidth - width) / 2,
+            top: contentTop + (contentHeight - height) / 2,
+            width,
+            height,
+            scale: naturalWidth / width,
+        };
+    };
 
     // MOUSE TO IMAGE COORDINATE MAPPER
     const getImgCoords = (clientX: number, clientY: number) => {
-        // 1. Identify which image is ACTUALLY visible to the user
-        // If preview exists, we use previewImgRef (which is object-contain)
-        // If not, we use tryOnImgRef (which is object-contain)
-        const activeImg = (processedTryOnUrl && previewImgRef.current)
-            ? previewImgRef.current
-            : tryOnImgRef.current;
+        const activeImg = tryOnImgRef.current;
 
         if (!containerRef.current || !activeImg) return null;
 
-        // 2. Get Geometries
-
-        // We need the ACTUAL rendered dimensions of the image content within the object-fit: contain element
-        // standard getBoundingClientRect on the img tag returns the ELEMENT size (w-full h-full), not the content size
         const naturalW = activeImg.naturalWidth;
         const naturalH = activeImg.naturalHeight;
-        const elemW = activeImg.offsetWidth;
-        const elemH = activeImg.offsetHeight;
+        const renderedRect = getRenderedImageRect(activeImg);
+        const mouseX = clientX - renderedRect.left;
+        const mouseY = clientY - renderedRect.top;
 
-        const imgRatio = naturalW / naturalH;
-        const containerRatio = elemW / elemH;
-
-        let renderedW, renderedH, renderedLeft, renderedTop;
-
-        if (containerRatio > imgRatio) {
-            // Container is wider than image -> Pillarbox (empty left/right)
-            // Image height matches container height
-            renderedH = elemH;
-            renderedW = elemH * imgRatio;
-            renderedTop = 0;
-            renderedLeft = (elemW - renderedW) / 2;
-        } else {
-            // Container is taller than image -> Letterbox (empty top/bottom)
-            // Image width matches container width
-            renderedW = elemW;
-            renderedH = elemW / imgRatio;
-            renderedLeft = 0;
-            renderedTop = (elemH - renderedH) / 2;
+        if (
+            mouseX < 0 ||
+            mouseY < 0 ||
+            mouseX > renderedRect.width ||
+            mouseY > renderedRect.height
+        ) {
+            return null;
         }
 
-        // 3. Calculate Image Coordinates
-        // Adjust mouse position by the rendered offset
-        // relative to the activeImg element
-        const imgElementRect = activeImg.getBoundingClientRect();
-        const clientXRelToImg = clientX - imgElementRect.left;
-        const clientYRelToImg = clientY - imgElementRect.top;
-
-        const mouseX = clientXRelToImg - renderedLeft;
-        const mouseY = clientYRelToImg - renderedTop;
-
-        // 4. Scale to Natural Dimensions
-        const scale = naturalW / renderedW;
-
-        // 5. Calculate UI Screen Coordinates (for Cursor Dot)
-        // We want the cursor dot to track the mouse EXACTLY
-        // But we should clamp or hide it if outside the image? 
-        // For now, let's just track the mouse on screen relative to canvas
         let screenX = 0;
         let screenY = 0;
 
@@ -847,11 +719,11 @@ const WardrobeStudio = () => {
         }
 
         return {
-            x: mouseX * scale,
-            y: mouseY * scale,
+            x: mouseX * renderedRect.scale,
+            y: mouseY * renderedRect.scale,
             w: naturalW,
             h: naturalH,
-            scale: scale,
+            scale: renderedRect.scale,
             screenX: screenX,
             screenY: screenY,
         };
@@ -862,17 +734,22 @@ const WardrobeStudio = () => {
         if (isSyncingRef.current) return;
         // Drag check removed
 
-        if (!isBrushActive || !tryOnImgRef.current) return;
+        if (!isBrushActive) return;
 
         e.stopPropagation();
         e.preventDefault();
-        isPaintingRef.current = true;
 
         const coords = getImgCoords(e.clientX, e.clientY);
+        if (!coords) {
+            isPaintingRef.current = false;
+            return;
+        }
+
+        isPaintingRef.current = true;
 
         // Init Canvas if Needed OR if Sizing Mismatch
-        const requiredW = tryOnImgRef.current.naturalWidth;
-        const requiredH = tryOnImgRef.current.naturalHeight;
+        const requiredW = coords.w;
+        const requiredH = coords.h;
 
         if (!restorationCanvasRef.current || restorationCanvasRef.current.width !== requiredW || restorationCanvasRef.current.height !== requiredH) {
             console.log("Re-initializing Restoration Canvas to match image:", requiredW, requiredH);
@@ -961,6 +838,12 @@ const WardrobeStudio = () => {
 
                 lastPaintPos.current = { x: coords.x, y: coords.y };
                 lastScreenPos.current = { x: coords.screenX, y: coords.screenY };
+            } else if (coords && isPaintingRef.current) {
+                lastPaintPos.current = { x: coords.x, y: coords.y };
+                lastScreenPos.current = { x: coords.screenX, y: coords.screenY };
+            } else if (!coords) {
+                lastPaintPos.current = null;
+                lastScreenPos.current = null;
             }
         }
     };
@@ -1667,7 +1550,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
  COMPOSITION
  - Single subject only. Full body visible. No cropping head/feet.
- - Solid black studio background (#000000).
+ - Solid black studio background (#000000), no gradients, no shadows on background.
 
  ${brandingInstruction}
 
@@ -1739,7 +1622,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  OUTPUT FORMAT (STRICT)
  - Produce ONE square image (1:1) with TWO equal vertical panels (left/right).
  - Subtle center divider is allowed; no frames, no collage borders, no extra panels.
- - Same solid black background (#000000) and consistent studio lighting in both panels.
+ - Same solid black studio background (#000000) and consistent studio lighting in both panels.
  - Full body visible in both panels (no cropping head/feet).
  - FOOTWEAR CONSISTENCY (CRITICAL): The subject must have the EXACT SAME footwear (or lack thereof) in both panels.
  - No text, no labels, no watermarks.
@@ -2009,8 +1892,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
     };
 
     const handleAddToCast = async () => {
-        // Strictly use the current visual state. No new processing.
-        const finalUrl = processedTryOnUrl || fittedImage;
+        const finalUrl = fittedImage;
         if (!finalUrl) return;
 
         const currentView = activeTryOnView;
@@ -2534,11 +2416,8 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                             <img
                                                 ref={tryOnImgRef}
                                                 src={fittedImage}
-                                                className={processedTryOnUrl ? 'hidden' : 'w-full h-full object-contain pointer-events-none'}
+                                                className="w-full h-full object-contain pointer-events-none"
                                             />
-                                            {processedTryOnUrl && (
-                                                <img ref={previewImgRef} src={processedTryOnUrl} className="w-full h-full object-contain pointer-events-none" />
-                                            )}
 
                                             {/* INTERACTION CANVASES */}
                                             <canvas ref={uiCanvasRef} className="absolute inset-0 w-full h-full pointer-events-none z-50 opacity-50" />
@@ -2608,6 +2487,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                             }}
                                             onExportGeneration={(gen) => {
                                                 setFittedImage(gen.displayUrl);
+                                                handleOpenSaveModal(gen.displayUrl, gen.id);
                                             }}
                                         />
                                     </div>
@@ -2618,147 +2498,12 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                 <div className="w-96 shrink-0 border-l border-white/10 bg-[#18181b]/50 h-full flex flex-col">
                                     <div className="p-4 border-b border-white/10 flex items-center justify-between shrink-0">
                                         <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-400">
-                                            {fittedImage ? (removeTryOnBg ? 'Image Adjustments' : 'Try-On Setup') : 'Try-On Setup'}
+                                            Try-On Setup
                                         </h3>
-                                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-2 cursor-pointer select-none hover:text-white transition-colors">
-                                            <input
-                                                type="checkbox"
-                                                checked={removeTryOnBg}
-                                                onChange={(e) => {
-                                                    const next = e.target.checked;
-                                                    if (next && !fittedImage) {
-                                                        showToast("Generate a fit first.");
-                                                        return;
-                                                    }
-                                                    setRemoveTryOnBg(next);
-                                                }}
-                                                disabled={!fittedImage}
-                                                className="w-4 h-4 accent-blue-500 rounded border-white/10 bg-black cursor-pointer"
-                                            />
-                                            <Eraser className="w-3.5 h-3.5" /> Remove BG
-                                        </label>
                                     </div>
 
                                     <div className="flex-grow p-4 space-y-4 overflow-hidden">
-                                        {removeTryOnBg && fittedImage ? (
-                                            <div className="space-y-4">
-                                                <div className="bg-black/30 border border-white/10 rounded-xl p-1.5 flex items-center gap-1">
-                                                    <button
-                                                        onClick={() => setBgToolTab('isolate')}
-                                                        className={`flex-1 py-2 rounded-lg text-[10px] font-black uppercase tracking-wider transition-colors ${bgToolTab === 'isolate' ? 'bg-white text-black' : 'text-gray-300 hover:bg-white/10'
-                                                            }`}
-                                                    >
-                                                        Isolate
-                                                    </button>
-                                                    <button
-                                                        onClick={() => setBgToolTab('restore')}
-                                                        className={`flex-1 py-2 rounded-lg text-[10px] font-black uppercase tracking-wider transition-colors ${bgToolTab === 'restore' ? 'bg-white text-black' : 'text-gray-300 hover:bg-white/10'
-                                                            }`}
-                                                    >
-                                                        Restore
-                                                    </button>
-                                                </div>
-
-                                                {bgToolTab === 'isolate' ? (
-                                                    <div className="bg-black/30 border border-white/5 rounded-xl p-4 space-y-3">
-                                                        <div className="flex items-center justify-between">
-                                                            <span className="text-[9px] font-black text-gray-500 uppercase tracking-widest">
-                                                                Isolation
-                                                            </span>
-                                                            <button
-                                                                onClick={runTryOnIsolation}
-                                                                className="text-[9px] font-bold text-gray-200 hover:text-white bg-white/5 hover:bg-white/10 px-2.5 py-1 rounded-lg border border-white/10 transition-colors flex items-center gap-1"
-                                                            >
-                                                                <Sparkles className="w-3 h-3" />
-                                                                {tryOnMask ? 'Re-run' : 'Run'}
-                                                            </button>
-                                                        </div>
-
-                                                        <div className="flex items-center justify-between gap-3 bg-black/20 p-2 rounded-lg border border-white/5">
-                                                            <span className="text-[10px] text-gray-400 font-bold w-12 text-right">
-                                                                {fringeSize}px
-                                                            </span>
-                                                            <input
-                                                                type="range"
-                                                                min="0"
-                                                                max="10"
-                                                                step="0.5"
-                                                                value={fringeSize}
-                                                                onChange={(e) => setFringeSize(parseFloat(e.target.value))}
-                                                                className="flex-grow h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                                                            />
-                                                        </div>
-
-                                                        <div className="text-[9px] text-gray-500 leading-relaxed">
-                                                            {tryOnMask ? 'Isolation ready. Switch to Restore to paint back details.' : 'Run isolation to enable Restore tools.'}
-                                                        </div>
-                                                    </div>
-                                                ) : (
-                                                    <div className="bg-black/30 border border-white/5 rounded-xl p-4 space-y-3">
-                                                        <div className="flex items-center justify-between">
-                                                            <span className="text-[9px] font-black text-gray-500 uppercase tracking-widest">
-                                                                Restore Brush
-                                                            </span>
-                                                            <button
-                                                                onClick={() => setIsBrushActive(!isBrushActive)}
-                                                                disabled={!tryOnMask}
-                                                                className={`text-[9px] font-black uppercase tracking-wider px-2.5 py-1 rounded-lg border transition-colors ${!tryOnMask
-                                                                    ? 'opacity-40 cursor-not-allowed bg-white/5 border-white/10 text-gray-400'
-                                                                    : isBrushActive
-                                                                        ? 'bg-blue-600 text-white border-blue-400/30'
-                                                                        : 'bg-white/5 hover:bg-white/10 text-gray-200 border-white/10'
-                                                                    }`}
-                                                            >
-                                                                {isBrushActive ? 'On' : 'Off'}
-                                                            </button>
-                                                        </div>
-
-                                                        <div className="grid grid-cols-3 gap-2 items-center">
-                                                            <button
-                                                                onClick={handleUndo}
-                                                                disabled={historyIndex < 0}
-                                                                className="py-2 rounded-lg bg-white/5 hover:bg-white/10 text-gray-200 border border-white/10 disabled:opacity-40 disabled:hover:bg-white/5 flex items-center justify-center"
-                                                                title="Undo"
-                                                            >
-                                                                <Undo2 className="w-4 h-4" />
-                                                            </button>
-                                                            <button
-                                                                onClick={handleRedo}
-                                                                disabled={historyIndex >= history.length - 1}
-                                                                className="py-2 rounded-lg bg-white/5 hover:bg-white/10 text-gray-200 border border-white/10 disabled:opacity-40 disabled:hover:bg-white/5 flex items-center justify-center"
-                                                                title="Redo"
-                                                            >
-                                                                <Redo2 className="w-4 h-4" />
-                                                            </button>
-
-                                                            <div className="text-[9px] font-bold text-gray-500 uppercase tracking-widest text-center">
-                                                                {historyIndex === -1 ? 0 : historyIndex + 1}/{history.length}
-                                                            </div>
-                                                        </div>
-
-                                                        {isBrushActive && (
-                                                            <div className="flex items-center gap-3 bg-black/20 p-2 rounded-lg border border-white/5">
-                                                                <span className="text-[10px] text-gray-400 font-bold w-12 text-right">{brushSize}px</span>
-                                                                <input
-                                                                    type="range"
-                                                                    min="1"
-                                                                    max="100"
-                                                                    value={brushSize}
-                                                                    onChange={(e) => setBrushSize(parseInt(e.target.value))}
-                                                                    onMouseDown={(e) => e.stopPropagation()}
-                                                                    className="flex-grow h-1.5 bg-gray-700 rounded-full appearance-none cursor-pointer accent-blue-500"
-                                                                />
-                                                            </div>
-                                                        )}
-
-                                                        <div className="text-[9px] text-gray-500 leading-relaxed">
-                                                            Paint on the image to restore original pixels (requires isolation).
-                                                        </div>
-                                                    </div>
-                                                )}
-                                            </div>
-                                        ) : (
-                                            <div className="space-y-4">
+                                        <div className="space-y-4">
                                                 <div className="bg-black/30 border border-white/5 rounded-xl p-4 space-y-3">
                                                     <div className="flex items-center justify-between gap-2">
                                                         <div className="min-w-0">
@@ -2847,19 +2592,18 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                                     </button>
                                                 </div>
                                             </div>
-                                        )}
                                     </div>
                                     <div className="p-4 border-t border-white/10 bg-[#09090b]/50 shrink-0 space-y-3">
                                         <button onClick={handleAddToCast} className="w-full bg-emerald-500/10 hover:bg-emerald-500 text-emerald-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-emerald-500/20 hover:-[0_0_15px_rgba(16,185,129,0.4)] text-[10px] font-black uppercase tracking-wider" title="Add to Session Cast">
                                             <UserPlus className="w-4 h-4" /> Add to Cast
                                         </button>
 
-                                        <button onClick={handleOpenSaveModal} className="w-full bg-purple-500/10 hover:bg-purple-500 text-purple-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-purple-500/20 hover:-[0_0_15px_rgba(168,85,247,0.4)] text-[10px] font-black uppercase tracking-wider" title="Save to Actor Library">
+                                        <button onClick={() => handleOpenSaveModal()} className="w-full bg-purple-500/10 hover:bg-purple-500 text-purple-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-purple-500/20 hover:-[0_0_15px_rgba(168,85,247,0.4)] text-[10px] font-black uppercase tracking-wider" title="Save to Actor Library">
                                             <FolderPlus className="w-4 h-4" /> Export to Library
                                         </button>
 
                                         <div className="grid grid-cols-2 gap-3">
-                                            <button onClick={() => downloadImage(processedTryOnUrl || fittedImage!, `fitted-${selectedCharacter?.name || 'character'}.png`)} className="w-full bg-blue-600/10 hover:bg-blue-600 text-blue-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-blue-500/20 hover:-[0_0_15px_rgba(37,99,235,0.4)] text-[10px] font-black uppercase tracking-wider" title="Download">
+                                            <button onClick={() => downloadImage(fittedImage!, `fitted-${selectedCharacter?.name || 'character'}.png`)} className="w-full bg-blue-600/10 hover:bg-blue-600 text-blue-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-blue-500/20 hover:-[0_0_15px_rgba(37,99,235,0.4)] text-[10px] font-black uppercase tracking-wider" title="Download">
                                                 <Download className="w-4 h-4" /> Save
                                             </button>
                                             <button onClick={() => {
@@ -2895,8 +2639,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                         onExportGeneration={(gen) => {
                             // Trigger the save modal flow with the selected generation
                             setFittedImage(gen.displayUrl);
-                            handleOpenSaveModal();
-                            useRecentGenerationsStore.getState().markExported(gen.id);
+                            handleOpenSaveModal(gen.displayUrl, gen.id);
                         }}
                     />
 
@@ -2905,7 +2648,11 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                     <ActorSaveModal
                         isOpen={showSaveModal}
                         initialName={newActorName}
-                        onClose={() => setShowSaveModal(false)}
+                        onClose={() => {
+                            setShowSaveModal(false);
+                            setSaveSourceImage(null);
+                            setSaveRecentGenerationId(null);
+                        }}
                         onSave={(name, category) => {
                             setNewActorName(name);
                             setSaveCategory(category);

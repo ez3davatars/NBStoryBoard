@@ -51,6 +51,33 @@ export const ActorIntelligencePanel = ({
     onRefreshSpatialData,
     style
 }: ActorIntelligencePanelProps) => {
+    const isDepthOff = !state.depthMapUrl && !state.isDepthProcessing;
+    const headerColor = isDepthOff
+        ? 'text-gray-500'
+        : authorityStatus === 'AUTHORITATIVE'
+            ? 'text-green-400'
+            : authorityStatus === 'DEGRADED'
+                ? 'text-amber-400'
+                : 'text-red-500';
+    const statusLabel = state.isDepthProcessing
+        ? 'Building'
+        : isDepthOff
+            ? 'Off'
+            : authorityStatus === 'AUTHORITATIVE'
+                ? 'Locked'
+                : authorityStatus === 'DEGRADED'
+                    ? 'Limited'
+                    : 'Unavailable';
+    const statusClass = state.isDepthProcessing
+        ? 'bg-blue-500/10 text-blue-300 border-blue-500/30'
+        : isDepthOff
+            ? 'bg-gray-500/10 text-gray-400 border-gray-500/20'
+            : authorityStatus === 'AUTHORITATIVE'
+                ? 'bg-green-500/10 text-green-400 border-green-500/30'
+                : authorityStatus === 'DEGRADED'
+                    ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+                    : 'bg-red-500/10 text-red-500 border-red-500/30';
+
     return (
         <SidebarPanel
             id="actor_intel"
@@ -61,15 +88,10 @@ export const ActorIntelligencePanel = ({
             onDragStart={onDragStart}
             onDrop={onDrop}
             style={style}
-            headerColor={authorityStatus === 'AUTHORITATIVE' ? 'text-green-400' : authorityStatus === 'DEGRADED' ? 'text-amber-400' : 'text-red-500'}
+            headerColor={headerColor}
             rightElement={
-                <div className={`px-2 py-0.5 rounded-[4px] text-[8px] font-black tracking-tight uppercase border transition-colors ${authorityStatus === 'AUTHORITATIVE' ? 'bg-green-500/10 text-green-400 border-green-500/30' :
-                    authorityStatus === 'DEGRADED' ? 'bg-amber-500/10 text-amber-400 border-amber-500/30' :
-                        'bg-red-500/10 text-red-500 border-red-500/30'
-                    }`}>
-                    {authorityStatus === 'AUTHORITATIVE' ? 'Locked' :
-                        authorityStatus === 'DEGRADED' ? 'Limited' :
-                            'Unavailable'}
+                <div className={`px-2 py-0.5 rounded-[4px] text-[8px] font-black tracking-tight uppercase border transition-colors ${statusClass}`}>
+                    {statusLabel}
                 </div>
             }
         >
@@ -83,19 +105,25 @@ export const ActorIntelligencePanel = ({
                         {/* 1. Depth Map (with Loading State) & Refresh */}
                         <div className="flex gap-1 items-center">
                             <button
-                                onClick={() => setShowDebugDepthMap(!showDebugDepthMap)}
-                                disabled={state.isDepthProcessing}
+                                onClick={() => {
+                                    if (state.depthMapUrl) {
+                                        setShowDebugDepthMap(!showDebugDepthMap);
+                                    } else {
+                                        onRefreshSpatialData();
+                                    }
+                                }}
+                                disabled={state.isDepthProcessing || (!state.depthMapUrl && !state.backgroundUrl)}
                                 className={`flex-1 px-3 py-1.5 text-[11px] font-bold rounded border transition-colors flex items-center justify-center gap-1 ${state.isDepthProcessing ? 'bg-blue-900/10 text-blue-300/50 border-blue-500/10 cursor-wait' : showDebugDepthMap ? 'bg-blue-500/20 text-blue-400 border-blue-500/50' : 'bg-black/20 text-gray-400 border-white/10 hover:bg-[#27272a]'}`}
-                                title="Visualizes the projected high-fidelity depth map. Lighter values represent closer objects."
+                                title={state.depthMapUrl ? "Visualizes the projected high-fidelity depth map. Lighter values represent closer objects." : "Generate an optional depth map for grounding and occlusion helpers."}
                             >
                                 {state.isDepthProcessing && <RefreshCcw className="w-3 h-3 animate-spin" />}
-                                {state.isDepthProcessing ? 'Generating...' : 'Depth Map'}
+                                {state.isDepthProcessing ? 'Generating...' : state.depthMapUrl ? 'Depth Map' : 'Generate Depth'}
                             </button>
                             <button
                                 onClick={onRefreshSpatialData}
-                                disabled={state.isDepthProcessing}
+                                disabled={state.isDepthProcessing || !state.backgroundUrl}
                                 className="px-2 py-2 bg-blue-900/20 text-blue-400 border border-blue-500/30 rounded hover:bg-blue-800/50 disabled:opacity-50 disabled:cursor-not-allowed"
-                                title="Force Refresh: Regenerate Depth Map & Floor Plane"
+                                title="Generate or regenerate Depth Map & Floor Plane"
                             >
                                 <RefreshCcw className="w-3 h-3" />
                             </button>

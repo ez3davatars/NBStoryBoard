@@ -1,455 +1,1152 @@
 # Cast Director Studio User Guide
-**Version 1.0.1**
+**Version 1.1.0**
+
+This guide covers the current application tabs, shared shell controls, and major panels in Cast Director Studio. Each feature group includes a step-by-step workflow instead of only a short description.
 
 ---
 
 ## Table of Contents
-1. Introduction
-2. Quick Start
-3. Work by Goal
-4. Feature Guide by Tab
-5. Recommended Studio Pipeline
-6. Troubleshooting
+1. [Introduction](#1-introduction)
+2. [First Setup](#2-first-setup)
+3. [App Shell and Shared Workflows](#3-app-shell-and-shared-workflows)
+   - [Recent Generations: Save It or Lose It](#recent-generations-save-it-or-lose-it)
+4. [Work by Goal](#4-work-by-goal)
+5. [CAST](#5-cast)
+6. [NANO CAST](#6-nano-cast)
+7. [PORTRAIT](#7-portrait)
+8. [WARDROBE](#8-wardrobe)
+9. [PROPS](#9-props)
+10. [STAGING](#10-staging)
+11. [SHOTS](#11-shots)
+12. [STORYBOARD - EXPERIMENTAL](#12-storyboard-experimental)
+13. [REGION EDIT / POST-PRODUCTION](#13-region-edit--post-production)
+14. [Recommended Studio Pipelines](#14-recommended-studio-pipelines)
+15. [Troubleshooting](#15-troubleshooting)
 
 ---
 
 ## 1. Introduction
-Welcome to **Cast Director Studio**, powered by **Nanobanana 2**. Cast Director Studio helps you create, refine, style, and stage characters for polished visual output.
 
-You can use the app in a flexible way. Some users move step-by-step from character creation to scene staging. Others jump directly into a specific tab depending on what they need.
+### Current Workspace Coverage
+The app exposes these main workspaces:
 
-> **Note on Preview Features:** Core creation tools like character generation, portrait refinement, wardrobe, props, and targeted post-production are fully ready. Some advanced scene systems (like Stage preview) are still evolving.
+1. **CAST** - Generate, stylize, slice, save, and organize actors.
+2. **NANO CAST** - Build characters from biometric captures, uploaded references, style synthesis, wardrobe, and reference sheets.
+3. **PORTRAIT** - Build synthetic or reference-locked face DNA.
+4. **WARDROBE** - Design costumes, manage wardrobe assets, and run virtual try-on.
+5. **PROPS** - Generate prop assets and apply props to characters.
+6. **STAGING** - Build scenes with actors, props, references, director controls, depth, layers, and composite generation.
+7. **SHOTS** - Generate multi-angle shot packs from a staged scene.
+8. **STORYBOARD [EXPERIMENTAL]** - Experimental Veo prompt, keyframe, timeline, and shot workflow.
+9. **REGION EDIT / POST-PRODUCTION** - Mask and fix localized areas of a result.
 
-### Core Tabs at a Glance
-- **CAST** — Generate new characters from scratch.
-- **NANO CAST** — Build from biometric capture, photos, or identity references.
-- **PORTRAIT** — Refine facial identity, age, morphology, and likeness.
-- **WARDROBE** — Design outfits and run virtual try-on.
-- **PROPS** — Create and isolate reusable objects.
-- **STAGE [PREVIEW]** — Arrange actors, props, and scene direction. Includes SHOTS for cinematic sequences.
-- **REGION EDIT / POST-PRODUCTION** — Fix or replace specific parts of a generated image.
+### Detailed Workflow Coverage
+This guide includes detailed steps for:
 
-### Where Should I Start?
-- **I want to create a new character** → Start in **CAST**.
-- **I want to build from a real face or photo** → Start in **NANO CAST** or **PORTRAIT** Reference Mode.
-- **I want to style a character with clothing or branding** → Start in **WARDROBE**.
-- **I want to create props or handheld objects** → Start in **PROPS**.
-- **I want to build a scene** → Start in **STAGE [PREVIEW]**.
-- **I want to fix only part of an image** → Start in **REGION EDIT / POST-PRODUCTION**.
+- File menu sessions: New, Open, Save, Save As, and save-on-close.
+- Settings: Hosted/BYOK, sign-in, API key, model, resolution, thinking, grounding, help hints, and Storyboard enablement.
+- Recent Generations strips and the **Save It or Lose It** workflow.
+- Image Inspector actions.
+- Actor, wardrobe, and prop library maintenance.
+- CAST reference sheets, slicing, folders, search, delete, and custom covers.
+- NANO CAST phase workflow, biometric sheets, wardrobe handoff, and reference sheet export.
+- WARDROBE Designer and Try-On details, especially turnaround sheets and Character Sheet anchors.
+- PROPS Application Room and reference slot binding.
+- STAGING panels, depth assist, reference stacks, stage layers, annotations, advanced render, and prompt terminal.
+- SHOTS configuration, directed shot cards, semantic locks, auto-reroll, 4K render, and promotion to Stage.
+- STORYBOARD prompt builder, keyframe engine, monitor, timeline, and scene-anchor routing.
+- REGION EDIT layer queue and protection mask behavior.
+
+All of those areas are now covered below.
 
 ---
 
-## 2. Quick Start
+## 2. First Setup
 
-### Step 1: Connect Your Save Folder
-The system includes a shared save-folder link so your work can move across tabs.
+### Connect a Save Folder
+Use a save folder before doing serious work. It lets the app persist actors, wardrobe, props, sessions, references, shot outputs, and generated assets.
 
-1. Open **Settings** (gear icon in the top right).
+1. Click the **Settings** gear in the top-right header.
 2. Find **Render Save Folder**.
 3. Click **Choose Save Folder**.
-4. Select your main project directory.
+4. Select the project folder where you want Cast Director Studio to store assets.
+5. Click **Save Config**.
+6. Go to **NANO CAST**, **CAST**, **WARDROBE**, or **PROPS** and confirm saved libraries can be scanned.
+7. If a library looks empty after saving something, click its scan or refresh button.
 
-### Verification
-- Go to **Nano Cast**.
-- Open the sidebar controls.
-- Confirm the status reads **CONNECTED** in green.
-- If it reads **NOT LINKED**, assets may only exist in temporary memory.
+### Expected Folder Behavior
+The app may create or use folders such as:
 
-### File Structure Note
-When you save an actor, the system uses a native file structure:
-- **Image file:** `Actor-{Timestamp}.png`
-- **Metadata sidecar:** `Actor-{Timestamp}.json`
+- `Actors`
+- `Wardrobe`
+- `Props`
+- `Sessions`
+- `ReferenceSheets`
+- local generated previews or shot assets
 
-The PNG stays generic for safe file handling, while the JSON stores the real actor name, tags, and style data.
+Actor saves usually produce:
 
-### Step 2A: Set Your AI Generation Preferences
-In **Settings**, configure:
-- **Active Engine** — Recommended: **Gemini 3.1 Flash (Image)**
-- **Image Resolution** — 1K, 2K, or 4K
-- **Thinking Mode** — Better prompt adherence, slower generation
-- **Google Image Search Grounding** — Useful for real-world accuracy
-- **Enable Storyboard (Veo 3.1)** — Experimental early-access feature
+- an image file such as `Actor-{timestamp}.png`
+- a metadata sidecar such as `Actor-{timestamp}.json`
 
-### Step 2B: Billing Mode and Credits
-The app may support different generation modes depending on your account setup. Always confirm which mode is active in your Settings before generating.
-- **Hosted Mode:** Uses your account entitlements and generation credits. Hosted users should monitor their available credits in the account area or wherever credit visibility exists in the current build.
-- **BYOK Mode:** Bring Your Own Key. Uses your own connected AI provider API workflow to process images.
+The image filename may stay generic while the JSON stores the real actor name, category, style, and related metadata.
 
-### Step 2C: Saved Assets vs Temporary Results
-As you generate images across the studio, many results remain temporary until you actively save them.
-- A generated result is often just a temporary preview; it may not persist across clears, screen refreshes, or session changes.
-- If you want to reuse an actor, prop, or outfit result later, **you must explicitly save it** to the proper library using the available save actions.
-- Refreshing or rescanning your library view may be needed after save or delete actions to securely confirm long-term storage updates.
+### Configure Billing and Generation Mode
 
-### Step 3: Complete a First 5-Minute Workflow
-A simple first pass:
-1. Go to **CAST** and generate a character.
-2. Save the character to your library.
-3. Open **WARDROBE** and apply a costume.
-4. Open **STAGE [PREVIEW]** and place the character on a background.
+1. Click **Settings**.
+2. Review the header credit/mode display: **HOSTED** or **BYOK**.
+3. If using **Hosted Cloud**, sign in with your hosted account if the sign-in form appears.
+4. If using **BYOK**, paste your Gemini API key into **Gemini API Key** when the field is available.
+5. Choose the **Active Engine**.
+6. Set **Image Resolution** to **1K**, **2K**, or **4K**.
+7. Toggle **Thinking Mode** if you want stronger prompt adherence and can accept slower generations.
+8. Toggle **Google Image Search Grounding** when real-world accuracy matters.
+9. Toggle **Enable Storyboard (Veo 3.1)** if you want the experimental Storyboard workspace.
+10. Click **Save Config**.
+
+### Understand Temporary vs Saved Results
+
+1. Treat every newly generated image as unsaved until you explicitly save or export it.
+2. Use [Recent Generations](#recent-generations-save-it-or-lose-it) as a local recovery cache for comparing, restoring, and saving recent images.
+3. Use **Add to Library**, **Export to Library**, **Save to Wardrobe**, **Export to Props**, or a save/download button when you want to keep something.
+4. After saving, use the library **Scan** or **Refresh** button if the card does not appear immediately.
+5. Avoid clearing a workspace until the asset you care about has been saved.
+
+---
+
+## 3. App Shell and Shared Workflows
+
+### Navigate Between Workspaces
+
+1. Use the main header tabs: **CAST**, **NANO CAST**, **PORTRAIT**, **WARDROBE**, **PROPS**, **STAGING**, and optionally **STORYBOARD**.
+2. If **STORYBOARD** is not visible, open **Settings** and enable **Enable Storyboard (Veo 3.1)**.
+3. Watch the footer for logs, generation status, and session status.
+4. Watch the top-right mode/credit display before running expensive workflows.
+
+### Use the File Menu
+
+1. Click **FILE** in the top-right header group.
+2. Choose **New Session** to clear the current work after confirming.
+3. Choose **Open Session...** to load a `.cds` session file.
+4. When opening a session, choose whether to save the current session first.
+5. Choose **Save Session** to save over the current `.cds` file.
+6. Choose **Save Session As...** to create a new `.cds` file.
+7. Choose **Help & Guides** to open the Help Center.
+
+### Save a Session Safely
+
+1. Connect a save folder first.
+2. Click **FILE**.
+3. Click **Save Session As...** for the first save.
+4. Name the session.
+5. Confirm the file is saved under your `Sessions` folder or chosen save location.
+6. Use **Save Session** afterward to update the same file.
+
+### Use Help Center
+
+1. Click the question mark icon in the header.
+2. Use **Start Here** for quick onboarding.
+3. Use **Work by Goal** to jump to a recommended workspace.
+4. Use **Current Tab Help** for help specific to the active workspace.
+5. Use **Troubleshooting** for common fixes.
+6. Use **Full User Guide** to open this full guide inside the app.
+
+### Use the Image Inspector
+
+1. Click an image's inspect or expand control when available.
+2. Review the image at full size.
+3. Click **Add to Cast** to add it to the current Cast list.
+4. Click **Load to Forge** to load it into CAST for further work.
+5. Click **Save to Actors Folder** or **Download** to store it.
+6. Click **Copy Raw Data** if you need the image data URL.
+7. Click **Close** or outside the inspector to return.
+
+### Recent Generations: Save It or Lose It
+
+1. Look for the **Recent Generations** strip near the bottom or output area in CAST, PORTRAIT, WARDROBE, and PROPS.
+2. Remember that Recent Generations is a local cache, not a permanent library.
+3. Expect Recent Generations to survive app restarts; seeing images from a previous session is normal.
+4. Cached recent images are eligible for cleanup after about 30 days, and each studio keeps only a limited recent history.
+5. Click a thumbnail to restore that result into the current workspace.
+6. Reference sheet results from CAST and NANO CAST also appear here so you can inspect them before deciding whether to save them.
+7. Hover a thumbnail and click **Export to Library** when the export icon appears.
+8. Use the workspace save action, such as **Add to Library**, **Save to Wardrobe**, **Export to Props**, or **Download**, if the recent item does not show a direct export button.
+9. Look for the saved/exported indicator after exporting a recent item.
+10. Refresh or scan the destination library if a saved actor, wardrobe item, portrait, reference sheet, or prop does not appear immediately.
+11. Remove or clear recent items only after every important image has been saved or exported.
+12. Do not rely on Recent Generations as the only copy of work you want to reuse long-term.
+
+### Refresh a Library
+
+1. Open the workspace with the library: actor, wardrobe, or prop.
+2. Click the scan/refresh icon.
+3. Wait for the cards to reload.
+4. If a saved image still does not appear, confirm the save folder is connected and that the file exists on disk.
+
+---
+
+## 4. Work by Goal
+
+### Create a New Character From Scratch
+
+1. Open **CAST**.
+2. Choose a target studio style.
+3. Type a clear actor prompt.
+4. Click **Generate**.
+5. Review the result.
+6. Use **Slicer** if you need to crop out a reusable part.
+7. Click **Add to Library** and choose a name/category.
+8. Use the actor later in **WARDROBE**, **PROPS**, or **STAGING**.
+
+### Build a Character From a Photo or Real Person
+
+1. Open **NANO CAST** or **PORTRAIT**.
+2. Upload a clear front-facing reference or capture center/left/right angles.
+3. Set identity strength or reference locks.
+4. Choose age, style, body scope, hair, wardrobe, or logo controls.
+5. Generate the actor.
+6. Review identity quality.
+7. Export the actor or a reference sheet to the library.
+
+### Refine a Face
+
+1. Open **PORTRAIT**.
+2. Choose **Synthetic** or **Reference** mode.
+3. Set identity, age, morphology, face, skin, hair, and render details.
+4. Generate a DNA portrait.
+5. Use **Send to Casting** or **Send to Ref Sheet** if you want to continue in CAST/NANO CAST.
+6. Export or download the final portrait.
+
+### Design and Fit Clothing
+
+1. Open **WARDROBE**.
+2. Use **Costume Designer** to create or import the costume.
+3. Save the costume to the wardrobe library.
+4. Switch to **Virtual Try-On Room**.
+5. Select a character and costume.
+6. Add a Character Sheet identity anchor if you have one.
+7. Choose **Front** or **Turnaround**.
+8. Click **Execute Virtual Try-On**.
+9. Export the fitted character to the actor library.
+
+### Create and Apply Props
+
+1. Open **PROPS**.
+2. Generate or upload a prop.
+3. Export it to the prop library.
+4. Switch to **Application Room**.
+5. Select a character and prop.
+6. Write placement notes.
+7. Click **Apply to Character**.
+8. Save the result to Actors, download it, or bind it to a reference slot.
+
+### Build a Scene
+
+1. Open **STAGING**.
+2. Create or upload a background in **Scene Generator**.
+3. Drag actors or props onto the stage.
+4. Position, scale, rotate, and order them.
+5. Use **Scene Director**, **Actor Intelligence**, **Reference Stacks**, and **Context Specs**.
+6. Click **Generate Composite**.
+7. Use **Result** view to inspect the output.
+8. Save, download, or send the result into SHOTS.
+
+### Generate Cinematic Coverage
+
+1. Build a scene in **STAGING**.
+2. Generate a composite first.
+3. Open **SHOTS**.
+4. Pick a pack and count.
+5. Edit the Directed Shot Plan.
+6. Click **Generate** for previews.
+7. Select the previews you like.
+8. Click **Render 4K**.
+9. Download or promote selected shots.
+
+### Build a Veo Storyboard
+
+1. Enable Storyboard in **Settings**.
+2. Create shots from **STAGING** or open **STORYBOARD** directly.
+3. Select a shot in the Storyboard shot rail.
+4. Load or upload Start and End plates.
+5. Use Prompt Builder and Timeline.
+6. Copy the formatted prompt, negative prompt, or timestamp sequence.
+7. Save prompt data back to the active shot.
+
+### Fix Part of an Image
+
+1. Open **STAGING** and make sure you have a result image.
+2. Open **Region Edit**.
+3. Turn **Mask ON**.
+4. Paint the area to edit.
+5. Write a localized layer instruction.
+6. Enable **Protect Anatomy** if faces or hair must be preserved.
+7. Click **Apply Enabled Layers**.
+8. Inspect the edited result.
+
+---
+
+## 5. CAST
+
+**Purpose:** Generate, stylize, organize, slice, and save actors.
+
+### Generate an Actor From Text
+
+1. Open **CAST**.
+2. In **Target Studio Style**, choose a style folder such as Realism, Animation, Illustration, Sci-Fi, or Unsorted.
+3. Type the character description in the prompt box.
+4. Include identity, age range, wardrobe, body type, expression, and visual style when relevant.
+5. Click **Generate**.
+6. Wait for the result to appear in the main preview.
+7. If the result is useful only temporarily, click **Add to Cast**.
+8. If the result should be permanent, click **Add to Library**.
+9. In the save dialog, choose a name and category.
+10. Refresh the Actor Library if the card does not appear.
+
+### Stylize an Uploaded Reference
+
+1. Open **CAST**.
+2. Click **Upload** or **Upload Ref**.
+3. Choose an image from disk.
+4. Select a target style.
+5. Add a prompt describing how the uploaded subject should be transformed.
+6. Click **Stylize** or **Generate**.
+7. Review the image.
+8. Save it to the Actor Library if you want to reuse it.
+
+### Slice Part of a Generated Image
+
+1. Generate or upload an image in CAST.
+2. Click **Slicer** so it reads active.
+3. Drag a crop rectangle around the part you want.
+4. Choose or confirm the tag for the cropped token.
+5. Apply the crop.
+6. Save the cropped piece when the save modal opens.
+7. Use the sliced asset as a Cast item or library asset.
+
+### Generate an Actor Reference Sheet
+
+1. Generate or load the actor you want to document.
+2. Open **Actor Reference Sheet**.
+3. Choose a layout:
+   - **Form Focus** for body/turnaround utility.
+   - **Face Focus** for head and likeness utility.
+   - **Split Focus** for mixed body and face reference.
+4. Optional: upload a logo in **Branding & Identity**.
+5. Click **Generate Reference Sheet**.
+6. Review the generated sheet in the modal.
+7. Click **Add to Library** to store it as an actor/reference asset.
+8. Click **Download** if you only need a local file.
+9. Click **Save Asset** to store it under the app's reference sheet workflow when available.
+10. Close the modal after confirming it is saved.
+
+### Manage the Cast Assets List
+
+1. Use **Add to Cast** to keep temporary working actors in the current session.
+2. Click a cast asset to use or inspect it.
+3. Use the delete control on a single asset to remove it from the session list.
+4. Use **Delete All Cast Assets** to clear the temporary cast list after confirming.
+5. Remember that clearing Cast Assets does not delete saved Actor Library files.
+
+### Manage the Actor Library
+
+1. Open the Actor Library panel on the right side of CAST.
+2. Click a studio folder to filter by category.
+3. Use search to find actors by name or metadata.
+4. Click refresh to rescan disk-backed actors and custom covers.
+5. Click an actor card's inspect control to view it large.
+6. Click add controls to move an actor into Cast or Stage.
+7. Use delete only when you intend to remove the saved library item.
+8. If custom folder cover controls are visible, upload or remove a cover after connecting a save folder.
+
+---
+
+## 6. NANO CAST
+
+**Purpose:** Build identity-preserved characters from biometric captures, uploaded photos, archetypes, style synthesis, wardrobe, logos, and reference sheets.
+
+### Start a Nano Cast Session
+
+1. Open **NANO CAST**.
+2. Confirm the save folder status. If storage is not connected, go to **Settings** and choose a save folder.
+3. Move through the phase buttons in order. Locked phases tell you what is missing.
+4. Use the footer logs if a phase does not advance.
+
+### Capture or Upload Biometric Angles
+
+1. Go to **Biometric Acquisition**.
+2. Choose webcam/manual capture or upload mode, depending on what is available in your build.
+3. Provide three angles:
+   - **Center**
+   - **Left**
+   - **Right**
+4. Use clear, well-lit, front-facing source photos whenever possible.
+5. Avoid heavy shadows, sunglasses, extreme expressions, and cropped heads.
+6. Confirm all required angle slots are filled.
+7. Review the **Biometric Manifest**.
+8. Continue to the next phase.
+
+### Generate a Local or Premium Biometric Sheet
+
+1. Capture or upload center/left/right angles.
+2. In the biometric section, click the fast/local biometric sheet action for a local composite.
+3. Review the local sheet.
+4. Click **Save to Drive** if you want the local sheet as a file.
+5. For a more polished AI forensic sheet, click the premium biometric sheet generation control.
+6. Review the generated premium board.
+7. Export or download it if you need it for external reference.
+
+### Choose Style and Body Scope
+
+1. Continue to **Style Synthesis**.
+2. Select a style preset or archetype.
+3. Choose a body scope when prompted, such as head, torso, or full body.
+4. If exact likeness is required, use realistic or exact-likeness styles and keep identity strength high.
+5. Click **Initialize Style Synthesis** or the available generate action.
+6. Wait for the final character render.
+7. Inspect the output for face identity, age, body scope, and wardrobe accuracy.
+
+### Use Director Controls
+
+1. Open the director controls panel.
+2. Adjust **Identity Lock** to control likeness strength.
+3. Add a **Hair Style Prompt** if hair should change.
+4. Upload a logo under **Branding & Identity** if clothing or branding should include it.
+5. Specify logo placement.
+6. Use **Wardrobe** controls to select a wardrobe item or enter a wardrobe prompt.
+7. Click **Generate & Fit** or **Fit Selected Item** when using wardrobe.
+8. Review the result.
+9. Export the selected image to the library when satisfied.
+
+### Use the Wardrobe Library Inside NANO CAST
+
+1. Open the Wardrobe section inside NANO CAST.
+2. Click upload to add a costume image.
+3. Click scan to refresh saved wardrobe items.
+4. Select a wardrobe item from the library.
+5. Enter optional wardrobe notes.
+6. Click **Fit Selected Item**.
+7. Save the wardrobe output or generated actor as needed.
+
+### Export a Nano Cast Character
+
+1. Generate a final character.
+2. Click **Export to Library**.
+3. Choose an actor name and category.
+4. Confirm the save.
+5. Refresh the Actor Library if needed.
+6. Use the saved actor in CAST, WARDROBE, PROPS, or STAGING.
+
+### Generate a Character Reference Sheet From NANO CAST
+
+1. Generate a character or complete biometric capture.
+2. Open the Reference Sheet section.
+3. Choose a layout.
+4. Choose a style preset.
+5. Choose an identity source:
+   - **Hybrid** blends scan and generated character.
+   - **Biometric** forces raw scan likeness.
+   - **Portrait** uses the generated portrait/character as authority.
+6. Add wardrobe or logo references if needed.
+7. Click **Generate Reference Sheet**.
+8. Review the sheet.
+9. Click **Export to Library** or **Download**.
+
+### Clear or Reset NANO CAST Work
+
+1. Save any actor, sheet, or wardrobe output you want to keep.
+2. Use clear/reset controls to remove current temporary images.
+3. Use delete controls only for library items you intend to remove.
+4. Rescan libraries after deleting files.
+
+---
+
+## 7. PORTRAIT
+
+**Purpose:** Create or refine a face using structured Character DNA.
+
+### Build a Synthetic Portrait
+
+1. Open **PORTRAIT**.
+2. Choose **Synthetic** mode.
+3. Fill out the **Identity Matrix**:
+   - sex
+   - ethnicity
+   - skin tone
+   - life stage
+   - chronological age
+4. Set **Morphology** values such as height, weight, build, and proportions.
+5. Adjust face structure controls.
+6. Adjust skin controls such as freckles, scars, dermal age, and under-eye control.
+7. Adjust hair color, style, length, and texture.
+8. Configure render style details.
+9. Click **Generate DNA Portrait**.
+10. Review the generated portrait.
+
+### Build a Reference-Locked Portrait
+
+1. Open **PORTRAIT**.
+2. Choose **Reference** mode.
+3. Upload or drop an **Identity Reference Photo**.
+4. Confirm the reference preview appears.
+5. Set life stage and age for age progression or regression.
+6. Use the lock/unlock controls:
+   - Keep traits locked when the reference should remain authoritative.
+   - Unlock morphology, face, skin, or hair when you want those details changed.
+7. Click **Generate DNA Portrait**.
+8. Compare the result against the reference.
+9. Save, send, or regenerate as needed.
+
+### Use Presets
+
+1. In Synthetic mode, configure a DNA setup you want to reuse.
+2. Enter a preset name.
+3. Click **Save Preset**.
+4. Load the preset later before generating.
+5. Use presets for recurring character families or style templates.
+
+### Randomize DNA
+
+1. Choose Synthetic mode.
+2. Click **Randomize DNA**.
+3. Review the changed identity, morphology, skin, hair, and render values.
+4. Fine-tune anything that does not match your target.
+5. Click **Generate DNA Portrait**.
+
+### Use Portrait Output Actions
+
+1. Click **Download** or **Download Original** to save the portrait file.
+2. Click **Export to Library** to store the portrait as an Actor Library asset.
+3. Click **Send to Casting** to load it into CAST.
+4. Click **Send to Ref Sheet** to hand it to NANO CAST reference sheet generation.
+5. Click **Generate Again** when you want a new variation with the same DNA.
+6. Click clear/reset when you want a clean portrait workspace.
+
+### Use Portrait Recent Generations
+
+1. After generating, find the recent strip.
+2. Click a recent item to restore it.
+3. Export a recent item to the library if you want it permanently.
+4. Remember that the recent strip can survive app restarts because it is a local cache.
+5. Clear recents only after saving important images.
+6. See [Recent Generations: Save It or Lose It](#recent-generations-save-it-or-lose-it) for the full rule.
+
+---
+
+## 8. WARDROBE
+
+**Purpose:** Design costumes, manage wardrobe assets, and fit costumes onto actors.
+
+### Manage the Wardrobe Library
+
+1. Open **WARDROBE**.
+2. Use the left **Wardrobe Library** panel.
+3. Click upload to add an existing costume image.
+4. Click scan to refresh saved wardrobe files.
+5. Click a wardrobe card to select it.
+6. Use the delete control on a card only if you want to permanently delete that costume.
+7. If the library is empty, create a costume in Designer or upload one.
+
+### Generate a Costume in Costume Designer
+
+1. Open **WARDROBE**.
+2. Select **Costume Designer**.
+3. Optional: load a **Design Reference**.
+4. Choose the reference type:
+   - **Sketch/Pattern** for drawings, flat designs, silhouettes, or patterns.
+   - **Costume** for a real or generated garment photo.
+5. Enter a detailed costume prompt in **Designer Workshop**.
+6. Optional: upload a PNG logo in the branding area.
+7. Specify logo placement if available.
+8. Click **Generate Costume**.
+9. Review the generated costume.
+10. Click **Save to Wardrobe** to store it.
+11. Use **Download** for a direct file save.
+12. Use **Clear** to reset the designer only after saving anything important.
+
+### Fit a Costume Onto a Character
+
+1. Open **WARDROBE**.
+2. Select **Virtual Try-On Room**.
+3. Choose a character from the actor list.
+4. Choose a wardrobe item from **Wardrobe Library**.
+5. Optional: upload a **Character Sheet (Identity Anchor)** for stronger turnaround identity.
+6. Write a try-on note if the fit needs special direction.
+7. Choose **Front** for a single front-facing output.
+8. Choose **Turnaround** for two sheets: Front/Back and Left/Right.
+9. Click **Execute Virtual Try-On**.
+10. Wait for the output.
+11. Toggle between generated views when turnaround sheets exist.
+12. Review identity, face window, costume silhouette, footwear, logo placement, and coverage.
+
+### Save a Fitted Character
+
+1. Generate a fitted character.
+2. Click **Export to Library**.
+3. Enter the actor name and category.
+4. Confirm save.
+5. Refresh the Actor Library if needed.
+6. Use the saved fitted actor in STAGING or later wardrobe iterations.
+
+### Download or Clear Try-On Output
+
+1. Click **Save** or the download control to save a local image.
+2. Click **Clear** to remove the current try-on result and selections.
+3. Confirm important results are exported before clearing.
+
+---
+
+## 9. PROPS
+
+**Purpose:** Create reusable props and apply them to characters.
+
+### Manage the Prop Library
+
+1. Open **PROPS**.
+2. Use the **Prop Library** panel.
+3. Click upload to add an existing prop image.
+4. Click scan to refresh saved props.
+5. Click a prop card to select it.
+6. Use delete only when you want to permanently remove a prop.
+7. In some workflows, Shift-click or a quick-bind control can bind a prop to the first empty Reference Stack slot in STAGING.
+
+### Generate a New Prop
+
+1. Select **Prop Designer**.
+2. Enter a prompt describing one standalone object.
+3. Include material, scale, color, style, and whether it is handheld, worn, or set dressing.
+4. Click **Generate Prop**.
+5. Review the generated prop.
+6. Click **Export to Library**.
+7. Use **Clear** only after saving any prop you want to keep.
+
+### Apply a Prop to a Character
+
+1. Select **Application Room**.
+2. Choose a character from the character row.
+3. Choose an active prop from the Prop Library.
+4. Write placement notes in the text area, such as:
+   - "Place the helmet on the head."
+   - "Put the sword in the right hand."
+   - "Attach the badge to the left chest."
+5. Click **Apply to Character**.
+6. Wait for the integration result.
+7. Review position, scale, hand/body contact, lighting, and perspective.
+8. Click **Save to Actors** to store the character plus prop.
+9. Click **Download** to save a local PNG.
+10. Click **Clear Stage** to remove the current preview.
+
+### Use Props in STAGING
+
+1. Save the prop to the Prop Library.
+2. Open **STAGING**.
+3. Drag the prop into the stage or into a Reference Stack when supported.
+4. Set its scale, depth, and notes like any other stage token.
+5. Include prop instructions in **Scene Director** or **Actor Intelligence** before generating a composite.
+
+---
+
+## 10. STAGING
+
+**Purpose:** Arrange actors, props, scene references, annotations, director instructions, depth, and final composites.
+
+### Create or Upload a Scene Background
+
+1. Open **STAGING**.
+2. In **Scene Generator**, drag, paste, or upload a **Scene Reference** if you already have an anchor image.
+3. Or type a background prompt if you want text-to-image generation.
+4. Choose the merge strategy when using a reference:
+   - **Character Identity**
+   - **Style Transfer**
+   - **Composition Reference**
+   - **Photo Merge**
+5. Toggle **Scene Lock** if the anchor image should stay structurally stable.
+6. Click **Generate Background**.
+7. Review the background.
+8. Click **Revert Background** if you need to return to the previous background.
+
+### Use Auto-Style Environment
+
+1. Select a staged actor/token.
+2. Enter or confirm a scene prompt.
+3. Click **Auto-Style Environment**.
+4. Let the app infer environment style around the selected token.
+5. Review the **Scene Intent** display.
+6. Adjust Scene Director fields if the inferred environment is too broad.
+
+### Replace Anchor Subjects
+
+1. Upload or generate a source scene that already contains people.
+2. Enable **Replace Anchor Subjects** in Scene Generator.
+3. Add references in **Reference Stacks**.
+4. For each reference, specify the target in the anchor scene, such as "person on left" or "woman in blue jacket".
+5. Use staged actor mappings when available for deterministic placement.
+6. Generate the composite.
+7. Inspect identity, wardrobe continuity, pose, gaze, and lighting.
+
+### Add Actors and Props to the Stage
+
+1. Save actors or props in their libraries first.
+2. In STAGING, use the Cast/asset palette.
+3. Drag an actor or prop onto the stage.
+4. Drop it near the intended position.
+5. Repeat for all subjects and props.
+6. Select a token to edit its properties.
+
+### Move and Transform a Token
+
+1. Click a token on the stage.
+2. Drag to reposition it.
+3. Use handles or controls to resize.
+4. Adjust rotation if needed.
+5. Use nudge controls for small placement changes.
+6. Set uniform scale on or off depending on the desired proportions.
+7. Use flip/scale X/Y controls if the token needs mirrored orientation.
+
+### Set Token Properties
+
+1. Select a token.
+2. Open **Token Properties**.
+3. Edit position, scale, rotation, and anchor.
+4. Set grounding mode when applicable:
+   - auto
+   - floor
+   - seat
+   - lean
+   - float
+5. Adjust z-depth ordering.
+6. Adjust occlusion mode and depth bias.
+7. Add token notes or action notes.
+8. Use brightness, contrast, saturation, or blur controls if available.
+9. Remove the token from the scene only if you do not need it on the stage anymore.
+
+### Use Actor Intelligence
+
+1. Add at least one actor to the stage.
+2. Open **Actor Intelligence**.
+3. Toggle **Depth Map** to view depth structure.
+4. Refresh depth if the background changed.
+5. Toggle **Ground Plane**, **Occupied Volumes**, **Depth Bands**, or **Actor HUD** for debugging.
+6. Click **Auto Analyze** to infer actor details when available.
+7. Enter pose, action, lighting, or DNA notes for the selected actor.
+8. Generate a composite and review whether the actor follows the notes.
+
+### Use Scene Director
+
+1. Open **Scene Director**.
+2. Enter **Subject / Action**.
+3. Enter or refine **Environment**.
+4. Choose **Lighting**.
+5. Choose **Camera**.
+6. Choose **Layout** when you need horizontal, vertical, or centered composition.
+7. Generate the composite.
+8. If the output drifts, make each field more explicit and regenerate.
+
+### Set Context Specs
+
+1. Open **Context Specs**.
+2. Choose resolution: **HD**, **2K**, or **4K**.
+3. Choose aspect ratio such as **16:9**, **9:16**, **1:1**, or **4:5**.
+4. Confirm the stage framing matches your intended output.
+5. Generate the composite.
+
+### Use Reference Stacks
+
+1. Open **Reference Stacks**.
+2. Drag a cast member, prop, or image into a reference slot.
+3. Activate the slot.
+4. Name the reference clearly.
+5. Click the inspect/edit control to open **Reference DNA**.
+6. Click **Auto-Analyze** to extract DNA/notes.
+7. Add manual DNA or target notes.
+8. If replacing anchor subjects, enter **Target in Anchor Scene**.
+9. Click **Save DNA Changes**.
+10. Generate or regenerate the composite.
+
+### Use Stage Layers
+
+1. Open **Stage Layers**.
+2. Click a layer to select its stage item.
+3. Click the eye icon to show or hide the layer.
+4. Drag layer rows to reorder depth.
+5. Double-click the label to rename it.
+6. Use bring/send controls to move the selected item front/back.
+7. Use delete only to remove the selected item from the stage.
+
+### Add and Edit Annotations
+
+1. Use the bottom toolbar to add a note, zone, or path annotation.
+2. Place it on the stage.
+3. Select the annotation.
+4. Edit its text, role, relation, or target details when the annotation panel appears.
+5. Use annotations to mark placement, gaze, movement, protect zones, or edit regions.
+6. Keep annotations clear and specific so generation instructions stay readable.
+
+### Use Advanced Render Parameters
+
+1. Open **Advanced Render Parameters**.
+2. Toggle **Strict Semantic Lock** only when structural replacement or exact geometry matters.
+3. Use **Anchor Scene DNA** to analyze or preserve anchor-scene identity and layout.
+4. Enable **Auto Whitelist Profiles** when staged tokens need structured identity/wardrobe/accessory profiles.
+5. Click **Analyze Missing** if some actor profiles are incomplete.
+6. Review the compiled prompt preview.
+7. Generate after confirming the strictness level is appropriate.
+
+### Use the Prompt Terminal
+
+1. Open **PROMPT ENGINE**.
+2. Review the compiled prompt.
+3. Click copy to copy it to the clipboard.
+4. Use the copied prompt for debugging or external review.
+5. Return to Scene Director or Reference Stacks to change inputs if the prompt is missing needed details.
+
+### Generate a Composite
+
+1. Confirm the stage has either a background, a scene prompt, or both.
+2. Confirm actors and props are positioned.
+3. Confirm Scene Director and Actor Intelligence notes are filled in.
+4. Confirm Reference Stacks are active if identity preservation matters.
 5. Click **Generate Composite**.
+6. Wait for processing.
+7. Switch to **Result** view if needed.
+8. Inspect the output.
+9. Save or download the result.
+10. Use Region Edit if only a small area needs correction.
 
-That gives you a fast end-to-end understanding of the studio.
+### Save Stage Images and Depth Maps
 
----
+1. Use the bottom toolbar download controls.
+2. Click the image download control to capture the stage or final result.
+3. Click **Depth** to download the generated depth map.
+4. Confirm both files appear on disk.
+5. Keep the depth map when debugging occlusion or grounding.
 
-## 3. Work by Goal
+### Use Undo, Redo, Copy, and Clear
 
-### Create a Character from Scratch
-Use this path if you do not already have a face or identity reference.
+1. Use **Undo** after accidental moves or edits.
+2. Use **Redo** to restore undone work.
+3. Use **Copy** for selected items when supported.
+4. Use **Clear Stage** only after confirming no unsaved scene state is needed.
+5. Confirm clear dialogs before destructive session changes.
 
-**Best starting point:** **CAST**
+### Create and Manage Shots From STAGING
 
-1. Write a prompt describing the character.
-2. Choose a visual style.
-3. Generate the actor.
-4. Save them to the library.
-5. Optionally send them to **Portrait** or **Nano Cast** for refinement.
-
-### Build a Character from a Photo or Real Person
-Use this when you want strong identity preservation.
-
-**Best starting point:** **NANO CAST** or **PORTRAIT Reference Mode**
-
-1. Upload a reference photo or capture biometric angles.
-2. Build the biometric/identity profile.
-3. Adjust likeness fidelity.
-4. Refine age, hair, or surface details if needed.
-5. Save the result to the library.
-
-### Style a Character with Clothing, Branding, or Visual Identity
-Use this when the face already exists and the next step is styling.
-
-**Best starting point:** **WARDROBE**
-
-1. Select a saved character.
-2. Design or import a costume.
-3. Apply branding/logo placement if needed.
-4. Run virtual try-on.
-5. Save the clean result for staging.
-
-### Create Props and Reusable Assets
-Use this for objects, handheld items, set dressing, or visual accessories.
-
-**Best starting point:** **PROPS**
-
-1. Generate the object.
-2. Remove the background.
-3. Refine edges if needed.
-4. Save the isolated prop to the library.
-5. Bring it into **STAGE [PREVIEW]** later.
-
-### Build a Staged Scene
-Use this when you already have actors, wardrobe, and optionally props.
-
-**Best starting point:** **STAGE [PREVIEW]**
-
-1. Add a background image.
-2. Drag actors and props onto the stage.
-3. Adjust token position, scale, depth, and notes.
-4. Use Scene Director and Actor Intelligence as needed.
-5. Generate a composite.
-
-### Fix or Replace Part of a Generated Image
-Use this when the full scene is mostly good but a localized area needs correction.
-
-**Best starting point:** **REGION EDIT / POST-PRODUCTION**
-
-1. Paint the area you want to change.
-2. Write a precise instruction.
-3. Use Protect Face/Hair if needed.
-4. Apply the enabled mask layer.
+1. Open **Shot List**.
+2. Click **New Shot** to create a shot from the current stage.
+3. The app captures the current stage as a start frame when possible.
+4. Click **Start** to capture or replace the active shot's start frame.
+5. Click **End** to capture the active shot's end frame.
+6. Rename the active shot and click **Save**.
+7. Click a shot in the list to load it.
+8. Duplicate a shot when you want a variant.
+9. Delete a shot only after confirming it is no longer needed.
+10. Click the clapperboard control to open the active shot in STORYBOARD.
 
 ---
 
-## 4. Feature Guide by Tab
+## 11. SHOTS
 
-## CAST
-**Purpose:** Generate new characters from scratch.
+**Purpose:** Generate multi-angle still coverage from a staged scene or uploaded source image.
 
-### Core Controls
-- **Prompt box** — Describe the character’s age, look, ethnicity, style, or role.
-- **Studio Style dropdown** — Realism, Animation, Anime, Concept Art, and other visual directions.
-- **Generate** — Starts the image generation.
+### Prepare a Scene Truth Source
 
-### Advanced Options
-- **Reference Sheets** — Generate multi-angle sheets for consistency.
-- **Canvas Actions / Crop** — Slice or isolate useful parts of the generated image.
-- **Save to Library** — Permanently store the actor for later use.
-- **Send to Director** — Move the result into Nano Cast for biometric/style refinement.
-- **Cast Assets List** — See current generated tokens and clear temporary ones if needed.
+1. Build a scene in **STAGING**.
+2. Click **Generate Composite**.
+3. Confirm the result image exists.
+4. Alternatively, upload a source image in Scene Generator and mark it as the source for SHOTS when the option is available.
+5. Open the **SHOTS** view/panel.
 
-### When to Use CAST
-Use CAST when you want a fresh synthetic character and do not need a real-world identity lock yet.
+### Configure a Shot Pack
 
----
+1. Expand **Shot Configuration**.
+2. Choose **Pack**:
+   - **Auto (Scene-Aware)** for context-based coverage.
+   - **Cinematic** for varied cinematic frames.
+   - **Portrait** for character-centered angles.
+   - **Coverage** for structured story/editorial coverage.
+3. Choose **Count**: 4, 6, or 9 variants.
+4. Review **Semantic Locks**:
+   - **identity**
+   - **wardrobe**
+   - **background**
+   - **lighting**
+5. Leave identity, background, and lighting locked for most workflows.
+6. Toggle **Auto-Reroll** on if you want the app to retry shots that are too similar to the source.
 
-## PORTRAIT
-**Purpose:** Build or refine a face with precision.
+### Edit the Directed Shot Plan
 
-Portrait supports two modes:
-- **Synthetic** — Build from scratch
-- **Reference** — Build from an uploaded photo
+1. Review each shot card in the plan.
+2. Set the shot target:
+   - scene
+   - actor
+   - pair
+3. Choose the actor when the shot targets a person.
+4. Choose shot type, camera flavor, action text, or notes.
+5. Make sure actor-targeted shots have a valid actor selected.
+6. Keep each shot note specific and camera-oriented.
 
-### Synthetic Mode
-Use this to define:
-- sex
-- ethnicity
-- skin tone
-- age
-- body measurements
-- facial architecture
-- hair and surface details
+### Generate Preview Shots
 
-### Reference Mode
-Use this when you already have a face to preserve.
+1. Click **Generate**.
+2. Wait while each shot card moves through queued/generating/done states.
+3. Inspect errors on any failed card.
+4. Click inspect on a finished shot to view it larger.
+5. Click regenerate on a single shot if only one angle failed.
+6. Select the previews you want to keep.
 
-Key controls:
-- **Identity Reference Photo**
-- **Likeness Fidelity Lock**
-- **Age Transform**
-- **Selective Unlocks** for hair, skin, morphology, and architecture
+### Render Selected Shots at 4K
 
-### Output Actions
-- **Generate DNA Portrait**
-- **Clear Portrait Options** — Clearing a portrait or reference is now intended to fully clear the active portrait state. Once cleared, the workspace should comfortably remain clean instead of repopulating unexpectedly.
-- **Send to Casting**
-- **Send to Ref Sheet**
+1. Select one or more finished previews.
+2. Click **Render 4K**.
+3. Wait for final render processing.
+4. Confirm selected cards show 4K-ready status.
+5. Download 4K from the card or inspect view.
+6. Use the stage promotion control if you want a shot variant to become the active Stage scene.
 
-### When to Use PORTRAIT
-Use PORTRAIT when facial fidelity and structural control matter more than broad character ideation.
+### Save or Reset a SHOTS Session
 
----
-
-## NANO CAST
-**Purpose:** Build a character from biometric or photo identity and refine their look. 
-
-Reference-based builds are best when facial identity needs to stay more consistent. Better source photos generally produce better identity preservation—front-facing, clear, and well-lit inputs are highly recommended.
-
-### Biometric Acquisition
-1. Enable the webcam or upload local images.
-2. Capture or import:
-   - Center
-   - Left
-   - Right
-3. Build the biometric matrix.
-
-### Director Console
-Use these controls to refine the output:
-- **Identity Lock Slider**
-- **Stylization Intensity**
-- **Approximate Age**
-- **Branding & Logo Placement**
-- **Save Character**
-
-### Cast Asset Output Control
-- **Delete All** — Explicitly clears temporary cast assets from your current preview layout. The action will safely ask for confirmation before removing them.
-
-### When to Use NANO CAST
-Use NANO CAST when you need high identity preservation but still want to stylize or brand the result. 
+1. Download selected previews or finals before resetting.
+2. Use **Reset Session** when you want to discard the current shot pack.
+3. Reconfigure pack/count/locks.
+4. Generate a new pack.
 
 ---
 
-## WARDROBE
-**Purpose:** Design costumes and fit them onto characters.
+## 12. STORYBOARD [EXPERIMENTAL]
 
-### Part A: Costume Designer
-Use this to create garments before applying them.
+**Purpose:** Experimental Veo prompt, keyframe, monitor, and timeline workflow.
 
-Key tools:
-- **Design Reference Upload**
-- **SKETCH Mode**
-- **COSTUME Mode**
-- **Save to Wardrobe**
+> **Experimental Note:** Storyboard is an Experimental feature. It is best used for early-access creative exploration, prompt development, keyframe planning, and selective workflows. Behavior, consistency, and available controls may continue to change.
 
-### Part B: Virtual Try-On Room
-Use this to fit garments to saved characters.
+### Enable Storyboard
 
-Key tools:
-- **Remove BG** toggle
-- **Character Sheet Identity Anchor**
-- **FRONT View**
-- **TURNAROUND View**
-- **Execute Virtual Try-On**
+1. Open **Settings**.
+2. Toggle **Enable Storyboard (Veo 3.1)**.
+3. Click **Save Config**.
+4. Confirm **STORYBOARD** appears in the main tab bar.
 
-### Part C: Cleanup Tools
-- **Remove Background**
-- **Edge Refinement / Spill Suppression**
-- **Manual Restoration / Eraser Brush**
+### Prepare a Shot for Storyboard
 
-### When to Use WARDROBE
-Use WARDROBE when the character exists and you now need outfit control, branding, or reusable styling variations.
+1. Open **STAGING**.
+2. Build or load a scene.
+3. Open **Shot List**.
+4. Click **New Shot**.
+5. Capture **Start** and **End** frames if needed.
+6. Click the clapperboard button to open Storyboard.
+7. Confirm the shot appears in the Storyboard shot rail.
 
----
+### Use the Storyboard Shot Rail
 
-## PROPS
-**Purpose:** Create and isolate reusable objects.
+1. Open **STORYBOARD**.
+2. Select a shot from the left rail.
+3. Click **Create First Shot** if no shots exist.
+4. Use delete on a shot only if you no longer need it.
+5. Use **Clear all shots** only after confirming the entire storyboard can be reset.
 
-### Main Uses
-- handheld items
-- set dressing
-- logos or symbolic objects
-- scene accessories
+### Use the Program Monitor
 
-### Workflow
-1. Generate the object.
-2. Remove the background.
-3. Refine edges if needed.
-4. Save the isolated prop to the library.
+1. Select a shot.
+2. Choose the active plate: start or end.
+3. Drop or upload an image into the plate slot if the shot has no image.
+4. Use **Load as Target** when you want the plate loaded for Storyboard generation.
+5. Use **Set as Scene Anchor** to send the plate back into STAGING as the Scene Generator anchor.
+6. Return to STAGING to build from that anchor image.
 
-### Application Room Behaviors
-- **Prop Removal** — Assigned props can easily be removed from the active slot using the designated remove/clear control.
-- **Reset Behaviors** — The prop selection state is entirely session-clean and should not persist unexpectedly after clearing. If a stale prop does occasionally still appear on load, perform a refresh or re-open the workspace to verify the active slot accurately represents as empty.
+### Build a Veo Prompt
 
-### When to Use PROPS
-Use PROPS before staging if the scene depends on specific objects.
+1. Select **Prompt** in STORYBOARD.
+2. Enter the shot concept.
+3. Fill cinematography details.
+4. Choose shot type, lens, and camera motion.
+5. Describe subject, action, context, and style/ambiance.
+6. Add a **Negative Prompt** for things to avoid.
+7. Add **Audio Prompts** if needed:
+   - dialogue
+   - sound effects
+   - ambience
+   - music
+8. Click enhance/smart drafting if available.
+9. Click **Copy** to copy the formatted five-part prompt.
+10. Click **Neg** to copy only the negative prompt.
+11. Click **Save** to store the draft on the active shot.
 
----
+### Use the Keyframe Engine
 
-## STAGE [PREVIEW]
-**Purpose:** Arrange your actors and props into a composed scene.
+1. Select **Keyframes**.
+2. Upload or load a **Start Plate**.
+3. Upload or load an **End Plate** if you need a transition.
+4. If an active shot has frames, click **Load** to pull them in.
+5. Click **Load & Sync** to load frames and run analysis.
+6. Adjust **Advanced DNA Controls**:
+   - Character Adherence
+   - Continuity Lock
+   - No Extra Objects
+   - No Morphing
+7. Click **Smart Analyze**.
+8. Review the raw JSON spec.
+9. Copy the spec if needed.
+10. Click reset only after saving or copying anything important.
 
-> **Preview Notice**
-> Staging is powerful and useful for concepting, scene planning, and selective production work, but consistency is still evolving.
+### Use the Timeline
 
-### Workspace Customization
-- modular sidebars
-- draggable panel order
-- persistent panel states
+1. Select **Timeline**.
+2. Add timestamp beats.
+3. Write the action or camera state for each beat.
+4. Remove beats that are no longer needed.
+5. Click **Copy Sequence** to copy formatted timeline text.
+6. Click **Save to Shot** to store the timeline on the active shot.
 
-### Top Command Area
-- **Depth Assist** status
-- **View Toggle** — Stage / Result / Shots
-- **Generate Composite**
+### Use the Compiled Output Dock
 
-### Token Properties
-Use this panel to control:
-- position
-- nudge
-- scale
-- anchor
-- rotation
-- z-depth ordering
-- occlusion mode
-- depth bias
-
-### Actor Intelligence
-Use this panel to control:
-- semantic DNA
-- pose/action intent
-- grounding
-- manual override behavior
-- auto analysis
-
-### Scene Director
-Use this panel to control:
-- subject/action
-- environment
-- lighting
-- camera
-- layout
-
-### Bottom Toolbar
-Use it for:
-- undo / redo
-- copy
-- clear stage
-- note / zone / path annotations
-- save image
-- save depth
-
-### Reference Stack Workflow
-Use this if you want the AI to place actors based on named references and directional notes rather than canvas positioning alone.
-
-### SHOTS: Multi-Angle Cinematic Generation
-The **SHOTS** tab allows you to generate a consistent "pack" of camera angles from a single staged scene. This is a powerful way to create a cinematic sequence or coverage for a story directly derived from the scene geometry.
-
-#### 1. Requirements
-Before using the SHOTS workflow, you must have:
-- Created a scene in the **STAGE** sub-tab.
-- Generated at least one composite image (**GENERATE COMPOSITE**). This image serves as the "Scene Truth" from which all camera angles are derived.
-
-#### 2. The Directed Shot Plan
-The **Directed Shot Plan** is where you define the specific angles and actions for your shot pack.
-- **Pack Select**: Choose a preset collection of shots (Cinematic, Coverage, etc.).
-- **Shot Cards**: Each card in the list represents one camera angle. You can customize the **Angle** (Close-up, Wide, etc.), the **Target** (Scene or specific Actor), and the **Action / Intent**.
-- **Action / Intent**: Describe what is happening in the shot (e.g., "looking surprised," "running toward camera").
-
-#### 3. Generation Workflow
-1. Click the green **GENERATE** button to render low-resolution previews for the entire pack.
-2. Review the results in the **Shot Grid**.
-3. **Semantic Locks**: Use these to toggle which parts of the scene (Identity, Wardrobe, Background, Lighting) should remain strictly locked to the "Scene Truth" during generation.
-4. **Final Render**: Select your favorite previews and click **RENDER 4K** to generate high-fidelity, production-ready cinematic shots.
-
-### When to Use STAGE
-Use STAGE when your actors and props already exist and the next step is composition, direction, and final composite generation.
+1. Open the bottom compiled output dock.
+2. Review the generated prompt or timeline sequence.
+3. Click **Copy** to place the output on the clipboard.
+4. Expand the negative traits section when present.
+5. Copy the negative prompt separately if needed.
 
 ---
 
-## REGION EDIT / POST-PRODUCTION
-**Purpose:** Correct only part of an image instead of rerendering the full scene.
+## 13. REGION EDIT / POST-PRODUCTION
 
-### Tools
-- **Masking Tools (Paint / Erase)**
-- **Mask Layers (A / B / C)**
-- **Brush Size & Edge Softness**
-- **Protect Face/Hair**
-- **Layer Instruction + Remove / Replace / Relight**
-- **Apply Enabled Layers**
+**Purpose:** Correct localized parts of a generated result without rerendering the full image.
 
-### When to Use It
-Use REGION EDIT when the overall image works but one section needs cleanup, replacement, or relighting.
+### Prepare for Region Edit
+
+1. Generate or load a result in STAGING.
+2. Open **Region Edit**.
+3. Confirm the result image is visible.
+4. Decide which area needs correction.
+
+### Paint a Mask
+
+1. Click **Mask ON**.
+2. Choose a layer: **A**, **B**, or **C**.
+3. Choose paint mode.
+4. Adjust **Brush Size**.
+5. Adjust edge softness if available.
+6. Paint white over the exact area to edit.
+7. Switch to erase mode if you need to remove part of the mask.
+8. Click **Clear Active Mask** if the current layer should be reset.
+
+### Use Multiple Edit Layers
+
+1. Put each distinct fix on its own layer.
+2. Enable only the layers you want to apply.
+3. Use layer A for the first fix, B for the second, and C for the third.
+4. Write separate instructions for each enabled layer.
+5. Apply layers sequentially when the order matters.
+
+### Protect Face, Hair, or Anatomy
+
+1. Toggle **Protect Anatomy**.
+2. Click **Generate** to create a protection mask.
+3. Review the protection mask preview.
+4. Adjust **Shrink Mask** if the protected area is too broad.
+5. Leave protection enabled when editing near faces, hair, hands, or other identity-critical anatomy.
+6. Clear the protection mask if it no longer matches the image.
+
+### Write Layer Instructions
+
+1. Select the active layer.
+2. Write a precise instruction in **Layer Instruction**.
+3. Use quick templates when helpful:
+   - **Remove** for deleting an unwanted object.
+   - **Replace** for replacing the masked area with a described object.
+   - **Relight** for lighting correction.
+4. Include texture, perspective, lighting, and realism notes.
+5. Avoid broad instructions that affect the whole image.
+
+### Apply or Cancel Region Edit
+
+1. Confirm the correct layers are enabled.
+2. Click **Apply Enabled Layers**.
+3. Wait for the running layer to finish.
+4. Click **Cancel** if you need to stop after the current layer.
+5. Review the edited result.
+6. Save or download the result if it is final.
 
 ---
 
-## 5. Recommended Studio Pipeline
-This is the **recommended** end-to-end workflow for users who want a structured studio process. It is not mandatory.
+## 14. Recommended Studio Pipelines
 
-### Step 1: Create or Import Character Identity
-Use **CAST**, **PORTRAIT**, or **NANO CAST** depending on whether the character starts synthetic or from a real reference.
+### Full Character-to-Scene Pipeline
 
-### Step 2: Refine Face, DNA, and Likeness
-Use **PORTRAIT** or **NANO CAST** to lock structural identity and age/style behavior.
+1. Use **CAST**, **PORTRAIT**, or **NANO CAST** to create the actor.
+2. Save the actor to the Actor Library.
+3. Use **WARDROBE** to design and fit clothing.
+4. Save the fitted actor.
+5. Use **PROPS** to create or apply props.
+6. Open **STAGING**.
+7. Add background, actors, props, references, and director notes.
+8. Generate a composite.
+9. Use **SHOTS** for camera coverage.
+10. Use **REGION EDIT** for local cleanup.
+11. Save the final outputs.
 
-### Step 3: Style with Wardrobe and Branding
-Use **WARDROBE** to create clothing, apply logos, and generate try-on outputs.
+### Identity-Preservation Pipeline
 
-### Step 4: Build Props
-Use **PROPS** to create and isolate objects needed for the scene.
+1. Start in **NANO CAST** with center/left/right references.
+2. Keep identity lock high.
+3. Generate a character.
+4. Generate a reference sheet.
+5. Save both actor and reference sheet.
+6. Use the reference sheet as an identity anchor in **WARDROBE** and **STAGING**.
+7. Use **Reference Stacks** for replacement or scene consistency.
 
-### Step 5: Stage the Scene
-Use **STAGE [PREVIEW]** to place actors and props, define notes, and set the environment.
+### Fast Concept Pipeline
 
-### Step 6: Generate Final Output or Shots
-Use **Generate Composite** and the **SHOTS** workflow for final visual output and camera-angle variations.
+1. Start in **CAST**.
+2. Generate a character quickly.
+3. Add to Cast.
+4. Open **STAGING**.
+5. Generate a simple background.
+6. Drag the actor onto the stage.
+7. Enter a short Scene Director action.
+8. Generate a composite.
+9. Save only the outputs worth keeping.
 
-### Step 7: Retouch Specific Areas
-Use **REGION EDIT / POST-PRODUCTION** to fix local mistakes or make targeted changes.
+### Storyboard Pipeline
+
+1. Create a staged scene in **STAGING**.
+2. Generate a composite.
+3. Add a shot in **Shot List**.
+4. Open **STORYBOARD**.
+5. Build the Veo prompt.
+6. Load start/end plates.
+7. Smart Analyze.
+8. Build a timestamp sequence.
+9. Copy prompt outputs for video generation.
+10. Use **Set as Scene Anchor** to route a Storyboard frame back into STAGING when needed.
 
 ---
 
-## 6. Troubleshooting
+## 15. Troubleshooting
 
-| Issue | Solution |
+| Issue | What to Do |
 | :--- | :--- |
-| **"Not Linked" Status** | Go to Settings and re-select your Save Folder. |
-| **Credit / Generation Mode Confusion** | Ensure your generation mode (Hosted vs BYOK) in the Settings properly aligns with your intent. |
-| **Library Not Updating / Stuck Views** | After saving or deleting, use the scan/refresh control to force a folder re-read to display changes properly. |
-| **Portrait Details Return After Clearing** | Clearing should permanently erase a portrait from memory. If it returns visually, click the Clear button again to lock it down durably. |
-| **Prop Still Appearing After Removal** | Ensure the selected prop slot appears visually empty. If a ghost prop persists, a fast refresh or workspace re-open will force the interface to acknowledge the clean slate. |
-| **Staging feels inconsistent** | Remember that STAGE is currently a preview-tier system. Use it for concepting, selective production, and shot planning. |
-| **Download or save issues** | Confirm your save folder is linked and that permissions are still granted. |
+| Save folder says not linked | Open Settings, choose Render Save Folder again, then save config. |
+| Library item is missing after save | Click Scan/Refresh in that library. Confirm the save folder is connected. |
+| Hosted/BYOK confusion | Check the top-right mode display, then review Settings. Hosted uses account credits. BYOK uses your API key. |
+| Hosted sign-in missing or expired | Open Settings and sign in again with the hosted account. |
+| BYOK generation fails | Open Settings and confirm the Gemini API key is present. |
+| Generated result disappeared | It was likely never saved to a durable library. Use Recent Generations if available, then export it to a library. |
+| Actor name looks generic on disk | The PNG may use a generic safe filename. Check the JSON sidecar for the real metadata. |
+| Wardrobe Try-On identity drifts | Use a saved actor with a strong reference image and upload a Character Sheet identity anchor. |
+| Turnaround has inconsistent sides | Regenerate with a clearer costume reference and Character Sheet anchor. |
+| Prop attaches to the wrong place | Add clearer placement notes, such as body part, side, scale, and orientation. |
+| Stage depth or occlusion looks wrong | Refresh depth, inspect Depth Map/Ground Plane/Occupied Volumes, then adjust token depth bias. |
+| Replace Anchor Subjects swaps identities | Use Reference Stacks with clear target names and actor mapping. |
+| SHOTS Generate is disabled | Create or choose a result source first by generating a composite or setting an uploaded source. |
+| SHOTS actor shot fails preflight | Select the required actor in the Directed Shot Plan. |
+| Storyboard tab missing | Enable Storyboard in Settings and save config. |
+| Storyboard monitor shows no plate | Select a shot or upload a Start/End plate. |
+| Region Edit changes too much | Use a tighter mask, enable Protect Anatomy, and make the instruction more local. |
+| Region Edit does nothing | Confirm Mask ON, an enabled layer, a visible mask, and a non-empty layer instruction. |
+| App feels stuck during generation | Check the footer status. Some hosted or 4K jobs take longer. |
+| Need to preserve current work | Use File > Save Session or Save Session As before clearing or opening another session. |
 
 ---
 
 ## Final Note
-Cast Director Studio is designed to be flexible. You do not have to follow the full studio pipeline every time.
 
-You can:
-- create only a character
-- style only an outfit
-- make only a prop
-- build only a staged concept
-- or move through the full pipeline from identity to final composite
-
-Use the workflow that matches your goal.
+Cast Director Studio is flexible. You can follow the full pipeline from actor identity to final shot pack, or you can use a single workspace for one focused task. The important habit is simple: save anything you want to reuse before clearing, switching sessions, or treating a temporary preview as permanent.

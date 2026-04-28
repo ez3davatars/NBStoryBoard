@@ -56,16 +56,51 @@ function dataUrlToUint8Array(dataUrl: string): Uint8Array {
   return bytes;
 }
 
+async function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function imageSourceToCachePayload(imageSource: string): Promise<{
+  bytes: Uint8Array;
+  displayUrl: string;
+}> {
+  if (imageSource.startsWith('data:image/')) {
+    return {
+      bytes: dataUrlToUint8Array(imageSource),
+      displayUrl: imageSource,
+    };
+  }
+
+  const response = imageSource.startsWith('blob:')
+    ? await fetch(imageSource)
+    : await fetch(imageSource, { mode: 'cors' });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch image source: ${response.status}`);
+  }
+
+  const blob = await response.blob();
+  const buffer = await blob.arrayBuffer();
+  return {
+    bytes: new Uint8Array(buffer),
+    displayUrl: await blobToDataUrl(blob),
+  };
+}
+
 // --- CACHE SERVICE ---
 
 export const RecentGenerationsCacheService = {
   /**
    * Cache a generation result to disk.
-   * Accepts either a data URL (base64) or a remote URL.
+   * Accepts a data URL, blob URL, or remote URL.
    * Returns the local cache path and a display URL on success.
    */
   async cacheGeneration(args: {
-    imageDataUrl: string; // base64 data URL of the image
+    imageDataUrl: string; // data URL, blob URL, or remote URL of the image
     studio: RecentGenerationStudio;
     cacheDirPath: string;
   }): Promise<{
@@ -89,9 +124,9 @@ export const RecentGenerationsCacheService = {
       const filename = generateSafeFilename(studio);
       const localCachePath = await window.electronAPI.joinPath(studioDir, filename);
 
-      // Convert data URL to binary and write
-      const buffer = dataUrlToUint8Array(imageDataUrl);
-      const success = await window.electronAPI.writeFile(localCachePath, buffer);
+      // Convert source image to binary and write
+      const { bytes, displayUrl } = await imageSourceToCachePayload(imageDataUrl);
+      const success = await window.electronAPI.writeFile(localCachePath, bytes);
 
       if (!success) {
         return { success: false, error: 'Failed to write cache file to disk' };
@@ -100,7 +135,7 @@ export const RecentGenerationsCacheService = {
       return {
         success: true,
         localCachePath,
-        displayUrl: imageDataUrl, // The data URL is already suitable for display
+        displayUrl,
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

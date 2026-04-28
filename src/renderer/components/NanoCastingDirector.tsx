@@ -48,6 +48,9 @@ import guardianYouthFem from '../assets/archetypes/guardian_youth_fem.png';
 import spriteYouthFem from '../assets/archetypes/sprite_youth_fem.png';
 
 import ActorSaveModal from './ActorSaveModal';
+import { useRecentGenerationsStore } from '../stores/useRecentGenerationsStore';
+import { RecentGenerationsCacheService } from '../services/RecentGenerationsCacheService';
+import RecentGenerationsStrip from './recent/RecentGenerationsStrip';
 
 import {
     saveAssetToDisk,
@@ -201,6 +204,8 @@ const formatHeight = (inches: number) => {
     const range = inches % 12;
     return `${ft}'${range}"`;
 };
+
+const isRecentReferenceSheet = (prompt?: string) => prompt?.toLowerCase().includes('reference sheet') ?? false;
 
 async function materializeDisplayUrl(url: string | null | undefined): Promise<string> {
     if (!url) return '';
@@ -1088,44 +1093,6 @@ const NanoCastingDirector = () => {
 
     // --- SAVING FUNCTIONS ---
 
-    const handleSaveToActors = async () => {
-        if (!finalCharacterUrl || (!state.saveDirectoryHandle && !state.saveDirectoryPath)) {
-            if (!state.saveDirectoryHandle && !state.saveDirectoryPath) dispatch({ type: 'ADD_LOG', payload: { message: "No save folder configured in settings.", type: 'error' } });
-            return;
-        }
-
-        try {
-            const mat = await LibraryAssetMaterializer.materializeCastAsset({
-                sourceUrl: finalCharacterUrl,
-                saveDirectoryPath: state.saveDirectoryPath,
-                actorName: "Nano Cast",
-                category: '' // Nano Casts don't have style folders built in right now, they'll go to root or Uncategorized
-            });
-
-            const newActor: CastMember = {
-                id: `actor-${Date.now()}`,
-                url: mat.previewUrl,
-                localPath: mat.localPath || undefined,
-                previewUrl: mat.previewUrl,
-                sourceUrl: mat.sourceUrl,
-                tag: 'front',
-                name: "Nano Cast",
-                filename: mat.filename,
-                profile: {
-                    identity: "Generated",
-                    wardrobe: "Standard",
-                    accessories: "",
-                    style: (selectedStyle && styleMatrix[selectedStyle as keyof typeof styleMatrix]?.label) || "Cinematic"
-                }
-            };
-
-            dispatch({ type: 'ADD_ACTOR_LIBRARY', payload: newActor });
-            dispatch({ type: 'ADD_LOG', payload: { message: `Saved to Actors: ${mat.filename || "Storage"}`, type: 'success' } });
-        } catch (error: unknown) {
-            dispatch({ type: 'ADD_LOG', payload: { message: `Actor save failed: ${getErrorMessage(error)}`, type: 'error' } });
-        }
-    };
-
     const handleSaveToWardrobe = async () => {
         if (!finalCharacterUrl || (!state.saveDirectoryHandle && !state.saveDirectoryPath)) {
             if (!state.saveDirectoryHandle && !state.saveDirectoryPath) dispatch({ type: 'ADD_LOG', payload: { message: "No save folder configured in settings.", type: 'error' } });
@@ -1266,6 +1233,30 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
     // --- PHASE 4 & 5: ORCHESTRATION & REVEAL ---
     const [generationLogs, setGenerationLogs] = useState<string[]>([]);
     const [finalCharacterUrl, setFinalCharacterUrl] = useState<string | null>(null);
+
+    const cacheNanoRecentGeneration = (imageUrl: string, prompt: string, createdAt = Date.now()) => {
+        const recentStore = useRecentGenerationsStore.getState();
+        if (!recentStore.cacheDirPath || !imageUrl) return;
+
+        RecentGenerationsCacheService.cacheGeneration({
+            imageDataUrl: imageUrl,
+            studio: 'nanocast',
+            cacheDirPath: recentStore.cacheDirPath,
+        }).then((cacheResult) => {
+            if (cacheResult.success && cacheResult.localCachePath && cacheResult.displayUrl) {
+                recentStore.addRecentGeneration({
+                    studio: 'nanocast',
+                    localCachePath: cacheResult.localCachePath,
+                    displayUrl: cacheResult.displayUrl,
+                    createdAt,
+                    prompt,
+                    mode: (state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok') || 'byok',
+                });
+            }
+        }).catch((e) => {
+            console.warn('[NanoCastingDirector] Recent generation caching failed:', e);
+        });
+    };
 
     // New: Pack Mode State
     const [generatePackMode] = useState(true);
@@ -1507,6 +1498,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                 if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev);
                 return safeResultUrl;
             });
+            cacheNanoRecentGeneration(safeResultUrl, "Nano Cast Character");
             setPhase(5); // Move to Result Phase
             setIsProcessing(false);
 
@@ -1596,12 +1588,20 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
     const [saveCategory, setSaveCategory] = useState("realism");
     const [newActorName, setNewActorName] = useState("");
     const [saveMode, setSaveMode] = useState<'actor' | 'ref_sheet'>('actor');
+    const [saveSourceUrl, setSaveSourceUrl] = useState<string | null>(null);
+    const [saveRecentGenerationId, setSaveRecentGenerationId] = useState<string | null>(null);
 
-    const handleOpenSaveModal = (mode: 'actor' | 'ref_sheet' = 'actor') => {
-        const urlToUse = mode === 'ref_sheet' ? refSheetUrl : finalCharacterUrl;
+    const handleOpenSaveModal = (
+        mode: 'actor' | 'ref_sheet' = 'actor',
+        sourceOverride?: string,
+        recentGenerationId?: string
+    ) => {
+        const urlToUse = sourceOverride || (mode === 'ref_sheet' ? refSheetUrl : finalCharacterUrl);
         if (!urlToUse) return;
 
         setSaveMode(mode);
+        setSaveSourceUrl(urlToUse);
+        setSaveRecentGenerationId(recentGenerationId || null);
         if (mode === 'ref_sheet') {
             setNewActorName(`RefSheet-${Date.now()}`);
         } else {
@@ -1614,13 +1614,13 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
     const confirmSaveToLibrary = async (nameOverride?: string, categoryOverride?: string) => {
         const targetName = nameOverride || newActorName;
         const targetCategory = categoryOverride || saveCategory;
-        const targetUrl = saveMode === 'ref_sheet' ? refSheetUrl : finalCharacterUrl;
+        const targetUrl = saveSourceUrl || (saveMode === 'ref_sheet' ? refSheetUrl : finalCharacterUrl);
 
         showToast(`Save Identity: ${targetName}`);
 
-        if ((!state.saveDirectoryHandle && !state.saveDirectoryPath) || !targetUrl) {
-            console.warn("Save aborted: No Directory Handle or URL");
-            showToast("No Save Folder or Image! Link Storage in Sidebar.");
+        if (!targetUrl) {
+            console.warn("Save aborted: No image URL");
+            showToast("No Image to Save");
             return;
         }
 
@@ -1660,6 +1660,9 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
             };
             
             dispatch({ type: 'ADD_ACTOR_LIBRARY', payload: newActor });
+            if (saveRecentGenerationId) {
+                useRecentGenerationsStore.getState().markExported(saveRecentGenerationId);
+            }
 
             if (mat.previewUrl) {
                 if (saveMode === 'ref_sheet') {
@@ -1671,6 +1674,8 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
 
             showToast(`Saved to Library: ${targetCategory}/${newActor.name}`);
             setShowSaveModal(false);
+            setSaveSourceUrl(null);
+            setSaveRecentGenerationId(null);
             if (saveMode === 'ref_sheet') setShowRefSheet(false);
 
         } catch (error: unknown) {
@@ -2427,6 +2432,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                 return safeRefSheetUrl;
             });
             setShowRefSheet(true);
+            cacheNanoRecentGeneration(safeRefSheetUrl, `Reference Sheet - NANO CAST (${refLayout})`);
             dispatch({ type: 'ADD_LOG', payload: { message: "Reference Sheet Generated.", type: 'success' } });
         } catch (error: unknown) {
             dispatch({ type: 'ADD_LOG', payload: { message: `Ref Sheet failed: ${getErrorMessage(error)}`, type: 'error' } });
@@ -2804,7 +2810,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
 
                                             <div className="pt-6 border-t border-border space-y-2">
                                                 <button
-                                                    onClick={() => void handleSaveToActors()}
+                                                    onClick={() => handleOpenSaveModal('actor')}
                                                     disabled={!finalCharacterUrl}
                                                     title="Exports this selected image to your chosen Library folder."
                                                     className="w-full bg-surface-2 hover:bg-surface-3 text-white py-3 rounded-lg text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 border border-border transition-all hover:scale-[1.02]"
@@ -3575,7 +3581,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                 key="phase5"
                                 initial={{ opacity: 0, scale: 0.9 }}
                                 animate={{ opacity: 1, scale: 1 }}
-                                className="h-full flex gap-8 items-center justify-center p-12"
+                                className="relative h-full flex gap-8 items-center justify-center p-12"
                             >
                                 <div className="h-full aspect-[2/3] relative rounded-xl overflow-hidden border-2 border-accent group">
                                     <img src={finalCharacterUrl} className="w-full h-full object-cover" />
@@ -3608,6 +3614,30 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                         Neural synthesis successful. Subject has been re-topologized and is ready for integration into the storyboard matrix.
                                         {generatePackMode && " Full variation pack generated."}
                                     </p>
+
+                                    <RecentGenerationsStrip
+                                        studio="nanocast"
+                                        compact
+                                        showSingle
+                                        className="w-full bg-black/60 border border-white/10"
+                                        onSelectGeneration={(gen) => {
+                                            if (isRecentReferenceSheet(gen.prompt)) {
+                                                setRefSheetUrl(gen.displayUrl);
+                                                setShowRefSheet(true);
+                                            } else {
+                                                setFinalCharacterUrl(gen.displayUrl);
+                                            }
+                                        }}
+                                        onExportGeneration={(gen) => {
+                                            if (isRecentReferenceSheet(gen.prompt)) {
+                                                setRefSheetUrl(gen.displayUrl);
+                                                handleOpenSaveModal('ref_sheet', gen.displayUrl, gen.id);
+                                            } else {
+                                                setFinalCharacterUrl(gen.displayUrl);
+                                                handleOpenSaveModal('actor', gen.displayUrl, gen.id);
+                                            }
+                                        }}
+                                    />
 
                                     <div className="grid grid-cols-2 gap-3">
                                         <button
@@ -3928,7 +3958,11 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                     <ActorSaveModal
                         isOpen={showSaveModal}
                         initialName={newActorName}
-                        onClose={() => setShowSaveModal(false)}
+                        onClose={() => {
+                            setShowSaveModal(false);
+                            setSaveSourceUrl(null);
+                            setSaveRecentGenerationId(null);
+                        }}
                         onSave={(name, category) => {
                             setNewActorName(name);
                             setSaveCategory(category);

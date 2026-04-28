@@ -10,6 +10,7 @@ export type RecentGenerationsStripProps = {
   studio: RecentGenerationStudio;
   compact?: boolean;
   collapsible?: boolean;
+  showSingle?: boolean;
   className?: string;
   onSelectGeneration?: (generation: RecentGeneration) => void;
   onExportGeneration?: (generation: RecentGeneration) => void;
@@ -21,6 +22,7 @@ export default function RecentGenerationsStrip({
   studio,
   compact = false,
   collapsible = false,
+  showSingle = false,
   className = '',
   onSelectGeneration,
   onExportGeneration,
@@ -91,7 +93,7 @@ export default function RecentGenerationsStrip({
   }
   
   // Only hide on 1 generation IF we haven't crossed the 2+ threshold yet (to respect initial load preference)
-  if (!hasTriggered && studioGenerations.length <= 1) {
+  if (!showSingle && !hasTriggered && studioGenerations.length <= 1) {
     return null;
   }
 
@@ -102,7 +104,7 @@ export default function RecentGenerationsStrip({
         <Clock className="w-3 h-3 text-gray-500" />
         <span
           className="text-[9px] font-bold text-gray-500 uppercase tracking-[0.15em]"
-          title="Recent Generations are temporarily stored on this device so you can compare results and recover unsaved work."
+          title="Recent Generations are cached locally, including reference sheets, and can survive app restarts. They are not permanent library assets until exported."
         >
           Recent Generations
         </span>

@@ -8,7 +8,6 @@ import {
     Copy,
     Trash2 as TrashIcon,
     Link2,
-    Layers,
     StickyNote,
     BoxSelect,
     UserPlus,
@@ -64,7 +63,6 @@ import { LibraryAssetMaterializer } from '../services/LibraryAssetMaterializer';
 import { useProductionExports } from '../hooks/useProductionExports';
 import { useAdvancedRender } from '../hooks/useAdvancedRender';
 import { buildPlacementIntentsFromAnnotations, buildAnchorSurfaceFromZone, buildAllowanceMaskFromAnchor, buildForegroundProtectMaskFromDepth } from '../utils/spatialHelpers';
-import { CutoutService } from '../services/CutoutService';
 
 import React from 'react';
 
@@ -150,6 +148,14 @@ const normalizeGeneratedImageUrl = async (res: GeneratedImageResponse): Promise<
         return rawUrl;
     }
 };
+
+const toFiniteNumber = (value: unknown, fallback: number): number => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : fallback;
+};
+
+const REGION_EDIT_MAX_EDGE = 2048;
+const REGION_EDIT_MAX_PIXELS = 2048 * 2048;
 
 // B. Scene Blocking Component
 
@@ -251,10 +257,6 @@ const SceneCanvas = () => {
         return true;
     }, [dispatch, state.apiKey, state.billingEntitlements, state.billingMode, state.hostedCredits]);
 
-    // --- DOM CAPTURE FOR SHOTS ---
-    // Tracks processing status by `${tokenId}-${sourceUrl}` to allow retries if image changes
-    const [cutoutStatuses, setCutoutStatuses] = useState<Record<string, 'processing' | 'failed'>>({});
-
     const [isCompactCommandHeader, setIsCompactCommandHeader] = useState(false);
     const [isCompactStageToolbar, setIsCompactStageToolbar] = useState(false);
 
@@ -297,46 +299,6 @@ const SceneCanvas = () => {
         return () => obs.disconnect();
     }, []);
 
-    const cutoutInFlightRef = useRef<Set<string>>(new Set());
-
-    useEffect(() => {
-        if (!state.tokens || state.tokens.length === 0) return;
-
-        state.tokens.forEach((t) => {
-            const isEligibleToken = t.elementType === 'actor' || t.elementType === 'prop' || !t.elementType;
-            if (!isEligibleToken || !t.url || t.cutoutUrl) return;
-
-            const jobKey = `${t.id}-${t.url}`;
-            if (cutoutInFlightRef.current.has(jobKey)) return;
-
-            cutoutInFlightRef.current.add(jobKey);
-            setCutoutStatuses(prev => ({ ...prev, [jobKey]: 'processing' }));
-
-            (async () => {
-                try {
-                    const { cutoutUrl, alphaMaskUrl } = await CutoutService.processImage(t.url);
-                    dispatch({
-                        type: 'UPDATE_TOKEN',
-                        payload: {
-                            id: t.id,
-                            cutoutUrl,
-                            alphaMaskUrl,
-                            sourceImageUrl: t.url,
-                        },
-                    });
-                    setCutoutStatuses(prev => {
-                        const next = { ...prev };
-                        delete next[jobKey];
-                        return next;
-                    });
-                } catch {
-                    setCutoutStatuses(prev => ({ ...prev, [jobKey]: 'failed' }));
-                } finally {
-                    cutoutInFlightRef.current.delete(jobKey);
-                }
-            })();
-        });
-    }, [state.tokens, dispatch]);
     useEffect(() => {
         const store = useSceneSpec.getState();
         const currentActors = store.scene.actors;
@@ -572,14 +534,17 @@ const SceneCanvas = () => {
 
 
 
-    // SPATIAL INTELLIGENCE: Auto-Generate Depth Map on Background Change
-    const lastBgRef = useRef<string | null>(state.backgroundUrl);
-
     const refreshSpatialData = useCallback(async () => {
-        if (!state.backgroundUrl || state.isDepthProcessing) return;
-        if (!ensureStagingAiAccess('Auto-Depth')) return;
+        if (!state.backgroundUrl) {
+            dispatch({ type: 'ADD_LOG', payload: { message: 'Add or generate a stage background before building a depth map.', type: 'info' } });
+            return;
+        }
+        if (state.isDepthProcessing) return;
+        if (!ensureStagingAiAccess('Depth Map')) return;
 
         dispatch({ type: 'SET_DEPTH_PROCESSING', payload: true });
+        dispatch({ type: 'SET_DEPTH_MAP', payload: null });
+        dispatch({ type: 'ADD_LOG', payload: { message: 'Generating optional depth map...', type: 'info' } });
 
         try {
             // "Ghost" generation: Use Gemini to infer the depth map from the RGB image
@@ -620,9 +585,12 @@ const SceneCanvas = () => {
                 if (volumes.length > 0) {
                     dispatch({ type: 'SET_OCCUPIED_VOLUMES', payload: volumes });
                 }
+
+                dispatch({ type: 'ADD_LOG', payload: { message: 'Depth map ready.', type: 'success' } });
             }
         } catch (error) {
-            console.error("[Spatial Intelligence] Auto-Depth Failed:", error);
+            console.error("[Spatial Intelligence] Depth Map Failed:", error);
+            dispatch({ type: 'ADD_LOG', payload: { message: 'Depth map generation failed. Staging can continue without depth.', type: 'error' } });
         } finally {
             dispatch({ type: 'SET_DEPTH_PROCESSING', payload: false });
         }
@@ -762,27 +730,7 @@ Output: environment plate only.
 
     // Lifted utilities from ProductionConsole
 
-    // analyzeBackgroundDNA extracted to useAdvancedRender hook
-    useEffect(() => {
-        const syncSpatialData = async () => {
-            // 1. Detect Change
-            if (state.backgroundUrl !== lastBgRef.current) {
-                lastBgRef.current = state.backgroundUrl;
-
-                // 2. Clear Stale Data (Immediate Visual Feedback)
-                if (state.depthMapUrl) {
-                    dispatch({ type: 'SET_DEPTH_MAP', payload: null });
-                    dispatch({ type: 'SET_FLOOR_PLANE', payload: null });
-                    dispatch({ type: 'SET_OCCUPIED_VOLUMES', payload: [] });
-                }
-
-                // 3. Trigger Refresh
-                refreshSpatialData();
-            }
-        };
-
-        syncSpatialData();
-    }, [state.backgroundUrl, refreshSpatialData, state.depthMapUrl, dispatch]);
+    // Depth maps are intentionally opt-in. SET_BG clears stale depth data; users can rebuild it on demand.
 
     /**
     * GROUNDING SYNCHRONIZATION
@@ -818,7 +766,7 @@ Output: environment plate only.
 
     useEffect(() => {
         // BAILOUT: If there is no depth map or no background, we cannot compute grounding.
-        if (groundDepth === null || !state.depthMapUrl || !state.backgroundUrl) {
+        if (groundDepth === null || !state.depthMapUrl || !state.backgroundUrl || viewportBox.w <= 1 || viewportBox.h <= 1) {
             // If we previously had a key and now don't, reset so we don't loop on re-entry
             if (lastGroundingKeyRef.current !== '') lastGroundingKeyRef.current = '';
             return;
@@ -837,19 +785,24 @@ Output: environment plate only.
             // Respect manual overrides / disabling
             if (!token.groundingEnabled) return;
 
-            const footY = token.y + token.height * (token.anchorY ?? 1.0);
+            const tokenX = toFiniteNumber(token.x, 0);
+            const tokenY = toFiniteNumber(token.y, 0);
+            const tokenHeight = Math.max(1, toFiniteNumber(token.height, 1));
+            const tokenAnchorY = Math.min(1, Math.max(0, toFiniteNumber(token.anchorY, 1.0)));
+            const tokenDepth = toFiniteNumber(token.depth, 0);
+            const footY = tokenY + tokenHeight * tokenAnchorY;
             const footYClamped = Math.min(Math.max(footY, 0), viewportBox.h - 1);
-            
+
             const rawDepth = DepthService.getDepthAtPointSync(
                 state.depthMapUrl!,
-                token.x / viewportBox.w,
+                tokenX / viewportBox.w,
                 footYClamped / viewportBox.h
             );
 
             const clamped = DepthService.clampDepthToGround(rawDepth, groundDepth);
 
             // ONLY dispatch if depth ACTUALLY changed to avoid infinite loop
-            if (Math.abs(clamped - (token.depth || 0)) > 0.01) {
+            if (Math.abs(clamped - tokenDepth) > 0.01) {
                 dispatch({
                     type: 'UPDATE_TOKEN',
                     payload: { id: token.id, depth: clamped },
@@ -892,8 +845,8 @@ Output: environment plate only.
                     // Safety gate: don't occlude brand-new placements until user confirms
                     if (token.hasConfirmedPlacement === false) continue;
 
-                    const tokenW = Math.max(1, Number(token.width) || 1);
-                    const tokenH = Math.max(1, Number(token.height) || 1);
+                    const tokenW = Math.max(1, toFiniteNumber(token.width, 1));
+                    const tokenH = Math.max(1, toFiniteNumber(token.height, 1));
                     if (!Number.isFinite(tokenW) || !Number.isFinite(tokenH)) continue;
 
                     // Downscale masks for performance, then rely on CSS mask-size to upscale.
@@ -911,23 +864,24 @@ Output: environment plate only.
                     const d = imgData.data;
 
                     // Stage placement (untransformed top-left)
-                    const anchorX = token.anchorX ?? 0.5;
-                    const anchorY = token.anchorY ?? 0.8;
-                    const left = (token.x || 0) - (tokenW * anchorX);
-                    const top = (token.y || 0) - (tokenH * anchorY);
+                    const anchorX = Math.min(1, Math.max(0, toFiniteNumber(token.anchorX, 0.5)));
+                    const anchorY = Math.min(1, Math.max(0, toFiniteNumber(token.anchorY, 0.8)));
+                    const left = toFiniteNumber(token.x, 0) - (tokenW * anchorX);
+                    const top = toFiniteNumber(token.y, 0) - (tokenH * anchorY);
 
                     // Transform mapping so occlusion stays correct under rotate/scale
                     const originX = tokenW * anchorX;
                     const originY = tokenH * anchorY;
-                    const rot = ((token.rotation || 0) * Math.PI) / 180;
+                    const rot = (toFiniteNumber(token.rotation, 0) * Math.PI) / 180;
                     const cos = Math.cos(rot);
                     const sin = Math.sin(rot);
-                    const sx = (token.scaleX ?? 1);
-                    const sy = (token.scaleY ?? 1);
+                    const sx = toFiniteNumber(token.scaleX, 1);
+                    const sy = toFiniteNumber(token.scaleY, 1);
 
                     const stepX = tokenW / maskW;
                     const stepY = tokenH / maskH;
-                    const tokenDepth = token.depth;
+                    const tokenDepth = Math.min(1, Math.max(0, toFiniteNumber(token.depth, 0.5)));
+                    const tokenOcclusionBias = toFiniteNumber(token.occlusionBias, 0);
 
                     for (let y = 0; y < maskH; y++) {
                         const localY = (y + 0.5) * stepY;
@@ -956,7 +910,7 @@ Output: environment plate only.
 
                             const occluded = token.occlusionMode === 'front'
                                 ? false
-                                : sceneDepth > (tokenDepth - (token.occlusionBias || 0) + EPS);
+                                : sceneDepth > (tokenDepth - tokenOcclusionBias + EPS);
 
                             const idx = (y * maskW + x) * 4;
                             d[idx] = 0;
@@ -1055,8 +1009,19 @@ Output: environment plate only.
     }, [state.director.aspectRatio, viewMode]);
 
     // analyzeWhitelistProfile was moved to useAdvancedRender
+    const resolveTokenImageUrl = (token: StageToken): string | null => (
+        token.cutoutUrl ||
+        token.url ||
+        state.actorLibrary.find(a => a.id === token.castId)?.url ||
+        null
+    );
+
     const buildRegionPlan = (overrides?: { token?: Map<string, WhitelistProfile>; cast?: Map<string, WhitelistProfile> }) => {
-        const sorted = [...state.tokens].sort((a, b) => (a.zIndex - b.zIndex) || (a.x - b.x));
+        const sorted = [...state.tokens].sort((a, b) => (
+            toFiniteNumber(a.zIndex, 0) - toFiniteNumber(b.zIndex, 0)
+        ) || (
+            toFiniteNumber(a.x, 0) - toFiniteNumber(b.x, 0)
+        ));
 
         return sorted.map((t, idx) => {
             const cast = (state.cast || []).find(c => c.id === t.castId) || null;
@@ -1077,6 +1042,202 @@ Output: environment plate only.
                 profile
             };
         });
+    };
+
+    const colorToHex = (r: number, g: number, b: number): string => (
+        `#${[r, g, b].map(v => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('')}`
+    );
+
+    const describeLuminance = (lum: number): string => {
+        if (lum < 0.18) return 'very low-key / shadowed';
+        if (lum < 0.34) return 'dim';
+        if (lum < 0.58) return 'soft midtone';
+        if (lum < 0.78) return 'bright';
+        return 'high-key';
+    };
+
+    const describeWarmth = (r: number, _g: number, b: number): string => {
+        const delta = r - b;
+        if (delta > 28) return 'warm';
+        if (delta < -28) return 'cool';
+        return 'neutral';
+    };
+
+    const describeContrast = (stdDev: number): string => {
+        if (stdDev > 0.24) return 'hard/high contrast';
+        if (stdDev > 0.13) return 'moderate contrast';
+        return 'soft/low contrast';
+    };
+
+    const buildAnchorLightingTransferBlock = async (
+        anchorUrl: string | null | undefined,
+        regionPlan: ReturnType<typeof buildRegionPlan>,
+        dnaLighting?: string
+    ): Promise<string> => {
+        if (!anchorUrl) return '';
+
+        try {
+            const img = await loadDataUrlImage(anchorUrl);
+            const viewportW = Math.max(1, Math.round(toFiniteNumber(viewportBox.w, 1024)));
+            const viewportH = Math.max(1, Math.round(toFiniteNumber(viewportBox.h, 576)));
+            const canvas = document.createElement('canvas');
+            canvas.width = viewportW;
+            canvas.height = viewportH;
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+            if (!ctx) return '';
+
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(0, 0, viewportW, viewportH);
+
+            const imgW = Math.max(1, toFiniteNumber(img.naturalWidth || img.width, 1));
+            const imgH = Math.max(1, toFiniteNumber(img.naturalHeight || img.height, 1));
+            const scale = Math.min(viewportW / imgW, viewportH / imgH);
+            const drawW = imgW * scale;
+            const drawH = imgH * scale;
+            const drawX = (viewportW - drawW) / 2;
+            const drawY = (viewportH - drawH) / 2;
+            ctx.drawImage(img, drawX, drawY, drawW, drawH);
+
+            const sampleRect = (
+                x: number,
+                y: number,
+                w: number,
+                h: number,
+                exclude?: { left: number; top: number; width: number; height: number }
+            ) => {
+                const sx = Math.max(0, Math.min(viewportW - 1, Math.floor(x)));
+                const sy = Math.max(0, Math.min(viewportH - 1, Math.floor(y)));
+                const ex = Math.max(sx + 1, Math.min(viewportW, Math.ceil(x + w)));
+                const ey = Math.max(sy + 1, Math.min(viewportH, Math.ceil(y + h)));
+                const data = ctx.getImageData(sx, sy, ex - sx, ey - sy).data;
+                let r = 0;
+                let g = 0;
+                let b = 0;
+                let lumSum = 0;
+                let lumSq = 0;
+                let count = 0;
+                let accentR = 0;
+                let accentG = 0;
+                let accentB = 0;
+                let accentCount = 0;
+
+                const sampleW = ex - sx;
+                for (let i = 0; i < data.length; i += 4) {
+                    if (exclude) {
+                        const px = sx + ((i / 4) % sampleW);
+                        const py = sy + Math.floor((i / 4) / sampleW);
+                        if (
+                            px >= exclude.left &&
+                            px <= exclude.left + exclude.width &&
+                            py >= exclude.top &&
+                            py <= exclude.top + exclude.height
+                        ) {
+                            continue;
+                        }
+                    }
+                    const pr = data[i];
+                    const pg = data[i + 1];
+                    const pb = data[i + 2];
+                    const lum = ((0.2126 * pr) + (0.7152 * pg) + (0.0722 * pb)) / 255;
+                    r += pr;
+                    g += pg;
+                    b += pb;
+                    lumSum += lum;
+                    lumSq += lum * lum;
+                    count += 1;
+
+                    const max = Math.max(pr, pg, pb);
+                    const min = Math.min(pr, pg, pb);
+                    if (max - min > 35 && lum > 0.18) {
+                        accentR += pr;
+                        accentG += pg;
+                        accentB += pb;
+                        accentCount += 1;
+                    }
+                }
+
+                if (count === 0) {
+                    return { r: 0, g: 0, b: 0, luminance: 0, stdDev: 0, accentHex: '', count: 0 };
+                }
+
+                const meanLum = lumSum / count;
+                const variance = Math.max(0, (lumSq / count) - (meanLum * meanLum));
+                return {
+                    r: r / count,
+                    g: g / count,
+                    b: b / count,
+                    luminance: meanLum,
+                    stdDev: Math.sqrt(variance),
+                    accentHex: accentCount > Math.max(12, count * 0.02)
+                        ? colorToHex(accentR / accentCount, accentG / accentCount, accentB / accentCount)
+                        : '',
+                    count
+                };
+            };
+
+            const keyDirectionFor = (left: number, top: number, width: number, height: number): string => {
+                const pad = Math.max(12, Math.min(width, height) * 0.18);
+                const samples = [
+                    { name: 'left', lum: sampleRect(left - pad, top, pad, height).luminance },
+                    { name: 'right', lum: sampleRect(left + width, top, pad, height).luminance },
+                    { name: 'above', lum: sampleRect(left, top - pad, width, pad).luminance },
+                    { name: 'below', lum: sampleRect(left, top + height, width, pad).luminance }
+                ];
+                samples.sort((a, b) => b.lum - a.lum);
+                return samples[0]?.name || 'ambient';
+            };
+
+            const globalSample = sampleRect(drawX, drawY, drawW, drawH);
+            const globalLine = [
+                `Global anchor lighting: ${describeLuminance(globalSample.luminance)}, ${describeContrast(globalSample.stdDev)}, ${describeWarmth(globalSample.r, globalSample.g, globalSample.b)} color temperature`,
+                `average scene color ${colorToHex(globalSample.r, globalSample.g, globalSample.b)}`
+            ].join('; ');
+            const analyzedLightingLine = dnaLighting?.trim()
+                ? `Director/AI lighting read: ${dnaLighting.trim()}`
+                : '';
+
+            const regionLines = regionPlan.map((entry) => {
+                const token = entry.token;
+                const width = Math.max(20, toFiniteNumber(token.width, 200) * Math.abs(toFiniteNumber(token.scaleX, 1)));
+                const height = Math.max(20, toFiniteNumber(token.height, 300) * Math.abs(toFiniteNumber(token.scaleY, 1)));
+                const anchorX = Math.min(1, Math.max(0, toFiniteNumber(token.anchorX, 0.5)));
+                const anchorY = Math.min(1, Math.max(0, toFiniteNumber(token.anchorY, 0.8)));
+                const left = toFiniteNumber(token.x, 0) - (width * anchorX);
+                const top = toFiniteNumber(token.y, 0) - (height * anchorY);
+                const expandedPad = Math.max(18, Math.min(width, height) * 0.16);
+                const sample = sampleRect(
+                    left - expandedPad,
+                    top - expandedPad,
+                    width + (expandedPad * 2),
+                    height + (expandedPad * 2),
+                    { left, top, width, height }
+                );
+                const key = keyDirectionFor(left, top, width, height);
+                const actorLabel = entry.cast?.name || token.tag || `Region ${entry.region}`;
+                const accent = sample.accentHex
+                    ? ` Nearby saturated bounce/accent light detected around ${sample.accentHex}; use only as subtle rim/spill if visually present in CLEAN_BG_PLATE.`
+                    : '';
+
+                return `- REGION ${entry.region} (${actorLabel}) BBOX [${Math.round(left)}, ${Math.round(top)}, ${Math.round(width)}, ${Math.round(height)}]: relight the actor to ${describeLuminance(sample.luminance)} exposure, ${describeContrast(sample.stdDev)}, ${describeWarmth(sample.r, sample.g, sample.b)} color temperature, local average ${colorToHex(sample.r, sample.g, sample.b)}, strongest environmental light from ${key}.${accent}`;
+            });
+
+            return [
+                '### ANCHOR LIGHTING TRANSFER LOCK (HARD)',
+                'CLEAN_BG_PLATE is the lighting authority. Re-light every generated/staged actor from scratch so they look photographed/rendered inside that anchor scene, not pasted from their source reference.',
+                globalLine,
+                analyzedLightingLine,
+                regionLines.length > 0 ? regionLines.join('\n') : '- No staged actor regions found. Match global anchor lighting only.',
+                '- Remove source-reference/studio lighting from actors. Match anchor black levels, highlight rolloff, shadow softness, ambient occlusion, contact shadows, color spill, haze, and local contrast.',
+                '- If the actor overlaps bright flowers, windows, lamps, neon, or other visible light sources in CLEAN_BG_PLATE, add matching local rim/bounce light on the facing actor edges only.'
+            ].filter(Boolean).join('\n');
+        } catch (err) {
+            console.warn('[AnchorLighting] Sampling failed; falling back to prompt-only lighting lock.', err);
+            return [
+                '### ANCHOR LIGHTING TRANSFER LOCK (HARD)',
+                'CLEAN_BG_PLATE is the lighting authority. Re-light every generated/staged actor from scratch to match the anchor image key/fill direction, exposure, color temperature, shadows, black levels, and color grading. Do not preserve studio lighting from actor references.',
+                dnaLighting?.trim() ? `Director/AI lighting read: ${dnaLighting.trim()}` : ''
+            ].filter(Boolean).join('\n');
+        }
     };
 
     const buildAnchorPlate = async (
@@ -1124,27 +1285,34 @@ Output: environment plate only.
 
         if (!state.director.replaceAnchorSubjects) {
             // Draw staged tokens for non-replace compositing mode.
-            const tokensByDepth = [...regionPlan].sort((a, b) => a.token.zIndex - b.token.zIndex);
+            const tokensByDepth = [...regionPlan].sort((a, b) => (
+                toFiniteNumber(a.token.zIndex, 0) - toFiniteNumber(b.token.zIndex, 0)
+            ));
             for (const r of tokensByDepth) {
+                let didSaveContext = false;
                 try {
                     const t = r.token;
 
-                    const vw = viewportBox.w > 0 ? viewportBox.w : STAGE_W;
-                    const vh = viewportBox.h > 0 ? viewportBox.h : STAGE_H;
+                    const vw = Math.max(1, toFiniteNumber(viewportBox.w, STAGE_W));
+                    const vh = Math.max(1, toFiniteNumber(viewportBox.h, STAGE_H));
                     const scaleX = STAGE_W / vw;
                     const scaleY = STAGE_H / vh;
 
-                    const normX = t.x * scaleX;
-                    const normY = t.y * scaleY;
-                    const normW = t.width * scaleX;
-                    const normH = t.height * scaleY;
+                    const normX = toFiniteNumber(t.x, 0) * scaleX;
+                    const normY = toFiniteNumber(t.y, 0) * scaleY;
+                    const normW = Math.max(1, toFiniteNumber(t.width, 200) * scaleX);
+                    const normH = Math.max(1, toFiniteNumber(t.height, 300) * scaleY);
 
-                    const img = await loadDataUrlImage(t.url);
+                    const imageUrl = resolveTokenImageUrl(t);
+                    if (!imageUrl) continue;
+                    const img = await loadDataUrlImage(imageUrl);
 
-                    const ax = t.anchorX ?? 0.5;
-                    const ay = t.anchorY ?? 0.8;
+                    const ax = Math.min(1, Math.max(0, toFiniteNumber(t.anchorX, 0.5)));
+                    const ay = Math.min(1, Math.max(0, toFiniteNumber(t.anchorY, 0.8)));
 
-                    const imgRatio = img.width / img.height;
+                    const imgW = Math.max(1, toFiniteNumber(img.naturalWidth || img.width, 1));
+                    const imgH = Math.max(1, toFiniteNumber(img.naturalHeight || img.height, 1));
+                    const imgRatio = imgW / imgH;
                     const boxRatio = normW / normH;
                     let drawW = normW;
                     let drawH = normH;
@@ -1162,13 +1330,15 @@ Output: environment plate only.
                     }
 
                     ctx.save();
+                    didSaveContext = true;
                     ctx.translate(normX, normY);
-                    ctx.rotate((t.rotation * Math.PI) / 180);
-                    ctx.scale(t.scaleX, t.scaleY || 1);
+                    ctx.rotate((toFiniteNumber(t.rotation, 0) * Math.PI) / 180);
+                    ctx.scale(toFiniteNumber(t.scaleX, 1), toFiniteNumber(t.scaleY, 1));
                     ctx.drawImage(img, (-normW * ax) + offX, (-normH * ay) + offY, drawW, drawH);
-                    ctx.restore();
                 } catch (e) {
                     console.warn("Failed to draw token on anchor plate", r.token.id, e);
+                } finally {
+                    if (didSaveContext) ctx.restore();
                 }
             }
         } else {
@@ -1182,43 +1352,52 @@ Output: environment plate only.
                 scaffoldCtx.drawImage(canvas, 0, 0, STAGE_W, STAGE_H);
             }
 
-            const tokensByDepth = [...regionPlan].sort((a, b) => a.token.zIndex - b.token.zIndex);
+            const tokensByDepth = [...regionPlan].sort((a, b) => (
+                toFiniteNumber(a.token.zIndex, 0) - toFiniteNumber(b.token.zIndex, 0)
+            ));
             for (const r of tokensByDepth) {
-                const t = r.token;
+                let didSaveContext = false;
+                try {
+                    const t = r.token;
 
-                const vw = viewportBox.w > 0 ? viewportBox.w : STAGE_W;
-                const vh = viewportBox.h > 0 ? viewportBox.h : STAGE_H;
-                const scaleX = STAGE_W / vw;
-                const scaleY = STAGE_H / vh;
+                    const vw = Math.max(1, toFiniteNumber(viewportBox.w, STAGE_W));
+                    const vh = Math.max(1, toFiniteNumber(viewportBox.h, STAGE_H));
+                    const scaleX = STAGE_W / vw;
+                    const scaleY = STAGE_H / vh;
 
-                const normX = t.x * scaleX;
-                const normY = t.y * scaleY;
-                const normW = t.width * scaleX;
-                const normH = t.height * scaleY;
+                    const normX = toFiniteNumber(t.x, 0) * scaleX;
+                    const normY = toFiniteNumber(t.y, 0) * scaleY;
+                    const normW = Math.max(1, toFiniteNumber(t.width, 200) * scaleX);
+                    const normH = Math.max(1, toFiniteNumber(t.height, 300) * scaleY);
 
-                const ax = t.anchorX ?? 0.5;
-                const ay = t.anchorY ?? 0.8;
-                const left = -normW * ax;
-                const top = -normH * ay;
+                    const ax = Math.min(1, Math.max(0, toFiniteNumber(t.anchorX, 0.5)));
+                    const ay = Math.min(1, Math.max(0, toFiniteNumber(t.anchorY, 0.8)));
+                    const left = -normW * ax;
+                    const top = -normH * ay;
 
-                ctx.save();
-                ctx.translate(normX, normY);
-                ctx.rotate((t.rotation * Math.PI) / 180);
-                ctx.scale(t.scaleX, t.scaleY || 1);
-                if (scaffoldCtx) {
-                    // Preserve coarse body orientation/gaze flow and local light cues,
-                    // but destroy fine identity details.
-                    ctx.filter = 'blur(7px) saturate(0.12) contrast(0.82) brightness(0.92)';
-                    ctx.drawImage(scaffoldSnapshot, left, top, normW, normH, left, top, normW, normH);
-                    ctx.filter = 'none';
+                    ctx.save();
+                    didSaveContext = true;
+                    ctx.translate(normX, normY);
+                    ctx.rotate((toFiniteNumber(t.rotation, 0) * Math.PI) / 180);
+                    ctx.scale(toFiniteNumber(t.scaleX, 1), toFiniteNumber(t.scaleY, 1));
+                    if (scaffoldCtx) {
+                        // Preserve coarse body orientation/gaze flow and local light cues,
+                        // but destroy fine identity details.
+                        ctx.filter = 'blur(7px) saturate(0.12) contrast(0.82) brightness(0.92)';
+                        ctx.drawImage(scaffoldSnapshot, left, top, normW, normH, left, top, normW, normH);
+                        ctx.filter = 'none';
+                    }
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.34)';
+                    ctx.fillRect(left, top, normW, normH);
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.72)';
+                    ctx.lineWidth = 1.5;
+                    ctx.setLineDash([6, 4]);
+                    ctx.strokeRect(left, top, normW, normH);
+                } catch (e) {
+                    console.warn("Failed to draw scaffold on anchor plate", r.token.id, e);
+                } finally {
+                    if (didSaveContext) ctx.restore();
                 }
-                ctx.fillStyle = 'rgba(0, 0, 0, 0.34)';
-                ctx.fillRect(left, top, normW, normH);
-                ctx.strokeStyle = 'rgba(255, 255, 255, 0.72)';
-                ctx.lineWidth = 1.5;
-                ctx.setLineDash([6, 4]);
-                ctx.strokeRect(left, top, normW, normH);
-                ctx.restore();
             }
         }
 
@@ -1439,6 +1618,11 @@ Output: environment plate only.
 
                     for (const pass of passPlan) {
                         const passAnchorPlate = await buildAnchorPlate([pass.regionEntry], runningBgUrl);
+                        const passLightingBlock = await buildAnchorLightingTransferBlock(
+                            runningBgUrl,
+                            [pass.regionEntry],
+                            dnaForRender.lighting || state.director.lighting
+                        );
                         const passReference = pass.ref!;
                         const passRefLabel = `REFERENCE_${passReference.index}`;
                         const passCastId = pass.regionEntry.token.castId || passReference.castId || '';
@@ -1475,7 +1659,11 @@ Output: environment plate only.
                         }
 
                         const allowedIdentityLabels = [passRefLabel, ...passSupportLabels];
-                        const passPrompt = `${passPromptBase}\n\n### SINGLE-REGION REPLACEMENT LOCK (HARD)\n- This pass may edit ONLY REGION ${pass.regionEntry.region}.\n- REGION ${pass.regionEntry.region} may use ONLY identity references labeled ${allowedIdentityLabels.join(', ')}.\n- Treat ${passRefLabel} as the primary identity anchor for this region.\n- Do NOT alter identity or pose of people outside REGION ${pass.regionEntry.region} in CLEAN_BG_PLATE.\n- Preserve all non-target pixels exactly.\n- GAZE/HEAD POSE LOCK: Match the target subject head yaw/pitch/roll and eye gaze direction from CLEAN_BG_PLATE in this region. If the anchor subject is not looking at camera, the replacement must also NOT look at camera.\n- LIGHTING LOCK: Match local key/fill direction, contrast ratio, and color temperature from neighboring CLEAN_BG_PLATE pixels around the region boundary. Do not use portrait/studio lighting from identity references.\n- NO LOOKALIKE SUBSTITUTION: If uncertain, preserve mapped identity references over aesthetic similarity.`;
+                        const passPrompt = [
+                            passPromptBase,
+                            passLightingBlock,
+                            `### SINGLE-REGION REPLACEMENT LOCK (HARD)\n- This pass may edit ONLY REGION ${pass.regionEntry.region}.\n- REGION ${pass.regionEntry.region} may use ONLY identity references labeled ${allowedIdentityLabels.join(', ')}.\n- Treat ${passRefLabel} as the primary identity anchor for this region.\n- Do NOT alter identity or pose of people outside REGION ${pass.regionEntry.region} in CLEAN_BG_PLATE.\n- Preserve all non-target pixels exactly.\n- GAZE/HEAD POSE LOCK: Match the target subject head yaw/pitch/roll and eye gaze direction from CLEAN_BG_PLATE in this region. If the anchor subject is not looking at camera, the replacement must also NOT look at camera.\n- LIGHTING LOCK: Match the ANCHOR LIGHTING TRANSFER block above. Do not use portrait/studio lighting from identity references.\n- NO LOOKALIKE SUBSTITUTION: If uncertain, preserve mapped identity references over aesthetic similarity.`
+                        ].filter(Boolean).join('\n\n');
 
                         let passJobId = '';
                         const passRes = await GeminiService.generateImage(
@@ -1512,6 +1700,11 @@ Output: environment plate only.
                 }
 
                 const anchorPlate = await buildAnchorPlate(plan);
+                const anchorLightingBlock = await buildAnchorLightingTransferBlock(
+                    activeBgUrl,
+                    plan,
+                    dnaForRender.lighting || state.director.lighting
+                );
 
                 const strictPromptBase = isReplaceMode
                     ? compiledPrompt
@@ -1688,6 +1881,7 @@ Output: environment plate only.
 
                 const strictPromptText = [
                     strictPromptBase,
+                    anchorLightingBlock,
                     routingLines.length > 0
                         ? `### REGION-TO-IDENTITY ROUTING LOCK (HARD)\n${routingLines.join('\n')}\n- Do NOT swap identities between regions.\n- Do NOT blend identity/body traits across different region subjects.\n- Do NOT keep anchor body morphology and only replace heads.\n- If uncertain, preserve region assignment over stylistic similarity.`
                         : '',
@@ -1761,15 +1955,25 @@ Output: environment plate only.
                     references.push({ url: safeCast[0].url, label: "Style Reference" });
                 }
 
-                const loosePromptText = buildLoosePrompt(
-                    dnaForRender,
-                    state.tokens,
-                    state.annotations,
-                    state.referenceSlots,
-                    state.director,
-                    safeExtractedStyle,
-                    bgPrompt
+                const loosePlan = buildRegionPlan({ token: tokenOverrides });
+                const looseLightingBlock = await buildAnchorLightingTransferBlock(
+                    activeBgUrl,
+                    loosePlan,
+                    dnaForRender.lighting || state.director.lighting
                 );
+
+                const loosePromptText = [
+                    buildLoosePrompt(
+                        dnaForRender,
+                        state.tokens,
+                        state.annotations,
+                        state.referenceSlots,
+                        state.director,
+                        safeExtractedStyle,
+                        bgPrompt
+                    ),
+                    looseLightingBlock
+                ].filter(Boolean).join('\n\n');
 
                 let actualGenId = '';
                 const res = await GeminiService.generateImage(
@@ -2038,6 +2242,80 @@ Output: environment plate only.
             img.onerror = () => reject(new Error('Failed to load image'));
             img.src = url;
         }), []);
+
+    const prepareRegionEditInputs = useCallback(async (
+        baseUrl: string,
+        editMaskUrl: string
+    ): Promise<{ baseDataUrl: string; maskDataUrl: string; wasDownscaled: boolean; width: number; height: number; editedPixels: number }> => {
+        const baseImg = await loadDataUrlImage(baseUrl);
+        const maskImg = await loadDataUrlImage(editMaskUrl);
+
+        const baseW = Math.max(1, toFiniteNumber(baseImg.naturalWidth || baseImg.width, 1));
+        const baseH = Math.max(1, toFiniteNumber(baseImg.naturalHeight || baseImg.height, 1));
+        const edgeScale = Math.min(1, REGION_EDIT_MAX_EDGE / Math.max(baseW, baseH));
+        const pixelScale = Math.min(1, Math.sqrt(REGION_EDIT_MAX_PIXELS / Math.max(1, baseW * baseH)));
+        const scale = Math.min(edgeScale, pixelScale);
+        const targetW = Math.max(1, Math.round(baseW * scale));
+        const targetH = Math.max(1, Math.round(baseH * scale));
+
+        const baseCanvas = document.createElement('canvas');
+        const maskCanvas = document.createElement('canvas');
+
+        try {
+            baseCanvas.width = targetW;
+            baseCanvas.height = targetH;
+            const baseCtx = baseCanvas.getContext('2d', { alpha: false });
+            if (!baseCtx) throw new Error('Region Edit base canvas unavailable.');
+            baseCtx.fillStyle = '#000000';
+            baseCtx.fillRect(0, 0, targetW, targetH);
+            baseCtx.imageSmoothingEnabled = true;
+            baseCtx.imageSmoothingQuality = 'high';
+            baseCtx.drawImage(baseImg, 0, 0, targetW, targetH);
+
+            maskCanvas.width = targetW;
+            maskCanvas.height = targetH;
+            const maskCtx = maskCanvas.getContext('2d', { willReadFrequently: true });
+            if (!maskCtx) throw new Error('Region Edit mask canvas unavailable.');
+            maskCtx.fillStyle = '#000000';
+            maskCtx.fillRect(0, 0, targetW, targetH);
+            maskCtx.imageSmoothingEnabled = false;
+            maskCtx.drawImage(maskImg, 0, 0, targetW, targetH);
+
+            const maskData = maskCtx.getImageData(0, 0, targetW, targetH);
+            const pixels = maskData.data;
+            let editedPixels = 0;
+            for (let idx = 0; idx < pixels.length; idx += 4) {
+                const alpha = pixels[idx + 3];
+                const lum = Math.max(pixels[idx], pixels[idx + 1], pixels[idx + 2]);
+                const v = alpha > 8 && lum > 24 ? 255 : 0;
+                if (v === 255) editedPixels++;
+                pixels[idx] = v;
+                pixels[idx + 1] = v;
+                pixels[idx + 2] = v;
+                pixels[idx + 3] = 255;
+            }
+            maskCtx.putImageData(maskData, 0, 0);
+
+            if (editedPixels < 8) {
+                throw new Error('Region Edit mask is empty after alignment. Paint a larger mask area and try again.');
+            }
+
+            return {
+                baseDataUrl: baseCanvas.toDataURL('image/jpeg', 0.92),
+                maskDataUrl: maskCanvas.toDataURL('image/png'),
+                wasDownscaled: scale < 0.999,
+                width: targetW,
+                height: targetH,
+                editedPixels
+            };
+        } finally {
+            baseCanvas.width = 1;
+            baseCanvas.height = 1;
+            maskCanvas.width = 1;
+            maskCanvas.height = 1;
+        }
+    }, [loadDataUrlImage]);
+
     // Erode (shrink) a white mask by radius pixels
     const erodeMask = useCallback(async (srcUrl: string, radius: number): Promise<string> => {
         if (radius === 0) return srcUrl;
@@ -2346,6 +2624,19 @@ Output: environment plate only.
             }
 
             let base: string = startingBase;
+            const regionEditImageSize: '1K' | '2K' | '4K' | undefined =
+                state.imageResolution === '4K' ? '2K' : state.imageResolution;
+            let loggedRegionEditDownscale = false;
+
+            if (state.imageResolution === '4K') {
+                dispatch({
+                    type: 'ADD_LOG',
+                    payload: {
+                        message: 'Region Edit stability mode active: using a 2K working frame for masked edits to prevent renderer memory crashes.',
+                        type: 'info'
+                    }
+                });
+            }
 
             // 1. Process standard regions
             const layers = regionEdit.layers.filter(
@@ -2410,7 +2701,6 @@ Output: environment plate only.
                 }
                 // Skip UI updates for virtual intent layers
                 if (!layer.id.startsWith('intent-')) {
-                    dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: layer.id as RegionEditLayer['id'], updates: { status: 'running', lastError: null } } });
                     dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: layer.id as RegionEditLayer['id'], updates: { status: 'queued', lastError: null } } });
                 }
             }
@@ -2467,39 +2757,37 @@ Output: environment plate only.
 
                 // Get intrinsic dimensions of base to properly align resolution with the mask
                 // This prevents backend mapping failures or letterboxing offsets
-                const baseImgScale = await loadDataUrlImage(base);
-                const baseW = baseImgScale.width || 1;
-                const baseH = baseImgScale.height || 1;
-
-                if (maskToSend) {
-                    const maskImgScale = await loadDataUrlImage(maskToSend);
-                    const scaleCanvas = document.createElement('canvas');
-                    scaleCanvas.width = baseW;
-                    scaleCanvas.height = baseH;
-                    const scaleCtx = scaleCanvas.getContext('2d');
-                    if (scaleCtx) {
-                        scaleCtx.imageSmoothingEnabled = false; // Preserve hard edges for binary mask
-                        scaleCtx.clearRect(0, 0, baseW, baseH);
-                        scaleCtx.drawImage(maskImgScale, 0, 0, baseW, baseH);
-                        maskToSend = scaleCanvas.toDataURL('image/png');
-                    }
+                const preparedEdit = await prepareRegionEditInputs(base, maskToSend);
+                if (preparedEdit.wasDownscaled && !loggedRegionEditDownscale) {
+                    loggedRegionEditDownscale = true;
+                    dispatch({
+                        type: 'ADD_LOG',
+                        payload: {
+                            message: `Region Edit working frame capped at ${preparedEdit.width}x${preparedEdit.height} for stability.`,
+                            type: 'info'
+                        }
+                    });
                 }
 
                 base = await GeminiService.editImageWithMask(
-                    base,
-                    maskToSend,
+                    preparedEdit.baseDataUrl,
+                    preparedEdit.maskDataUrl,
                     promptText,
                     state.apiKey,
                     editModel,
                     [],
                     { 
                         aspectRatio: state.director.aspectRatio,
-                        imageSize: state.imageResolution as '1K' | '2K' | '4K' | undefined,
+                        imageSize: regionEditImageSize,
                         billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', 
                         entitlements: state.billingEntitlements,
                         expectedResponseType: 'image'
                     }
                 );
+
+                if (!layer.id.startsWith('intent-')) {
+                    dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: layer.id as RegionEditLayer['id'], updates: { status: 'success', lastError: null } } });
+                }
             }
 
             dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
@@ -2738,8 +3026,8 @@ Output: environment plate only.
         try {
             // Manual Canvas Composition (Authority #5) - Decoupled from HTML-TO-IMAGE
             const canvas = document.createElement('canvas');
-            const TARGET_W = viewportBox.w;
-            const TARGET_H = viewportBox.h;
+            const TARGET_W = Math.max(1, Math.round(toFiniteNumber(viewportBox.w, 960)));
+            const TARGET_H = Math.max(1, Math.round(toFiniteNumber(viewportBox.h, 540)));
             canvas.width = TARGET_W;
             canvas.height = TARGET_H;
             const ctx = canvas.getContext('2d');
@@ -2762,43 +3050,54 @@ Output: environment plate only.
             // 3. Draw Tokens (Actors)
             const sortedTokens = [...state.tokens]
                 .filter(t => t.visible !== false)
-                .sort((a, b) => a.zIndex - b.zIndex);
+                .sort((a, b) => toFiniteNumber(a.zIndex, 0) - toFiniteNumber(b.zIndex, 0));
 
             for (const t of sortedTokens) {
+                let didSaveContext = false;
                 try {
-                    const img = await loadImage(t.url);
+                    const imageUrl = resolveTokenImageUrl(t);
+                    if (!imageUrl) continue;
+                    const img = await loadImage(imageUrl);
                     ctx.save();
+                    didSaveContext = true;
 
-                    const ax = t.anchorX !== undefined ? t.anchorX : 0.5;
-                    const ay = t.anchorY !== undefined ? t.anchorY : 0.8;
+                    const tokenX = toFiniteNumber(t.x, 0);
+                    const tokenY = toFiniteNumber(t.y, 0);
+                    const tokenWidth = Math.max(1, toFiniteNumber(t.width, 200));
+                    const tokenHeight = Math.max(1, toFiniteNumber(t.height, 300));
+                    const ax = Math.min(1, Math.max(0, toFiniteNumber(t.anchorX, 0.5)));
+                    const ay = Math.min(1, Math.max(0, toFiniteNumber(t.anchorY, 0.8)));
 
                     // Coordinate Transform
-                    ctx.translate(t.x, t.y);
-                    ctx.rotate((t.rotation * Math.PI) / 180);
-                    ctx.scale(t.scaleX, t.scaleY);
+                    ctx.translate(tokenX, tokenY);
+                    ctx.rotate((toFiniteNumber(t.rotation, 0) * Math.PI) / 180);
+                    ctx.scale(toFiniteNumber(t.scaleX, 1), toFiniteNumber(t.scaleY, 1));
 
                     // "Object-Contain" Logic
-                    const imgRatio = img.width / img.height;
-                    const boxRatio = t.width / t.height;
-                    let drawW = t.width;
-                    let drawH = t.height;
+                    const imgW = Math.max(1, toFiniteNumber(img.naturalWidth || img.width, 1));
+                    const imgH = Math.max(1, toFiniteNumber(img.naturalHeight || img.height, 1));
+                    const imgRatio = imgW / imgH;
+                    const boxRatio = tokenWidth / tokenHeight;
+                    let drawW = tokenWidth;
+                    let drawH = tokenHeight;
                     let offX = 0;
                     let offY = 0;
 
                     if (imgRatio > boxRatio) {
-                        drawW = t.width;
-                        drawH = t.width / imgRatio;
-                        offY = (t.height - drawH) / 2;
+                        drawW = tokenWidth;
+                        drawH = tokenWidth / imgRatio;
+                        offY = (tokenHeight - drawH) / 2;
                     } else {
-                        drawH = t.height;
-                        drawW = t.height * imgRatio;
-                        offX = (t.width - drawW) / 2;
+                        drawH = tokenHeight;
+                        drawW = tokenHeight * imgRatio;
+                        offX = (tokenWidth - drawW) / 2;
                     }
 
-                    ctx.drawImage(img, (-t.width * ax) + offX, (-t.height * ay) + offY, drawW, drawH);
-                    ctx.restore();
+                    ctx.drawImage(img, (-tokenWidth * ax) + offX, (-tokenHeight * ay) + offY, drawW, drawH);
                 } catch (e) {
                     console.error("Token load failed", t.tag, e);
+                } finally {
+                    if (didSaveContext) ctx.restore();
                 }
             }
 
@@ -2820,8 +3119,8 @@ Output: environment plate only.
     ): string | null => {
         if (!viewportRef.current) return null;
         try {
-            const TARGET_W = viewportBox.w;
-            const TARGET_H = viewportBox.h;
+            const TARGET_W = Math.max(1, Math.round(toFiniteNumber(viewportBox.w, 960)));
+            const TARGET_H = Math.max(1, Math.round(toFiniteNumber(viewportBox.h, 540)));
             const canvas = document.createElement('canvas');
             canvas.width = TARGET_W;
             canvas.height = TARGET_H;
@@ -2836,7 +3135,11 @@ Output: environment plate only.
             ctx.fillStyle = '#FFFFFF';
             for (const r of renders) {
                 if (r.type === 'rect') {
-                    ctx.fillRect(r.x, r.y, r.w, r.h);
+                    const x = toFiniteNumber(r.x, 0);
+                    const y = toFiniteNumber(r.y, 0);
+                    const w = Math.max(0, toFiniteNumber(r.w, 0));
+                    const h = Math.max(0, toFiniteNumber(r.h, 0));
+                    if (w > 0 && h > 0) ctx.fillRect(x, y, w, h);
                 }
             }
 
@@ -2858,7 +3161,14 @@ Output: environment plate only.
         if (dragItem) {
             const dx = e.clientX - dragItem.startX;
             const dy = e.clientY - dragItem.startY;
-            const updates = { x: dragItem.initialX + dx, y: dragItem.initialY + dy };
+            const updates = {
+                x: toFiniteNumber(dragItem.initialX, 0) + dx,
+                y: toFiniteNumber(dragItem.initialY, 0) + dy
+            };
+
+            if (!Number.isFinite(updates.x) || !Number.isFinite(updates.y)) {
+                return;
+            }
 
             latestDragRef.current =
                 dragItem.type === 'token'
@@ -2872,51 +3182,55 @@ Output: environment plate only.
             const dx = e.clientX - resizeItem.startX;
             const dy = e.clientY - resizeItem.startY;
 
-            let nw = resizeItem.initialW;
-            let nh = resizeItem.initialH;
+            const initialW = Math.max(20, toFiniteNumber(resizeItem.initialW, 20));
+            const initialH = Math.max(20, toFiniteNumber(resizeItem.initialH, 20));
+            const initialX = toFiniteNumber(resizeItem.initialX, 0);
+            const initialY = toFiniteNumber(resizeItem.initialY, 0);
+            let nw = initialW;
+            let nh = initialH;
 
             // Better: we need the resizeItem to store the anchor to do this math properly if it varies per token.
             // Assuming 'token' type has anchorX/Y. We need to pass it in setResizeItem.
             // Let's assume passed in resizeItem.
 
-            const ax = resizeItem.anchorX ?? 0.5;
-            const ay = resizeItem.anchorY ?? 0.8;
+            const ax = Math.min(1, Math.max(0, toFiniteNumber(resizeItem.anchorX, 0.5)));
+            const ay = Math.min(1, Math.max(0, toFiniteNumber(resizeItem.anchorY, 0.8)));
 
-            const oldLeft = resizeItem.initialX - (resizeItem.initialW * ax);
-            const oldTop = resizeItem.initialY - (resizeItem.initialH * ay);
+            const oldLeft = initialX - (initialW * ax);
+            const oldTop = initialY - (initialH * ay);
 
             let newLeft = oldLeft;
             let newTop = oldTop;
 
             // Calculate new dimensions based on handle
-            if (resizeItem.handle.includes('r')) nw = Math.max(20, resizeItem.initialW + dx);
+            if (resizeItem.handle.includes('r')) nw = Math.max(20, initialW + dx);
             if (resizeItem.handle.includes('l')) {
-                nw = Math.max(20, resizeItem.initialW - dx);
-                newLeft = oldLeft + (resizeItem.initialW - nw);
+                nw = Math.max(20, initialW - dx);
+                newLeft = oldLeft + (initialW - nw);
             }
-            if (resizeItem.handle.includes('b')) nh = Math.max(20, resizeItem.initialH + dy);
+            if (resizeItem.handle.includes('b')) nh = Math.max(20, initialH + dy);
             if (resizeItem.handle.includes('t')) {
-                nh = Math.max(20, resizeItem.initialH - dy);
-                newTop = oldTop + (resizeItem.initialH - nh);
+                nh = Math.max(20, initialH - dy);
+                newTop = oldTop + (initialH - nh);
             }
 
             // Aspect Ratio Lock
             if (resizeItem.uniformScale) {
-                const ratio = resizeItem.initialW / resizeItem.initialH;
+                const ratio = initialW / initialH;
                 if (resizeItem.handle === 'br' || resizeItem.handle === 'tl') {
                     if (Math.abs(dx) > Math.abs(dy)) {
                         nh = nw / ratio;
-                        if (resizeItem.handle === 'tl') newTop = oldTop + (resizeItem.initialH - nh);
+                        if (resizeItem.handle === 'tl') newTop = oldTop + (initialH - nh);
                     } else {
                         nw = nh * ratio;
-                        if (resizeItem.handle === 'tl') newLeft = oldLeft + (resizeItem.initialW - nw);
+                        if (resizeItem.handle === 'tl') newLeft = oldLeft + (initialW - nw);
                     }
                 } else if (resizeItem.handle === 'tr') {
                     if (Math.abs(dx) > Math.abs(dy)) nh = nw / ratio; else nw = nh * ratio;
-                    newTop = oldTop + (resizeItem.initialH - nh);
+                    newTop = oldTop + (initialH - nh);
                 } else if (resizeItem.handle === 'bl') {
                     if (Math.abs(dx) > Math.abs(dy)) nh = nw / ratio; else nw = nh * ratio;
-                    newLeft = oldLeft + (resizeItem.initialW - nw);
+                    newLeft = oldLeft + (initialW - nw);
                 }
             }
 
@@ -2936,8 +3250,8 @@ Output: environment plate only.
                         height: nh,
                         x: nx,
                         y: ny,
-                        scaleX: resizeItem.initialScaleX,
-                        scaleY: resizeItem.initialScaleY,
+                        scaleX: toFiniteNumber(resizeItem.initialScaleX, 1),
+                        scaleY: toFiniteNumber(resizeItem.initialScaleY, 1),
                     }
                 });
             } else {
@@ -2948,12 +3262,12 @@ Output: environment plate only.
                 // Note: Annotations x/y are Top-Left currently in renderer.
             }
         } else if (rotateItem) {
-            const dx = e.clientX - rotateItem.centerX;
-            const dy = e.clientY - rotateItem.centerY;
+            const dx = e.clientX - toFiniteNumber(rotateItem.centerX, e.clientX);
+            const dy = e.clientY - toFiniteNumber(rotateItem.centerY, e.clientY);
             const angle = Math.atan2(dy, dx) * (180 / Math.PI);
             // Delta from start click
-            const delta = angle - rotateItem.startAngle;
-            const newRot = (rotateItem.initialRotation + delta + 360) % 360; // Normalize 0-360
+            const delta = angle - toFiniteNumber(rotateItem.startAngle, angle);
+            const newRot = (toFiniteNumber(rotateItem.initialRotation, 0) + delta + 360) % 360; // Normalize 0-360
 
             if (rotateItem.type === 'token') {
                 dispatch({ type: 'UPDATE_TOKEN', payload: { id: rotateItem.id, rotation: newRot } });
@@ -3146,37 +3460,45 @@ Output: environment plate only.
 
     const collectVisibleCompositeElements = useCallback(() => {
         return state.tokens
-            .filter(t => t.visible !== false && !!t.url)
-            .sort((a, b) => a.zIndex - b.zIndex)
-            .map(t => ({
-                id: t.id,
-                url: t.cutoutUrl || t.url,
-                sourceImageUrl: t.sourceImageUrl || t.url,
-                label: t.tag,
-                type: t.elementType || 'actor',
-                x: t.x,
-                y: t.y,
-                width: t.width,
-                height: t.height,
-                anchorX: t.anchorX !== undefined ? t.anchorX : 0.5,
-                anchorY: t.anchorY !== undefined ? t.anchorY : 0.8,
-                preserveIdentity: t.preserveIdentity,
-                preserveWardrobe: t.preserveWardrobe,
-                groundingMode: t.groundingMode,
-                notes: t.notes
-            }));
-    }, [state.tokens]);
+            .filter(t => t.visible !== false)
+            .sort((a, b) => toFiniteNumber(a.zIndex, 0) - toFiniteNumber(b.zIndex, 0))
+            .map(t => {
+                const url = resolveTokenImageUrl(t);
+                if (!url) return null;
+
+                return {
+                    id: t.id,
+                    url,
+                    sourceImageUrl: t.sourceImageUrl || t.url || url,
+                    label: t.tag,
+                    type: t.elementType || 'actor',
+                    x: toFiniteNumber(t.x, 0),
+                    y: toFiniteNumber(t.y, 0),
+                    width: Math.max(20, toFiniteNumber(t.width, 200)),
+                    height: Math.max(20, toFiniteNumber(t.height, 300)),
+                    anchorX: Math.min(1, Math.max(0, toFiniteNumber(t.anchorX, 0.5))),
+                    anchorY: Math.min(1, Math.max(0, toFiniteNumber(t.anchorY, 0.8))),
+                    preserveIdentity: t.preserveIdentity,
+                    preserveWardrobe: t.preserveWardrobe,
+                    groundingMode: t.groundingMode,
+                    notes: t.notes
+                };
+            })
+            .filter((element): element is NonNullable<typeof element> => element !== null);
+    }, [state.tokens, state.actorLibrary]);
 
     const collectDepthAssistWarnings = useCallback((): DepthAssistWarning[] => {
         const warnings: DepthAssistWarning[] = [];
         if (!state.depthMapUrl || state.isDepthProcessing) return warnings;
 
         const elements = collectVisibleCompositeElements();
+        const viewportW = Math.max(1, toFiniteNumber(viewportBox.w, 1));
+        const viewportH = Math.max(1, toFiniteNumber(viewportBox.h, 1));
         
         elements.forEach(t => {
             // Normalized center-ish point for depth check
-            const nx = (t.x) / viewportBox.w;
-            const ny = (t.y) / viewportBox.h;
+            const nx = Math.min(1, Math.max(0, t.x / viewportW));
+            const ny = Math.min(1, Math.max(0, t.y / viewportH));
             
             // Fast synchronous sample from pre-cached depth data via DepthService
             const anchorDepth = DepthService.getDepthAtPointSync(state.depthMapUrl, nx, ny);
@@ -3199,10 +3521,10 @@ Output: environment plate only.
             if (state.occupiedVolumes && state.occupiedVolumes.length > 0) {
                for (const vol of state.occupiedVolumes) {
                    if (!vol.footprint || typeof vol.footprint.x !== 'number') continue;
-                   const vx = vol.footprint.x * viewportBox.w;
-                   const vy = vol.footprint.y * viewportBox.h;
-                   const vw = vol.footprint.w * viewportBox.w;
-                   const vh = vol.footprint.h * viewportBox.h;
+                   const vx = toFiniteNumber(vol.footprint.x, 0) * viewportW;
+                   const vy = toFiniteNumber(vol.footprint.y, 0) * viewportH;
+                   const vw = Math.max(0, toFiniteNumber(vol.footprint.w, 0) * viewportW);
+                   const vh = Math.max(0, toFiniteNumber(vol.footprint.h, 0) * viewportH);
                    
                    // Basic intersection check of token anchor point within volume bounding box
                    if (t.x >= vx && t.x <= vx + vw && t.y >= vy && t.y <= vy + vh) {
@@ -3270,13 +3592,13 @@ Output: environment plate only.
 
             const newId = `token-${Date.now()}-${Math.random().toString(16).slice(2)}`;
             // Find max zIndex to place on top (optional, or just +1)
-            const maxZ = Math.max(...state.tokens.map(t => t.zIndex), 10);
+            const maxZ = Math.max(...state.tokens.map(t => toFiniteNumber(t.zIndex, 10)), 10);
 
             const cloneToken: StageToken = {
                 ...original,
                 id: newId,
-                x: original.x + 40,
-                y: original.y,
+                x: toFiniteNumber(original.x, 0) + 40,
+                y: toFiniteNumber(original.y, 0),
                 zIndex: maxZ + 1
             };
             dispatch({ type: 'ADD_TOKEN', payload: cloneToken });
@@ -3287,12 +3609,12 @@ Output: environment plate only.
             if (!original) return;
 
             const newId = `ann-${Date.now()}`;
-            const maxZ = Math.max(...state.annotations.map(a => a.zIndex), 10);
+            const maxZ = Math.max(...state.annotations.map(a => toFiniteNumber(a.zIndex, 10)), 10);
             const cloneAnn = {
                 ...original,
                 id: newId,
-                x: original.x + 40,
-                y: original.y,
+                x: toFiniteNumber(original.x, 0) + 40,
+                y: toFiniteNumber(original.y, 0),
                 zIndex: maxZ + 1
             };
 
@@ -3307,7 +3629,7 @@ Output: environment plate only.
         const topWarnings = warnings.filter((w) => w.severity === 'high' || w.severity === 'medium').slice(0, 2);
         const hasDepth = !!state.depthMapUrl && !state.isDepthProcessing;
 
-        let depthStatusText = "Unavailable";
+        let depthStatusText = state.isDepthProcessing ? "Building" : "Off";
         let depthStatusColor = "text-gray-500";
         if (hasDepth) {
             if (topWarnings.length > 0) {
@@ -3675,15 +3997,21 @@ Output: environment plate only.
                         <span className="hidden sm:inline">Image</span>
                     </button>
                     <button
-                        onClick={downloadDepthMap}
-                        disabled={!state.depthMapUrl}
+                        onClick={() => {
+                            if (state.depthMapUrl) {
+                                downloadDepthMap();
+                            } else {
+                                refreshSpatialData();
+                            }
+                        }}
+                        disabled={state.isDepthProcessing || (!state.depthMapUrl && !state.backgroundUrl)}
                         className={`bg-black/80 hover:bg-black border border-white/10 text-purple-500 px-1 py-1 rounded-md flex items-center gap-1 text-[6.5px] font-bold uppercase transition-all whitespace-nowrap shrink-0 ${
-                            state.depthMapUrl ? 'hover:text-purple-400 active:scale-95' : 'opacity-50 cursor-not-allowed'
+                            !state.isDepthProcessing && (state.depthMapUrl || state.backgroundUrl) ? 'hover:text-purple-400 active:scale-95' : 'opacity-50 cursor-not-allowed'
                         }`}
-                        title="Download generated Depth Map"
+                        title={state.depthMapUrl ? "Download generated Depth Map" : "Generate optional Depth Map"}
                     >
-                        <Download className="w-3 h-3" />
-                        <span className="hidden sm:inline">Depth</span>
+                        {state.isDepthProcessing ? <RefreshCcw className="w-3 h-3 animate-spin" /> : state.depthMapUrl ? <Download className="w-3 h-3" /> : <RefreshCcw className="w-3 h-3" />}
+                        <span className="hidden sm:inline">{state.isDepthProcessing ? 'Depth...' : 'Depth'}</span>
                     </button>
                 </>
             );
@@ -3709,19 +4037,10 @@ Output: environment plate only.
         );
     };
 
-    const processingCutoutsCount = Object.values(cutoutStatuses).filter((v) => v === 'processing').length;
-    const isProcessingCutouts = processingCutoutsCount > 0;
-
     return (
         <>
             <div className={`flex flex-col h-full overflow-hidden`}>
                 {state.isProcessing && <NanobananaThinking />}
-            {isProcessingCutouts && (
-                <div className="absolute top-4 right-4 z-50 flex items-center gap-2 px-3 py-1.5 bg-indigo-950/80 border border-indigo-500/30 rounded shadow-lg text-indigo-200">
-                    <Layers className="w-4 h-4 animate-pulse text-indigo-400" />
-                    <span className="text-xs font-bold tracking-wider">Removing Background ({processingCutoutsCount})...</span>
-                </div>
-            )}
 
             <div className="flex h-full gap-4 p-4 overflow-hidden select-none">
                 {/* 1. LEFT SIDEBAR: ACTIVE ACTOR INTELLIGENCE & PROPERTIES */}
@@ -3998,12 +4317,12 @@ Output: environment plate only.
                                         <div className="flex items-center gap-2 pt-2">
                                             <button
                                                 onClick={() => {
-                                                    const currentZ = selectedToken.zIndex;
-                                                    const sorted = [...state.tokens].sort((a, b) => a.zIndex - b.zIndex);
-                                                    const lower = sorted.reverse().find(t => t.zIndex < currentZ);
+                                                    const currentZ = toFiniteNumber(selectedToken.zIndex, 1);
+                                                    const sorted = [...state.tokens].sort((a, b) => toFiniteNumber(a.zIndex, 0) - toFiniteNumber(b.zIndex, 0));
+                                                    const lower = sorted.reverse().find(t => toFiniteNumber(t.zIndex, 0) < currentZ);
                                                     if (lower) {
                                                         updateToken(lower.id, { zIndex: currentZ });
-                                                        updateToken(selectedToken.id, { zIndex: lower.zIndex });
+                                                        updateToken(selectedToken.id, { zIndex: toFiniteNumber(lower.zIndex, 1) });
                                                     } else if (currentZ > 1) {
                                                         updateToken(selectedToken.id, { zIndex: 1 });
                                                     }
@@ -4017,12 +4336,12 @@ Output: environment plate only.
                                             </div>
                                             <button
                                                 onClick={() => {
-                                                    const currentZ = selectedToken.zIndex;
-                                                    const sorted = [...state.tokens].sort((a, b) => a.zIndex - b.zIndex);
-                                                    const higher = sorted.find(t => t.zIndex > currentZ);
+                                                    const currentZ = toFiniteNumber(selectedToken.zIndex, 1);
+                                                    const sorted = [...state.tokens].sort((a, b) => toFiniteNumber(a.zIndex, 0) - toFiniteNumber(b.zIndex, 0));
+                                                    const higher = sorted.find(t => toFiniteNumber(t.zIndex, 0) > currentZ);
                                                     if (higher) {
                                                         updateToken(higher.id, { zIndex: currentZ });
-                                                        updateToken(selectedToken.id, { zIndex: higher.zIndex });
+                                                        updateToken(selectedToken.id, { zIndex: toFiniteNumber(higher.zIndex, currentZ + 1) });
                                                     } else {
                                                         updateToken(selectedToken.id, { zIndex: currentZ + 1 });
                                                     }
@@ -4593,17 +4912,24 @@ Output: environment plate only.
 
                                     {/* 4. Actor Depth Band Visualizer */}
                                     {showDebugBands && state.tokens.map(token => {
-                                        if (token.depth === undefined) return null;
-                                        const dRaw = token.depth * 255;
+                                        const tokenDepth = token.depth === undefined ? undefined : toFiniteNumber(token.depth, 0.5);
+                                        if (tokenDepth === undefined) return null;
+                                        const tokenWidth = Math.max(20, toFiniteNumber(token.width, 200));
+                                        const tokenHeight = Math.max(20, toFiniteNumber(token.height, 300));
+                                        const tokenAnchorX = Math.min(1, Math.max(0, toFiniteNumber(token.anchorX, 0.5)));
+                                        const tokenAnchorY = Math.min(1, Math.max(0, toFiniteNumber(token.anchorY, 0.8)));
+                                        const tokenX = toFiniteNumber(token.x, 0);
+                                        const tokenY = toFiniteNumber(token.y, 0);
+                                        const dRaw = tokenDepth * 255;
                                         return (
                                             <div
                                                 key={`band-${token.id}`}
                                                 className="absolute border border-[#ff00ff]/50"
                                                 style={{
-                                                    left: token.x - (token.width * token.anchorX),
-                                                    top: token.y - (token.height * token.anchorY),
-                                                    width: token.width,
-                                                    height: token.height,
+                                                    left: tokenX - (tokenWidth * tokenAnchorX),
+                                                    top: tokenY - (tokenHeight * tokenAnchorY),
+                                                    width: tokenWidth,
+                                                    height: tokenHeight,
                                                     backgroundColor: 'rgba(255, 0, 255, 0.05)'
                                                 }}
                                             >
@@ -4652,26 +4978,48 @@ Output: environment plate only.
                             {/* Tokens Layer */}
                             {viewMode === 'stage' && (
                                 <>
-                                    {[...state.tokens].filter(t => t.visible !== false).sort((a, b) => a.zIndex - b.zIndex).map(token => (
+                                    {[...state.tokens]
+                                        .filter(t => t.visible !== false)
+                                        .sort((a, b) => toFiniteNumber(a.zIndex, 10) - toFiniteNumber(b.zIndex, 10))
+                                        .map(token => {
+                                            const tokenX = toFiniteNumber(token.x, 0);
+                                            const tokenY = toFiniteNumber(token.y, 0);
+                                            const tokenWidth = Math.max(20, toFiniteNumber(token.width, 200));
+                                            const tokenHeight = Math.max(20, toFiniteNumber(token.height, 300));
+                                            const tokenAnchorX = Math.min(1, Math.max(0, toFiniteNumber(token.anchorX, 0.5)));
+                                            const tokenAnchorY = Math.min(1, Math.max(0, toFiniteNumber(token.anchorY, 0.8)));
+                                            const tokenRotation = toFiniteNumber(token.rotation, 0);
+                                            const tokenPitch = toFiniteNumber(token.pitch, 0);
+                                            const tokenYaw = toFiniteNumber(token.yaw, 0);
+                                            const tokenScaleX = toFiniteNumber(token.scaleX, 1);
+                                            const tokenScaleY = toFiniteNumber(token.scaleY, 1);
+                                            const tokenZIndex = toFiniteNumber(token.zIndex, 10);
+                                            const tokenMask = tokenMasks[token.id];
+                                            const shouldApplyMask = !!tokenMask
+                                                && dragItem?.id !== token.id
+                                                && resizeItem?.id !== token.id
+                                                && rotateItem?.id !== token.id;
+
+                                            return (
                                 <div
                                     key={token.id}
                                     className={`absolute cursor-move group/token ${state.selection === token.id ? 'ring-2 ring-yellow-500 ring-offset-2 ring-offset-[#09090b]' : ''}`}
                                     style={{
-                                        left: token.x - (token.width * (token.anchorX ?? 0.5)),
-                                        top: token.y - (token.height * (token.anchorY ?? 0.8)),
-                                        width: token.width,
-                                        height: token.height,
-                                        transformOrigin: `${(token.anchorX ?? 0.5) * 100}% ${(token.anchorY ?? 0.8) * 100}%`,
-                                        transform: `perspective(800px) rotateX(${token.pitch || 0}deg) rotateY(${token.yaw || 0}deg) rotate(${token.rotation}deg) scale(${token.scaleX}, ${token.scaleY})`,
-                                        zIndex: state.selection === token.id ? 1000 : (token.zIndex ?? 10),
-                                        ...((tokenMasks[token.id] && dragItem?.id !== token.id && resizeItem?.id !== token.id && rotateItem?.id !== token.id) ? {
-                                            WebkitMaskImage: `url(${tokenMasks[token.id]})`,
-                                            WebkitMaskSize: `${token.width}px ${token.height}px`,
+                                        left: tokenX - (tokenWidth * tokenAnchorX),
+                                        top: tokenY - (tokenHeight * tokenAnchorY),
+                                        width: tokenWidth,
+                                        height: tokenHeight,
+                                        transformOrigin: `${tokenAnchorX * 100}% ${tokenAnchorY * 100}%`,
+                                        transform: `perspective(800px) rotateX(${tokenPitch}deg) rotateY(${tokenYaw}deg) rotate(${tokenRotation}deg) scale(${tokenScaleX}, ${tokenScaleY})`,
+                                        zIndex: state.selection === token.id ? 1000 : tokenZIndex,
+                                        ...(shouldApplyMask ? {
+                                            WebkitMaskImage: `url(${tokenMask})`,
+                                            WebkitMaskSize: `${tokenWidth}px ${tokenHeight}px`,
                                             WebkitMaskPosition: `0px 0px`,
                                             WebkitMaskRepeat: 'no-repeat',
                                             WebkitMaskComposite: 'source-over',
-                                            maskImage: `url(${tokenMasks[token.id]})`,
-                                            maskSize: `${token.width}px ${token.height}px`,
+                                            maskImage: `url(${tokenMask})`,
+                                            maskSize: `${tokenWidth}px ${tokenHeight}px`,
                                             maskPosition: `0px 0px`,
                                             maskRepeat: 'no-repeat',
                                         } : {})
@@ -4694,26 +5042,14 @@ Output: environment plate only.
                                             type: 'token',
                                             startX: e.clientX,
                                             startY: e.clientY,
-                                            initialX: token.x,
-                                            initialY: token.y
+                                            initialX: tokenX,
+                                            initialY: tokenY
                                         });
                                     }}
                                 >
                                     <div className={`absolute inset-0 transition-all duration-500 pointer-events-none`} />
-                                    {/* Cutout Status Fallback Badge */}
-                                    <div className="absolute top-0 right-0 z-50 pointer-events-none p-1 flex items-center justify-end">
-                                        {token.cutoutUrl ? (
-                                            <span className="bg-green-500/80 text-white text-[8px] px-1.5 py-0.5 rounded shadow whitespace-nowrap">Cutout Ready</span>
-                                        ) : cutoutStatuses[`${token.id}-${token.url}`] === 'failed' ? (
-                                            <span className="bg-red-500/80 text-white text-[8px] px-1.5 py-0.5 rounded shadow whitespace-nowrap">Cutout Failed</span>
-                                        ) : cutoutStatuses[`${token.id}-${token.url}`] === 'processing' ? (
-                                            <span className="bg-blue-500/80 text-white text-[8px] px-1.5 py-0.5 rounded shadow whitespace-nowrap">Removing BG...</span>
-                                        ) : (
-                                            <span className="bg-gray-700/80 text-white text-[8px] px-1.5 py-0.5 rounded shadow whitespace-nowrap">Original Image</span>
-                                        )}
-                                    </div>
                                     {(() => {
-                                        const finalUrl = token.cutoutUrl || token.url || state.actorLibrary.find(a => a.id === token.castId)?.url;
+                                        const finalUrl = resolveTokenImageUrl(token);
                                         if (!finalUrl) {
                                             return (
                                                 <div className="w-full h-full flex flex-col items-center justify-center bg-black/40 rounded border border-dashed border-white/20 text-white/40">
@@ -4733,13 +5069,13 @@ Output: environment plate only.
                                                         let f = '';
                                                         if (layer === 'foreground') f = 'contrast(1.15) saturate(1.1) drop-shadow(0 4px 8px rgba(0,0,0,0.5))';
                                                         if (layer === 'background') f = 'contrast(0.85) brightness(1.05) blur(0.5px)';
-                                                        if (token. intelligence) f += (f ? ' ' : '') + 'drop-shadow(0 0 8px rgba(34,197,94,0.6))';
+                                                        if (token.intelligence) f += (f ? ' ' : '') + 'drop-shadow(0 0 8px rgba(34,197,94,0.6))';
 
                                                         // Apply manual filters
-                                                        const bright = token.brightness ?? 100;
-                                                        const contrast = token.contrast ?? 100;
-                                                        const saturate = token.saturation ?? 100;
-                                                        const blur = token.blur ?? 0;
+                                                        const bright = toFiniteNumber(token.brightness, 100);
+                                                        const contrast = toFiniteNumber(token.contrast, 100);
+                                                        const saturate = toFiniteNumber(token.saturation, 100);
+                                                        const blur = Math.max(0, toFiniteNumber(token.blur, 0));
 
                                                         if (bright !== 100) f += ` brightness(${bright}%)`;
                                                         if (contrast !== 100) f += ` contrast(${contrast}%)`;
@@ -4774,16 +5110,16 @@ Output: environment plate only.
                                                             handle,
                                                             startX: e.clientX,
                                                             startY: e.clientY,
-                                                            initialW: token.width,
-                                                            initialH: token.height,
-                                                            initialX: token.x,
-                                                            initialY: token.y,
-                                                            initialScaleX: token.scaleX,
-                                                            initialScaleY: token.scaleY,
+                                                            initialW: tokenWidth,
+                                                            initialH: tokenHeight,
+                                                            initialX: tokenX,
+                                                            initialY: tokenY,
+                                                            initialScaleX: tokenScaleX,
+                                                            initialScaleY: tokenScaleY,
                                                             uniformScale: token.uniformScale,
                                                             // Pass anchor for resize math
-                                                            anchorX: token.anchorX,
-                                                            anchorY: token.anchorY
+                                                            anchorX: tokenAnchorX,
+                                                            anchorY: tokenAnchorY
                                                         });
                                                     }}
                                                 />
@@ -4822,20 +5158,33 @@ Output: environment plate only.
                                         </div>
                                     )}
                                 </div>
-                            ))}
+                                            );
+                                        })}
 
                             {/* Annotations Layer */}
-                            {[...state.annotations].filter(a => a.visible !== false).sort((a, b) => a.zIndex - b.zIndex).map(note => (
+                            {[...state.annotations]
+                                .filter(a => a.visible !== false)
+                                .sort((a, b) => toFiniteNumber(a.zIndex, 10) - toFiniteNumber(b.zIndex, 10))
+                                .map(note => {
+                                    const noteX = toFiniteNumber(note.x, 0);
+                                    const noteY = toFiniteNumber(note.y, 0);
+                                    const noteWidth = Math.max(20, toFiniteNumber(note.width, note.type === 'arrow' ? 60 : 150));
+                                    const noteHeight = Math.max(20, toFiniteNumber(note.height, note.type === 'arrow' ? 60 : 100));
+                                    const noteRotation = toFiniteNumber(note.rotation, 0);
+                                    const noteZIndex = toFiniteNumber(note.zIndex, 10);
+                                    const noteThickness = Math.max(1, toFiniteNumber(note.thickness, 2));
+
+                                    return (
                                 <div
                                     key={note.id}
                                     className={`absolute cursor-move group/note ${state.selection === note.id ? 'z-50' : ''}`}
                                     style={{
-                                        left: note.x,
-                                        top: note.y,
-                                        width: note.width,
-                                        height: note.height,
-                                        zIndex: note.zIndex,
-                                        transform: `rotate(${note.rotation}deg)`
+                                        left: noteX,
+                                        top: noteY,
+                                        width: noteWidth,
+                                        height: noteHeight,
+                                        zIndex: noteZIndex,
+                                        transform: `rotate(${noteRotation}deg)`
                                     }}
                                     onMouseDown={(e) => {
                                         if (regionEdit.isMaskMode) return;
@@ -4846,8 +5195,8 @@ Output: environment plate only.
                                             type: 'annotation',
                                             startX: e.clientX,
                                             startY: e.clientY,
-                                            initialX: note.x,
-                                            initialY: note.y
+                                            initialX: noteX,
+                                            initialY: noteY
                                         });
                                     }}
                                 >
@@ -4902,7 +5251,7 @@ Output: environment plate only.
                                             {/* Lucide icon is fixed path, strokeWidth is prop. Color is prop. */}
                                             <MoveUpRight
                                                 className="w-full h-full"
-                                                strokeWidth={note.thickness ?? 2}
+                                                strokeWidth={noteThickness}
                                                 color={note.color || '#a855f7'} // Default purple
                                                 style={{ opacity: 0.9 }}
                                             />
@@ -4921,10 +5270,10 @@ Output: environment plate only.
                                                     handle: 'br',
                                                     startX: e.clientX,
                                                     startY: e.clientY,
-                                                    initialW: note.width,
-                                                    initialH: note.height,
-                                                    initialX: note.x,
-                                                    initialY: note.y,
+                                                    initialW: noteWidth,
+                                                    initialH: noteHeight,
+                                                    initialX: noteX,
+                                                    initialY: noteY,
                                                     initialScaleX: 1, // Annotations don't strictly use scale property for sizing yet, but required by type
                                                     initialScaleY: 1,
                                                     uniformScale: false,
@@ -4945,8 +5294,8 @@ Output: environment plate only.
                                                 const rect = gate.getBoundingClientRect();
                                                 // Note x,y is relative to the camera gate (viewport).
                                                 // Center = rect.left + note.x + width/2
-                                                const cx = rect.left + note.x + (note.width / 2);
-                                                const cy = rect.top + note.y + (note.height / 2);
+                                                const cx = rect.left + noteX + (noteWidth / 2);
+                                                const cy = rect.top + noteY + (noteHeight / 2);
 
                                                 const angle = Math.atan2(e.clientY - cy, e.clientX - cx) * (180 / Math.PI);
 
@@ -4956,7 +5305,7 @@ Output: environment plate only.
                                                     centerX: cx,
                                                     centerY: cy,
                                                     startAngle: angle,
-                                                    initialRotation: note.rotation
+                                                    initialRotation: noteRotation
                                                 });
                                             }}
                                         >
@@ -4964,7 +5313,8 @@ Output: environment plate only.
                                         </div>
                                     )}
                                 </div>
-                            ))}
+                                    );
+                                })}
                             </>
                             )}
                         </div>

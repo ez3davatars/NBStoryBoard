@@ -20,6 +20,7 @@ import {
 export const HelpCenterDrawer: React.FC = () => {
     const { state, dispatch } = useAppContext();
     const [guideOpen, setGuideOpen] = useState(false);
+    const [guideAnchor, setGuideAnchor] = useState<string | undefined>();
 
     // Contextual Help Mapping
     const getTabHelpContent = () => {
@@ -56,11 +57,15 @@ export const HelpCenterDrawer: React.FC = () => {
             case 'nano_cast':
                 return {
                     title: "NANO CAST Help",
-                    desc: "Import a real person into the Cast Director Studio.",
+                    desc: "Build a cast-ready character from real-world photo or biometric references.",
                     actions: [
-                        "For strongest identity preservation, always use front-facing, clear, well-lit reference photos.",
-                        "Use the Identity Lock Slider to control how aggressively the AI holds onto their exact bone structure.",
-                        "The 'Delete All' button safely clears temporary generation previews without affecting your saved permanent characters."
+                        "Open NANO CAST when you want to preserve a real person's likeness instead of inventing a new character from scratch.",
+                        "In Biometric Acquisition, capture or upload clear center, left, and right face references before moving forward.",
+                        "Use front-facing, well-lit photos with minimal blur, heavy shadows, sunglasses, or extreme expressions for the strongest identity match.",
+                        "Use Identity Lock to control how aggressively the generated character holds the source bone structure and facial proportions.",
+                        "In Style Synthesis, set wardrobe, grooming, hair style, and Branding & Identity details before generating the final character.",
+                        "Export Character or Export to Library when you want to keep a result permanently; temporary previews are not the same as saved library assets.",
+                        "Generate a Character Reference Sheet when you need a multi-angle identity anchor for future staging, wardrobe, or shot work."
                     ]
                 };
             case 'wardrobe':
@@ -69,7 +74,6 @@ export const HelpCenterDrawer: React.FC = () => {
                     desc: "Design costumes and fit them onto actors.",
                     actions: [
                         "Designer vs Try-On: Use SKETCH or COSTUME modes to create clothing first, then use Virtual Try-On to fit it onto your saved actors.",
-                        "Use 'Auto-Remove BG' to isolate your actors immediately.",
                         "Your Character Sheet anchors the identity during generation."
                     ]
                 };
@@ -153,6 +157,11 @@ export const HelpCenterDrawer: React.FC = () => {
         }
     };
 
+    const openGuide = (anchor?: string) => {
+        setGuideAnchor(anchor);
+        setGuideOpen(true);
+    };
+
     if (!state.isHelpOpen) return null;
 
     const navItems = [
@@ -192,7 +201,7 @@ export const HelpCenterDrawer: React.FC = () => {
                                 key={item.id}
                                 onClick={() => {
                                     if (item.id === 'guide') {
-                                        setGuideOpen(true);
+                                        openGuide();
                                     } else {
                                         dispatch({ type: 'SET_HELP_SECTION', payload: item.id });
                                     }
@@ -221,8 +230,14 @@ export const HelpCenterDrawer: React.FC = () => {
                                     <p className="text-xs text-gray-300 hover:text-white transition-colors">Your generation credits and behavior depend on your Active Billing Mode in Settings. Always check whether you are running in Hosted Mode (using credits) or BYOK Mode (Bring Your Own Key).</p>
                                 </div>
                                 <div className="border-t border-white/5 pt-4">
-                                    <h4 className="font-bold text-yellow-500 uppercase text-xs tracking-wider mb-2">Save It or Lose It</h4>
-                                    <p className="text-xs text-gray-300 hover:text-white transition-colors">Many generated results remain temporary! If you love an actor, prop, or costume, explicitly click Save. You may need to refresh your library view after saving for it to securely register visually.</p>
+                                    <h4 className="font-bold text-yellow-500 uppercase text-xs tracking-wider mb-2">Recent Generations: Save It or Lose It</h4>
+                                    <p className="text-xs text-gray-300 hover:text-white transition-colors">The Recent Generations strip is a local cache, so images and reference sheets can survive app restarts and still appear days later. They are not permanent library assets until you export or save them. Click a thumbnail to restore it, then use Export to Library, Add to Library, or the save action before clearing anything.</p>
+                                    <button
+                                        onClick={() => openGuide('recent-generations-save-it-or-lose-it')}
+                                        className="mt-3 flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-yellow-500 hover:text-yellow-400 transition-colors"
+                                    >
+                                        <BookOpen className="w-3 h-3" /> Open Recent Generations guide
+                                    </button>
                                 </div>
                             </div>
 
@@ -260,11 +275,11 @@ export const HelpCenterDrawer: React.FC = () => {
                                 </div>
                             </button>
 
-                            <button onClick={() => handleGoalRoute('nano_cast')} className="w-full flex items-start text-left gap-3 p-4 bg-[#18181b] hover:bg-[#202022] border border-white/5 hover:border-yellow-500/30 rounded-xl transition-all group">
+                            <button onClick={() => handleGoalRoute('nano_cast', 'tab-nano_cast')} className="w-full flex items-start text-left gap-3 p-4 bg-[#18181b] hover:bg-[#202022] border border-white/5 hover:border-yellow-500/30 rounded-xl transition-all group">
                                 <div className="p-2 bg-emerald-500/10 text-emerald-400 rounded-lg group-hover:scale-110 transition-transform"><UserCircle className="w-5 h-5" /></div>
                                 <div>
-                                    <h4 className="text-gray-200 font-bold mb-0.5">Build from a photo</h4>
-                                    <p className="text-xs text-gray-500">Preserve exact real-world identity.</p>
+                                    <h4 className="text-gray-200 font-bold mb-0.5">Nano Cast from a photo</h4>
+                                    <p className="text-xs text-gray-500">Open NANO CAST help for photo-based identity preservation.</p>
                                 </div>
                             </button>
 
@@ -357,7 +372,14 @@ export const HelpCenterDrawer: React.FC = () => {
                 </div>
             </div>
 
-            <GuideViewerModal isOpen={guideOpen} onClose={() => setGuideOpen(false)} />
+            <GuideViewerModal
+                isOpen={guideOpen}
+                initialAnchor={guideAnchor}
+                onClose={() => {
+                    setGuideOpen(false);
+                    setGuideAnchor(undefined);
+                }}
+            />
         </div>
     );
 };

@@ -28,6 +28,7 @@ import { HelpCenterDrawer } from './components/ui/HelpCenterDrawer';
 import { WelcomeModal } from './components/ui/WelcomeModal';
 import { CreditExhaustedModal } from './components/ui/CreditExhaustedModal';
 import { useRecentGenerationsStore } from './stores/useRecentGenerationsStore';
+import ActorSaveModal from './components/ActorSaveModal';
 
 import {
   Settings,
@@ -73,10 +74,26 @@ const getErrorMessage = (error: unknown): string => {
   return String(error);
 };
 
+const actorLibraryStyleForCategory = (category: string): string => {
+  switch (category) {
+    case 'anim':
+      return 'family_3d';
+    case 'illustration':
+      return 'retro_anime';
+    case 'scifi':
+      return 'cyberpunk_neon';
+    case 'realism':
+    case 'uncategorized':
+    default:
+      return 'exact_studio';
+  }
+};
+
 const ImageInspector = () => {
   const { state, dispatch } = useAppContext();
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
   const [resolvedDisplay, setResolvedDisplay] = useState<string | null>(null);
+  const [showActorSaveModal, setShowActorSaveModal] = useState(false);
 
   useEffect(() => {
     if (!state.inspectImage) {
@@ -101,6 +118,48 @@ const ImageInspector = () => {
   const closeInspector = () => {
     dispatch({ type: 'SET_INSPECT_IMAGE', payload: null });
     dispatch({ type: 'SET_INSPECT_MASK', payload: null });
+  };
+
+  const getInspectorSourceUrl = () => state.inspectImageSourceUrl || resolvedDisplay || state.inspectImage || '';
+
+  const saveInspectorToActorLibrary = async (name: string, category: string) => {
+    const sourceUrl = getInspectorSourceUrl();
+    if (!sourceUrl) return;
+
+    try {
+      const mat = await LibraryAssetMaterializer.materializeCastAsset({
+        sourceUrl,
+        saveDirectoryPath: state.saveDirectoryPath,
+        actorName: name,
+        category,
+      });
+
+      const newActor: CastMember = {
+        id: `actor-inspect-${Date.now()}`,
+        url: mat.previewUrl,
+        localPath: mat.localPath || undefined,
+        previewUrl: mat.previewUrl,
+        sourceUrl: mat.sourceUrl,
+        tag: 'front',
+        name,
+        filename: mat.filename,
+        profile: {
+          identity: name,
+          wardrobe: '',
+          accessories: '',
+          style: actorLibraryStyleForCategory(category),
+        }
+      };
+
+      dispatch({ type: 'ADD_ACTOR_LIBRARY', payload: newActor });
+      dispatch({ type: 'ADD_LOG', payload: { message: `Saved to Actor Library: ${mat.filename || name}`, type: 'success' } });
+      setShowActorSaveModal(false);
+      setShowSaveConfirm(true);
+      setTimeout(() => setShowSaveConfirm(false), 2000);
+    } catch (err: unknown) {
+      console.error("Actor library save failed", err);
+      dispatch({ type: 'ADD_LOG', payload: { message: `Save failed: ${getErrorMessage(err)}`, type: 'error' } });
+    }
   };
 
   return (
@@ -206,37 +265,12 @@ const ImageInspector = () => {
             <X className="w-5 h-5 sm:w-6 sm:h-6 stroke-[3]" />
           </button>
           <button
-            onClick={async (e) => {
+            onClick={(e) => {
               e.stopPropagation();
-              if (state.saveDirectoryHandle) {
-                try {
-                  const actorsDir = await state.saveDirectoryHandle.getDirectoryHandle('Actors', { create: true });
-                  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-                  const filename = `Inspect-Actor-${timestamp}.png`;
-                  const fileHandle = await actorsDir.getFileHandle(filename, { create: true });
-                  const writable = await fileHandle.createWritable();
-                  const fetchTarget = state.inspectImageLocalPath && state.inspectImageLocalPath.startsWith('file://')
-                    ? state.inspectImageLocalPath : state.inspectImage!;
-                  const response = await fetch(fetchTarget);
-                  const blob = await response.blob();
-                  await writable.write(blob);
-                  await writable.close();
-                  setShowSaveConfirm(true);
-                  setTimeout(() => setShowSaveConfirm(false), 2000);
-                  dispatch({ type: 'ADD_LOG', payload: { message: `Saved to Actors/${filename}`, type: 'success' } });
-                } catch (err: unknown) {
-                  console.error("Save failed", err);
-                  dispatch({ type: 'ADD_LOG', payload: { message: `Save failed: ${getErrorMessage(err)}`, type: 'error' } });
-                }
-              } else {
-                const link = document.createElement('a');
-                link.href = state.inspectImage!;
-                link.download = `NB-Inspect-${Date.now()}.png`;
-                link.click();
-              }
+              setShowActorSaveModal(true);
             }}
             className="w-12 h-12 sm:w-14 sm:h-14 bg-white/10 hover:bg-white text-white hover:text-black rounded-xl transition-all transform hover:scale-110 flex items-center justify-center border border-white/20"
-            title={state.saveDirectoryHandle ? "Save to Actors Folder" : "Download to Disk"}
+            title="Save to Actor Library"
           >
             <Download className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.5]" />
           </button>
@@ -252,6 +286,17 @@ const ImageInspector = () => {
             <Copy className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.5]" />
           </button>
         </div>
+
+        <ActorSaveModal
+          isOpen={showActorSaveModal}
+          initialName={`Actor ${state.actorLibrary.length + 1}`}
+          onClose={() => setShowActorSaveModal(false)}
+          onSave={(name, category) => {
+            void saveInspectorToActorLibrary(name, category);
+          }}
+          title="Save to Actor Library"
+          description="Select a Studio Folder to organize this actor:"
+        />
       </div>
     </div>
   );

@@ -27,6 +27,22 @@ export const ShotTile: React.FC<ShotTileProps> = ({ variant, onToggleSelected, o
   const [localExpired, setLocalExpired] = useState(false);
   const [regenerateInstruction, setRegenerateInstruction] = useState('');
   const effectiveStatus = localExpired ? 'expired' : variant.status;
+  const renderMode = variant.renderMode || 'ai_camera_move';
+  const integrityStatus = variant.integrity?.status || (renderMode === 'continuity_reframe' ? 'fallback' : 'unchecked');
+  const integrityLabel =
+    integrityStatus === 'verified' ? 'Verified'
+      : integrityStatus === 'fallback' ? 'Fallback'
+        : integrityStatus === 'needs_review' ? 'Review'
+          : integrityStatus === 'unverified' ? 'Unverified'
+            : renderMode === 'ai_camera_move' ? 'Spatial' : 'Locked';
+  const integrityClass =
+    integrityStatus === 'verified'
+      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+      : integrityStatus === 'fallback'
+        ? 'border-amber-500/30 bg-amber-500/10 text-amber-300'
+        : integrityStatus === 'needs_review'
+          ? 'border-red-500/30 bg-red-500/10 text-red-300'
+          : 'border-blue-500/30 bg-blue-500/10 text-blue-300';
 
   useEffect(() => {
     if (!rawUrl) return;
@@ -149,10 +165,35 @@ export const ShotTile: React.FC<ShotTileProps> = ({ variant, onToggleSelected, o
       {/* Info Bar */}
       <div className="min-w-0 p-3 flex flex-col flex-grow justify-between bg-[#111111] border-t border-[#27272a] min-h-[136px]">
         <div className="min-w-0 pr-1 min-h-[52px]">
-          <div className="truncate text-gray-200 font-medium text-sm m-0 p-0 leading-tight">{variant.label}</div>
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="truncate text-gray-200 font-medium text-sm m-0 p-0 leading-tight">{variant.label}</div>
+            <span
+              className={`shrink-0 rounded border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider ${integrityClass}`}
+              title={variant.integrity?.issues?.join('\n') || undefined}
+            >
+                {integrityLabel}
+              </span>
+          </div>
           <div className="text-xs text-gray-500 mt-1 leading-snug line-clamp-2 min-h-[34px]" title={variant.description}>
             {variant.description}
           </div>
+          {renderMode === 'continuity_reframe' ? (
+            <div className="mt-1 text-[10px] leading-tight text-amber-400/75">
+              Continuity crop fallback. Pose and position stay locked.
+            </div>
+          ) : integrityStatus === 'verified' ? (
+            <div className="mt-1 text-[10px] leading-tight text-emerald-400/75">
+              AI spatial simulation passed continuity check.
+            </div>
+          ) : integrityStatus === 'needs_review' ? (
+            <div className="mt-1 text-[10px] leading-tight text-red-400/75">
+              Spatial shot needs review: {variant.integrity?.issues?.[0] || 'continuity issue detected'}.
+            </div>
+          ) : (
+            <div className="mt-1 text-[10px] leading-tight text-blue-400/70">
+              AI spatial simulation.
+            </div>
+          )}
         </div>
 
         {hasImage && (

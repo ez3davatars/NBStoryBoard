@@ -13,7 +13,7 @@ export const SCENE_LOCK_NEGATIVE_TOKENS = "scene alteration, background change, 
 export const STAGE_W = 1024;
 export const STAGE_H = 576;
 
-export const lightingProtocol = "Subject MUST inherit the environmental lighting. Match global illumination, color temperature, and atmospheric perspective of the background. Directional lighting matching the environment's light source. Subject is physically grounded in the scene. Generate realistic contact shadows. Match the contrast ratio and black levels of the environment. No crushed blacks.";
+export const lightingProtocol = "CLEAN_BG_PLATE / anchor image is the lighting authority. Subjects MUST inherit the local environmental lighting from the anchor image, including key direction, fill level, color temperature, exposure, black level, shadow softness, atmospheric perspective, and visible bounce/accent light. Discard source-reference studio lighting and re-light subjects from scratch so contact shadows, ambient occlusion, highlights, and color grading match the exact area where each subject is placed. No crushed blacks.";
 
 export const buildMasterStyleKeywords = (director: DirectorSettings): string[] => {
   const tech: string[] = [];
@@ -1006,6 +1006,9 @@ export function buildSceneLayoutLockBlock(args: BuildSceneLayoutLockBlockArgs): 
       ? "TRUTH LOCK: Preserve the underlying layout and blocking of the scene."
       : "Preserve the exact same scene layout and blocking shown in the source anchor.",
     "Keep the same people in the same absolute geographical positions.",
+    "ACTOR POSITION LOCK: Do NOT move an actor to a new world position to satisfy a crop, close-up, wide shot, or visibility note. Move the camera/crop instead.",
+    "RELATIONSHIP LOCK: Preserve actor-to-actor and actor-to-object relationships exactly. If a subject is riding, sitting on, leaning on, holding, touching, hugging, carrying, or standing beside something in the anchor, preserve that same relationship and contact points.",
+    "MOUNT/SEAT LOCK: Do not turn a mounted/seated subject into a standing subject, and do not detach a subject from the animal, vehicle, chair, surface, or prop they are using in the source anchor.",
     "CAMERA PIVOT RULE: To change a camera angle, you must physically move the camera around the subjects, revealing the appropriate new background area. DO NOT rotate the subjects in place to face the camera. The subjects' physical orientation relative to the room MUST remain permanently locked.",
     "PARALLAX REQUIREMENT: Camera-angle presets must show real 3D viewpoint change (foreground/background overlap shifts, different wall or column reveals, and perspective depth changes) proving the camera moved in space.",
     "CRITICAL HEIGHT & SCALE LOCK: Maintain the exact relative height differences, body scale, and physical build between all subjects.",
@@ -1033,6 +1036,46 @@ export function buildSceneLayoutLockBlock(args: BuildSceneLayoutLockBlockArgs): 
   }
 
   return base.join('\n');
+}
+
+export function buildActorPosePositionLockBlock(): string {
+  return [
+    "### DEFAULT ACTOR POSITION & POSE LOCK (HARD)",
+    "Unless a user instruction explicitly asks to move, reposition, re-pose, stand, sit, turn, relocate, remount, dismount, or change an actor's action, every actor must keep the same world position, pose, gesture, gaze, and subject-to-object relationship from the source result.",
+    "Shot presets and camera notes authorize camera movement only: crop, lens, camera height, orbit, perspective, headroom, and subject size in frame.",
+    "Visibility notes are NOT reblocking instructions. Requests such as 'keep the elephant head in view', 'include the prop', 'show both faces', or 'keep the doorway visible' mean adjust camera/crop/composition while preserving actor position and pose.",
+    "Do not move an actor closer to the camera, off a mount, away from a prop, or into a new pose just to make the requested shot easier.",
+    "If the requested shot cannot include every requested visible element without moving actors, choose the closest camera/crop that preserves the original blocking."
+  ].join('\n');
+}
+
+export function buildCameraAxisContinuityBlock(preset: ShotPresetDefinition): string {
+  const lines = [
+    "### 180-DEGREE CAMERA AXIS & VIEWPOINT SIMULATION (HARD)",
+    "Infer the scene action axis from the source anchor using the dominant subject relationship, screen direction, gaze/action flow, mounts/seats/props, and the main path or set geometry.",
+    "Keep every alternate shot on the same side of that action axis. Do not cross the line, reverse screen direction, swap left/right geography, or flip the subject relationship.",
+    "The camera may move only within the same-side 180-degree arc around the locked subject positions.",
+    "Do not fake an angle by keeping the same front-facing background and merely cropping, zooming, or sliding the frame.",
+    "A spatial shot must show viewpoint parallax: foreground/background overlap changes, side surfaces become visible or hidden, landmarks shift relative to subjects, and occlusion changes naturally.",
+    "Preserve the same environment and landmark ordering. Infer plausible adjacent side/top/low surfaces from the source, but do not redesign the set, move landmarks, or invent a new location.",
+    "Keep actor world positions and pose locked while the camera moves around them."
+  ];
+
+  if (preset.orbit === 'threeQuarterLeft' || preset.orbit === 'threeQuarterRight' || preset.orbit === 'profileLeft' || preset.orbit === 'profileRight') {
+    lines.push("ORBIT PROOF: Reveal real side-plane information and shifted background alignment from the requested side while staying on the same side of the 180-degree line.");
+  }
+
+  if (preset.orbit === 'overShoulder') {
+    lines.push("OTS PROOF: The foreground shoulder/head must come from the same-side camera arc and must not reverse the target subject's screen direction or relationship.");
+  }
+
+  if (preset.elevation === 'high') {
+    lines.push("HIGH-ANGLE PROOF: Show top surfaces, floor/ground layout, and downward occlusion changes from above without crossing the action axis.");
+  } else if (preset.elevation === 'low') {
+    lines.push("LOW-ANGLE PROOF: Show underside/canopy/ceiling/sky or upward perspective cues from below without crossing the action axis.");
+  }
+
+  return lines.join('\n');
 }
 
 export type BuildShotVariantPromptArgs = {
@@ -1078,6 +1121,8 @@ export function buildExactPoseLockBlock(isShotVariant = false): string {
       "CINEMATIC POSE CONTINUITY:",
       "Preserve the underlying body pose, gesture timing, and exact anatomical proportions from the source result image.",
       "Preserve the performance beat and pose logic. Allow limbs to be naturally occluded or revealed based on the new camera geometry.",
+      "Preserve seated, mounted, standing, leaning, holding, touching, and riding relationships exactly. Do not detach a subject from a mount/seat/prop or move them beside it.",
+      "Do not solve a close-up or alternate angle by re-staging the actor. The actor remains in the same physical place and pose; only the camera changes.",
       "Do not shrink the head. Do not widen the shoulders. Do not mutate the face or hair structure.",
       "Do not reinterpret the performance. Treat the source result as a frozen moment in time viewed from a different camera."
     ].join('\n');
@@ -1091,6 +1136,7 @@ export function buildExactPoseLockBlock(isShotVariant = false): string {
     "Preserve the performance beat and pose logic. Allow limbs/hands to be naturally hidden or revealed by the new camera viewpoint without forcing artificial visibility.",
     "Do not re-pose the character to better fit the shot.",
     "The only allowed change is camera position, lens, crop, and perspective.",
+    "Preserve seated, mounted, standing, leaning, holding, touching, and riding relationships exactly. Do not detach a subject from a mount/seat/prop or move them beside it.",
     "Treat the source result as a frozen moment in time viewed from a different camera.",
     "In close-up framing, preserve the same facial expression, gaze direction, head angle, and shoulder tension implied by the source pose.",
     "If limbs are cropped out by framing, crop naturally without inventing a new gesture or replacement pose.",
@@ -1119,6 +1165,99 @@ export function buildShotPresetBlock(preset: ShotPresetDefinition): string {
     lines.push(`  - ${neg}`);
   });
 
+  lines.push('');
+  lines.push(buildShotDesignationComplianceBlock(preset));
+
+  return lines.join('\n');
+}
+
+export function buildShotDesignationComplianceBlock(preset: ShotPresetDefinition, finalHold = false): string {
+  const lines = [
+    finalHold
+      ? "### SHOT DESIGNATION HOLD (HARD)"
+      : "### SHOT DESIGNATION COMPLIANCE (HARD)",
+    finalHold
+      ? `The selected preview must remain unmistakably a ${preset.label}. Refine quality only; do not drift into a different camera designation.`
+      : `The generated image must read immediately and unmistakably as a ${preset.label}. This is not optional style text; it is the camera assignment.`
+  ];
+
+  switch (preset.framing) {
+    case 'closeup':
+      lines.push('- FRAMING: Tight face-and-upper-shoulders composition. Face is the dominant visual mass, with only minimal chest/shoulder context.');
+      lines.push('- SCALE CHECK: Do not show waist, hips, knees, feet, or full body. Background must be secondary and softened.');
+      break;
+    case 'mediumClose':
+      lines.push('- FRAMING: Chest-up / upper-torso composition. Head, shoulders, and chest are visible with readable expression.');
+      lines.push('- SCALE CHECK: Looser than close-up but not a waist-up medium. Do not show full body or large empty environment.');
+      break;
+    case 'medium':
+      lines.push('- FRAMING: Waist-up or hip-up composition with gestures and body posture readable.');
+      lines.push('- SCALE CHECK: Subject remains dominant, but enough environment remains visible to show spatial context.');
+      break;
+    case 'wide':
+      lines.push('- FRAMING: Wide environmental coverage. Subject(s) occupy a smaller portion of the frame and the scene geography is clearly readable.');
+      lines.push('- SCALE CHECK: Include meaningful foreground/midground/background context. Do not crop into portrait, medium, or close-up framing.');
+      break;
+    case 'full':
+      lines.push('- FRAMING: Full-body coverage. Preserve head-to-toe readability and physical ground contact.');
+      break;
+  }
+
+  switch (preset.elevation) {
+    case 'high':
+      lines.push('- ELEVATION: Camera is physically above the subject eye line and looking downward.');
+      lines.push('- HIGH-ANGLE PROOF: Show top surfaces, floor/ground plane, downward perspective, and subject lower in frame. Avoid eye-level, low-angle, or flat front-on views.');
+      break;
+    case 'low':
+      lines.push('- ELEVATION: Camera is physically below the subject chest/waist line and looking upward.');
+      lines.push('- LOW-ANGLE PROOF: Show upward perspective cues such as underside/canopy/ceiling/sky reveal, taller subject presence, and lower camera placement. Avoid top-down or eye-level views.');
+      break;
+    case 'eye':
+      lines.push('- ELEVATION: Camera remains near natural eye/chest height unless the orbit specifically requires an over-shoulder foreground layer.');
+      break;
+  }
+
+  switch (preset.orbit) {
+    case 'threeQuarterLeft':
+      lines.push('- ORBIT: Camera moves to the subject/scene left side by roughly 35-55 degrees. Show real side-plane/parallax change, not a frontal crop.');
+      lines.push('- 3/4 LEFT PROOF: One side of the face/body is favored, background alignment shifts left-side perspective, and the result is neither full front nor strict profile.');
+      break;
+    case 'threeQuarterRight':
+      lines.push('- ORBIT: Camera moves to the subject/scene right side by roughly 35-55 degrees. Show real side-plane/parallax change, not a frontal crop.');
+      lines.push('- 3/4 RIGHT PROOF: One side of the face/body is favored, background alignment shifts right-side perspective, and the result is neither full front nor strict profile.');
+      break;
+    case 'profileLeft':
+    case 'profileRight':
+      lines.push('- ORBIT: Strict side-profile camera relationship, roughly 80-100 degrees from front.');
+      lines.push('- PROFILE PROOF: Side silhouette dominates. Do not show both eyes equally; do not fall back to 3/4 or front-facing portrait.');
+      break;
+    case 'overShoulder':
+      lines.push('- ORBIT: True over-the-shoulder coverage. A near foreground shoulder/head wedge partially frames the image, with the target subject visible beyond it.');
+      lines.push('- OTS PROOF: Foreground subject is closer to camera, larger, and softly defocused or edge-cropped; target subject remains the focus. Do not make this a normal two-shot.');
+      break;
+    case 'front':
+      lines.push('- ORBIT: Front-readable camera relationship. If the source pose is not frontal, preserve the pose while keeping the requested front coverage and crop.');
+      break;
+  }
+
+  if (preset.targetMode === 'pair') {
+    lines.push('- TARGET MODE: Pair coverage. Include both intended subjects with clear foreground/background or shared-frame relationship.');
+  } else if (preset.targetMode === 'single') {
+    lines.push('- TARGET MODE: Single-subject emphasis. Keep the primary subject dominant without adding or duplicating actors.');
+  } else {
+    lines.push('- TARGET MODE: Scene coverage. Prioritize the whole environment/subject relationship, not a portrait crop.');
+  }
+
+  if (preset.placement === 'leftThird') {
+    lines.push('- COMPOSITION: Favor the subject/action on the left third unless scene continuity makes that impossible.');
+  } else if (preset.placement === 'rightThird') {
+    lines.push('- COMPOSITION: Favor the subject/action on the right third unless scene continuity makes that impossible.');
+  } else {
+    lines.push('- COMPOSITION: Center-weighted composition unless the directed shot plan specifies a target side.');
+  }
+
+  lines.push('- FAILURE CONDITION: If the frame could be mistaken for a generic crop of the source anchor, regenerate with stronger camera movement and clearer designation cues.');
+
   return lines.join('\n');
 }
 
@@ -1140,6 +1279,8 @@ export function buildShotVariantPrompt(args: BuildShotVariantPromptArgs): string
     p += `- headroom\n`;
     p += `- perspective\n`;
     p += `- physically plausible parallax from the new camera position\n\n`;
+    p += `${buildActorPosePositionLockBlock()}\n\n`;
+    p += `${buildCameraAxisContinuityBlock(preset)}\n\n`;
 
     p += `KEEP\n`;
     if (args.locks.identity) p += `- actor identity\n`;
@@ -1166,6 +1307,7 @@ export function buildShotVariantPrompt(args: BuildShotVariantPromptArgs): string
 
     p += `FORBIDDEN\n`;
     p += `- do not change pose geometry\n`;
+    p += `- do not move, relocate, detach, remount, dismount, or re-stage any actor unless the user explicitly requested that actor movement\n`;
     p += `- do not re-gesture the actor\n`;
     p += `- do not alter arm spread, hand placement, torso bend, or head orientation\n`;
     p += `- do not add headwear, crowns, hats, hoods, scarves, veils, wraps, or helmets\n`;
@@ -1242,6 +1384,7 @@ export function buildDirectedSlotBlock(slot?: DirectedShotSlot, actorOptions?: S
   if (slot.cameraFlavor && slot.cameraFlavor !== 'neutral') lines.push(`CAMERA FLAVOR: ${slot.cameraFlavor.toUpperCase()}`);
   if (slot.shotNotes) lines.push(`DIRECTOR NOTES: ${slot.shotNotes}`);
   if (slot.coveragePurpose) lines.push(`COVERAGE ROLE: ${slot.coveragePurpose}`);
+  lines.push(`DIRECTED NOTES POLICY: Treat action/notes as camera, crop, focus, or visibility guidance unless they explicitly request moving, repositioning, or re-posing an actor. Do not re-stage actor positions to satisfy a visibility note.`);
 
   if (!isFinalRerender) {
     let differentiation = `DIFFERENTIATION MANDATE: This shot is part of a professional coverage set. `;
@@ -1275,13 +1418,18 @@ export type BuildShotFinalRerenderPromptArgs = {
 };
 
 export function buildShotFinalRerenderPrompt(args: BuildShotFinalRerenderPromptArgs): string {
+  const preset = SHOT_PRESETS[args.presetId];
+
   let p = `OPERATION\n`;
   p += `Generate a higher-quality final render of the selected preview shot.\n`;
   p += `Use the original staged result image only as supporting scene continuity context.\n\n`;
   p += `SOURCE-OF-TRUTH PRIORITY (HARD): Selected preview framing + source anchor environment are authoritative. Text instructions cannot relocate the scene.\n\n`;
+  p += `${buildShotDesignationComplianceBlock(preset, true)}\n\n`;
 
   p += `CHANGE\n`;
   p += `- Upscale and refine the detail\n\n`;
+  p += `${buildActorPosePositionLockBlock()}\n\n`;
+  p += `${buildCameraAxisContinuityBlock(preset)}\n\n`;
 
   p += `KEEP\n`;
   p += `- The exact composition, camera angle, crop, subject placement, and pose relationships from the preview shot\n`;

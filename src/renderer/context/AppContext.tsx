@@ -806,7 +806,32 @@ const applySnapshot = (s: AppState, snap: HistorySnapshot): AppState => ({
     selectionType: null,
 });
 
-const shouldRecordHistory = (type: Action['type']) => {
+const shouldRecordHistory = (action: Action) => {
+    const type = action.type;
+
+    // Region Edit can touch large mask data URLs many times during one operation.
+    // Treat mask/status/prompt layer mutations as tool state, not stage history.
+    if (
+        type === 'SET_REGION_EDIT' ||
+        type === 'SET_REGION_ACTIVE_LAYER' ||
+        type === 'UPDATE_REGION_LAYER' ||
+        type === 'CLEAR_REGION_LAYER_MASK' ||
+        type === 'CLEAR_ALL_REGION_MASKS' ||
+        type === 'SET_REGION_PROTECT' ||
+        type === 'SET_REGION_PROTECT_MASK'
+    ) {
+        return false;
+    }
+
+    if (type === 'SET_COMPOSITE_METADATA' || type === 'SET_SCENE_RESULT_ANCHOR') {
+        return false;
+    }
+
+    if (type === 'UPDATE_SHOT_META') {
+        const keys = Object.keys(action.payload.updates);
+        return keys.some(key => key === 'name' || key === 'notes' || key === 'veoPromptDraft' || key === 'veoTimeline');
+    }
+
     const set = new Set<Action['type']>([
         'SET_BG',
         'ADD_TOKEN', 'UPDATE_TOKEN', 'REMOVE_TOKEN',
@@ -814,10 +839,9 @@ const shouldRecordHistory = (type: Action['type']) => {
         'UPDATE_REF_SLOT', 'CLEAR_REF_SLOTS',
         'SET_DIRECTOR',
         'CLEAR_STAGE',
-        'SET_REGION_EDIT', 'SET_REGION_ACTIVE_LAYER', 'UPDATE_REGION_LAYER', 'CLEAR_REGION_LAYER_MASK', 'CLEAR_ALL_REGION_MASKS',
         'SET_SHOTS', 'ADD_SHOT_FROM_STAGE', 'DUPLICATE_SHOT', 'REMOVE_SHOT', 'SET_ACTIVE_SHOT', 'SAVE_ACTIVE_SHOT', 'UPDATE_SHOT_META', 'SET_SHOT_FRAME',
         'SET_STORYBOARD_SOURCE', 'SET_STORYBOARD_END_SOURCE', 'SET_STORYBOARD_GENERATIONS', 'UPDATE_STORYBOARD_GENERATION',
-        'SET_RESULT_IMAGE', 'SET_COMPOSITE_METADATA', 'SET_SCENE_RESULT_ANCHOR'
+        'SET_RESULT_IMAGE'
     ]);
     return set.has(type);
 };
@@ -991,18 +1015,79 @@ export const initialState: AppState = {
 
 // --- DATA SANITIZATION ---
 
-function sanitizeTokens(tokens: StageToken[]): StageToken[] {
-    return tokens.map(t => ({
-        ...t,
-        // Ensure we don't store heavy base64 strings in the persistence layer
-        url: typeof t.url === 'string' && t.url.startsWith('data:') ? '' : t.url,
-    }));
+const coerceFiniteNumber = (value: unknown, fallback: number): number => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : fallback;
+};
+
+const clampNumber = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
+
+type SanitizeTokenOptions = {
+    stripDataUrl?: boolean;
+};
+
+const sanitizeToken = (token: StageToken, options: SanitizeTokenOptions = {}): StageToken => {
+    const stripDataUrl = options.stripDataUrl === true;
+
+    return {
+        ...token,
+        x: coerceFiniteNumber(token.x, 0),
+        y: coerceFiniteNumber(token.y, 0),
+        width: Math.max(20, coerceFiniteNumber(token.width, 200)),
+        height: Math.max(20, coerceFiniteNumber(token.height, 300)),
+        rotation: coerceFiniteNumber(token.rotation, 0),
+        scaleX: coerceFiniteNumber(token.scaleX, 1),
+        scaleY: coerceFiniteNumber(token.scaleY, 1),
+        pitch: coerceFiniteNumber(token.pitch, 0),
+        yaw: coerceFiniteNumber(token.yaw, 0),
+        anchorX: clampNumber(coerceFiniteNumber(token.anchorX, 0.5), 0, 1),
+        anchorY: clampNumber(coerceFiniteNumber(token.anchorY, 0.8), 0, 1),
+        zIndex: coerceFiniteNumber(token.zIndex, 1),
+        depth: token.depth === undefined ? undefined : clampNumber(coerceFiniteNumber(token.depth, 0.5), 0, 1),
+        occlusionBias: token.occlusionBias === undefined ? undefined : coerceFiniteNumber(token.occlusionBias, 0),
+        brightness: token.brightness === undefined ? undefined : coerceFiniteNumber(token.brightness, 100),
+        contrast: token.contrast === undefined ? undefined : coerceFiniteNumber(token.contrast, 100),
+        saturation: token.saturation === undefined ? undefined : coerceFiniteNumber(token.saturation, 100),
+        blur: token.blur === undefined ? undefined : Math.max(0, coerceFiniteNumber(token.blur, 0)),
+        // Persistence can opt into stripping heavy base64 strings; live editing must keep them.
+        url: stripDataUrl && typeof token.url === 'string' && token.url.startsWith('data:') ? '' : token.url,
+    };
+};
+
+function sanitizeTokens(tokens: StageToken[], options: SanitizeTokenOptions = {}): StageToken[] {
+    return tokens.map(t => sanitizeToken(t, options));
 }
 
+const sanitizeAnnotation = (annotation: StageAnnotation): StageAnnotation => {
+    const type = annotation.type === 'zone' || annotation.type === 'arrow' || annotation.type === 'note'
+        ? annotation.type
+        : 'note';
+    const defaultWidth = type === 'arrow' ? 60 : type === 'zone' ? 220 : 150;
+    const defaultHeight = type === 'arrow' ? 60 : type === 'zone' ? 140 : 100;
+
+    return {
+        ...annotation,
+        type,
+        x: coerceFiniteNumber(annotation.x, 0),
+        y: coerceFiniteNumber(annotation.y, 0),
+        width: Math.max(20, coerceFiniteNumber(annotation.width, defaultWidth)),
+        height: Math.max(20, coerceFiniteNumber(annotation.height, defaultHeight)),
+        rotation: coerceFiniteNumber(annotation.rotation, 0),
+        scaleX: coerceFiniteNumber(annotation.scaleX, 1),
+        scaleY: coerceFiniteNumber(annotation.scaleY, 1),
+        zIndex: coerceFiniteNumber(annotation.zIndex, 10),
+        thickness: annotation.thickness === undefined
+            ? annotation.thickness
+            : Math.max(1, coerceFiniteNumber(annotation.thickness, 2)),
+        x1: annotation.x1 === undefined ? undefined : coerceFiniteNumber(annotation.x1, 0),
+        y1: annotation.y1 === undefined ? undefined : coerceFiniteNumber(annotation.y1, 0),
+        x2: annotation.x2 === undefined ? undefined : coerceFiniteNumber(annotation.x2, 0),
+        y2: annotation.y2 === undefined ? undefined : coerceFiniteNumber(annotation.y2, 0),
+    };
+};
+
 function sanitizeAnnotations(ann: StageAnnotation[]): StageAnnotation[] {
-    return ann.map(a => ({
-        ...a,
-    }));
+    return ann.map(sanitizeAnnotation);
 }
 
 function sanitizeReferenceSlots(slots: ReferenceSlot[]): ReferenceSlot[] {
@@ -1015,20 +1100,35 @@ function sanitizeReferenceSlots(slots: ReferenceSlot[]): ReferenceSlot[] {
     });
 }
 
-function sanitizeShots(shots: Shot[]): Shot[] {
-    return shots.map(s => ({
-        ...s,
-        tokens: sanitizeTokens(s.tokens),
-        annotations: sanitizeAnnotations(s.annotations),
-        referenceSlots: sanitizeReferenceSlots(s.referenceSlots || []),
-    }));
+function sanitizeShot(shot: Shot, options: SanitizeTokenOptions = {}): Shot {
+    return {
+        ...shot,
+        occupiedVolumes: smartClone(shot.occupiedVolumes || []),
+        tokens: sanitizeTokens(deduplicateTokens(smartClone(shot.tokens) || []), options),
+        annotations: sanitizeAnnotations(smartClone(shot.annotations) || []),
+        referenceSlots: sanitizeReferenceSlots(shot.referenceSlots || []),
+        regionEdit: smartClone(shot.regionEdit ?? DEFAULT_REGION_EDIT),
+    };
+}
+
+function sanitizeShots(shots: Shot[], options: SanitizeTokenOptions = { stripDataUrl: true }): Shot[] {
+    return shots.map(s => sanitizeShot(s, options));
+}
+
+function sanitizeSnapshotForRestore(snap: HistorySnapshot): HistorySnapshot {
+    return {
+        ...snap,
+        tokens: sanitizeTokens(deduplicateTokens(smartClone(snap.tokens) || [])),
+        annotations: sanitizeAnnotations(smartClone(snap.annotations) || []),
+        shots: sanitizeShots(smartClone(snap.shots) || [], { stripDataUrl: false }),
+    };
 }
 
 // --- REDUCER ---
 
 export const reducer = (state: AppState, action: Action): AppState => {
     // Auto-record history for stage-impacting actions
-    if (action.type !== 'UNDO' && action.type !== 'REDO' && shouldRecordHistory(action.type)) {
+    if (action.type !== 'UNDO' && action.type !== 'REDO' && shouldRecordHistory(action)) {
         const past = [...(state.historyPast || []), snapshotOf(state)].slice(-MAX_HISTORY);
         state = { ...state, historyPast: past, historyFuture: [] };
     }
@@ -1040,14 +1140,14 @@ export const reducer = (state: AppState, action: Action): AppState => {
             const past = [...state.historyPast];
             const snap = past.pop()!;
             const future = [snapshotOf(state), ...(state.historyFuture || [])].slice(0, MAX_HISTORY);
-            return applySnapshot({ ...state, historyPast: past, historyFuture: future }, snap);
+            return applySnapshot({ ...state, historyPast: past, historyFuture: future }, sanitizeSnapshotForRestore(snap));
         }
         case 'REDO': {
             if (!state.historyFuture || state.historyFuture.length === 0) return state;
             const future = [...state.historyFuture];
             const snap = future.shift()!;
             const past = [...(state.historyPast || []), snapshotOf(state)].slice(-MAX_HISTORY);
-            return applySnapshot({ ...state, historyPast: past, historyFuture: future }, snap);
+            return applySnapshot({ ...state, historyPast: past, historyFuture: future }, sanitizeSnapshotForRestore(snap));
         }
         case 'SET_VIEW':
             return { ...state, view: action.payload };
@@ -1100,10 +1200,17 @@ export const reducer = (state: AppState, action: Action): AppState => {
         case 'ADD_TOKEN': {
             // Safety: Prevent adding a token that already exists in the array (ID check)
             if (state.tokens.some(t => t.id === action.payload.id)) return state;
-            return { ...state, tokens: [...state.tokens, action.payload] };
+            return { ...state, tokens: [...state.tokens, sanitizeToken(action.payload)] };
         }
         case 'UPDATE_TOKEN':
-            return { ...state, tokens: state.tokens.map(t => (t.id === action.payload.id ? { ...t, ...action.payload } : t)) };
+            return {
+                ...state,
+                tokens: state.tokens.map(t => (
+                    t.id === action.payload.id
+                        ? sanitizeToken({ ...t, ...action.payload })
+                        : t
+                ))
+            };
         case 'REMOVE_TOKEN': {
             const nextTokens = state.tokens.filter(t => t.id !== action.payload);
             const nextSelection = state.selection === action.payload ? null : state.selection;
@@ -1117,27 +1224,34 @@ export const reducer = (state: AppState, action: Action): AppState => {
             const copy: StageToken = {
                 ...smartClone(src),
                 id: nextId,
-                x: src.x + 20,
-                y: src.y + 20,
-                zIndex: Math.max(...state.tokens.map(t => t.zIndex), 0) + 1
+                x: coerceFiniteNumber(src.x, 0) + 20,
+                y: coerceFiniteNumber(src.y, 0) + 20,
+                zIndex: Math.max(...state.tokens.map(t => coerceFiniteNumber(t.zIndex, 0)), 0) + 1
             };
             return {
                 ...state,
-                tokens: [...state.tokens, copy],
+                tokens: [...state.tokens, sanitizeToken(copy)],
                 selection: copy.id,
                 selectionType: 'token'
             };
         }
 
         case 'ADD_ANNOTATION':
-            return { ...state, annotations: [...state.annotations, action.payload] };
+            return { ...state, annotations: [...state.annotations, sanitizeAnnotation(action.payload)] };
         case 'UPDATE_ANNOTATION':
-            return { ...state, annotations: state.annotations.map(a => (a.id === action.payload.id ? { ...a, ...action.payload } : a)) };
+            return {
+                ...state,
+                annotations: state.annotations.map(a => (
+                    a.id === action.payload.id
+                        ? sanitizeAnnotation({ ...a, ...action.payload })
+                        : a
+                ))
+            };
         case 'SET_TOKENS':
-            return { ...state, tokens: deduplicateTokens(action.payload) };
+            return { ...state, tokens: sanitizeTokens(deduplicateTokens(action.payload)) };
 
         case 'SET_ANNOTATIONS':
-            return { ...state, annotations: action.payload };
+            return { ...state, annotations: sanitizeAnnotations(action.payload) };
 
         case 'REMOVE_ANNOTATION': {
             const nextAnnotations = state.annotations.filter(a => a.id !== action.payload);
@@ -1259,10 +1373,11 @@ export const reducer = (state: AppState, action: Action): AppState => {
 
         case 'SYNC_SPATIAL_DESCRIPTORS': {
             const STAGE_H = 540;
+            const safeTokens = sanitizeTokens(state.tokens);
 
             // 1. Recompute depthScore for all actors
             // Using ONLY: scale, y, anchorLayer (Authority #1 & #2)
-            const withScores = state.tokens.map(t => ({
+            const withScores = safeTokens.map(t => ({
                 ...t,
                 _depthScore: computeDepthScore(
                     {
@@ -1280,7 +1395,7 @@ export const reducer = (state: AppState, action: Action): AppState => {
 
             // 3. Assign derived layers (Authority #3 - Read Only)
             const count = sorted.length;
-            const nextTokens = state.tokens.map(t => {
+            const nextTokens = safeTokens.map(t => {
                 const sortedItem = sorted.find(s => s.id === t.id);
                 const index = sorted.findIndex(s => s.id === t.id);
                 const score = sortedItem?._depthScore || 0.5;
@@ -1322,6 +1437,11 @@ export const reducer = (state: AppState, action: Action): AppState => {
                     return { 
                         ...s, 
                         backgroundUrl: action.payload,
+                        depthMapUrl: null,
+                        depthMapHash: null,
+                        sourceBackgroundHash: null,
+                        floorPlane: null,
+                        occupiedVolumes: [],
                         promotedResultAnchor: undefined,
                         latestCompositeResultUrl: undefined,
                         latestCompositeStage: undefined,
@@ -1331,14 +1451,30 @@ export const reducer = (state: AppState, action: Action): AppState => {
                     };
                 });
             }
-            return { ...state, backgroundUrl: action.payload, shots: nextShots };
+            return {
+                ...state,
+                backgroundUrl: action.payload,
+                depthMapUrl: null,
+                depthMapHash: null,
+                sourceBackgroundHash: null,
+                floorPlane: null,
+                occupiedVolumes: [],
+                shots: nextShots
+            };
         }
         case 'SET_DEPTH_MAP': {
             const { url, hash, sourceHash } = typeof action.payload === 'string' || action.payload === null
                 ? { url: action.payload, hash: null, sourceHash: null }
                 : action.payload;
             // Invalidate floor plane when depth map changes
-            return { ...state, depthMapUrl: url, depthMapHash: hash || null, sourceBackgroundHash: sourceHash || null, floorPlane: null };
+            return {
+                ...state,
+                depthMapUrl: url,
+                depthMapHash: hash || null,
+                sourceBackgroundHash: sourceHash || null,
+                floorPlane: null,
+                occupiedVolumes: []
+            };
         }
         case 'SET_FLOOR_PLANE':
             return { ...state, floorPlane: action.payload };
@@ -1443,6 +1579,9 @@ export const reducer = (state: AppState, action: Action): AppState => {
                 customCovers: state.customCovers,
 
                 // re-normalize nested structures
+                tokens: sanitizeTokens(deduplicateTokens(smartClone(loaded.tokens) || [])),
+                annotations: sanitizeAnnotations(smartClone(loaded.annotations) || []),
+                shots: sanitizeShots(smartClone(loaded.shots) || [], { stripDataUrl: false }),
                 director: { ...defaultDirector, ...(loaded.director || {}) },
                 regionEdit: {
                     ...smartClone(DEFAULT_REGION_EDIT),
@@ -1497,8 +1636,8 @@ export const reducer = (state: AppState, action: Action): AppState => {
                     applyNote: ''
                 },
 
-                historyPast: loaded.historyPast || [],
-                historyFuture: loaded.historyFuture || [],
+                historyPast: (loaded.historyPast || []).map(sanitizeSnapshotForRestore),
+                historyFuture: (loaded.historyFuture || []).map(sanitizeSnapshotForRestore),
                 sessionName: loaded.sessionName ?? state.sessionName ?? null,
                 sessionFilePath: loaded.sessionFilePath ?? state.sessionFilePath ?? null,
             };
@@ -1747,14 +1886,14 @@ export const reducer = (state: AppState, action: Action): AppState => {
             return { ...state, shotSessionsBySceneId: rest };
         }
         case 'SET_SHOTS':
-            return { ...state, shots: action.payload };
+            return { ...state, shots: sanitizeShots(action.payload, { stripDataUrl: false }) };
 
         case 'ADD_SHOT_FROM_STAGE': {
             const now = Date.now();
             const nextId = `shot-${now}-${Math.random().toString(16).slice(2)}`;
             const name = action.payload?.name?.trim() || `Shot ${state.shots.length + 1}`;
 
-            const newShot: Shot = {
+            const newShot: Shot = sanitizeShot({
                 id: nextId,
                 name,
                 createdAt: now,
@@ -1773,7 +1912,7 @@ export const reducer = (state: AppState, action: Action): AppState => {
                 endFrameUrl: null,
                 notes: '',
                 regionEdit: smartClone(state.regionEdit),
-            };
+            });
 
             return { ...state, shots: [...state.shots, newShot], activeShotId: newShot.id };
         }
@@ -1783,21 +1922,21 @@ export const reducer = (state: AppState, action: Action): AppState => {
             if (!src) return state;
             const now = Date.now();
             const nextId = `shot-${now}-${Math.random().toString(16).slice(2)}`;
-            const copy: Shot = {
+            const copy: Shot = sanitizeShot({
                 ...smartClone(src),
                 id: nextId,
                 name: `${src.name} Copy`,
                 createdAt: now,
                 updatedAt: now,
-            };
+            });
             return {
                 ...state,
                 shots: [...state.shots, copy],
                 activeShotId: copy.id,
                 backgroundUrl: copy.backgroundUrl,
                 depthMapUrl: copy.depthMapUrl || null,
-                tokens: smartClone(copy.tokens) || [],
-                annotations: smartClone(copy.annotations) || [],
+                tokens: sanitizeTokens(deduplicateTokens(smartClone(copy.tokens) || [])),
+                annotations: sanitizeAnnotations(smartClone(copy.annotations) || []),
                 referenceSlots: smartClone(copy.referenceSlots) || [],
                 director: smartClone(copy.director),
                 floorPlane: copy.floorPlane || null,
@@ -1814,7 +1953,8 @@ export const reducer = (state: AppState, action: Action): AppState => {
 
             if (!removingActive) return { ...state, shots: remaining };
 
-            const nextActive = remaining[remaining.length - 1] || null;
+            const nextActiveRaw = remaining[remaining.length - 1] || null;
+            const nextActive = nextActiveRaw ? sanitizeShot(nextActiveRaw) : null;
             if (!nextActive) {
                 return { 
                     ...state, 
@@ -1835,8 +1975,8 @@ export const reducer = (state: AppState, action: Action): AppState => {
                 sourceBackgroundHash: nextActive.sourceBackgroundHash || null,
                 floorPlane: nextActive.floorPlane || null,
                 occupiedVolumes: smartClone(nextActive.occupiedVolumes) || [],
-                tokens: smartClone(nextActive.tokens) || [],
-                annotations: smartClone(nextActive.annotations) || [],
+                tokens: sanitizeTokens(deduplicateTokens(smartClone(nextActive.tokens) || [])),
+                annotations: sanitizeAnnotations(smartClone(nextActive.annotations) || []),
                 referenceSlots: smartClone(nextActive.referenceSlots) || [],
                 director: smartClone(nextActive.director),
                 regionEdit: smartClone(nextActive.regionEdit ?? DEFAULT_REGION_EDIT),
@@ -1861,16 +2001,19 @@ export const reducer = (state: AppState, action: Action): AppState => {
             const id = action.payload.id;
             if (!id) return { ...state, activeShotId: null };
 
-            const shot = state.shots.find(s => s.id === id);
-            if (!shot) return state;
+            const rawShot = state.shots.find(s => s.id === id);
+            if (!rawShot) return state;
+            const shot = sanitizeShot(rawShot);
 
             return {
                 ...state,
                 activeShotId: shot.id,
                 backgroundUrl: shot.backgroundUrl,
                 depthMapUrl: shot.depthMapUrl || null,
-                tokens: deduplicateTokens(smartClone(shot.tokens) || []),
-                annotations: smartClone(shot.annotations) || [],
+                depthMapHash: shot.depthMapHash || null,
+                sourceBackgroundHash: shot.sourceBackgroundHash || null,
+                tokens: sanitizeTokens(deduplicateTokens(smartClone(shot.tokens) || [])),
+                annotations: sanitizeAnnotations(smartClone(shot.annotations) || []),
                 referenceSlots: smartClone(shot.referenceSlots) || [],
                 director: smartClone(shot.director) || smartClone(defaultDirector),
                 floorPlane: shot.floorPlane || null,
@@ -1891,19 +2034,21 @@ export const reducer = (state: AppState, action: Action): AppState => {
 
             const nextShots = state.shots.map(s => {
                 if (s.id !== state.activeShotId) return s;
-                return {
+                return sanitizeShot({
                     ...s,
                     backgroundUrl: state.backgroundUrl,
                     depthMapUrl: state.depthMapUrl,
-                    tokens: deduplicateTokens(smartClone(state.tokens) || []),
-                    annotations: smartClone(state.annotations) || [],
+                    depthMapHash: state.depthMapHash,
+                    sourceBackgroundHash: state.sourceBackgroundHash,
+                    tokens: sanitizeTokens(deduplicateTokens(smartClone(state.tokens) || [])),
+                    annotations: sanitizeAnnotations(smartClone(state.annotations) || []),
                     referenceSlots: smartClone(state.referenceSlots) || [],
                     director: smartClone(state.director),
                     floorPlane: state.floorPlane,
                     occupiedVolumes: smartClone(state.occupiedVolumes) || [],
                     regionEdit: smartClone(state.regionEdit),
                     updatedAt: touch ? now : s.updatedAt,
-                };
+                });
             });
 
             return { ...state, shots: nextShots };
@@ -2230,7 +2375,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         const restore = async () => {
             try {
                 const [_tokens, _annotations, rawActors, rawWardrobe, rawProps] = await Promise.all([
-                    migrateOrLoad<StageToken[]>('nano_tokens', sanitizeTokens),
+                    migrateOrLoad<StageToken[]>('nano_tokens', tokens => sanitizeTokens(tokens, { stripDataUrl: true })),
                     migrateOrLoad<StageAnnotation[]>('nano_annotations', sanitizeAnnotations),
                     StorageService.load<CastMember[]>('nano_actors', []),
                     StorageService.load<WardrobeItem[]>('nano_wardrobe', []),
@@ -2386,7 +2531,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
         persistTimerRef.current = window.setTimeout(async () => {
             try {
-                await StorageService.save('nano_tokens', sanitizeTokens(state.tokens));
+                await StorageService.save('nano_tokens', sanitizeTokens(state.tokens, { stripDataUrl: true }));
                 await StorageService.save('nano_annotations', sanitizeAnnotations(state.annotations));
             } catch (e) {
                 console.error('Token/Annotation persistence failed', e);

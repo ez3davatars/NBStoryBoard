@@ -143,7 +143,11 @@ export const GeminiService = {
   },
 
   // Helper: Convert Blob/Data URL to Base64
-  async _resolveImageData(url: string, maxSize: number = 3072): Promise<{ mimeType: string; data: string }> {
+  async _resolveImageData(
+    url: string,
+    maxSize: number = 3072,
+    options: { preservePng?: boolean } = {}
+  ): Promise<{ mimeType: string; data: string }> {
     if (!url) throw new Error("No URL provided to _resolveImageData");
 
     let resolvedMimeType = '';
@@ -207,7 +211,7 @@ export const GeminiService = {
       const MAX_SIZE = maxSize || 3072; // Gemini multi-image payload limit logic
       let targetW = img.width;
       let targetH = img.height;
-      const needsFlattening = resolvedMimeType.includes('png') || resolvedMimeType.includes('webp');
+      const needsFlattening = !options.preservePng && (resolvedMimeType.includes('png') || resolvedMimeType.includes('webp'));
       
       if (targetW > MAX_SIZE || targetH > MAX_SIZE || needsFlattening) {
           if (targetW > MAX_SIZE || targetH > MAX_SIZE) {
@@ -225,9 +229,10 @@ export const GeminiService = {
               ctx.fillStyle = '#000000';
               ctx.fillRect(0, 0, targetW, targetH);
               ctx.drawImage(img, 0, 0, targetW, targetH);
-              // Re-encode as JPEG for highly aggressive JSON payload reduction over IPC
-              const optimizedUrl = canvas.toDataURL('image/jpeg', 0.90);
-              resolvedMimeType = 'image/jpeg';
+              const optimizedUrl = options.preservePng
+                ? canvas.toDataURL('image/png')
+                : canvas.toDataURL('image/jpeg', 0.90);
+              resolvedMimeType = options.preservePng ? 'image/png' : 'image/jpeg';
               resolvedData = optimizedUrl.split('base64,')[1];
           }
       }
@@ -967,8 +972,8 @@ export const GeminiService = {
     const effectiveKey = options.billingMode === 'hosted' ? 'HOSTED_MODE' : (apiKey || '');
     const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
-    const base = await GeminiService._resolveImageData(baseImageUrl);
-    const mask = await GeminiService._resolveImageData(maskDataUrl);
+    const base = await GeminiService._resolveImageData(baseImageUrl, 2048);
+    const mask = await GeminiService._resolveImageData(maskDataUrl, 2048, { preservePng: true });
 
     const parts: GeminiPart[] = [];
 
@@ -1707,7 +1712,7 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
     // 2. Camera Instruction Blueprint (MUST BE SECOND)
     if (shotBlueprintUrl) {
         const blueprint = await GeminiService._resolveImageData(shotBlueprintUrl);
-        parts.push({ text: `[CAMERA INSTRUCTION BLUEPRINT: Adhere to the teal framing guide and occlusion overlays]` });
+        parts.push({ text: `[CAMERA INSTRUCTION BLUEPRINT: Adhere to the teal framing guide, printed camera designation labels, direction arrows, and occlusion overlays. The final image must visibly satisfy that camera designation.]` });
         parts.push({ inlineData: { mimeType: blueprint.mimeType, data: blueprint.data } });
     }
     

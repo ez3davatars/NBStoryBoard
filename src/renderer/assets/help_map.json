@@ -85,17 +85,9 @@
                 "type": "tooltip",
                 "text": "Add contextual instructions such as wear, damage, or fit."
             },
-            "removeBackgroundToggle": {
-                "type": "tooltip",
-                "text": "Uses AI segmentation to isolate the subject."
-            },
-            "restoreBrush": {
-                "type": "tooltip",
-                "text": "Restores areas removed unintentionally."
-            },
             "saveProcessedImage": {
                 "type": "inline",
-                "text": "The edited version replaces the raw render."
+                "text": "Save the current fitted render before clearing the workspace."
             }
         },
         "props": {

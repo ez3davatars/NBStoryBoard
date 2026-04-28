@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import type { ShotSession, ShotPackId, ShotLocks, ShotVariant, ShotPresetId, DirectedShotSlot } from '../../types/shots';
+import type { ShotSession, ShotPackId, ShotLocks, ShotVariant, ShotPresetId, DirectedShotSlot, SceneTruthSnapshot } from '../../types/shots';
 import type { ActorIdentityReferenceSet, ShotsActorOption } from '../../context/AppContext';
 import { SHOT_PRESETS, buildShotPresetIdsForPack } from '../../utils/shotsPresets';
 import { buildShotVariantPrompt, buildShotFinalRerenderPrompt } from '../../utils/promptHelpers';
@@ -15,6 +15,7 @@ import { useAppContext } from '../../context/AppContext';
 import { buildSceneTruthSnapshot } from '../../utils/sceneTruthHelpers';
 import { buildShotBlueprintImage } from '../../utils/shotBlueprintHelpers';
 import { computeImageSimilarity } from '../../utils/similarityHelpers';
+import { renderContinuityShotImage } from '../../utils/continuityShotRenderer';
 
 export type ShotsPanelProps = {
   sceneId: string;
@@ -63,6 +64,24 @@ const deriveShotsStyleLock = (qualityMode?: string): string => {
 const getErrorMessage = (error: unknown): string => {
   if (error instanceof Error) return error.message;
   return String(error);
+};
+
+const isNoImageShotResponse = (message: string): boolean =>
+  /No image data in shot preview response|No image data|no image/i.test(message);
+
+type ShotIntegrityReport = {
+  passed?: boolean;
+  score?: number;
+  issues?: string[];
+  correction?: string;
+  actorCountPreserved?: boolean;
+  actorRelationshipPreserved?: boolean;
+  actorPosePreserved?: boolean;
+  sceneContinuityPreserved?: boolean;
+  shotDesignationSatisfied?: boolean;
+  within180Rule?: boolean;
+  environmentViewpointPlausible?: boolean;
+  viewpointChangeSufficient?: boolean;
 };
 
 export const ShotsPanel: React.FC<ShotsPanelProps> = ({
@@ -121,6 +140,145 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const panelRef = useRef<HTMLDivElement>(null);
+
+  const generateAiShotPreview = async (args: {
+    anchorImageUrl: string;
+    actorIdentitySets?: ActorIdentityReferenceSet[];
+    prompt: string;
+    shotBlueprintUrl?: string;
+    sceneTruth?: SceneTruthSnapshot;
+    presetId: ShotPresetId;
+    hasSubjectStyleAnalysis?: boolean;
+  }): Promise<string> => {
+    const baseArgs = {
+      anchorImageUrl: args.anchorImageUrl,
+      actorIdentitySets: args.actorIdentitySets,
+      prompt: args.prompt,
+      apiKey,
+      model,
+      options: {
+        billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
+        entitlements: state.billingEntitlements,
+        signal: abortControllerRef.current?.signal
+      }
+    };
+
+    const isHostedShots = state.billingEntitlements.effectiveBillingMode === 'hosted';
+    if (isHostedShots) {
+      return GeminiService.generateShotPreview(baseArgs);
+    }
+
+    try {
+      return await GeminiService.generateShotPreview({
+        ...baseArgs,
+        shotBlueprintUrl: args.shotBlueprintUrl,
+        sceneTruth: args.sceneTruth,
+        presetId: args.presetId,
+        hasSubjectStyleAnalysis: args.hasSubjectStyleAnalysis,
+      });
+    } catch (err: unknown) {
+      const msg = getErrorMessage(err);
+      if (/400|Bad Request|413|Payload/i.test(msg)) {
+        console.warn('[ShotsPanel] Rich preview payload rejected; retrying thin payload', {
+          presetId: args.presetId,
+          error: msg
+        });
+        return GeminiService.generateShotPreview(baseArgs);
+      }
+      throw err;
+    }
+  };
+
+  const validateShotIntegrity = async (args: {
+    sourceUrl: string;
+    previewUrl: string;
+    presetId: ShotPresetId;
+    directedSlot?: DirectedShotSlot;
+    sceneTruth?: SceneTruthSnapshot;
+  }): Promise<{ passed: boolean; report: ShotIntegrityReport }> => {
+    const preset = SHOT_PRESETS[args.presetId];
+    const actorSummary = (args.sceneTruth?.actors || [])
+      .slice()
+      .sort((a, b) => a.leftToRightIndex - b.leftToRightIndex)
+      .map((actor) => `${actor.actorLabel || 'Actor'}: zone=${actor.approxZone}, role=${actor.role}, target=${actor.targetInScene || 'source relationship'}`)
+      .join('\n');
+
+    const prompt = `
+Compare SOURCE_ANCHOR and GENERATED_SHOT as a shot-continuity supervisor.
+
+Expected shot designation: ${preset.label}
+Preset instruction: ${preset.shotInstruction}
+Directed slot notes: ${args.directedSlot?.actionText || args.directedSlot?.shotNotes || args.directedSlot?.coveragePurpose || 'none'}
+Expected visible actor count: ${args.sceneTruth?.expectedActorCount ?? 'preserve source count'}
+Known source blocking:
+${actorSummary || 'Preserve the same actor positions, poses, and actor-to-object contact relationships from SOURCE_ANCHOR.'}
+
+The generated shot is allowed to simulate a new camera angle, crop, lens, parallax, depth of field, and occlusion.
+It is NOT allowed to move actors to new world positions, detach actors from animals/vehicles/seats/props, change pose/action, change actor count, swap identities, or redesign the scene.
+
+Camera-axis requirement:
+- Infer the same source action axis from subject relationships, screen direction, gaze/action flow, mounts/seats/props, and dominant environment geometry.
+- GENERATED_SHOT must stay on the same side of that axis within a plausible 180-degree camera arc. It must not flip left/right geography or reverse the subject relationship.
+- For angle/elevation presets, GENERATED_SHOT must show real environment viewpoint change: shifted foreground/background overlap, changed occlusion, visible side/top/low surfaces when appropriate, and plausible parallax around preserved landmarks.
+- Do not accept a shot that only crops, zooms, or pans the original front-facing environment while claiming to be a new camera angle.
+
+Return JSON with:
+{
+  "passed": boolean,
+  "score": number from 0 to 1,
+  "actorCountPreserved": boolean,
+  "actorRelationshipPreserved": boolean,
+  "actorPosePreserved": boolean,
+  "sceneContinuityPreserved": boolean,
+  "shotDesignationSatisfied": boolean,
+  "within180Rule": boolean,
+  "environmentViewpointPlausible": boolean,
+  "viewpointChangeSufficient": boolean,
+  "issues": string[],
+  "correction": "one concise correction prompt for regeneration"
+}
+`;
+
+    try {
+      const report = await GeminiService.analyzeMultiFrameJson<ShotIntegrityReport>(
+        prompt,
+        apiKey,
+        model,
+        [
+          { url: args.sourceUrl, label: 'SOURCE_ANCHOR' },
+          { url: args.previewUrl, label: 'GENERATED_SHOT' }
+        ],
+        {
+          billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
+          entitlements: state.billingEntitlements
+        }
+      );
+
+      const passed = Boolean(report.passed)
+        && report.actorCountPreserved !== false
+        && report.actorRelationshipPreserved !== false
+        && report.actorPosePreserved !== false
+        && report.sceneContinuityPreserved !== false
+        && report.shotDesignationSatisfied !== false
+        && report.within180Rule !== false
+        && report.environmentViewpointPlausible !== false
+        && report.viewpointChangeSufficient !== false
+        && (report.score ?? 1) >= 0.74;
+
+      return { passed, report };
+    } catch (err) {
+      console.warn('[ShotsPanel] Integrity check unavailable.', err);
+      return {
+        passed: true,
+        report: {
+          passed: true,
+          score: undefined,
+          issues: ['Integrity check unavailable; accepted spatial simulation without verification.'],
+          correction: ''
+        }
+      };
+    }
+  };
 
 
   // Sync state with existing session if any
@@ -273,6 +431,8 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
           slotId: slot.id,
           slotIndex: slot.index,
           presetId: slot.shotType,
+          renderMode: 'ai_camera_move',
+          integrity: { status: 'unchecked' },
           label: preset.label,
           description: preset.description,
           prompt,
@@ -355,100 +515,109 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
             console.warn("Could not materialize blueprint for variant", variant.id, bpErr);
         }
 
-        const previewBaseArgs = {
-          anchorImageUrl: effectiveResultImageUrl,
-          actorIdentitySets,
-          prompt: variant.prompt,
-          apiKey,
-          model,
-          options: { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, signal: abortControllerRef.current?.signal }
-        };
+        let previewUrl = '';
+        let integrityReport: ShotIntegrityReport | null = null;
+        let integrityPassed = false;
+        let usedFallback = false;
+        const MAX_INTEGRITY_ATTEMPTS = 3;
 
-        const isHostedShots = state.billingEntitlements.effectiveBillingMode === 'hosted';
-        let previewUrl: string;
+        for (let attempt = 1; attempt <= MAX_INTEGRITY_ATTEMPTS; attempt++) {
+          const attemptPrompt = attempt === 1
+            ? variant.prompt
+            : [
+                variant.prompt,
+                '### SHOT INTEGRITY CORRECTION',
+                integrityReport?.correction || 'Regenerate while preserving source actor positions, poses, contact relationships, actor count, and scene continuity.',
+                integrityReport?.issues?.length ? `Failed issues: ${integrityReport.issues.join('; ')}` : '',
+                'OUTPUT REQUIREMENT: Return exactly one completed image. Do not answer with text, JSON, analysis, explanation, or a blank response.',
+                '180-RULE REPAIR: Stay on the same side of the action axis while showing real environment parallax from the requested camera position.',
+                'Keep this as a true spatial camera simulation, but do not re-stage actors or detach subjects from animals, seats, props, or other contact relationships.'
+              ].filter(Boolean).join('\n');
 
-        if (isHostedShots) {
-          // Thin payload only for hosted mode to avoid oversized Edge Function requests
-          previewUrl = await GeminiService.generateShotPreview(previewBaseArgs);
-        } else {
           try {
-            previewUrl = await GeminiService.generateShotPreview({
-              ...previewBaseArgs,
+            previewUrl = await generateAiShotPreview({
+              anchorImageUrl: effectiveResultImageUrl,
+              actorIdentitySets,
+              prompt: attemptPrompt,
               shotBlueprintUrl: rawBlueprintUrl,
               sceneTruth,
               presetId: variant.presetId,
-              hasSubjectStyleAnalysis: !!safeSubjectActionText,
+              hasSubjectStyleAnalysis: !!safeSubjectActionText
             });
-          } catch (err: unknown) {
-            const msg = getErrorMessage(err);
-            if (/400|Bad Request|413|Payload/i.test(msg)) {
-              console.warn('[ShotsPanel] Preview payload rejected. Original Error:', msg, 'Retrying thin payload for:', {
-                variantId: variant.id,
-                presetId: variant.presetId,
-              });
-              previewUrl = await GeminiService.generateShotPreview(previewBaseArgs);
-            } else {
-              throw err;
-            }
-          }
-        }
+          } catch (previewErr: unknown) {
+            const previewErrorMessage = getErrorMessage(previewErr);
+            if (!isNoImageShotResponse(previewErrorMessage)) throw previewErr;
 
-        // Phase 7: Similarity Rejection
-        let attempts = 1;
-        let isDuplicate = false;
-        const SIMILARITY_THRESHOLD = 0.94; // If similarity >= 94%, it basically returned the anchor image or a trivial crop.
-        try {
-           let similarity = await computeImageSimilarity(effectiveResultImageUrl, previewUrl);
-           console.log(`[ShotsPanel] Shot ${variant.presetId} similarity check: ${(similarity*100).toFixed(1)}%`);
-           while (autoReroll && similarity >= SIMILARITY_THRESHOLD && attempts < 3) {
-              console.warn(`[ShotsPanel] Shot ${variant.presetId} rejected for duplicate framing (${(similarity*100).toFixed(1)}%). Auto-retrying...`);
-              
+            integrityReport = {
+              passed: false,
+              score: 0,
+              issues: [previewErrorMessage],
+              correction: 'Return exactly one completed image for the requested shot. Do not answer with text, JSON, analysis, explanation, or a blank response.'
+            };
+
+            if (attempt < MAX_INTEGRITY_ATTEMPTS) {
               onUpdateSession(sceneId, prev => {
                 if (!prev) return prev;
                 return {
                   ...prev,
-                  variants: prev.variants.map(v => v.id === variant.id ? { 
-                    ...v, 
-                    status: 'generating', 
-                    error: `Similar composition detected (${(similarity*100).toFixed(0)}%). Rerolling alternative angle (Try ${attempts+1}/3)...` 
+                  variants: prev.variants.map(v => v.id === variant.id ? {
+                    ...v,
+                    status: 'generating',
+                    integrity: {
+                      status: 'needs_review',
+                      score: 0,
+                      issues: [previewErrorMessage],
+                      attempts: attempt
+                    },
+                    error: `Shot renderer returned no image. Retrying spatial shot (${attempt}/${MAX_INTEGRITY_ATTEMPTS})...`
                   } : v)
                 };
               });
+              continue;
+            }
 
-              attempts++;
-              const appendedPrompt = `${variant.prompt}\nCRITICAL: PREVIOUS ATTEMPT FAILED. YOU MUST MATERIALLY CHANGE THE CAMERA ANGLE AND CROP. DO NOT REPRODUCE THE SOURCE COMPOSITION.`;
-              
-              if (isHostedShots) {
-                  previewUrl = await GeminiService.generateShotPreview({
-                     anchorImageUrl: effectiveResultImageUrl,
-                     actorIdentitySets,
-                     prompt: appendedPrompt,
-                     apiKey,
-                     model,
-                     options: { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, signal: abortControllerRef.current?.signal }
-                  });
-              } else {
-                  previewUrl = await GeminiService.generateShotPreview({
-                     anchorImageUrl: effectiveResultImageUrl,
-                     shotBlueprintUrl: rawBlueprintUrl,
-                     actorIdentitySets,
-                     prompt: appendedPrompt,
-                     apiKey,
-                     model,
-                     sceneTruth,
-                     presetId: variant.presetId,
-                     hasSubjectStyleAnalysis: !!safeSubjectActionText,
-                     options: { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, signal: abortControllerRef.current?.signal }
-                  });
-              }
-              similarity = await computeImageSimilarity(effectiveResultImageUrl, previewUrl);
-              console.log(`[ShotsPanel] Shot ${variant.presetId} retry ${attempts} similarity check: ${(similarity*100).toFixed(1)}%`);
-           }
-           if (autoReroll && similarity >= SIMILARITY_THRESHOLD) {
-              isDuplicate = true; // Still a duplicate after max retries
-           }
-        } catch (simErr) {
-           console.error("[ShotsPanel] Failed to compute image similarity:", simErr);
+            break;
+          }
+
+          const validation = await validateShotIntegrity({
+            sourceUrl: effectiveResultImageUrl,
+            previewUrl,
+            presetId: variant.presetId,
+            directedSlot,
+            sceneTruth
+          });
+
+          integrityReport = validation.report;
+          integrityPassed = validation.passed;
+
+          if (integrityPassed) break;
+
+          onUpdateSession(sceneId, prev => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              variants: prev.variants.map(v => v.id === variant.id ? {
+                ...v,
+                status: 'generating',
+                integrity: {
+                  status: 'needs_review',
+                  score: integrityReport?.score,
+                  issues: integrityReport?.issues,
+                  attempts: attempt
+                },
+                error: `Integrity issue detected. Rerolling spatial shot (${attempt}/${MAX_INTEGRITY_ATTEMPTS})...`
+              } : v)
+            };
+          });
+        }
+
+        if (!integrityPassed) {
+          previewUrl = await renderContinuityShotImage({
+            sourceImageUrl: effectiveResultImageUrl,
+            preset,
+            sceneTruth
+          });
+          usedFallback = true;
         }
 
         const materialized = await LocalAssetService.materializeImageAsset({
@@ -477,7 +646,23 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
               blueprintUrl: materializedBlueprintUrl,
               localPreviewPath: materialized.localPath || undefined,
               sourcePreviewUrl: previewUrl,
-              error: isDuplicate ? 'CRITICAL: Failed to materially change framing.' : undefined
+              renderMode: usedFallback ? 'continuity_reframe' : 'ai_camera_move',
+              integrity: usedFallback
+                ? {
+                    status: 'fallback',
+                    score: integrityReport?.score,
+                    issues: integrityReport?.issues?.length
+                      ? integrityReport.issues
+                      : ['Spatial simulation failed integrity checks; continuity crop fallback used.'],
+                    attempts: MAX_INTEGRITY_ATTEMPTS
+                  }
+                : {
+                    status: integrityReport?.issues?.some(issue => issue.toLowerCase().includes('unavailable')) ? 'unverified' : 'verified',
+                    score: integrityReport?.score,
+                    issues: integrityReport?.issues,
+                    attempts: integrityReport ? Math.min(MAX_INTEGRITY_ATTEMPTS, Math.max(1, integrityReport.issues?.length ? 2 : 1)) : 1
+                  },
+              error: usedFallback ? 'Spatial simulation failed integrity checks; used continuity crop fallback.' : undefined
             } : v)
           };
         });
@@ -536,6 +721,42 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
     for (const variant of selectedVariants) {
       if (!variant.previewUrl) continue;
       try {
+        const preset = SHOT_PRESETS[variant.presetId];
+        const renderMode = variant.renderMode || 'ai_camera_move';
+
+        if (renderMode === 'continuity_reframe') {
+          const finalUrl = await renderContinuityShotImage({
+            sourceImageUrl: effectiveResultImageUrl,
+            preset,
+            sceneTruth: session.sceneTruth,
+            outputWidth: 3840
+          });
+
+          const materialized = await LocalAssetService.materializeImageAsset({
+            sourceUrl: finalUrl,
+            sceneId: sceneId,
+            variantId: variant.id,
+            kind: 'final',
+            saveDirectoryPath: state.saveDirectoryPath
+          });
+
+          onUpdateSession(sceneId, prev => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              variants: prev.variants.map(v => v.id === variant.id ? {
+                ...v,
+                status: 'done',
+                finalUrl: materialized.displayUrl,
+                localFinalPath: materialized.localPath || undefined,
+                sourceFinalUrl: finalUrl,
+                renderMode: 'continuity_reframe'
+              } : v)
+            };
+          });
+          continue;
+        }
+
         const finalPrompt = buildShotFinalRerenderPrompt({
           sourceResultUrl: effectiveResultImageUrl,
           sceneTruth: session.sceneTruth!,
@@ -674,7 +895,7 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
       const directedSlot = session.directedShots?.find(s => s.id === variant.slotId);
       const preset = SHOT_PRESETS[variant.presetId];
       
-      let rawBlueprintUrl = variant.sourcePreviewUrl; // Fallback, will regenerate below if we can
+      let rawBlueprintUrl = variant.blueprintUrl; // Fallback, will regenerate below if we can
       if (directedSlot && preset) {
          rawBlueprintUrl = await buildShotBlueprintImage({
             anchorImageUrl: effectiveResultImageUrl,
@@ -691,45 +912,32 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
         `If any text conflicts with the anchor image environment, ignore the text and follow the anchor image.\n`;
 
       const basePrompt = extraInstruction
-        ? `${variant.prompt}\n### SHOT-SPECIFIC REGENERATE ADJUSTMENT\n${extraInstruction}\nRespect all core scene, identity, and continuity locks while applying this adjustment.`
+        ? `${variant.prompt}\n### SHOT-SPECIFIC REGENERATE ADJUSTMENT\n${extraInstruction}\nApply this as camera/framing/visibility guidance unless it explicitly says to move, reposition, re-pose, stand, sit, turn, remount, dismount, or change an actor's action. Preserve actor positions, pose, and actor-to-object contact relationships by default.`
         : variant.prompt;
       const lockedPrompt = `${basePrompt}${environmentHardLock}`;
 
-      const previewBaseArgs = {
-        anchorImageUrl: effectiveResultImageUrl,
-        actorIdentitySets: session.actorIdentitySets,
-        prompt: lockedPrompt,
-        apiKey,
-        model,
-        options: { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, signal: abortControllerRef.current?.signal }
-      };
+      const generateRegeneratedPreview = async (prompt: string): Promise<string> =>
+        generateAiShotPreview({
+          anchorImageUrl: effectiveResultImageUrl,
+          actorIdentitySets: session.actorIdentitySets,
+          prompt,
+          shotBlueprintUrl: rawBlueprintUrl,
+          sceneTruth: session.sceneTruth,
+          presetId: variant.presetId,
+          hasSubjectStyleAnalysis: false
+        });
 
-      const isHostedShots = state.billingEntitlements.effectiveBillingMode === 'hosted';
       let previewUrl: string;
-
-      if (isHostedShots) {
-        previewUrl = await GeminiService.generateShotPreview(previewBaseArgs);
-      } else {
-        try {
-          previewUrl = await GeminiService.generateShotPreview({
-            ...previewBaseArgs,
-            shotBlueprintUrl: rawBlueprintUrl,
-            sceneTruth: session.sceneTruth,
-            presetId: variant.presetId,
-            hasSubjectStyleAnalysis: false,
-          });
-        } catch (err: unknown) {
-          const msg = getErrorMessage(err);
-          if (/400|Bad Request|413|Payload/i.test(msg)) {
-            console.warn('[ShotsPanel] Rich preview payload rejected; retrying thin payload', {
-              variantId: variant.id,
-              presetId: variant.presetId,
-            });
-            previewUrl = await GeminiService.generateShotPreview(previewBaseArgs);
-          } else {
-            throw err;
-          }
-        }
+      try {
+        previewUrl = await generateRegeneratedPreview(lockedPrompt);
+      } catch (previewErr: unknown) {
+        const previewErrorMessage = getErrorMessage(previewErr);
+        if (!isNoImageShotResponse(previewErrorMessage)) throw previewErr;
+        previewUrl = await generateRegeneratedPreview([
+          lockedPrompt,
+          '### OUTPUT RECOVERY',
+          'Return exactly one completed image for this shot. No text, JSON, explanation, analysis, or blank response.'
+        ].join('\n'));
       }
 
       // Phase 7: Similarity Rejection
@@ -757,34 +965,83 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
             attempts++;
             const appendedPrompt = `${lockedPrompt}\nCRITICAL: PREVIOUS ATTEMPT FAILED. YOU MUST MATERIALLY CHANGE THE CAMERA ANGLE AND CROP. DO NOT REPRODUCE THE SOURCE COMPOSITION.`;
             
-            if (isHostedShots) {
-                previewUrl = await GeminiService.generateShotPreview({
-                   anchorImageUrl: effectiveResultImageUrl,
-                   actorIdentitySets: session.actorIdentitySets,
-                   prompt: appendedPrompt,
-                   apiKey,
-                   model,
-                   options: { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, signal: abortControllerRef.current?.signal }
-                });
-            } else {
-                previewUrl = await GeminiService.generateShotPreview({
-                   anchorImageUrl: effectiveResultImageUrl,
-                   shotBlueprintUrl: rawBlueprintUrl,
-                   actorIdentitySets: session.actorIdentitySets,
-                   prompt: appendedPrompt,
-                   apiKey,
-                   model,
-                   sceneTruth: session.sceneTruth,
-                   presetId: variant.presetId,
-                   hasSubjectStyleAnalysis: false,
-                   options: { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, signal: abortControllerRef.current?.signal }
-                });
+            try {
+              previewUrl = await generateRegeneratedPreview(appendedPrompt);
+            } catch (previewErr: unknown) {
+              const previewErrorMessage = getErrorMessage(previewErr);
+              if (!isNoImageShotResponse(previewErrorMessage)) throw previewErr;
+              previewUrl = await generateRegeneratedPreview([
+                appendedPrompt,
+                '### OUTPUT RECOVERY',
+                'Return exactly one completed image for this shot. No text, JSON, explanation, analysis, or blank response.'
+              ].join('\n'));
             }
             similarity = await computeImageSimilarity(effectiveResultImageUrl, previewUrl);
          }
          if (autoReroll && similarity >= SIMILARITY_THRESHOLD) isDuplicate = true;
       } catch (simErr) {
          console.error("[ShotsPanel] Failed to compute image similarity:", simErr);
+      }
+
+      let integrityReport: ShotIntegrityReport | null = null;
+      let integrityPassed = false;
+      let renderMode: ShotVariant['renderMode'] = 'ai_camera_move';
+
+      const firstValidation = await validateShotIntegrity({
+        sourceUrl: effectiveResultImageUrl,
+        previewUrl,
+        presetId: variant.presetId,
+        directedSlot,
+        sceneTruth: session.sceneTruth
+      });
+      integrityReport = firstValidation.report;
+      integrityPassed = firstValidation.passed;
+
+      if (!integrityPassed) {
+        const correctionPrompt = [
+          lockedPrompt,
+          '### SHOT INTEGRITY CORRECTION',
+          integrityReport?.correction || 'Regenerate while preserving source actor positions, poses, contact relationships, actor count, and scene continuity.',
+          integrityReport?.issues?.length ? `Failed issues: ${integrityReport.issues.join('; ')}` : '',
+          'OUTPUT REQUIREMENT: Return exactly one completed image. Do not answer with text, JSON, analysis, explanation, or a blank response.',
+          '180-RULE REPAIR: Stay on the same side of the action axis while showing real environment parallax from the requested camera position.'
+        ].filter(Boolean).join('\n');
+
+        try {
+          previewUrl = await generateRegeneratedPreview(correctionPrompt);
+        } catch (previewErr: unknown) {
+          const previewErrorMessage = getErrorMessage(previewErr);
+          if (!isNoImageShotResponse(previewErrorMessage)) throw previewErr;
+          integrityReport = {
+            passed: false,
+            score: 0,
+            issues: [previewErrorMessage],
+            correction: 'Return exactly one completed image for the requested shot.'
+          };
+          integrityPassed = false;
+          previewUrl = '';
+        }
+
+        if (previewUrl) {
+          const secondValidation = await validateShotIntegrity({
+            sourceUrl: effectiveResultImageUrl,
+            previewUrl,
+            presetId: variant.presetId,
+            directedSlot,
+            sceneTruth: session.sceneTruth
+          });
+          integrityReport = secondValidation.report;
+          integrityPassed = secondValidation.passed;
+        }
+      }
+
+      if (!integrityPassed) {
+        previewUrl = await renderContinuityShotImage({
+          sourceImageUrl: effectiveResultImageUrl,
+          preset,
+          sceneTruth: session.sceneTruth
+        });
+        renderMode = 'continuity_reframe';
       }
 
       const materialized = await LocalAssetService.materializeImageAsset({
@@ -806,12 +1063,72 @@ export const ShotsPanel: React.FC<ShotsPanelProps> = ({
             blueprintUrl: rawBlueprintUrl, // Fallback if no materialized one exists
             localPreviewPath: materialized.localPath || undefined,
             sourcePreviewUrl: previewUrl,
-            error: isDuplicate ? 'CRITICAL: Failed to materially change framing.' : undefined
+            renderMode,
+            integrity: renderMode === 'continuity_reframe'
+              ? {
+                  status: 'fallback',
+                  score: integrityReport?.score,
+                  issues: integrityReport?.issues?.length
+                    ? integrityReport.issues
+                    : ['Spatial simulation failed integrity checks; continuity crop fallback used.'],
+                  attempts: 2
+                }
+              : {
+                  status: integrityReport?.issues?.some(issue => issue.toLowerCase().includes('unavailable')) ? 'unverified' : 'verified',
+                  score: integrityReport?.score,
+                  issues: integrityReport?.issues,
+                  attempts: integrityPassed ? 1 : 2
+                },
+            error: renderMode === 'continuity_reframe'
+              ? 'Spatial simulation failed integrity checks; used continuity crop fallback.'
+              : isDuplicate ? 'CRITICAL: Failed to materially change framing.' : undefined
           } : v)
         };
       });
     } catch (err: unknown) {
       const errorMessage = getErrorMessage(err);
+      if (isNoImageShotResponse(errorMessage)) {
+        try {
+          const preset = SHOT_PRESETS[variant.presetId];
+          const fallbackUrl = await renderContinuityShotImage({
+            sourceImageUrl: effectiveResultImageUrl,
+            preset,
+            sceneTruth: session.sceneTruth
+          });
+          const materialized = await LocalAssetService.materializeImageAsset({
+            sourceUrl: fallbackUrl,
+            sceneId: sceneId,
+            variantId: variant.id,
+            kind: 'preview',
+            saveDirectoryPath: state.saveDirectoryPath
+          });
+
+          onUpdateSession(sceneId, prev => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              variants: prev.variants.map(v => v.id === variantId ? {
+                ...v,
+                status: 'done',
+                previewUrl: materialized.displayUrl,
+                localPreviewPath: materialized.localPath || undefined,
+                sourcePreviewUrl: fallbackUrl,
+                renderMode: 'continuity_reframe',
+                integrity: {
+                  status: 'fallback',
+                  score: 0,
+                  issues: [errorMessage, 'Shot renderer returned no image; continuity crop fallback used.'],
+                  attempts: 2
+                },
+                error: 'Shot renderer returned no image; used continuity crop fallback.'
+              } : v)
+            };
+          });
+          return;
+        } catch (fallbackErr) {
+          console.warn('[ShotsPanel] No-image regenerate fallback failed.', fallbackErr);
+        }
+      }
       onUpdateSession(sceneId, prev => {
         if (!prev) return prev;
         return {

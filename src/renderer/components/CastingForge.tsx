@@ -8,10 +8,9 @@ import {
   Search, Calendar, Type, Layers, Folder, HelpCircle,
   Maximize, LayoutTemplate, Share2, Info, CheckCircle2,
   ArrowDownUp, Edit2, FolderInput, Hammer, Lock,
-  Undo2, Redo2, Zap, Sliders, Clapperboard
+  Zap, Clapperboard
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
-import { CutoutService } from "../services/CutoutService";
 import { GeminiService } from '../services/GeminiService';
 import HelpTooltip from './ui/HelpTooltip';
 import InlineHint from './ui/InlineHint';
@@ -78,7 +77,7 @@ ABSOLUTE RULES:
 - Head Close-ups: Front, Left 3/4, Right 3/4, Side Profile
 
 6. COMPOSITION
-- Solid black studio background.
+- Solid black studio background (#000000).
 - Empty negative space.
 - No floating heads.
 - No disembodied parts.
@@ -207,6 +206,8 @@ const getErrorMessage = (error: unknown): string => {
   if (error instanceof Error) return error.message;
   return String(error);
 };
+
+const isRecentReferenceSheet = (prompt?: string) => prompt?.toLowerCase().includes('reference sheet') ?? false;
 
 const stripUnsafeFilenameChars = (value: string): string => {
   const forbidden = new Set(['<', '>', ':', '"', '/', '\\', '|', '?', '*']);
@@ -462,7 +463,6 @@ const CastingForge = () => {
   const [cropStart, setCropStart] = useState<{ x: number, y: number } | null>(null);
   const [cropRect, setCropRect] = useState<{ x: number, y: number, w: number, h: number } | null>(null);
   const [removeBg, setRemoveBg] = useState(false);
-  const [aiMaskActive, setAiMaskActive] = useState(false);
 
 
   // Draggable Panel State (Removed - Docked Controls)
@@ -471,34 +471,33 @@ const CastingForge = () => {
   useEffect(() => {
     if (!state.lastCastedImage) {
       setRemoveBg(false);
-      setAiMaskActive(false);
     }
   }, [state.lastCastedImage]);
 
-  const [processedPreviewUrl, setProcessedPreviewUrl] = useState<string | null>(null);
+  const [, setProcessedPreviewUrl] = useState<string | null>(null);
   const [activeHandle, setActiveHandle] = useState<string | null>(null);
 
   const [showRefSheet, setShowRefSheet] = useState(false);
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [refLayout, setRefLayout] = useState<RefSheetLayoutMode>('form_focus');
-  const [fringeSize, setFringeSize] = useState(0); // 0-10 pixels
+  const [fringeSize] = useState(0);
   const [isIsolating, setIsIsolating] = useState(false);
-  const [isolationProgress, setIsolationProgress] = useState(0);
+  const [isolationProgress] = useState(0);
   const [brandingLogo, setBrandingLogo] = useState<string | null>(null);
   const [logoPosition, setLogoPosition] = useState<string>('');
 
   // MASK RESTORATION STATE
   const [isBrushActive, setIsBrushActive] = useState(false);
-  const [brushSize, setBrushSize] = useState(20);
+  const [brushSize] = useState(20);
   const [restorationLayer, setRestorationLayer] = useState<string | null>(null); // Data URL of painted mask
   const [erodedUrl, setErodedUrl] = useState<string | null>(null); // Intermediate eroded state
   const [cursorPos, setCursorPos] = useState<{ x: number, y: number } | null>(null);
 
 
   // HISTORY STATE
-  const [history, setHistory] = useState<(string | null)[]>([null]);
+  const [, setHistory] = useState<(string | null)[]>([null]);
   const historyRef = useRef<(string | null)[]>([null]); // Source of Truth for logic
-  const [historyIndex, setHistoryIndex] = useState(0);
+  const [, setHistoryIndex] = useState(0);
   const historyIndexRef = useRef(0); // Synchronous track for rapid undo/redo
 
   // CACHE REFS (Optimization)
@@ -655,13 +654,9 @@ const CastingForge = () => {
       canvas.height = mainImg.naturalHeight;
 
       // 1. Draw Main (Base)
-      // If Remove BG is active, we start Transparent.
-      // If NOT active (or no mask), we start with Main Image.
       if (!effectiveRemoveBg) {
         ctx.drawImage(mainImg, 0, 0);
       }
-      // If Remove BG is TRUE, key assumption: user wants to see CUTOUT + RESTORATION.
-      // We do NOT draw the main image background.
 
       // 2. Draw Mask (Cutout) if available & active
       if (state.lastCastedMask && effectiveRemoveBg) {
@@ -725,7 +720,7 @@ const CastingForge = () => {
   }, [state.lastCastedImage, restorationLayer, state.lastCastedMask, removeBg]);
 
   const handleAddToCast = async () => {
-    const source = pendingRefSheet || processedPreviewUrl || state.lastCastedImage;
+    const source = pendingRefSheet || state.lastCastedImage;
     if (!source) return;
 
     try {
@@ -758,7 +753,7 @@ const CastingForge = () => {
 
   const handleSaveToActorLibrary = async (targetFolderOverride?: string, nameOverride?: string) => {
     const isRefSheet = !!pendingRefSheet;
-    const finalUrl = pendingRefSheet || processedPreviewUrl || state.lastCastedImage;
+    const finalUrl = pendingRefSheet || state.lastCastedImage;
     if (!finalUrl) return;
 
     const targetFolderId = targetFolderOverride || activeFolder || 'uncategorized';
@@ -879,8 +874,7 @@ const CastingForge = () => {
           // ROBUST PHOTOGRAPHY PROMPT (Safe but detailed)
           styleDirectives = "Shot on Sony A7R IV, 50mm lens. Harsh realistic lighting, flash photography, visible pores, dermatological details, authentic skin texture, imperfect, grainy, sharp focus. Backlight separation, perfect white balance on subject, no color contamination. DO NOT crop off the top of the head.";
 
-          // BACKGROUND RE-PHRASING (To avoid 'digital green' bias)
-          effectivePrompt += " Standing in front of a solid black studio background.";
+          effectivePrompt += " Standing in front of a solid black studio background (#000000), evenly lit, with no background shadows.";
 
           // STRICT ANTI-CG CONSTRAINTS
           negativePrompt = "Do not use: digital art, illustration, painting, drawing, cartoon, anime, 3d render, cgi, unreal engine, smooth skin, airbrushed, beauty filter, perfect lighting, symmetry, plastic, doll-like, artistic adaptation, stylized.";
@@ -989,7 +983,7 @@ SUBJECT LOCK
 STYLE AUTHORITY
 - Apply this character description exactly: ${effectivePrompt}
 - Apply this style direction exactly: ${styleDirectives}
-- Keep the output as one clean isolated character on a solid black studio background.
+- Keep the output as one clean isolated character on a solid black studio background (#000000), evenly lit, with no background shadows.
 
 COMPOSITION
 - Single subject only.
@@ -1014,7 +1008,7 @@ SUBJECT DEFINITION
 
 COMPOSITION
 - One subject only.
-- Solid black studio background.
+- Solid black studio background (#000000), evenly lit, with no background shadows.
 - No text, no labels, no HUD, no overlays.
 
 NEGATIVE CONSTRAINTS:
@@ -1050,25 +1044,8 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
         }
         dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: safeResolvedUrl });
         setProcessedPreviewUrl(null);
-        setShowAdjustments(false);
       } else {
         return;
-      }
-
-      try {
-        if (aiMaskActive) {
-          dispatch({ type: 'ADD_LOG', payload: { message: "Running local AI isolation...", type: 'info' } });
-
-          const { cutoutUrl } = await CutoutService.processImage(safeResolvedUrl, undefined, undefined, true);
-
-          if (generationIdRef.current === currentGenId) {
-            dispatch({ type: 'SET_LAST_CASTED_MASK', payload: cutoutUrl });
-            dispatch({ type: 'ADD_LOG', payload: { message: "Subject Isolated Successfully", type: 'success' } });
-          }
-        }
-      } catch (maskErr: unknown) {
-        console.error("Isolation Failed:", maskErr);
-        dispatch({ type: 'ADD_LOG', payload: { message: `Isolation Failed: ${getErrorMessage(maskErr)}`, type: 'error' } });
       }
 
       const logMessage = state.lastCastedImage ? "Character stylized" : "Character generated";
@@ -1116,8 +1093,6 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
 
 
   const imgRef = useRef<HTMLImageElement>(null);
-  const maskImgRef = useRef<HTMLImageElement>(null);
-  const previewImgRef = useRef<HTMLImageElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   // RESTORATION REFS
   const restorationCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -1126,7 +1101,6 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
   const lastPaintPos = useRef<{ x: number, y: number } | null>(null);
   const lastScreenPos = useRef<{ x: number, y: number } | null>(null);
   const isSyncingRef = useRef(false); // Track async canvas sync state
-  const syncRequestId = useRef(0); // Track migration/sync requests to avoid race conditions
 
   const generationIdRef = useRef<number>(0);
 
@@ -1332,7 +1306,6 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
   const [showSortMenu, setShowSortMenu] = useState(false);
   const [activeFolder, setActiveFolder] = useState<string | null>(null);
   const [refSheetUrl, setRefSheetUrl] = useState<string | null>(null);
-  const [showAdjustments, setShowAdjustments] = useState(false);
 
   // Custom Covers moved to AppContext for persistence
   // const [customCovers, setCustomCovers] = useState<Record<string, string>>({});
@@ -1571,14 +1544,13 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
     });
   }, [state.actorLibrary, librarySearch, sortOption, activeFolder, knownStyles]);
 
-  // --- 4. ISOLATION PROCESS (UPDATED for Imgly) ---
-  // The 'mask' is now the isolated image URL itself.
-  // --- 4. ISOLATION PROCESS (UPDATED for Imgly) ---
+  // --- 4. ALPHA MATTE PROCESS ---
   // The 'mask' is now the isolated image URL itself.
 
   // PHASE 1: EROSION (Heavy - CPU)
   const generateErodedMask = async (srcUrl: string, pixels: number): Promise<string> => {
-    if (pixels === 0) return srcUrl;
+    const safePixels = Math.max(0, Math.min(4, pixels));
+    if (safePixels === 0) return srcUrl;
 
     return new Promise((resolve) => {
       const img = new Image();
@@ -1603,9 +1575,9 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
         }
 
         // SUB-PIXEL EROSION
-        const rBase = Math.floor(pixels);
+        const rBase = Math.floor(safePixels);
         const rExt = rBase + 1;
-        const fraction = pixels - rBase;
+        const fraction = safePixels - rBase;
 
         for (let y = 0; y < h; y++) {
           for (let x = 0; x < w; x++) {
@@ -1796,7 +1768,6 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
 
   // EFFECT 2: Handle Composition (Fast)
   useEffect(() => {
-    // If Remove BG is off, show nothing
     if (!removeBg) {
       setProcessedPreviewUrl(null);
       return;
@@ -1842,7 +1813,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
 
 
   const handleDownload = async () => {
-    const source = processedPreviewUrl || state.lastCastedImage;
+    const source = state.lastCastedImage;
     if (!source) return;
 
     try {
@@ -1893,29 +1864,35 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
           dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: standardizedUrl });
           dispatch({ type: 'SET_LAST_CASTED_MASK', payload: null });
           setProcessedPreviewUrl(null);
-          setShowAdjustments(false);
-
-          const currentGenId = Date.now();
-          generationIdRef.current = currentGenId;
-
-          try {
-            dispatch({ type: 'ADD_LOG', payload: { message: "Isolating character silhouette locally...", type: 'info' } });
-            const { cutoutUrl } = await CutoutService.processImage(standardizedUrl, undefined, undefined, true);
-
-            if (generationIdRef.current === currentGenId) {
-              dispatch({ type: 'SET_LAST_CASTED_MASK', payload: cutoutUrl });
-              dispatch({ type: 'ADD_LOG', payload: { message: "Character silhouette isolated successfully", type: 'success' } });
-            }
-          } catch (err: unknown) {
-            if (generationIdRef.current === currentGenId) {
-              dispatch({ type: 'ADD_LOG', payload: { message: `Mask generation failed: ${getErrorMessage(err)}`, type: 'error' } });
-            }
-          }
         };
         img.src = rawDataUrl;
       };
       reader.readAsDataURL(file);
     }
+  };
+
+  const cacheCastingRecentGeneration = (imageUrl: string, prompt: string, createdAt = Date.now()) => {
+    const recentStore = useRecentGenerationsStore.getState();
+    if (!recentStore.cacheDirPath || !imageUrl) return;
+
+    RecentGenerationsCacheService.cacheGeneration({
+      imageDataUrl: imageUrl,
+      studio: 'general',
+      cacheDirPath: recentStore.cacheDirPath,
+    }).then((cacheResult) => {
+      if (cacheResult.success && cacheResult.localCachePath && cacheResult.displayUrl) {
+        recentStore.addRecentGeneration({
+          studio: 'general',
+          localCachePath: cacheResult.localCachePath,
+          displayUrl: cacheResult.displayUrl,
+          createdAt,
+          prompt,
+          mode: (state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok') || 'byok',
+        });
+      }
+    }).catch((e) => {
+      console.warn('[CastingForge] Recent generation caching failed:', e);
+    });
   };
 
   const handleGenerateRefSheet = async () => {
@@ -1973,7 +1950,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
       finalPrompt += "\nSTRICT NEGATIVE ADDENDUM: double-head, two heads on one body, conjoined anatomy, fused torso, ghost body, mirrored twin body, duplicate neck, duplicate torso, extra body in slot, empty panel slot, panel overlap artifacts.\n";
 
       // BRANDING INJECTION
-      const targetReferenceUrl = processedPreviewUrl || state.lastCastedImage;
+      const targetReferenceUrl = state.lastCastedImage;
       const inputImages = [{ url: targetReferenceUrl, label: 'Character Reference' }];
 
       if (brandingLogo) {
@@ -2065,6 +2042,7 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
 
       setRefSheetUrl(safeRefSheetUrl);
       setShowRefSheet(true);
+      cacheCastingRecentGeneration(safeRefSheetUrl, `Reference Sheet - CAST (${refLayout})`);
       dispatch({ type: 'ADD_LOG', payload: { message: "Reference Sheet Generated.", type: 'success' } });
     } catch (e: unknown) {
       dispatch({ type: 'ADD_LOG', payload: { message: `Ref Sheet failed: ${getErrorMessage(e)}`, type: 'error' } });
@@ -2080,33 +2058,56 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
 
   // handlePanelMouseDown removed (Docked Controls)
 
+  const getRenderedImageRect = (img: HTMLImageElement) => {
+    const rect = img.getBoundingClientRect();
+    const style = window.getComputedStyle(img);
+    const padLeft = parseFloat(style.paddingLeft) || 0;
+    const padTop = parseFloat(style.paddingTop) || 0;
+    const padRight = parseFloat(style.paddingRight) || 0;
+    const padBottom = parseFloat(style.paddingBottom) || 0;
+
+    const contentLeft = rect.left + padLeft;
+    const contentTop = rect.top + padTop;
+    const contentWidth = Math.max(1, rect.width - padLeft - padRight);
+    const contentHeight = Math.max(1, rect.height - padTop - padBottom);
+
+    const naturalWidth = img.naturalWidth || 1;
+    const naturalHeight = img.naturalHeight || 1;
+    const fitScale = Math.min(contentWidth / naturalWidth, contentHeight / naturalHeight);
+    const width = naturalWidth * fitScale;
+    const height = naturalHeight * fitScale;
+
+    return {
+      left: contentLeft + (contentWidth - width) / 2,
+      top: contentTop + (contentHeight - height) / 2,
+      width,
+      height,
+      scale: naturalWidth / width,
+    };
+  };
+
   // MOUSE TO IMAGE COORDINATE MAPPER
   const getImgCoords = (clientX: number, clientY: number) => {
-    // 1. Identify which image is ACTUALLY visible to the user
-    // If preview exists, we use previewImgRef (which is object-contain)
-    // If not, we use imgRef (which is object-contain)
-    // Note: When preview is active, imgRef becomes 'absolute invisible', so its rect helps nobody.
-    const activeImg = (processedPreviewUrl && previewImgRef.current)
-      ? previewImgRef.current
-      : imgRef.current;
+    const activeImg = imgRef.current;
 
     if (!containerRef.current || !activeImg) return null;
 
-    // 2. Get Geometries
     const container = containerRef.current;
     const containerRect = container.getBoundingClientRect();
-    const imgRect = activeImg.getBoundingClientRect();
+    const renderedRect = getRenderedImageRect(activeImg);
 
-    // 3. Calculate Image Coordinates
-    // relative to the IMAGE element's top-left
-    const mouseX = clientX - imgRect.left;
-    const mouseY = clientY - imgRect.top;
+    const mouseX = clientX - renderedRect.left;
+    const mouseY = clientY - renderedRect.top;
 
-    // 4. Scale to Natural Dimensions
-    // naturalWidth / renderedWidth
-    const scale = activeImg.naturalWidth / imgRect.width;
+    if (
+      mouseX < 0 ||
+      mouseY < 0 ||
+      mouseX > renderedRect.width ||
+      mouseY > renderedRect.height
+    ) {
+      return null;
+    }
 
-    // 5. Calculate UI Screen Coordinates (for Cursor Dot)
     // Relative to Container Content Box (where .absolute children live)
     // screenX = clientX - (containerLeft + borderLeft)
     const borderLeft = container.clientLeft || 0;
@@ -2115,11 +2116,11 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
     const screenY = clientY - containerRect.top - borderTop;
 
     return {
-      x: mouseX * scale,
-      y: mouseY * scale,
+      x: mouseX * renderedRect.scale,
+      y: mouseY * renderedRect.scale,
       w: activeImg.naturalWidth,
       h: activeImg.naturalHeight,
-      scale: scale,
+      scale: renderedRect.scale,
       screenX: screenX,
       screenY: screenY,
     };
@@ -2132,18 +2133,23 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
     // Drag logic removed
 
     // BRUSH INTERACTION
-    if (isBrushActive && imgRef.current) {
+    if (isBrushActive) {
       e.stopPropagation();
       e.preventDefault();
-      isPaintingRef.current = true;
 
       const coords = getImgCoords(e.clientX, e.clientY);
+      if (!coords) {
+        isPaintingRef.current = false;
+        return;
+      }
+
+      isPaintingRef.current = true;
 
       // Init Canvas if Needed
       if (!restorationCanvasRef.current) {
         const c = document.createElement('canvas');
-        c.width = imgRef.current.naturalWidth;
-        c.height = imgRef.current.naturalHeight;
+        c.width = coords.w;
+        c.height = coords.h;
         restorationCanvasRef.current = c;
 
         if (restorationLayer) {
@@ -2162,35 +2168,28 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
         uictx?.clearRect(0, 0, uiCanvasRef.current.width, uiCanvasRef.current.height);
       }
 
-      if (coords) {
-        lastPaintPos.current = { x: coords.x, y: coords.y };
+      lastPaintPos.current = { x: coords.x, y: coords.y };
 
-        // USE CALCULATED SCREEN COORDS
-        const uiX = coords.screenX;
-        const uiY = coords.screenY;
-        lastScreenPos.current = { x: uiX, y: uiY };
+      const uiX = coords.screenX;
+      const uiY = coords.screenY;
+      lastScreenPos.current = { x: uiX, y: uiY };
 
-        // Dot for click
-        const ctx = restorationCanvasRef.current.getContext('2d');
-        if (ctx) {
-          ctx.beginPath();
-          // SCALE BRUSH: Screen Pixels -> Image Pixels
-          const r = (brushSize * coords.scale) / 2;
-          ctx.arc(coords.x, coords.y, r, 0, Math.PI * 2);
-          ctx.fillStyle = 'white';
-          ctx.fill();
-          // NO STATE UPDATE HERE - Wait for mouse up
-        }
+      const ctx = restorationCanvasRef.current.getContext('2d');
+      if (ctx) {
+        ctx.beginPath();
+        const r = (brushSize * coords.scale) / 2;
+        ctx.arc(coords.x, coords.y, r, 0, Math.PI * 2);
+        ctx.fillStyle = 'white';
+        ctx.fill();
+      }
 
-        // Draw visual dot on UI canvas
-        const uictx = uiCanvasRef.current?.getContext('2d');
-        if (uictx) {
-          uictx.beginPath();
-          const r = brushSize / 2;
-          uictx.arc(uiX, uiY, r, 0, Math.PI * 2);
-          uictx.fillStyle = 'white';
-          uictx.fill();
-        }
+      const uictx = uiCanvasRef.current?.getContext('2d');
+      if (uictx) {
+        uictx.beginPath();
+        const r = brushSize / 2;
+        uictx.arc(uiX, uiY, r, 0, Math.PI * 2);
+        uictx.fillStyle = 'white';
+        uictx.fill();
       }
       return;
     }
@@ -2261,7 +2260,14 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
           }
           lastPaintPos.current = { x: coords.x, y: coords.y };
           lastScreenPos.current = { x: uiX, y: uiY };
+        } else if (isPaintingRef.current) {
+          lastPaintPos.current = { x: coords.x, y: coords.y };
+          lastScreenPos.current = { x: uiX, y: uiY };
         }
+      } else {
+        setCursorPos(null);
+        lastPaintPos.current = null;
+        lastScreenPos.current = null;
       }
       return;
     }
@@ -2341,89 +2347,6 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
     setActiveHandle(null);
   };
 
-  const syncRefCanvas = (url: string | null) => {
-    if (!imgRef.current) return;
-
-    // Re-init canvas if missing
-    if (!restorationCanvasRef.current) {
-      const c = document.createElement('canvas');
-      c.width = imgRef.current.naturalWidth;
-      c.height = imgRef.current.naturalHeight;
-      restorationCanvasRef.current = c;
-    }
-
-    const ctx = restorationCanvasRef.current.getContext('2d');
-    if (!ctx) return;
-
-    // Increment request ID
-    const currentId = ++syncRequestId.current;
-
-    // Defer clearing until image loads to prevent race condition
-    if (url) {
-      isSyncingRef.current = true;
-      const img = new Image();
-      img.onload = () => {
-        // Only draw if this is the latest request
-        if (currentId === syncRequestId.current) {
-          if (restorationCanvasRef.current) {
-            ctx.clearRect(0, 0, restorationCanvasRef.current.width, restorationCanvasRef.current.height);
-            ctx.drawImage(img, 0, 0);
-          }
-        } else {
-          console.log("Ignored stale undo/redo request (Lock released)");
-        }
-        // ALWAYS RELEASE LOCK
-        isSyncingRef.current = false;
-      };
-      img.onerror = () => {
-        console.error("Failed to load history snapshot");
-        isSyncingRef.current = false; // RELEASE LOCK ON ERROR
-      };
-      img.src = url;
-    } else {
-      // Safe to clear immediately if no URL
-      ctx.clearRect(0, 0, restorationCanvasRef.current.width, restorationCanvasRef.current.height);
-    }
-  };
-
-  const handleUndo = () => {
-    const currentIndex = historyIndexRef.current;
-    console.log("UNDO CLICK. Current Ref:", currentIndex);
-    if (currentIndex > 0) {
-      const newIndex = Math.max(0, currentIndex - 1);
-      const snapshot = historyRef.current[newIndex]; // Read from Ref
-
-      console.log("UNDO SNAPSHOT FOUND:", { newIndex, snapshotLen: snapshot?.length });
-
-      if (snapshot === undefined) return;
-
-      historyIndexRef.current = newIndex;
-      setHistoryIndex(newIndex);
-      setRestorationLayer(snapshot);
-      setRestorationLayer(snapshot);
-      syncRefCanvas(snapshot);
-    }
-  };
-
-  const handleRedo = () => {
-    const currentIndex = historyIndexRef.current;
-    const currentHist = historyRef.current;
-    console.log("REDO CLICK. Current Ref:", currentIndex, "Hist Len:", currentHist.length);
-    if (currentIndex < currentHist.length - 1) {
-      const newIndex = Math.min(currentHist.length - 1, currentIndex + 1);
-      const snapshot = currentHist[newIndex]; // Read from Ref
-
-      console.log("REDO SNAPSHOT FOUND:", { newIndex, snapshotLen: snapshot?.length });
-
-      if (snapshot === undefined) return;
-
-      historyIndexRef.current = newIndex;
-      setHistoryIndex(newIndex);
-      setRestorationLayer(snapshot);
-      syncRefCanvas(snapshot);
-    }
-  };
-
   const handleMouseLeave = () => {
     endInteraction();
     setCursorPos(null);
@@ -2431,8 +2354,7 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
 
   const finalizeCrop = () => {
     if (!cropRect || !containerRef.current || cropRect.w < 10) return;
-    const isUsingProcessedPreview = !!(processedPreviewUrl && previewImgRef.current);
-    const sourceElement = isUsingProcessedPreview ? previewImgRef.current : imgRef.current;
+    const sourceElement = imgRef.current;
     if (!sourceElement) return;
 
     const containerRect = containerRef.current.getBoundingClientRect();
@@ -2874,6 +2796,13 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
                     </button>
                   </HelpTooltip>
                   <button
+                    onClick={handleAddToCast}
+                    className="bg-blue-500/10 hover:bg-blue-500 text-blue-400 hover:text-white px-4 py-1.5 rounded-full text-[9px] font-black flex items-center gap-2 transition-all uppercase tracking-widest active:scale-95 border border-blue-500/20"
+                    title="Add to Session Cast"
+                  >
+                    <UserPlus className="w-4 h-4" /> Add to Cast
+                  </button>
+                  <button
                     onClick={handleDownload}
                     className="text-gray-500 hover:text-white transition-all transform hover:scale-110 active:scale-90"
                     title="Download PNG"
@@ -2891,16 +2820,6 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
               >
                 <Scissors className="w-3.5 h-3.5" />
                 Slicer {isCropping ? 'Active' : 'Idle'}
-              </button>
-              <button
-                onClick={() => setShowAdjustments(!showAdjustments)}
-                className={`text-[9px] px-4 py-1.5 rounded-full font-black flex items-center gap-2 transition-all uppercase tracking-widest active:scale-95 border ${showAdjustments
-                  ? 'bg-purple-600 text-white border-purple-400 '
-                  : 'bg-black/40 text-gray-500 border-white/5 hover:border-white/20 hover:text-gray-200'
-                  }`}
-              >
-                <Sliders className="w-3.5 h-3.5" />
-                Adjustments
               </button>
             </div>
           </div>
@@ -2951,37 +2870,31 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
                     ref={imgRef}
                     src={state.lastCastedImage}
                     crossOrigin="anonymous"
-                    className={processedPreviewUrl ? 'invisible absolute pointer-events-none' : 'absolute inset-0 w-full h-full object-contain pointer-events-none py-4 sm:py-8 px-1 sm:px-2'}
-                    style={{ filter: (removeBg && !!state.lastCastedMask) ? 'none' : 'drop-shadow(0 0 2px rgba(255,255,255,0.25)) drop-shadow(0 8px 15px rgba(0,0,0,0.8)) drop-shadow(0 -8px 15px rgba(0,0,0,0.8))' }}
+                    className="absolute inset-0 w-full h-full object-contain pointer-events-none py-4 sm:py-8 px-1 sm:px-2"
+                    style={{ filter: 'drop-shadow(0 0 2px rgba(255,255,255,0.25)) drop-shadow(0 8px 15px rgba(0,0,0,0.8)) drop-shadow(0 -8px 15px rgba(0,0,0,0.8))' }}
                   />
-                  {processedPreviewUrl && (
-                    <img
-                      ref={previewImgRef}
-                      src={processedPreviewUrl}
-                      className="absolute inset-0 w-full h-full object-contain pointer-events-none py-4 sm:py-8 px-1 sm:px-2"
-                      style={{ filter: (removeBg && !!state.lastCastedMask) ? 'none' : 'drop-shadow(0 0 2px rgba(255,255,255,0.25)) drop-shadow(0 8px 15px rgba(0,0,0,0.8)) drop-shadow(0 -8px 15px rgba(0,0,0,0.8))' }}
-                    />
-                  )}
-                  {state.lastCastedMask && (
-                    <img
-                      key={state.lastCastedMask}
-                      ref={maskImgRef}
-                      src={state.lastCastedMask}
-                      crossOrigin="anonymous"
-                      className="hidden"
-                    />
-                  )}
 
                   {/* RECENT GENERATIONS STRIP */}
                   <div className="absolute bottom-2 left-0 right-0 z-50 pointer-events-auto flex justify-center px-4">
                       <RecentGenerationsStrip
                           studio="general"
+                          showSingle
                           className="w-full max-w-3xl bg-black/80 backdrop-blur-md rounded-2xl border border-white/10"
                           onSelectGeneration={(gen) => {
-                              dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: gen.displayUrl });
+                              if (isRecentReferenceSheet(gen.prompt)) {
+                                  setRefSheetUrl(gen.displayUrl);
+                                  setShowRefSheet(true);
+                              } else {
+                                  dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: gen.displayUrl });
+                              }
                           }}
                           onExportGeneration={(gen) => {
-                              dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: gen.displayUrl });
+                              if (isRecentReferenceSheet(gen.prompt)) {
+                                  setPendingRefSheet(gen.displayUrl);
+                              } else {
+                                  dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: gen.displayUrl });
+                                  setPendingRefSheet(null);
+                              }
                               setShowSaveModal(true);
                               useRecentGenerationsStore.getState().markExported(gen.id);
                           }}
@@ -3153,160 +3066,6 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
               )}
             </div>
 
-            {state.lastCastedImage && showAdjustments && (
-              <div className="w-80 shrink-0 border-l border-white/10 bg-[#18181b]/50 h-full flex flex-col animate-in slide-in-from-right-10 duration-300">
-                <div className="p-4 border-b border-white/10 flex items-center justify-between shrink-0">
-                  <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-400">Image Adjustments</h3>
-                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-2 cursor-pointer select-none hover:text-white transition-colors">
-                    <input
-                      type="checkbox"
-                      checked={removeBg}
-                      onChange={(e) => setRemoveBg(e.target.checked)}
-                      className="w-4 h-4 accent-blue-500 rounded border-white/10 bg-black cursor-pointer"
-                    />
-                    <Eraser className="w-3.5 h-3.5" /> Remove BG
-                  </label>
-                </div>
-
-                <div className="flex-grow overflow-y-auto p-4 space-y-6 scrollbar-thin scrollbar-thumb-gray-800 scrollbar-track-transparent">
-                  {removeBg ? (
-                    <>
-                      <div className="space-y-3">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[9px] font-black text-gray-500 uppercase tracking-widest">Edge Refinement</span>
-
-                          {state.lastCastedMask ? (
-                            <div className="flex items-center gap-1.5 text-blue-400">
-                              <CheckCircle2 className="w-3 h-3" />
-                              <span className="text-[9px] font-bold uppercase">Isolated</span>
-                            </div>
-                          ) : (
-                            <button
-                              onClick={async () => {
-                                if (!state.lastCastedImage) return;
-                                try {
-                                  dispatch({ type: 'ADD_LOG', payload: { message: "Starting isolation...", type: 'info' } });
-                                  setIsIsolating(true);
-                                  setIsolationProgress(5);
-                                  const { cutoutUrl } = await CutoutService.processImage(
-                                    state.lastCastedImage,
-                                    undefined,
-                                    (_key: string, current: number, total: number) => {
-                                      if (total) setIsolationProgress(Math.round((current / total) * 100));
-                                    },
-                                    true
-                                  );
-                                  dispatch({ type: 'SET_LAST_CASTED_MASK', payload: cutoutUrl });
-                                  dispatch({ type: 'ADD_LOG', payload: { message: "Isolation Complete", type: 'success' } });
-                                  setRemoveBg(true);
-                                } catch (e: unknown) {
-                                  dispatch({ type: 'ADD_LOG', payload: { message: "Isolation Error: " + getErrorMessage(e), type: 'error' } });
-                                } finally {
-                                  setIsIsolating(false);
-                                  setIsolationProgress(0);
-                                }
-                              }}
-                              className="text-[9px] font-bold text-gray-400 hover:text-white flex items-center gap-1 bg-white/5 px-2 py-0.5 rounded transition-colors"
-                            >
-                              <Sparkles className="w-3 h-3" /> Run
-                            </button>
-                          )}
-                        </div>
-
-                        <div className="flex items-center gap-3 bg-black/20 p-2 rounded-lg border border-white/5">
-                          <span className="text-[10px] text-gray-400 font-bold w-8 text-right">{fringeSize}px</span>
-                          <input
-                            type="range"
-                            min="0"
-                            max="10"
-                            step="0.5"
-                            value={fringeSize}
-                            onChange={(e) => setFringeSize(parseFloat(e.target.value))}
-                            className="flex-grow h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                          />
-                        </div>
-                      </div>
-
-                      <div className="pt-4 border-t border-white/5 space-y-3">
-                        <div className="flex flex-col w-full gap-2">
-                          <span className="text-[9px] font-black text-gray-500 uppercase tracking-widest leading-none">Restore</span>
-                          <div className="w-full flex items-center justify-between gap-1 bg-black/40 rounded-lg p-1 border border-white/10">
-                            <div className="relative group/history">
-                              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-black border border-gray-700 px-2 py-1 rounded text-[9px] text-gray-300 opacity-0 group-hover/history:opacity-100 pointer-events-none transition-opacity whitespace-nowrap z-50">
-                                History State: {historyIndex}
-                              </div>
-                              <span className="text-xs font-bold text-blue-400 font-mono px-2 select-none bg-blue-900/30 rounded border border-blue-500/30 min-w-[36px] text-center whitespace-nowrap block">
-                                {historyIndex} / {history.length - 1}
-                              </span>
-                            </div>
-
-                            <button
-                              onClick={() => setIsBrushActive(!isBrushActive)}
-                              className={`p-1.5 rounded transition-all ${isBrushActive
-                                ? 'bg-blue-600 text-white -[0_0_10px_rgba(37,99,235,0.5)]'
-                                : 'text-gray-400 hover:text-white hover:bg-white/10'
-                                }`}
-                              title="Restore Mask Brush"
-                            >
-                              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 20a6 6 0 0 0-12 0" /><path d="M12 20v-6" /><path d="M12 14a4 4 0 0 1 4-4V5a4 4 0 0 0-8 0v5a4 4 0 0 1 4 4z" /></svg>
-                            </button>
-                            <div className="w-px h-3 bg-white/10 mx-0.5" />
-                            <button
-                              onClick={handleUndo}
-                              disabled={historyIndex <= 0}
-                              className="p-3 rounded hover:bg-white/10 text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent transition-colors group"
-                            >
-                              <Undo2 className="w-4 h-4 pointer-events-none" />
-                            </button>
-                            <button
-                              onClick={handleRedo}
-                              disabled={historyIndex >= history.length - 1}
-                              className="p-3 rounded hover:bg-white/10 text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent transition-colors group"
-                            >
-                              <Redo2 className="w-4 h-4 pointer-events-none" />
-                            </button>
-                          </div>
-                        </div>
-
-                        {isBrushActive && (
-                          <div className="flex items-center gap-3 pl-2 animate-in fade-in slide-in-from-top-1 bg-black/20 p-2 rounded-lg border border-white/5">
-                            <span className="text-[9px] font-bold text-gray-500 w-8 text-right">{brushSize}px</span>
-                            <input
-                              type="range"
-                              min="1"
-                              max="100"
-                              value={brushSize}
-                              onChange={(e) => setBrushSize(parseInt(e.target.value))}
-                              onMouseDown={(e) => e.stopPropagation()}
-                              className="flex-grow h-1.5 bg-gray-700 rounded-full appearance-none cursor-pointer accent-blue-500"
-                            />
-                          </div>
-                        )}
-                      </div>
-                    </>
-                  ) : (
-                    <div className="flex flex-col items-center justify-center py-10 opacity-30 text-center">
-                      <Eraser className="w-8 h-8 mb-2" />
-                      <span className="text-[10px] font-bold uppercase tracking-widest block max-w-[150px] leading-relaxed">Enable "Remove BG" to access tools</span>
-                    </div>
-                  )}
-                </div>
-
-                <div className="p-4 border-t border-white/10 bg-[#09090b]/50 shrink-0 space-y-3">
-                  <button onClick={handleAddToCast} className="w-full bg-emerald-500/10 hover:bg-emerald-500 text-emerald-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-emerald-500/20 hover:-[0_0_15px_rgba(16,185,129,0.4)] text-[10px] font-black uppercase tracking-wider" title="Add to Session Cast">
-                    <UserPlus className="w-4 h-4" /> Add to Cast
-                  </button>
-                  <div className="grid grid-cols-2 gap-3">
-                    <button onClick={handleDownload} className="w-full bg-blue-600/10 hover:bg-blue-600 text-blue-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-blue-500/20 hover:-[0_0_15px_rgba(37,99,235,0.4)] text-[10px] font-black uppercase tracking-wider">
-                      <Download className="w-4 h-4" /> Save
-                    </button>
-                    <button onClick={() => { dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: null }); useRecentGenerationsStore.getState().clearRecentGenerationsForStudio('general'); }} className="w-full bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-red-500/20 hover:-[0_0_15px_rgba(239,68,68,0.4)] text-[10px] font-black uppercase tracking-wider">
-                      <X className="w-4 h-4" /> Clear
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
         </div>
       </div>
