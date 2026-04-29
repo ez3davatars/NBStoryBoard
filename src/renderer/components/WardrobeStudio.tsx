@@ -1033,9 +1033,12 @@ const WardrobeStudio = () => {
             return;
         }
 
-        if (!designerPrompt) {
-            showToast("Enter a wardrobe prompt to generate a costume.");
-            dispatch({ type: 'ADD_LOG', payload: { message: "Costume Designer requires a prompt.", type: 'error' } });
+        const hasDesignerPrompt = designerPrompt.trim().length > 0;
+        const hasDesignerReference = Boolean(designerRefImage);
+
+        if (!hasDesignerPrompt && !hasDesignerReference) {
+            showToast("Enter a wardrobe prompt or upload a reference image.");
+            dispatch({ type: 'ADD_LOG', payload: { message: "Costume Designer requires a prompt or reference image.", type: 'error' } });
             return;
         }
 
@@ -1099,13 +1102,17 @@ const WardrobeStudio = () => {
 - Ensure correct proportions and legibility.`
                 : `BRANDING: None.`;
 
+            const userDescription = hasDesignerPrompt
+                ? designerPrompt.trim()
+                : 'Use the uploaded design reference as the primary design brief.';
+
             const prompt = `
 Professional garment design + studio product photography.
 
 ${referenceInstructions}
 
 USER DESCRIPTION:
-${designerPrompt}
+${userDescription}
 
 OUTPUT REQUIREMENTS (STRICT):
 - Single standalone garment only (NO person, NO mannequin, NO hanger, NO hands).
@@ -1164,7 +1171,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                             localCachePath: cacheResult.localCachePath,
                             displayUrl: cacheResult.displayUrl,
                             createdAt: Date.now(),
-                            prompt: designerPrompt || 'Generated Costume',
+                            prompt: userDescription || 'Generated Costume',
                             mode: (state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok') || 'byok',
                         });
                     }
@@ -2089,9 +2096,22 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                         >
                                             <div className="flex items-center justify-between gap-3">
                                                 <div className="flex items-center gap-3 min-w-0">
-                                                    <div className="w-10 h-10 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center shrink-0">
-                                                        <Upload className="w-5 h-5 text-gray-400" />
-                                                    </div>
+                                                    <label className="relative group cursor-pointer shrink-0" title="Upload Design Reference">
+                                                        <div className="w-10 h-10 rounded-lg bg-white/5 border border-dashed border-white/10 group-hover:border-blue-500/50 flex items-center justify-center transition-all overflow-hidden">
+                                                            {designerRefImage ? (
+                                                                <img src={designerRefImage} className="w-full h-full object-cover" alt="Design Reference" />
+                                                            ) : (
+                                                                <Upload className="w-5 h-5 text-gray-400 group-hover:text-blue-400" />
+                                                            )}
+                                                        </div>
+                                                        <input
+                                                            type="file"
+                                                            className="hidden"
+                                                            accept="image/*"
+                                                            onClick={(e) => { (e.target as HTMLInputElement).value = ''; }}
+                                                            onChange={handleUploadDesignerReference}
+                                                        />
+                                                    </label>
                                                     <div className="min-w-0">
                                                         <div className="text-xs font-bold text-white leading-tight">
                                                             {designerRefImage ? 'Reference loaded' : 'Drop a reference image'}
@@ -2101,17 +2121,6 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                                         </div>
                                                     </div>
                                                 </div>
-
-                                                <label className="shrink-0 text-[9px] font-bold text-gray-200 hover:text-white cursor-pointer bg-white/5 hover:bg-white/10 px-2.5 py-1 rounded-lg border border-white/10 transition-colors">
-                                                    Upload
-                                                    <input
-                                                        type="file"
-                                                        className="hidden"
-                                                        accept="image/*"
-                                                        onClick={(e) => { (e.target as HTMLInputElement).value = ''; }}
-                                                        onChange={handleUploadDesignerReference}
-                                                    />
-                                                </label>
                                             </div>
 
                                             {designerRefImage && (
@@ -2153,7 +2162,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                             onClick={handleDesignerGenerate}
                                             disabled={
                                                 state.isProcessing || 
-                                                !designerPrompt ||
+                                                (!designerPrompt.trim() && !designerRefImage) ||
                                                 (state.billingEntitlements.effectiveBillingMode === "byok" && !state.apiKey)
                                             }
                                             className="w-full bg-gradient-to-r from-yellow-500 to-yellow-600 hover:from-yellow-400 hover:to-yellow-500 text-black py-3 rounded-xl font-black text-xs uppercase tracking-[0.2em] transition-all active:scale-95 disabled:opacity-50"
@@ -2288,20 +2297,6 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                                 </>
                                             )}
                                         </div>
-                                        {/* RECENT GENERATIONS STRIP */}
-                                        <div className="absolute bottom-2 left-0 right-0 z-50 pointer-events-auto flex justify-center px-4">
-                                            <RecentGenerationsStrip
-                                                studio="wardrobe"
-                                                className="w-full max-w-3xl bg-black/80 backdrop-blur-md rounded-2xl border border-white/10"
-                                                onSelectGeneration={(gen) => {
-                                                    setDesignerImage(gen.displayUrl);
-                                                }}
-                                                onExportGeneration={(gen) => {
-                                                    setDesignerImage(gen.displayUrl);
-                                                }}
-                                            />
-                                        </div>
-
                                     </div>
                                 ) : (
                                     <div className="flex flex-col items-center opacity-20">
@@ -2309,6 +2304,23 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                         <span className="text-xs font-black uppercase tracking-widest text-[#a1a1aa]">Awaiting Design</span>
                                     </div>
                                 )}
+
+                                {/* RECENT GENERATIONS STRIP (Costume Designer viewport) */}
+                                <div className="absolute bottom-2 left-0 right-0 z-50 pointer-events-auto flex justify-center px-4">
+                                    <RecentGenerationsStrip
+                                        studio="wardrobe"
+                                        showSingle
+                                        className="w-full max-w-3xl bg-black/80 backdrop-blur-md rounded-2xl border border-white/10"
+                                        onSelectGeneration={(gen) => {
+                                            setDesignerImage(gen.displayUrl);
+                                        }}
+                                        onExportGeneration={async (gen) => {
+                                            setDesignerImage(gen.displayUrl);
+                                            await saveToWardrobe(gen.displayUrl, gen.prompt || designerPrompt || 'Generated Costume');
+                                            useRecentGenerationsStore.getState().markExported(gen.id);
+                                        }}
+                                    />
+                                </div>
 
                                 <div className="absolute top-4 right-4 flex items-center gap-2">
                                     <button

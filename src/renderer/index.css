@@ -200,6 +200,26 @@ button:focus-visible {
   animation: bounce-x 1s infinite;
 }
 
+@keyframes style-scan {
+  0% {
+    transform: translateX(-110%);
+    opacity: 0.35;
+  }
+
+  50% {
+    opacity: 1;
+  }
+
+  100% {
+    transform: translateX(210%);
+    opacity: 0.35;
+  }
+}
+
+.animate-style-scan {
+  animation: style-scan 1.15s ease-in-out infinite;
+}
+
 @keyframes bounce-x {
 
   0%,

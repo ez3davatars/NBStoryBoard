@@ -155,6 +155,41 @@ FACE LAYOUT SLOT MAP (STRICT):
   B3 = BACK/REAR
 `;
 
+const REFERENCE_SHEET_CALLOUT_LABELS_BASE = `
+CALLOUT LABELS ENABLED:
+Create the reference sheet with clean professional annotation labels and thin leader lines. Label only visible or user-provided details such as hairstyle, clothing pieces, accessories, footwear, logo placement, and view angles. Do not invent measurements, materials, brand names, character names, height, or hidden details. If height is not provided, do not add a height scale. Keep labels minimal, readable, correctly spelled, and placed outside the character silhouette whenever possible.
+
+CALLOUT TEXT RULES:
+- Callout labels are the only permitted text on the sheet.
+- Do not add captions, paragraphs, watermarks, brand names, character names, ages, heights, measurements, or material claims.
+- If an item is ambiguous, use generic wording such as Bag, Outerwear, Footwear, Accessory Detail, Wardrobe Detail, or Logo Placement.
+- Do not let labels or leader lines cover the face, eyes, silhouette read, logo, or key costume details.
+- Avoid clutter; use only the most important visible labels.
+`;
+
+const getReferenceSheetCalloutPrompt = (layout: RefSheetLayoutMode, logoPlacement?: string) => {
+  let prompt = REFERENCE_SHEET_CALLOUT_LABELS_BASE;
+
+  if (layout === 'form_focus') {
+    prompt += `
+FORM SHEET CALLOUT FOCUS:
+- Prioritize Front View, Three-Quarter View, Side Profile, Full Body, hairstyle, main outfit pieces, accessories, footwear${logoPlacement ? `, and Logo Placement at ${logoPlacement}` : ', and logo placement only if visible or explicitly provided'}.
+- Use general view labels when a precise detail is not visible.`;
+  } else if (layout === 'face_focus') {
+    prompt += `
+FACE SHEET CALLOUT FOCUS:
+- Prioritize Front Face, Side Face, Three-Quarter Face, hairline, eye shape, visible facial hair, visible or provided marks, and Expression Reference.
+- Do not invent biometric measurements, skin analysis, age, or facial proportions.`;
+  } else {
+    prompt += `
+SPLIT SHEET CALLOUT FOCUS:
+- Prioritize Source/Reference Side, Generated/Character Side, matching identity anchors, hairstyle, wardrobe match, facial detail${logoPlacement ? `, and Logo Placement at ${logoPlacement}` : ', and logo placement only if visible or explicitly provided'}.
+- Keep source/generated labels clear and do not imply invented identity facts.`;
+  }
+
+  return `${prompt}\n`;
+};
+
 const REFERENCE_SHEET_UNIQUENESS_AUDIT = `
 ANGLE UNIQUENESS AUDIT (MANDATORY BEFORE FINAL OUTPUT):
 - Every full-body slot must belong to a different yaw bucket.
@@ -480,6 +515,7 @@ const CastingForge = () => {
   const [showRefSheet, setShowRefSheet] = useState(false);
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [refLayout, setRefLayout] = useState<RefSheetLayoutMode>('form_focus');
+  const [includeCalloutLabels, setIncludeCalloutLabels] = useState(false);
   const [fringeSize] = useState(0);
   const [isIsolating, setIsIsolating] = useState(false);
   const [isolationProgress] = useState(0);
@@ -1106,6 +1142,38 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
 
   // DELETE CONFIRMATION STATE
   const [deleteTarget, setDeleteTarget] = useState<{ type: 'cast' | 'library' | 'cast_all', payload: string, name: string } | null>(null);
+
+  const handleClearForgeCanvas = () => {
+    generationIdRef.current += 1;
+
+    dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: null });
+    dispatch({ type: 'SET_LAST_CASTED_MASK', payload: null });
+    dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
+
+    setPendingRefSheet(null);
+    setRefSheetUrl(null);
+    setShowRefSheet(false);
+    setProcessedPreviewUrl(null);
+    setIsCropping(false);
+    setCropStart(null);
+    setCropRect(null);
+    setRemoveBg(false);
+    setRestorationLayer(null);
+    setErodedUrl(null);
+    setIsBrushActive(false);
+    setCursorPos(null);
+
+    if (restorationCanvasRef.current) {
+      const ctx = restorationCanvasRef.current.getContext('2d');
+      ctx?.clearRect(0, 0, restorationCanvasRef.current.width, restorationCanvasRef.current.height);
+    }
+    if (uiCanvasRef.current) {
+      const ctx = uiCanvasRef.current.getContext('2d');
+      ctx?.clearRect(0, 0, uiCanvasRef.current.width, uiCanvasRef.current.height);
+    }
+
+    dispatch({ type: 'ADD_LOG', payload: { message: 'Forge canvas cleared.', type: 'info' } });
+  };
 
   const executeDelete = () => {
     if (!deleteTarget) return;
@@ -1947,6 +2015,11 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
 
       finalPrompt += "\n\nCRITICAL ROTATION OVERRIDE: While the identity and costume must match the reference, YOU MUST NOT COPY THE CAMERA ANGLE OF THE REFERENCE IMAGE across all panels. You MUST dynamically rotate the character's head and body in 3D space to precisely match the requested viewpoints (Profile, 3/4, Back, etc) for each individual panel.\n\n";
 
+      if (includeCalloutLabels) {
+        finalPrompt += getReferenceSheetCalloutPrompt(refLayout, logoPosition);
+        finalPrompt += "\nTEXT EXCEPTION OVERRIDE: The base negative word 'text' does not apply to the requested professional callout labels. It still applies to unrelated captions, watermarks, random text, misspelled filler, signatures, UI text, and decorative typography.\n";
+      }
+
       finalPrompt += "\nSTRICT NEGATIVE ADDENDUM: double-head, two heads on one body, conjoined anatomy, fused torso, ghost body, mirrored twin body, duplicate neck, duplicate torso, extra body in slot, empty panel slot, panel overlap artifacts.\n";
 
       // BRANDING INJECTION
@@ -2042,7 +2115,7 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
 
       setRefSheetUrl(safeRefSheetUrl);
       setShowRefSheet(true);
-      cacheCastingRecentGeneration(safeRefSheetUrl, `Reference Sheet - CAST (${refLayout})`);
+      cacheCastingRecentGeneration(safeRefSheetUrl, `Reference Sheet - CAST (${refLayout}${includeCalloutLabels ? ', callout labels' : ''})`);
       dispatch({ type: 'ADD_LOG', payload: { message: "Reference Sheet Generated.", type: 'success' } });
     } catch (e: unknown) {
       dispatch({ type: 'ADD_LOG', payload: { message: `Ref Sheet failed: ${getErrorMessage(e)}`, type: 'error' } });
@@ -2560,6 +2633,43 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
             ))}
           </div>
 
+          <div className={`mb-4 rounded-xl border p-3 transition-all ${includeCalloutLabels ? 'border-purple-500/35 bg-purple-500/10' : 'border-white/5 bg-black/35'}`}>
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={includeCalloutLabels}
+                onChange={(e) => setIncludeCalloutLabels(e.target.checked)}
+                className="sr-only"
+              />
+              <span
+                className={`mt-0.5 flex h-5 w-9 shrink-0 items-center rounded-full border p-0.5 transition-all ${includeCalloutLabels
+                  ? 'border-purple-400/70 bg-purple-500/80 shadow-[0_0_12px_rgba(168,85,247,0.35)]'
+                  : 'border-white/10 bg-[#09090b]'
+                  }`}
+                aria-hidden="true"
+              >
+                <span
+                  className={`h-3.5 w-3.5 rounded-full bg-white transition-transform ${includeCalloutLabels ? 'translate-x-4' : 'translate-x-0'}`}
+                />
+              </span>
+
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest text-gray-200">
+                  Add Callout Labels
+                  <span className="group relative inline-flex">
+                    <Info className="w-3.5 h-3.5 text-gray-500 group-hover:text-purple-300 transition-colors" />
+                    <span className="absolute bottom-full left-1/2 z-50 mb-2 w-64 -translate-x-1/2 rounded-lg border border-gray-700 bg-gray-900 p-3 text-[10px] font-medium normal-case tracking-normal text-gray-300 opacity-0 shadow-xl transition-opacity pointer-events-none group-hover:opacity-100">
+                      Callout labels are generated by AI and should describe only visible or user-provided details. Review labels before using the sheet professionally.
+                    </span>
+                  </span>
+                </span>
+                <span className="mt-1 block text-[10px] leading-relaxed text-gray-500">
+                  Annotates visible hair, wardrobe, accessories, logo placement, and view angles.
+                </span>
+              </span>
+            </label>
+          </div>
+
           {/* BRANDING SECTION */}
           <div className="bg-black/40 border border-white/5 rounded-xl p-3 mb-4 space-y-3">
             <div className="flex items-center gap-2 mb-1">
@@ -2801,6 +2911,14 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
                     title="Add to Session Cast"
                   >
                     <UserPlus className="w-4 h-4" /> Add to Cast
+                  </button>
+                  <button
+                    onClick={handleClearForgeCanvas}
+                    className="bg-red-500/10 hover:bg-red-500 text-red-400 hover:text-white px-3 py-1.5 rounded-full text-[9px] font-black flex items-center gap-2 transition-all uppercase tracking-widest active:scale-95 border border-red-500/20"
+                    title="Clear Canvas"
+                    aria-label="Clear canvas and return to Forge UI"
+                  >
+                    <Trash2 className="w-4 h-4" />
                   </button>
                   <button
                     onClick={handleDownload}

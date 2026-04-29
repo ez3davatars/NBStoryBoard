@@ -444,6 +444,17 @@ const SceneCanvas = () => {
 
     const [bgPrompt, setBgPrompt] = useState('');
 
+    useEffect(() => {
+        setBgPrompt('');
+
+        const clearSessionScenePrompt = () => setBgPrompt('');
+        window.addEventListener('beforeunload', clearSessionScenePrompt);
+
+        return () => {
+            window.removeEventListener('beforeunload', clearSessionScenePrompt);
+        };
+    }, []);
+
     const activeReferences = useMemo(() => getActiveReferenceSlots(state.referenceSlots), [state.referenceSlots]);
     const promptIdentitySets = useMemo(
         () => getActorIdentityReferenceSetsForScene(state, state.activeShotId || 'default'),

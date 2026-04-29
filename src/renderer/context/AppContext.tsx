@@ -872,6 +872,20 @@ const defaultDirector: DirectorSettings = {
         'text, watermark, extra limbs, duplicate subjects, distorted anatomy, unrealistic lighting',
 };
 
+const resetDirectorSessionFields = (director: DirectorSettings): DirectorSettings => ({
+    ...director,
+    replaceAnchorSubjects: false,
+    globalReplaceTarget: '',
+});
+
+const loadStoredDirector = (): DirectorSettings => {
+    const stored = loadJson<Partial<DirectorSettings>>('nano_director_v3', {});
+    return resetDirectorSessionFields({ ...defaultDirector, ...stored });
+};
+
+const getPersistableDirector = (director: DirectorSettings): DirectorSettings =>
+    resetDirectorSessionFields(director);
+
 const defaultRefSlots: ReferenceSlot[] = Array.from({ length: 10 }, (_, i) => ({
     index: i + 1,
     url: undefined,
@@ -929,7 +943,7 @@ export const initialState: AppState = {
     tokens: [],
     annotations: [],
     referenceSlots: defaultRefSlots,
-    director: loadJson<DirectorSettings>('nano_director_v3', defaultDirector),
+    director: loadStoredDirector(),
     selection: null,
     selectionType: null,
     backgroundUrl: null,
@@ -2548,7 +2562,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         try {
             localStorage.setItem('nano_api_key', state.apiKey);
             localStorage.setItem('nano_model', state.model);
-            localStorage.setItem('nano_director_v3', JSON.stringify(state.director));
+            localStorage.setItem('nano_director_v3', JSON.stringify(getPersistableDirector(state.director)));
             localStorage.setItem('nano_bg_url', state.backgroundUrl || '');
             localStorage.setItem('nano_depth_url', state.depthMapUrl || '');
             localStorage.setItem('nano_depth_hash', state.depthMapHash || '');

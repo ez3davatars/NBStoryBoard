@@ -1,4 +1,4 @@
-import { ImageIcon, X, Upload as UploadIcon, RefreshCcw, Maximize as MaximizeIcon, Lock } from 'lucide-react';
+import { ImageIcon, X, Upload as UploadIcon, RefreshCcw, Maximize as MaximizeIcon, Lock, Sparkles, Trash2 } from 'lucide-react';
 import { SidebarPanel } from '../ui/SidebarPanel';
 import { Dropdown } from '../ui/Dropdown';
 import { getEffectiveResultAnchorForScene } from '../../context/AppContext';
@@ -178,17 +178,27 @@ export const AnchorRefPanel = ({
                                 }
                             }}
                         />
-                        <button
-                            onClick={generateBg}
-                            disabled={
-                                state.isProcessing || 
-                                !(!!bgPrompt.trim() || !!state.backgroundUrl)
-                            }
-                            className="bg-blue-600 hover:bg-blue-500 text-white p-2 rounded flex items-center justify-center disabled:opacity-50 disabled:bg-gray-800"
-                            title="Generate Background"
-                        >
-                            {state.isProcessing ? <RefreshCcw className="w-3.5 h-3.5 animate-spin" /> : <MaximizeIcon className="w-3.5 h-3.5" />}
-                        </button>
+                        <div className="flex flex-col gap-1 shrink-0">
+                            <button
+                                onClick={generateBg}
+                                disabled={
+                                    state.isProcessing || 
+                                    !(!!bgPrompt.trim() || !!state.backgroundUrl)
+                                }
+                                className="bg-blue-600 hover:bg-blue-500 text-white p-2 rounded flex items-center justify-center disabled:opacity-50 disabled:bg-gray-800 transition-colors"
+                                title="Generate Background"
+                            >
+                                {state.isProcessing ? <RefreshCcw className="w-3.5 h-3.5 animate-spin" /> : <MaximizeIcon className="w-3.5 h-3.5" />}
+                            </button>
+                            <button
+                                onClick={() => setBgPrompt('')}
+                                disabled={!bgPrompt.trim()}
+                                className="bg-[#18181b] hover:bg-red-500/20 text-gray-500 hover:text-red-300 p-2 rounded flex items-center justify-center border border-[#27272a] hover:border-red-500/40 disabled:opacity-30 disabled:hover:bg-[#18181b] disabled:hover:text-gray-500 disabled:hover:border-[#27272a] transition-colors"
+                                title="Clear Scene Notes"
+                            >
+                                <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                        </div>
                     </div>
                     
                     {/* Style Transfer Button */}
@@ -196,19 +206,38 @@ export const AnchorRefPanel = ({
                         <button
                             onClick={handleAutoStyleEnvironment}
                             disabled={isAnalyzingStyle || !selectedTokenId || !state.tokens.find((t: StageToken) => t.id === selectedTokenId)}
-                            className="w-full py-1 px-2 border border-blue-500/30 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 rounded text-[10px] uppercase font-bold tracking-wider disabled:opacity-30 disabled:hover:bg-blue-500/10 transition-colors flex items-center justify-center gap-2"
+                            className={`relative w-full overflow-hidden py-2 px-2 border rounded text-[10px] uppercase font-black tracking-wider transition-all flex items-center justify-center gap-2 ${
+                                isAnalyzingStyle
+                                    ? 'border-fuchsia-300/60 bg-gradient-to-r from-fuchsia-600 via-cyan-500 to-amber-400 text-white shadow-[0_0_24px_rgba(34,211,238,0.35)] animate-pulse'
+                                    : extractedStyle
+                                        ? 'border-emerald-400/40 bg-gradient-to-r from-emerald-500/20 via-cyan-500/15 to-purple-500/20 text-emerald-200 shadow-[0_0_16px_rgba(16,185,129,0.18)] hover:border-emerald-300/70 hover:text-white'
+                                        : 'border-blue-500/30 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 disabled:opacity-30 disabled:hover:bg-blue-500/10'
+                            }`}
                         >
                             {isAnalyzingStyle ? (
                                 <>
-                                    <RefreshCcw className="w-3 h-3 animate-spin" />
-                                    Analyzing character aesthetic...
+                                    <span className="absolute inset-0 bg-[linear-gradient(110deg,transparent_0%,rgba(255,255,255,0.28)_35%,transparent_70%)] animate-shimmer" />
+                                    <RefreshCcw className="relative z-10 w-3.5 h-3.5 animate-spin" />
+                                    <span className="relative z-10">Analyzing character aesthetic...</span>
+                                </>
+                            ) : extractedStyle ? (
+                                <>
+                                    <Sparkles className="w-3.5 h-3.5 text-emerald-300" />
+                                    Style Locked
+                                    <span className="text-cyan-200">/ Auto-Style Again</span>
                                 </>
                             ) : (
                                 <>
-                                    ✨ Auto-Style Environment
+                                    <Sparkles className="w-3.5 h-3.5 text-purple-300" />
+                                    Auto-Style Environment
                                 </>
                             )}
                         </button>
+                        {isAnalyzingStyle && (
+                            <div className="h-1 rounded-full bg-black/50 border border-white/5 overflow-hidden">
+                                <div className="h-full w-1/2 rounded-full bg-gradient-to-r from-purple-400 via-cyan-300 to-yellow-300 animate-style-scan" />
+                            </div>
+                        )}
                         {extractedStyle && !isAnalyzingStyle && (
                             <div className="text-[9px] text-blue-300/70 italic px-1 leading-tight border-l border-blue-500/30 ml-1 pl-2">
                                 Style locked: {extractedStyle.styleSummary}
