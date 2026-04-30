@@ -26,9 +26,13 @@ import { FileMenu } from './components/ui/FileMenu';
 import { AppCloseDialog } from './components/ui/AppCloseDialog';
 import { HelpCenterDrawer } from './components/ui/HelpCenterDrawer';
 import { WelcomeModal } from './components/ui/WelcomeModal';
-import { CreditExhaustedModal } from './components/ui/CreditExhaustedModal';
+import { InsufficientCreditModal } from './components/ui/InsufficientCreditModal';
 import { useRecentGenerationsStore } from './stores/useRecentGenerationsStore';
 import ActorSaveModal from './components/ActorSaveModal';
+import {
+  INSUFFICIENT_HOSTED_CREDITS_EVENT,
+  type InsufficientCreditModalState
+} from './utils/billingProducts';
 
 import {
   Settings,
@@ -429,6 +433,26 @@ const App = () => {
         if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
     };
   }, [refreshCredits]);
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<InsufficientCreditModalState>).detail;
+      if (!detail) return;
+
+      dispatch({ type: 'SET_HOSTED_CREDITS', payload: detail.currentCredits });
+      dispatch({ type: 'SET_CREDIT_MODAL', payload: detail });
+      dispatch({
+        type: 'ADD_LOG',
+        payload: {
+          message: `Generation blocked: needs ${detail.requiredCredits} credits, current balance ${detail.currentCredits}.`,
+          type: 'error'
+        }
+      });
+    };
+
+    window.addEventListener(INSUFFICIENT_HOSTED_CREDITS_EVENT, handler);
+    return () => window.removeEventListener(INSUFFICIENT_HOSTED_CREDITS_EVENT, handler);
+  }, [dispatch]);
 
   useEffect(() => {
     console.log('[NBStoryBoard] VITE_APP_ENV =', import.meta.env.VITE_APP_ENV ?? '(undefined)');
@@ -1286,7 +1310,7 @@ const App = () => {
 
           <HelpCenterDrawer />
           <WelcomeModal />
-          <CreditExhaustedModal />
+          <InsufficientCreditModal />
 
           {/* Footer / Logs */}
           <footer className="border-t border-[#27272a] bg-black px-3 sm:px-4 py-2 text-[10px] font-mono">
@@ -1564,6 +1588,7 @@ const App = () => {
                       <div>
                         <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Image Resolution (Gemini 3.1)</label>
                         <select
+                          id="render-quality-selector"
                           className="w-full bg-[#09090b] border border-[#27272a] rounded px-2 py-1.5 text-xs text-white focus:border-yellow-500 outline-none"
                           value={state.imageResolution}
                           onChange={(e) => dispatch({ type: 'SET_IMAGE_RESOLUTION', payload: e.target.value as '1K' | '2K' | '4K' })}

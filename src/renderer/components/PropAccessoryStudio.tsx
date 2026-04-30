@@ -385,12 +385,6 @@ const PropAccessoryStudio = () => {
 
     const handleDesignerGenerate = async () => {
         const billingMode = state.billingEntitlements.effectiveBillingMode;
-        
-        if (billingMode === 'hosted' && state.hostedCredits === 0) {
-            dispatch({ type: 'ADD_LOG', payload: { message: "Generation blocked: Insufficient credits", type: 'error' } });
-            dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
-            return;
-        }
 
         if (!designerPrompt) {
             dispatch({
@@ -669,12 +663,6 @@ oversized wearable, resized wearable, moved wearable, floating wearable, theatri
     const handleApply = async () => {
         console.warn(`[DEBUG_PATH] handleApply invoked! Button was clicked.`);
         const billingMode = state.billingEntitlements.effectiveBillingMode;
-        
-        if (billingMode === 'hosted' && state.hostedCredits === 0) {
-            dispatch({ type: 'ADD_LOG', payload: { message: "Generation blocked: Insufficient credits", type: 'error' } });
-            dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
-            return;
-        }
 
         if (!selectedCharacter || !selectedProp) {
             dispatch({

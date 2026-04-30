@@ -9,6 +9,10 @@ import { resolveDisplayUrl } from '../utils/assetUrlResolver';
 import type { VeoFivePartDraft, VeoAudioBlock, VeoTimestampBeat } from '../promptEngine/veoFivePart';
 import type { ShotSession, ShotActorReferenceInput } from '../types/shots';
 import { EntitlementResolver, type Entitlements } from '../utils/EntitlementResolver';
+import {
+    calculateRequiredGenerationCredits,
+    type InsufficientCreditModalState
+} from '../utils/billingProducts';
 
 export const APP_SCHEMA_VERSION = 5; // bump when persisted state shape changes
 // --- SHARED TYPES ---
@@ -519,6 +523,7 @@ export interface AppState {
     hostedSession: HostedSession | null;
     hostedCredits: number | null;
     showCreditModal: boolean;
+    creditModal: InsufficientCreditModalState | null;
 
     backgroundJobs: BackgroundJob[];
     liveStatus: LiveStatusMessage | null;
@@ -695,7 +700,7 @@ export type Action =
     | { type: 'SET_BILLING_ENTITLEMENTS'; payload: Entitlements }
     | { type: 'SET_HOSTED_SESSION'; payload: HostedSession | null }
     | { type: 'SET_HOSTED_CREDITS'; payload: number | null }
-    | { type: 'SET_CREDIT_MODAL'; payload: boolean }
+    | { type: 'SET_CREDIT_MODAL'; payload: boolean | Omit<InsufficientCreditModalState, 'openedAt'> | InsufficientCreditModalState }
     | { type: 'ADD_BACKGROUND_JOB'; payload: BackgroundJob }
     | { type: 'UPDATE_BACKGROUND_JOB'; payload: { id: string; updates: Partial<BackgroundJob> } }
     | { type: 'REMOVE_BACKGROUND_JOB'; payload: string }
@@ -1019,11 +1024,14 @@ export const initialState: AppState = {
     billingEntitlements: {
         hasHostedAccess: true,
         hasByokAccess: true,
-        effectiveBillingMode: loadJson<'hosted' | 'byok'>('nano_billing_mode', 'byok')
+        effectiveBillingMode: loadJson<'hosted' | 'byok'>('nano_billing_mode', 'byok'),
+        byokTier: null,
+        ownedProductKeys: []
     },
     hostedSession: null,
     hostedCredits: null,
     showCreditModal: false,
+    creditModal: null,
     liveStatus: null,
 };
 
@@ -1138,6 +1146,14 @@ function sanitizeSnapshotForRestore(snap: HistorySnapshot): HistorySnapshot {
     };
 }
 
+const buildDefaultCreditModalState = (state: AppState): InsufficientCreditModalState => ({
+    requiredCredits: calculateRequiredGenerationCredits({ imageSize: state.imageResolution }),
+    currentCredits: state.hostedCredits ?? 0,
+    imageSize: state.imageResolution,
+    renderType: 'standard',
+    openedAt: Date.now()
+});
+
 // --- REDUCER ---
 
 export const reducer = (state: AppState, action: Action): AppState => {
@@ -1195,8 +1211,24 @@ export const reducer = (state: AppState, action: Action): AppState => {
         }
         case 'SET_HOSTED_CREDITS':
             return { ...state, hostedCredits: action.payload };
-        case 'SET_CREDIT_MODAL':
-            return { ...state, showCreditModal: action.payload };
+        case 'SET_CREDIT_MODAL': {
+            if (typeof action.payload === 'boolean') {
+                return {
+                    ...state,
+                    showCreditModal: action.payload,
+                    creditModal: action.payload ? buildDefaultCreditModalState(state) : null
+                };
+            }
+
+            return {
+                ...state,
+                showCreditModal: true,
+                creditModal: {
+                    ...action.payload,
+                    openedAt: 'openedAt' in action.payload ? action.payload.openedAt : Date.now()
+                }
+            };
+        }
 
         case 'ADD_CAST':
             return { ...state, cast: [...state.cast, action.payload] };
@@ -1587,6 +1619,7 @@ export const reducer = (state: AppState, action: Action): AppState => {
                 hostedSession: state.hostedSession,
                 hostedCredits: state.hostedCredits,
                 showCreditModal: state.showCreditModal,
+                creditModal: state.creditModal,
                 actorLibrary: state.actorLibrary,
                 wardrobeItems: state.wardrobeItems,
                 propItems: state.propItems,

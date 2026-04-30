@@ -1020,12 +1020,6 @@ const WardrobeStudio = () => {
 
     const handleDesignerGenerate = async () => {
         const billingMode = state.billingEntitlements.effectiveBillingMode;
-        
-        if (billingMode === 'hosted' && state.hostedCredits === 0) {
-            dispatch({ type: 'ADD_LOG', payload: { message: "Generation blocked: Insufficient credits", type: 'error' } });
-            dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
-            return;
-        }
 
         if (billingMode === "byok" && !state.apiKey) {
             showToast("API Key required for BYOK Costume Designer.");
@@ -1287,12 +1281,6 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
     const handleTryOn = async () => {
         const billingMode = state.billingEntitlements.effectiveBillingMode;
-
-        if (billingMode === 'hosted' && state.hostedCredits === 0) {
-            dispatch({ type: 'ADD_LOG', payload: { message: "Generation blocked: Insufficient credits", type: 'error' } });
-            dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
-            return;
-        }
 
         if (!selectedCharacter || !selectedCostume) {
             showToast("Select both a subject and a wardrobe item.");

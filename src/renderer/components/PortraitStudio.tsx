@@ -616,12 +616,6 @@ export default function PortraitStudio() {
     const [progress, setProgress] = useState<{ phase: string, percent: number, text?: string } | null>(null);
 
     const handleGenerate = async () => {
-        if (state.billingEntitlements.effectiveBillingMode === 'hosted' && state.hostedCredits === 0) {
-            dispatch({ type: 'ADD_LOG', payload: { message: "Generation blocked: Insufficient credits", type: 'error' } });
-            dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
-            return;
-        }
-
         const billingMode = state.billingEntitlements.effectiveBillingMode;
         if (billingMode === "byok" && !state.apiKey) {
             dispatch({

@@ -235,13 +235,6 @@ const SceneCanvas = () => {
         const billingMode = state.billingEntitlements?.effectiveBillingMode || state.billingMode;
         
         if (billingMode === 'hosted') {
-            const hostedCredits = state.hostedCredits;
-            if (hostedCredits !== null && hostedCredits <= 0) {
-                dispatch({ type: 'ADD_LOG', payload: { message: `${featureLabel} blocked: Insufficient credits`, type: 'error' } });
-                dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
-                return false;
-            }
-
             return true;
         }
 
@@ -255,7 +248,7 @@ const SceneCanvas = () => {
         }
 
         return true;
-    }, [dispatch, state.apiKey, state.billingEntitlements, state.billingMode, state.hostedCredits]);
+    }, [dispatch, state.apiKey, state.billingEntitlements, state.billingMode]);
 
     const [isCompactCommandHeader, setIsCompactCommandHeader] = useState(false);
     const [isCompactStageToolbar, setIsCompactStageToolbar] = useState(false);
@@ -2421,12 +2414,6 @@ Output: environment plate only.
     };
 
     const generateFaceProtectionMask = async () => {
-        if (state.billingEntitlements.effectiveBillingMode === 'hosted' && state.hostedCredits === 0) {
-            dispatch({ type: 'ADD_LOG', payload: { message: "Mask generation blocked: Insufficient credits", type: 'error' } });
-            dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
-            return;
-        }
-
         if (!ensureStagingAiAccess('Protection Mask')) return;
         setProtectStatus('generating');
         try {

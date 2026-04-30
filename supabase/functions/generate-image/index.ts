@@ -18,16 +18,144 @@ type GenerateImageRequestBody = {
   payload?: {
     model?: string;
     requestBody?: unknown;
+    generationType?: unknown;
+    resolutionTier?: unknown;
+    requiredCredits?: unknown;
+    creditPricingVersion?: unknown;
   };
   executionFingerprint?: string;
-  options?: unknown;
+  options?: {
+    imageSize?: unknown;
+    creditRenderType?: unknown;
+    generationType?: unknown;
+    resolutionTier?: unknown;
+    requiredCredits?: unknown;
+  } | unknown;
+  generationType?: unknown;
+  resolutionTier?: unknown;
+  requiredCredits?: unknown;
+  creditPricingVersion?: unknown;
 };
+
+type GenerationType = 'standard' | 'character_sheet';
+type ResolutionTier = '1k' | '2k' | '4k';
+
+const CREDIT_PRICING_VERSION = '1-2-6';
+
+class HttpError extends Error {
+  status: number;
+  code: string;
+
+  constructor(status: number, code: string, message: string) {
+    super(message);
+    this.name = 'HttpError';
+    this.status = status;
+    this.code = code;
+  }
+}
 
 const withTimeout = <T>(promise: Promise<T>, ms: number, name: string): Promise<T> => {
     return Promise.race([
         promise,
         new Promise((_, reject) => setTimeout(() => reject(new Error(`DIAGNOSTIC HANG DETECTED: [${name}] timed out after ${ms}ms`)), ms))
     ]) as Promise<T>;
+};
+
+const isObjectRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const normalizeGenerationType = (value: unknown): GenerationType => {
+  if (value === undefined || value === null || value === '') return 'standard';
+  if (typeof value !== 'string') {
+    throw new HttpError(400, 'INVALID_GENERATION_TYPE', 'generationType must be "standard" or "character_sheet".');
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'standard' || normalized === 'character_sheet') return normalized;
+
+  throw new HttpError(400, 'INVALID_GENERATION_TYPE', 'generationType must be "standard" or "character_sheet".');
+};
+
+const normalizeResolutionTier = (value: unknown): ResolutionTier | null => {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string') {
+    throw new HttpError(400, 'INVALID_RESOLUTION_TIER', 'resolutionTier must be "1k", "2k", or "4k".');
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === '1k' || normalized === '1K'.toLowerCase()) return '1k';
+  if (normalized === '2k' || normalized === '2K'.toLowerCase()) return '2k';
+  if (normalized === '4k' || normalized === '4K'.toLowerCase()) return '4k';
+
+  throw new HttpError(400, 'INVALID_RESOLUTION_TIER', 'resolutionTier must be "1k", "2k", or "4k".');
+};
+
+const deriveResolutionTierFromRequestBody = (requestBody: unknown): ResolutionTier | null => {
+  if (!isObjectRecord(requestBody)) return null;
+  const generationConfig = requestBody.generationConfig;
+  if (!isObjectRecord(generationConfig)) return null;
+  const imageConfig = generationConfig.imageConfig;
+  if (!isObjectRecord(imageConfig)) return null;
+  return normalizeResolutionTier(imageConfig.imageSize);
+};
+
+const normalizeClientRequiredCredits = (value: unknown): number | null => {
+  if (value === undefined || value === null || value === '') return null;
+  const numeric = Number(value);
+  if (!Number.isInteger(numeric) || numeric < 1) {
+    throw new HttpError(400, 'INVALID_REQUIRED_CREDITS', 'requiredCredits must be a positive integer.');
+  }
+  return numeric;
+};
+
+const calculateBackendRequiredCredits = (_generationType: GenerationType, resolutionTier: ResolutionTier): number => {
+  if (resolutionTier === '4k') return 6;
+  if (resolutionTier === '2k') return 2;
+  return 1;
+};
+
+const readHostedCreditMetadata = (body: GenerateImageRequestBody) => {
+  const payload = body.payload ?? {};
+  const options = isObjectRecord(body.options) ? body.options : {};
+
+  const generationType = normalizeGenerationType(
+    body.generationType ??
+    payload.generationType ??
+    options.generationType ??
+    options.creditRenderType
+  );
+
+  const resolutionTier =
+    normalizeResolutionTier(
+      body.resolutionTier ??
+      payload.resolutionTier ??
+      options.resolutionTier ??
+      options.imageSize
+    ) ??
+    deriveResolutionTierFromRequestBody(payload.requestBody) ??
+    '1k';
+
+  const backendCalculatedRequiredCredits = calculateBackendRequiredCredits(generationType, resolutionTier);
+  const clientRequiredCredits = normalizeClientRequiredCredits(
+    body.requiredCredits ??
+    payload.requiredCredits ??
+    options.requiredCredits
+  );
+
+  if (clientRequiredCredits !== null && clientRequiredCredits !== backendCalculatedRequiredCredits) {
+    throw new HttpError(
+      400,
+      'CREDIT_COST_MISMATCH',
+      `Credit metadata mismatch: client requiredCredits ${clientRequiredCredits} does not match backend calculated ${backendCalculatedRequiredCredits}.`
+    );
+  }
+
+  return {
+    generationType,
+    resolutionTier,
+    requiredCredits: backendCalculatedRequiredCredits,
+    creditPricingVersion: CREDIT_PRICING_VERSION
+  };
 };
 
 serve(async (req) => {
@@ -92,9 +220,39 @@ serve(async (req) => {
     const userId = userData.user.id;
 
     const payloadRaw = await withTimeout(req.json() as Promise<unknown>, 15000, "req.json");
-    const { payload, executionFingerprint } = (payloadRaw ?? {}) as GenerateImageRequestBody;
+    const requestBody = (payloadRaw ?? {}) as GenerateImageRequestBody;
+    const { payload, executionFingerprint } = requestBody;
     if (!payload?.model || !executionFingerprint) {
       throw new Error("Invalid request payload: missing payload.model or executionFingerprint");
+    }
+
+    const creditMetadata = readHostedCreditMetadata(requestBody);
+
+    const { data: profileData, error: profileErr } = await withTimeout(
+      supabaseService
+        .from('profiles')
+        .select('credit_balance')
+        .eq('id', userId)
+        .single(),
+      10000,
+      'profiles.credit_balance'
+    );
+
+    if (profileErr) {
+      throw new Error(`Could not validate hosted credit balance: ${profileErr.message}`);
+    }
+
+    const currentCredits = Number(profileData?.credit_balance ?? 0);
+    if (!Number.isFinite(currentCredits)) {
+      throw new Error('Could not validate hosted credit balance: credit_balance is not numeric.');
+    }
+
+    if (currentCredits < creditMetadata.requiredCredits) {
+      throw new HttpError(
+        402,
+        'INSUFFICIENT_CREDITS',
+        `Insufficient hosted credits: this render needs ${creditMetadata.requiredCredits}, current balance is ${currentCredits}.`
+      );
     }
     
     const idempotencyKey = req.headers.get('x-idempotency-key');
@@ -107,7 +265,7 @@ serve(async (req) => {
             p_request_idempotency_key: idempotencyKey,
             p_request_fingerprint: executionFingerprint,
             p_generation_type: 'image',
-            p_cost: 1,
+            p_cost: creditMetadata.requiredCredits,
             p_is_byok: false,
             p_provider: 'gemini',
             p_provider_model: payload.model
@@ -115,7 +273,12 @@ serve(async (req) => {
         10000, "start_generation_rpc"
     );
 
-    if (startErr) throw new Error(`start_generation failed: ${startErr.message}`);
+    if (startErr) {
+      if (/insufficient|credit/i.test(startErr.message)) {
+        throw new HttpError(402, 'INSUFFICIENT_CREDITS', `start_generation rejected hosted credits: ${startErr.message}`);
+      }
+      throw new Error(`start_generation failed: ${startErr.message}`);
+    }
     const job = jobData as GenerationJob | null;
     if (!job) throw new Error("start_generation returned no job");
 
@@ -154,6 +317,20 @@ serve(async (req) => {
 
     if (payloadErr) throw new Error(`Could not enqueue generation payload data: ${payloadErr.message}`);
 
+    const { error: metadataErr } = await supabaseService
+        .from('generations')
+        .update({
+             billing_metadata: creditMetadata
+        })
+        .eq('id', job.id);
+
+    if (metadataErr) {
+      console.warn(
+        `[Billing Metadata] Could not persist metadata for generation ${job.id}. ` +
+        `Apply the billing_metadata schema migration to store it. Error: ${metadataErr.message}`
+      );
+    }
+
     // 4. Return instant HTTP 202 
     return new Response(JSON.stringify({ generationId: job.id, status: 'PENDING', acceptedAt: Date.now() }), {
         status: 202,
@@ -167,25 +344,34 @@ serve(async (req) => {
     
     let status = 500;
     let publicMessage = 'Generation request failed';
-    if (errMessage.includes('Unauthorized') || errMessage.includes('Missing Authorization header')) {
+    let code = 'INTERNAL_ERROR';
+    if (err instanceof HttpError) {
+      status = err.status;
+      publicMessage = err.message;
+      code = err.code;
+    } else if (errMessage.includes('Unauthorized') || errMessage.includes('Missing Authorization header')) {
       status = 401;
       publicMessage = 'Unauthorized';
+      code = 'UNAUTHORIZED';
     } else if (errMessage.includes('Idempotency')) {
       status = 409;
       publicMessage = errMessage;
+      code = 'IDEMPOTENCY_CONFLICT';
     } else if (
       errMessage.includes('Missing X-Idempotency-Key header') ||
       errMessage.startsWith('Invalid request payload')
     ) {
       status = 400;
       publicMessage = errMessage;
+      code = 'INVALID_REQUEST';
     } else if (errMessage.includes('req.json')) {
       status = 400;
       publicMessage = 'Invalid request body';
+      code = 'INVALID_JSON';
     }
 
     // fail_generation relies on generation payload isolation
-    return new Response(JSON.stringify({ error: publicMessage, code: 'INTERNAL_ERROR' }), {
+    return new Response(JSON.stringify({ error: publicMessage, code }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       status,
     });

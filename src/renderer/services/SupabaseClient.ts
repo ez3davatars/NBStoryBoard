@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import type { Session } from '@supabase/supabase-js';
+import type { BillingProductKey } from '../utils/billingProducts';
 
 // Env variables exposed by Vite will be available here
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
@@ -65,6 +66,53 @@ export const SupabaseAuth = {
       console.error("Failed to fetch hosted credits", error);
       return null;
     }
-    return data?.credit_balance ?? null;
+    const balance = Number(data?.credit_balance ?? null);
+    return Number.isFinite(balance) ? balance : null;
+  },
+
+  createCheckoutSession: async (productKey: BillingProductKey): Promise<string> => {
+    if (!supabaseUrl || !supabaseAnonKey) {
+      throw new Error("Supabase is not configured. Check environment variables.");
+    }
+
+    const token = await SupabaseAuth.getValidJwt();
+    const endpoint = `${supabaseUrl}/functions/v1/create-checkout-session`;
+
+    const payload = {
+      product_key: productKey,
+      client: 'desktop',
+      return_url: window.location.href.startsWith('http') ? window.location.href : undefined
+    };
+
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      cache: 'no-store',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        apikey: supabaseAnonKey,
+        'Content-Type': 'application/json',
+        Accept: 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`Checkout session failed (${response.status}): ${text || response.statusText}`);
+    }
+
+    const data = JSON.parse(text) as {
+      url?: string;
+      checkout_url?: string;
+      checkoutUrl?: string;
+      session_url?: string;
+    };
+
+    const checkoutUrl = data.url || data.checkout_url || data.checkoutUrl || data.session_url;
+    if (!checkoutUrl) {
+      throw new Error("Checkout session did not return a URL.");
+    }
+
+    return checkoutUrl;
   }
 };

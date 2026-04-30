@@ -1127,12 +1127,6 @@ const NanoCastingDirector = () => {
     const generateWardrobe = async () => {
         const billingMode = state.billingEntitlements.effectiveBillingMode;
         if (billingMode === "byok" && !state.apiKey) { dispatch({ type: 'ADD_LOG', payload: { message: 'API Key required for BYOK', type: 'error' } }); return; }
-        
-        if (billingMode === 'hosted' && state.hostedCredits === 0) {
-            dispatch({ type: 'ADD_LOG', payload: { message: "Generation blocked: Insufficient credits", type: 'error' } });
-            dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
-            return;
-        }
 
         if (!wardrobePrompt && !selectedWardrobeItem) return;
 
@@ -1270,11 +1264,6 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
     };
 
     const handleOrchestration = async () => {
-        if (state.billingEntitlements.effectiveBillingMode === 'hosted' && state.hostedCredits === 0) {
-            dispatch({ type: 'ADD_LOG', payload: { message: "Generation blocked: Insufficient credits", type: 'error' } });
-            dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
-            return;
-        }
         if (state.billingEntitlements.effectiveBillingMode === "byok" && !state.apiKey) {
             dispatch({ type: 'ADD_LOG', payload: { message: "API Key required for BYOK generation.", type: 'error' } });
             return;
@@ -1515,11 +1504,6 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
     };
 
     const handleRegenerate = async () => {
-        if (state.billingEntitlements.effectiveBillingMode === 'hosted' && state.hostedCredits === 0) {
-            dispatch({ type: 'ADD_LOG', payload: { message: "Generation blocked: Insufficient credits", type: 'error' } });
-            dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
-            return;
-        }
         if (state.billingEntitlements.effectiveBillingMode === "byok" && !state.apiKey) {
             dispatch({ type: 'ADD_LOG', payload: { message: "API Key required for BYOK generation.", type: 'error' } });
             return;
@@ -1943,7 +1927,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
             }, updateMs);
 
             try {
-                res = await GeminiService.generateImage(prompt, state.apiKey, state.model, imageRefs, { imageSize: '4K', thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements });
+                res = await GeminiService.generateImage(prompt, state.apiKey, state.model, imageRefs, { imageSize: '4K', creditRenderType: 'character_sheet', thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements });
             } finally {
                 clearInterval(progressInterval);
             }
@@ -2394,7 +2378,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                             state.apiKey,
                             state.model,
                             imageRefs,
-                            { aspectRatio: '16:9', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements }
+                            { aspectRatio: '16:9', imageSize: state.imageResolution, creditRenderType: 'character_sheet', thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements }
                         ),
                         timeoutPromise(timeoutMs) // Dynamic Timeout
                     ]);

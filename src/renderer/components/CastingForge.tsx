@@ -882,12 +882,6 @@ const CastingForge = () => {
   }, [selectedStyleId]);
 
   const handleGenerate = async () => {
-    if (state.billingEntitlements.effectiveBillingMode === 'hosted' && state.hostedCredits === 0) {
-      dispatch({ type: 'ADD_LOG', payload: { message: "Generation blocked: Insufficient credits", type: 'error' } });
-      dispatch({ type: 'SET_CREDIT_MODAL', payload: true });
-      return;
-    }
-
     // CHANGE: "Character design sheet" triggers text layouts. Use "Full body character portrait" instead.
     let effectivePrompt = state.lastCastedPrompt || "A full body character portrait";
     let styleDirectives = "";
@@ -2050,6 +2044,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
           {
             aspectRatio: referenceSheetAspectRatio,
             imageSize: state.imageResolution,
+            creditRenderType: 'character_sheet',
             thinkingLevel: state.enableImageThinking,
             googleGrounding: false,
             strictMode: true,

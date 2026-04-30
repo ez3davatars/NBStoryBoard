@@ -2,6 +2,17 @@ import type { VeoFivePartDraft, VeoAudioBlock } from '../promptEngine/veoFivePar
 import type { ActorIdentityReferenceSet } from '../context/AppContext';
 import { buildOrderedActorIdentityInputs, hasStrongFaceAnchor } from '../utils/identityReferenceHelpers';
 import { SupabaseAuth, supabase } from './SupabaseClient';
+import {
+  CREDIT_PRICING_VERSION,
+  INSUFFICIENT_HOSTED_CREDITS_EVENT,
+  calculateRequiredGenerationCredits,
+  type HostedCreditRenderType,
+  type HostedGenerationType,
+  type HostedImageSize,
+  type HostedResolutionTier,
+  type InsufficientCreditModalState,
+  toHostedResolutionTier
+} from '../utils/billingProducts';
 
 export type ExtractedStyle = {
   medium?: string;
@@ -63,11 +74,19 @@ type GeminiGenerateContentResult = {
 };
 
 type HostedExecutionOptions = {
-  imageSize?: '1K' | '2K' | '4K';
+  imageSize?: HostedImageSize;
+  creditRenderType?: HostedCreditRenderType;
   expectedResponseType?: ExpectedResponseType;
   onJobAccepted?: (generationId: string, acceptedAt?: number) => void;
   uiWaitWindowMs?: number;
   signal?: AbortSignal;
+};
+
+type HostedBillingMetadata = {
+  generationType: HostedGenerationType;
+  resolutionTier: HostedResolutionTier;
+  requiredCredits: number;
+  creditPricingVersion: typeof CREDIT_PRICING_VERSION;
 };
 
 type SharedGenerationOptions = {
@@ -75,6 +94,8 @@ type SharedGenerationOptions = {
   entitlements?: GenerationEntitlements;
   onJobAccepted?: (generationId: string, acceptedAt?: number) => void;
   expectedResponseType?: ExpectedResponseType;
+  imageSize?: HostedImageSize;
+  creditRenderType?: HostedCreditRenderType;
   uiWaitWindowMs?: number;
   signal?: AbortSignal;
 };
@@ -124,6 +145,47 @@ const extractTextParts = (result: GeminiGenerateContentResult, joiner: string): 
     .filter((text): text is string => typeof text === 'string' && text.trim().length > 0)
     .join(joiner)
     .trim();
+
+class InsufficientHostedCreditsError extends Error {
+  details: InsufficientCreditModalState;
+
+  constructor(details: InsufficientCreditModalState) {
+    super(`Insufficient hosted credits: this render needs ${details.requiredCredits} credits, current balance is ${details.currentCredits}.`);
+    this.name = 'InsufficientHostedCreditsError';
+    this.details = details;
+  }
+}
+
+const getHostedRequestImageSize = (
+  requestBody: Record<string, unknown>,
+  fallback?: HostedImageSize
+): HostedImageSize | undefined => {
+  if (fallback) return fallback;
+
+  const generationConfig = requestBody.generationConfig as { imageConfig?: { imageSize?: unknown } } | undefined;
+  const imageSize = generationConfig?.imageConfig?.imageSize;
+  return imageSize === '1K' || imageSize === '2K' || imageSize === '4K' ? imageSize : undefined;
+};
+
+const buildHostedBillingMetadata = (
+  requestBody: Record<string, unknown>,
+  options: HostedExecutionOptions = {}
+): HostedBillingMetadata => {
+  const imageSize = getHostedRequestImageSize(requestBody, options.imageSize);
+  const resolutionTier = toHostedResolutionTier(imageSize);
+  const generationType = options.creditRenderType ?? 'standard';
+  const requiredCredits = calculateRequiredGenerationCredits({
+    generationType,
+    resolutionTier
+  });
+
+  return {
+    generationType,
+    resolutionTier,
+    requiredCredits,
+    creditPricingVersion: CREDIT_PRICING_VERSION
+  };
+};
 
 export const GeminiService = {
 
@@ -323,6 +385,40 @@ export const GeminiService = {
     return undefined;
   },
 
+  async _assertHostedCreditsAvailable(
+    requestBody: Record<string, unknown>,
+    options: HostedExecutionOptions = {}
+  ): Promise<HostedBillingMetadata> {
+    const billingMetadata = buildHostedBillingMetadata(requestBody, options);
+    if (!supabase) return billingMetadata;
+
+    const userObj = await supabase.auth.getUser();
+    const userId = userObj.data?.user?.id;
+    if (!userId) return billingMetadata;
+
+    const currentCredits = await SupabaseAuth.fetchHostedCredits(userId);
+    if (currentCredits === null) return billingMetadata;
+
+    if (billingMetadata.requiredCredits > currentCredits) {
+      const details: InsufficientCreditModalState = {
+        requiredCredits: billingMetadata.requiredCredits,
+        currentCredits,
+        imageSize: getHostedRequestImageSize(requestBody, options.imageSize),
+        resolutionTier: billingMetadata.resolutionTier,
+        renderType: billingMetadata.generationType,
+        openedAt: Date.now()
+      };
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent(INSUFFICIENT_HOSTED_CREDITS_EVENT, { detail: details }));
+      }
+
+      throw new InsufficientHostedCreditsError(details);
+    }
+
+    return billingMetadata;
+  },
+
   async _executeHostedRequest(
     model: string,
     requestBody: Record<string, unknown>,
@@ -339,9 +435,14 @@ export const GeminiService = {
     const token = await SupabaseAuth.getValidJwt();
     const idempotencyKey = "batch_" + Date.now() + "_" + Math.floor(Math.random() * 1000);
 
+    const billingMetadata = buildHostedBillingMetadata(requestBody, options);
     const payloadBodyForEdge = {
       model,
-      requestBody
+      requestBody,
+      generationType: billingMetadata.generationType,
+      resolutionTier: billingMetadata.resolutionTier,
+      requiredCredits: billingMetadata.requiredCredits,
+      creditPricingVersion: billingMetadata.creditPricingVersion
     };
 
     const hashBuffer = await crypto.subtle.digest(
@@ -357,6 +458,8 @@ export const GeminiService = {
       throw new Error('Hosted Execution Error: Missing or malformed user JWT');
     }
 
+    await GeminiService._assertHostedCreditsAvailable(requestBody, options);
+
     const edgeUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-image`;
     const rawResponse = await fetch(edgeUrl, {
       method: 'POST',
@@ -371,7 +474,11 @@ export const GeminiService = {
       body: JSON.stringify({
         payload: payloadBodyForEdge,
         options,
-        executionFingerprint
+        executionFingerprint,
+        generationType: billingMetadata.generationType,
+        resolutionTier: billingMetadata.resolutionTier,
+        requiredCredits: billingMetadata.requiredCredits,
+        creditPricingVersion: billingMetadata.creditPricingVersion
       }),
       signal: options.signal
     });
@@ -460,7 +567,7 @@ export const GeminiService = {
     apiKey: string,
     model: string,
     referenceImages: { url: string; label: string }[] = [],
-    options: { aspectRatio?: string, imageSize?: '1K' | '2K' | '4K', thinkingLevel?: boolean | 'minimal' | 'low' | 'medium' | 'high', googleGrounding?: boolean, strictMode?: boolean, billingMode?: BillingMode, entitlements?: GenerationEntitlements, onJobAccepted?: (generationId: string, acceptedAt?: number) => void, uiWaitWindowMs?: number } = {}
+    options: { aspectRatio?: string, imageSize?: HostedImageSize, creditRenderType?: HostedCreditRenderType, thinkingLevel?: boolean | 'minimal' | 'low' | 'medium' | 'high', googleGrounding?: boolean, strictMode?: boolean, billingMode?: BillingMode, entitlements?: GenerationEntitlements, onJobAccepted?: (generationId: string, acceptedAt?: number) => void, uiWaitWindowMs?: number } = {}
   ): Promise<string> {
 
     // --- API ACCESS LAYER ---
@@ -966,7 +1073,7 @@ export const GeminiService = {
     apiKey: string | null | undefined,
     model: string,
     referenceImages: { url: string; label: string }[] = [],
-    options: { aspectRatio?: string, imageSize?: '1K' | '2K' | '4K', billingMode?: BillingMode, entitlements?: GenerationEntitlements, expectedResponseType?: 'image' } = {}
+    options: { aspectRatio?: string, imageSize?: HostedImageSize, creditRenderType?: HostedCreditRenderType, billingMode?: BillingMode, entitlements?: GenerationEntitlements, expectedResponseType?: 'image' } = {}
   ): Promise<string> {
     if (!apiKey && options.billingMode !== 'hosted') throw new Error("No API Key provided.");
     const effectiveKey = options.billingMode === 'hosted' ? 'HOSTED_MODE' : (apiKey || '');
