@@ -151,6 +151,59 @@ type Phase = 1 | 2 | 3 | 4 | 5;
 type MorphVariant = 'masc' | 'fem' | 'youth_masc' | 'youth_fem';
 type ReferenceLayout = 'form_focus' | 'face_focus' | 'split_focus';
 type RefSheetStyleId = keyof typeof REF_SHEET_STYLES;
+type BiometricCaptureAngle = 'center' | 'left' | 'right' | 'up' | 'down';
+type NanoRefSheetSlotRect = {
+    label: string;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+};
+
+type NanoRefSheetDuplicateValidation = {
+    hasDuplicate: boolean;
+    maxSimilarity: number;
+    pair: string | null;
+};
+
+const NANOCAST_HYBRID_PROFILE_DUPLICATE_THRESHOLD = 0.82;
+
+const NANOCAST_PROFILE_PAIR_VISUAL_LOCK = `
+PROFILE PAIR VISUAL LOCK (CRITICAL):
+- Left profile and right profile are opposite technical camera views, not two reusable side closeups.
+- Anatomical LEFT PROFILE must show the face/nose/snout/visor pointing toward screen-right.
+- Anatomical RIGHT PROFILE must show the face/nose/snout/visor pointing toward screen-left.
+- Same-direction side profiles are invalid even if one is scaled, cropped, relit, shifted, or placed in a different cell.
+- For animal, creature, robot, mascot, helmet, or stylized characters, use the snout/visor/faceplate protrusion and collar/neck direction to prove the left/right difference.
+- If both profile panels point the same screen direction, redraw the incorrect panel before final output.
+`;
+
+const NANOCAST_HYBRID_PROFILE_SLOT_LOCK = `
+NANOCAST HYBRID SPLIT PROFILE LOCK:
+- In LAYOUT C lower head row, LENS 5 and LENS 6 must be adjacent but opposite profile views.
+- LENS 5 = true left profile, nose/snout/faceplate points screen-right.
+- LENS 6 = true right profile, nose/snout/faceplate points screen-left.
+- LENS 5 and LENS 6 must not share the same silhouette, crop, rim light, side hardware, collar direction, or muzzle/nose direction.
+- If LENS 5 and LENS 6 could be mistaken for the same side profile, the sheet is invalid.
+`;
+
+const BIOMETRIC_CAPTURE_TONES: Record<BiometricCaptureAngle, { notes: number[]; accent: number; duration: number }> = {
+    center: { notes: [523.25, 659.25], accent: 1046.5, duration: 0.18 },
+    left: { notes: [392, 493.88], accent: 783.99, duration: 0.2 },
+    right: { notes: [440, 554.37], accent: 880, duration: 0.2 },
+    up: { notes: [587.33, 739.99, 987.77], accent: 1174.66, duration: 0.22 },
+    down: { notes: [349.23, 261.63], accent: 523.25, duration: 0.24 }
+};
+const BIOMETRIC_CAPTURE_MAX_GAIN = 0.44;
+const BIOMETRIC_CAPTURE_TONE_GAIN = 0.95;
+const BIOMETRIC_CAPTURE_ACCENT_GAIN = 0.58;
+const BIOMETRIC_CAPTURE_FILE_GAIN = 1.25;
+const BIOMETRIC_CAPTURE_AUDIO_BASE_PATH = 'audio/biometric';
+const BIOMETRIC_CAPTURE_AUDIO_EXTENSIONS = ['mp3', 'wav', 'ogg', 'm4a'] as const;
+
+const getBiometricCaptureAudioCandidates = (angle: BiometricCaptureAngle): string[] =>
+    BIOMETRIC_CAPTURE_AUDIO_EXTENSIONS.map((extension) => `${BIOMETRIC_CAPTURE_AUDIO_BASE_PATH}/${angle}.${extension}`);
+
 type ArchetypeOption = {
     id: string;
     name: string;
@@ -172,6 +225,10 @@ type PermissionAwareDirectoryHandle = FileSystemDirectoryHandle & {
 
 type WindowWithDirectoryPicker = Window & {
     showDirectoryPicker?: (options?: { mode?: 'read' | 'readwrite'; startIn?: string }) => Promise<FileSystemDirectoryHandle>;
+};
+
+type WindowWithWebkitAudioContext = Window & {
+    webkitAudioContext?: typeof AudioContext;
 };
 
 const getErrorMessage = (error: unknown): string => {
@@ -206,6 +263,165 @@ const formatHeight = (inches: number) => {
 };
 
 const isRecentReferenceSheet = (prompt?: string) => prompt?.toLowerCase().includes('reference sheet') ?? false;
+
+const nanoDataUrlToBlob = (dataUrl: string): Blob => {
+    const [meta, data] = dataUrl.split(',');
+    const mimeMatch = meta.match(/data:(.*?);base64/);
+    const mime = mimeMatch?.[1] || 'image/png';
+    const bytes = atob(data);
+    const arr = new Uint8Array(bytes.length);
+    for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+    return new Blob([arr], { type: mime });
+};
+
+const resolveNanoReferenceSheetBlob = async (src: string): Promise<Blob> => {
+    if (src.startsWith('data:image/')) return nanoDataUrlToBlob(src);
+
+    const response = await fetch(src, { mode: 'cors' });
+    if (!response.ok) throw new Error(`Reference sheet image fetch failed: ${response.status}`);
+    return await response.blob();
+};
+
+const loadNanoReferenceSheetImage = (src: string): Promise<HTMLImageElement> =>
+    new Promise((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error('Failed to load NanoCast reference sheet for validation'));
+        img.src = src;
+    });
+
+const getNanoCastHybridProfileSlots = (): NanoRefSheetSlotRect[] => [
+    { label: 'LENS_5_TRUE_LEFT_PROFILE', x: 0.2, y: 0.6, w: 0.2, h: 0.4 },
+    { label: 'LENS_6_TRUE_RIGHT_PROFILE', x: 0.4, y: 0.6, w: 0.2, h: 0.4 }
+];
+
+const computeNanoSlotSimilarity = (
+    sourceCanvas: HTMLCanvasElement,
+    a: NanoRefSheetSlotRect,
+    b: NanoRefSheetSlotRect
+): number => {
+    const SIZE = 64;
+    const ANALYSIS_SIZE = 192;
+    const width = sourceCanvas.width;
+    const height = sourceCanvas.height;
+
+    const toPixels = (slot: NanoRefSheetSlotRect) => ({
+        sx: Math.max(0, Math.floor(slot.x * width)),
+        sy: Math.max(0, Math.floor(slot.y * height)),
+        sw: Math.max(1, Math.floor(slot.w * width)),
+        sh: Math.max(1, Math.floor(slot.h * height))
+    });
+
+    const drawForegroundNormalizedSlot = (slot: NanoRefSheetSlotRect, target: HTMLCanvasElement) => {
+        const slotCanvas = document.createElement('canvas');
+        slotCanvas.width = ANALYSIS_SIZE;
+        slotCanvas.height = ANALYSIS_SIZE;
+        const slotCtx = slotCanvas.getContext('2d');
+        const targetCtx = target.getContext('2d');
+        if (!slotCtx || !targetCtx) return;
+
+        const p = toPixels(slot);
+        slotCtx.drawImage(sourceCanvas, p.sx, p.sy, p.sw, p.sh, 0, 0, ANALYSIS_SIZE, ANALYSIS_SIZE);
+
+        const imageData = slotCtx.getImageData(0, 0, ANALYSIS_SIZE, ANALYSIS_SIZE);
+        const data = imageData.data;
+        let minX = ANALYSIS_SIZE;
+        let minY = ANALYSIS_SIZE;
+        let maxX = -1;
+        let maxY = -1;
+
+        for (let y = 0; y < ANALYSIS_SIZE; y++) {
+            for (let x = 0; x < ANALYSIS_SIZE; x++) {
+                const idx = (y * ANALYSIS_SIZE + x) * 4;
+                const alpha = data[idx + 3];
+                const luma = (data[idx] * 0.2126) + (data[idx + 1] * 0.7152) + (data[idx + 2] * 0.0722);
+                if (alpha > 24 && luma > 22) {
+                    minX = Math.min(minX, x);
+                    minY = Math.min(minY, y);
+                    maxX = Math.max(maxX, x);
+                    maxY = Math.max(maxY, y);
+                }
+            }
+        }
+
+        if (maxX <= minX || maxY <= minY) {
+            targetCtx.drawImage(slotCanvas, 0, 0, ANALYSIS_SIZE, ANALYSIS_SIZE, 0, 0, SIZE, SIZE);
+            return;
+        }
+
+        const pad = 10;
+        minX = Math.max(0, minX - pad);
+        minY = Math.max(0, minY - pad);
+        maxX = Math.min(ANALYSIS_SIZE - 1, maxX + pad);
+        maxY = Math.min(ANALYSIS_SIZE - 1, maxY + pad);
+
+        targetCtx.drawImage(
+            slotCanvas,
+            minX,
+            minY,
+            Math.max(1, maxX - minX + 1),
+            Math.max(1, maxY - minY + 1),
+            0,
+            0,
+            SIZE,
+            SIZE
+        );
+    };
+
+    const ca = document.createElement('canvas');
+    const cb = document.createElement('canvas');
+    ca.width = SIZE;
+    ca.height = SIZE;
+    cb.width = SIZE;
+    cb.height = SIZE;
+    const ctxA = ca.getContext('2d');
+    const ctxB = cb.getContext('2d');
+    if (!ctxA || !ctxB) return 0;
+
+    drawForegroundNormalizedSlot(a, ca);
+    drawForegroundNormalizedSlot(b, cb);
+
+    const dataA = ctxA.getImageData(0, 0, SIZE, SIZE).data;
+    const dataB = ctxB.getImageData(0, 0, SIZE, SIZE).data;
+
+    let sumSqrDiff = 0;
+    for (let i = 0; i < dataA.length; i += 4) {
+        const dR = dataA[i] - dataB[i];
+        const dG = dataA[i + 1] - dataB[i + 1];
+        const dB = dataA[i + 2] - dataB[i + 2];
+        sumSqrDiff += dR * dR + dG * dG + dB * dB;
+    }
+
+    const maxDiff = (255 * 255 * 3) * (SIZE * SIZE);
+    return 1 - (sumSqrDiff / maxDiff);
+};
+
+const detectNanoCastHybridProfileDuplicate = async (sheetUrl: string): Promise<NanoRefSheetDuplicateValidation> => {
+    const blob = await resolveNanoReferenceSheetBlob(sheetUrl);
+    const tempUrl = URL.createObjectURL(blob);
+
+    try {
+        const img = await loadNanoReferenceSheetImage(tempUrl);
+        const sourceCanvas = document.createElement('canvas');
+        sourceCanvas.width = img.width;
+        sourceCanvas.height = img.height;
+        const ctx = sourceCanvas.getContext('2d');
+        if (!ctx) return { hasDuplicate: false, maxSimilarity: 0, pair: null };
+
+        ctx.drawImage(img, 0, 0);
+        const [leftProfile, rightProfile] = getNanoCastHybridProfileSlots();
+        const similarity = computeNanoSlotSimilarity(sourceCanvas, leftProfile, rightProfile);
+
+        return {
+            hasDuplicate: similarity >= NANOCAST_HYBRID_PROFILE_DUPLICATE_THRESHOLD,
+            maxSimilarity: similarity,
+            pair: `${leftProfile.label} vs ${rightProfile.label}`
+        };
+    } finally {
+        URL.revokeObjectURL(tempUrl);
+    }
+};
 
 async function materializeDisplayUrl(url: string | null | undefined): Promise<string> {
     if (!url) return '';
@@ -804,6 +1020,15 @@ const NanoCastingDirector = () => {
         up: null,
         down: null
     });
+    const scanAudioContextRef = useRef<AudioContext | null>(null);
+    const scanAudioBufferCacheRef = useRef<Partial<Record<BiometricCaptureAngle, AudioBuffer | null>>>({});
+    const scanToneLastPlayedAtRef = useRef<Record<BiometricCaptureAngle, number>>({
+        center: 0,
+        left: 0,
+        right: 0,
+        up: 0,
+        down: 0
+    });
 
 
     // --- LIVE PROGRESS SIMULATION ---
@@ -831,16 +1056,211 @@ const NanoCastingDirector = () => {
         return () => clearInterval(interval);
     }, [isProcessing, progress.phase, state.imageResolution]);
 
+    const ensureScanAudioContext = useCallback(async (): Promise<AudioContext | null> => {
+        if (typeof window === 'undefined') return null;
+
+        try {
+            const AudioContextCtor = window.AudioContext || (window as WindowWithWebkitAudioContext).webkitAudioContext;
+            if (!AudioContextCtor) return null;
+
+            const audioContext =
+                scanAudioContextRef.current && scanAudioContextRef.current.state !== 'closed'
+                    ? scanAudioContextRef.current
+                    : new AudioContextCtor();
+            scanAudioContextRef.current = audioContext;
+
+            if (audioContext.state === 'suspended') {
+                await audioContext.resume();
+            }
+
+            return audioContext;
+        } catch (error) {
+            console.warn('Biometric scan audio unavailable:', error);
+            return null;
+        }
+    }, []);
+
+    const loadBiometricCaptureAudioBuffer = useCallback(async (
+        angle: BiometricCaptureAngle,
+        audioContext: AudioContext
+    ): Promise<AudioBuffer | null> => {
+        const cached = scanAudioBufferCacheRef.current[angle];
+        if (cached !== undefined) return cached;
+
+        for (const url of getBiometricCaptureAudioCandidates(angle)) {
+            let response: Response;
+            try {
+                response = await fetch(url, { cache: 'no-cache' });
+            } catch {
+                continue;
+            }
+
+            if (!response.ok) continue;
+
+            try {
+                const arrayBuffer = await response.arrayBuffer();
+                const decodedBuffer = await audioContext.decodeAudioData(arrayBuffer.slice(0));
+                scanAudioBufferCacheRef.current[angle] = decodedBuffer;
+                return decodedBuffer;
+            } catch (error) {
+                console.warn(`Biometric scan audio file could not be decoded: ${url}`, error);
+            }
+        }
+
+        scanAudioBufferCacheRef.current[angle] = null;
+        return null;
+    }, []);
+
+    const playBiometricCaptureAudioFile = useCallback((
+        audioContext: AudioContext,
+        audioBuffer: AudioBuffer,
+        perceivedVolume: number
+    ) => {
+        const startAt = audioContext.currentTime + 0.01;
+        const source = audioContext.createBufferSource();
+        const fileGain = audioContext.createGain();
+        const outputCompressor = audioContext.createDynamicsCompressor();
+
+        source.buffer = audioBuffer;
+        outputCompressor.threshold.setValueAtTime(-12, startAt);
+        outputCompressor.knee.setValueAtTime(8, startAt);
+        outputCompressor.ratio.setValueAtTime(5, startAt);
+        outputCompressor.attack.setValueAtTime(0.003, startAt);
+        outputCompressor.release.setValueAtTime(0.08, startAt);
+        fileGain.gain.setValueAtTime(Math.max(0.0001, BIOMETRIC_CAPTURE_FILE_GAIN * perceivedVolume), startAt);
+
+        source.connect(fileGain);
+        fileGain.connect(outputCompressor);
+        outputCompressor.connect(audioContext.destination);
+        source.start(startAt);
+        source.onended = () => {
+            try {
+                source.disconnect();
+                fileGain.disconnect();
+                outputCompressor.disconnect();
+            } catch {
+                // Nodes may already be disconnected if the audio context is torn down.
+            }
+        };
+    }, []);
+
+    const playBiometricCaptureTone = useCallback(async (angle: BiometricCaptureAngle) => {
+        if (!state.biometricSoundEnabled || state.biometricSoundVolume <= 0) return;
+
+        const now = Date.now();
+        if (now - scanToneLastPlayedAtRef.current[angle] < 350) return;
+        scanToneLastPlayedAtRef.current[angle] = now;
+
+        try {
+            const audioContext = await ensureScanAudioContext();
+            if (!audioContext || audioContext.state !== 'running') return;
+
+            const profile = BIOMETRIC_CAPTURE_TONES[angle];
+            const volume = Math.min(1, Math.max(0, state.biometricSoundVolume / 100));
+            const perceivedVolume = Math.pow(volume, 0.72);
+            const customAudioBuffer = await loadBiometricCaptureAudioBuffer(angle, audioContext);
+            if (customAudioBuffer) {
+                playBiometricCaptureAudioFile(audioContext, customAudioBuffer, perceivedVolume);
+                return;
+            }
+
+            const startAt = audioContext.currentTime + 0.015;
+            const masterGain = audioContext.createGain();
+            const outputCompressor = audioContext.createDynamicsCompressor();
+            outputCompressor.threshold.setValueAtTime(-16, startAt);
+            outputCompressor.knee.setValueAtTime(10, startAt);
+            outputCompressor.ratio.setValueAtTime(6, startAt);
+            outputCompressor.attack.setValueAtTime(0.003, startAt);
+            outputCompressor.release.setValueAtTime(0.08, startAt);
+            masterGain.gain.setValueAtTime(0.0001, startAt);
+            masterGain.gain.exponentialRampToValueAtTime(Math.max(0.0001, BIOMETRIC_CAPTURE_MAX_GAIN * perceivedVolume), startAt + 0.015);
+            masterGain.gain.exponentialRampToValueAtTime(0.0001, startAt + profile.duration);
+            masterGain.connect(outputCompressor);
+            outputCompressor.connect(audioContext.destination);
+
+            profile.notes.forEach((frequency, index) => {
+                const oscillator = audioContext.createOscillator();
+                const toneGain = audioContext.createGain();
+                const noteStart = startAt + (index * 0.045);
+                oscillator.type = index === 0 ? 'sine' : 'triangle';
+                oscillator.frequency.setValueAtTime(frequency, noteStart);
+                toneGain.gain.setValueAtTime(0.0001, noteStart);
+                toneGain.gain.exponentialRampToValueAtTime(BIOMETRIC_CAPTURE_TONE_GAIN, noteStart + 0.012);
+                toneGain.gain.exponentialRampToValueAtTime(0.0001, noteStart + 0.12);
+                oscillator.connect(toneGain);
+                toneGain.connect(masterGain);
+                oscillator.start(noteStart);
+                oscillator.stop(noteStart + 0.15);
+            });
+
+            const accent = audioContext.createOscillator();
+            const accentGain = audioContext.createGain();
+            const accentStart = startAt + 0.055;
+            accent.type = 'sine';
+            accent.frequency.setValueAtTime(profile.accent, accentStart);
+            accentGain.gain.setValueAtTime(0.0001, accentStart);
+            accentGain.gain.exponentialRampToValueAtTime(BIOMETRIC_CAPTURE_ACCENT_GAIN, accentStart + 0.01);
+            accentGain.gain.exponentialRampToValueAtTime(0.0001, accentStart + 0.09);
+            accent.connect(accentGain);
+            accentGain.connect(masterGain);
+            accent.start(accentStart);
+            accent.stop(accentStart + 0.11);
+
+            window.setTimeout(() => {
+                try {
+                    masterGain.disconnect();
+                    outputCompressor.disconnect();
+                } catch {
+                    // Nodes may already be disconnected if the audio context is torn down.
+                }
+            }, Math.ceil((profile.duration + 0.35) * 1000));
+        } catch (error) {
+            console.warn('Biometric capture tone failed:', error);
+        }
+    }, [
+        ensureScanAudioContext,
+        loadBiometricCaptureAudioBuffer,
+        playBiometricCaptureAudioFile,
+        state.biometricSoundEnabled,
+        state.biometricSoundVolume
+    ]);
+
+    useEffect(() => {
+        if (!state.biometricSoundEnabled) return;
+
+        const unlockScanAudio = () => {
+            void ensureScanAudioContext();
+        };
+
+        window.addEventListener('pointerdown', unlockScanAudio, { passive: true });
+        window.addEventListener('keydown', unlockScanAudio);
+        return () => {
+            window.removeEventListener('pointerdown', unlockScanAudio);
+            window.removeEventListener('keydown', unlockScanAudio);
+        };
+    }, [ensureScanAudioContext, state.biometricSoundEnabled]);
+
+    useEffect(() => {
+        return () => {
+            if (scanAudioContextRef.current && scanAudioContextRef.current.state !== 'closed') {
+                void scanAudioContextRef.current.close();
+            }
+        };
+    }, []);
+
     // Explicit setter to handle cleanup
-    const setAngle = useCallback((angle: keyof typeof capturedAngles, url: string | null) => {
+    const setAngle = useCallback((angle: BiometricCaptureAngle, url: string | null) => {
         setCapturedAngles(prev => {
             const oldUrl = prev[angle];
             if (oldUrl && oldUrl !== url) {
                 URL.revokeObjectURL(oldUrl);
             }
+            if (url && oldUrl !== url) {
+                void playBiometricCaptureTone(angle);
+            }
             return { ...prev, [angle]: url };
         });
-    }, []);
+    }, [playBiometricCaptureTone]);
 
     // Refs for stable access inside callbacks without re-triggering
     const capturedAnglesRef = useRef(capturedAngles);
@@ -850,6 +1270,7 @@ const NanoCastingDirector = () => {
 
     const [stabilityProgress, setStabilityProgress] = useState(0);
     const [cameraEnabled, setCameraEnabled] = useState(false);
+    const [webcamReadyTick, setWebcamReadyTick] = useState(0);
 
     // --- PERSISTENCE & WARDROBE STATES ---
     const [sidebarMode, setSidebarMode] = useState<'director' | 'wardrobe'>('director');
@@ -865,6 +1286,15 @@ const NanoCastingDirector = () => {
     const STABILITY_THRESHOLD = 15; // Frames to hold steady
     const SCAN_COOLDOWN_MS = 1500;
     const captureCurrentFrameRef = useRef<((sector: keyof typeof capturedAngles) => Promise<void> | void) | null>(null);
+
+    const resetScanTracking = useCallback(() => {
+        scanCooldownRef.current = false;
+        lastSectorRef.current = null;
+        sectorStableFramesRef.current = 0;
+        lastUpdateRef.current = 0;
+        setActiveSector(null);
+        setStabilityProgress(0);
+    }, []);
 
     // Helper: Convert Base64 to Blob URL for memory efficiency
     const base64ToBlobUrl = (base64: string) => {
@@ -978,6 +1408,7 @@ const NanoCastingDirector = () => {
 
     const captureCurrentFrame = useCallback(async (sector: keyof typeof capturedAngles) => {
         console.log("Attempting Capture:", sector);
+        void ensureScanAudioContext();
         if (!webcamRef.current) { console.log("No Webcam Ref"); return; }
         const imageSrc = webcamRef.current.getScreenshot();
         if (imageSrc) {
@@ -1023,7 +1454,7 @@ const NanoCastingDirector = () => {
                 // dispatch({ type: 'ADD_LOG', payload: { message: "Scan not saved: No save folder set in Settings.", type: 'error' } });
             }
         }
-    }, [setAngle]);
+    }, [ensureScanAudioContext, setAngle]);
 
     useEffect(() => {
         captureCurrentFrameRef.current = captureCurrentFrame;
@@ -1033,6 +1464,16 @@ const NanoCastingDirector = () => {
         let camera: Camera | null = null;
         let faceMesh: FaceMesh | null = null;
         let isActive = true;
+        const waitForWebcamVideo = async (): Promise<HTMLVideoElement | null> => {
+            for (let attempt = 0; attempt < 30 && isActive; attempt++) {
+                const video = webcamRef.current?.video ?? null;
+                if (video && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+                    return video;
+                }
+                await new Promise(resolve => window.setTimeout(resolve, 100));
+            }
+            return webcamRef.current?.video ?? null;
+        };
 
         const initFaceMesh = async () => {
             faceMesh = new FaceMesh({
@@ -1050,8 +1491,10 @@ const NanoCastingDirector = () => {
 
             faceMesh.onResults(onResults);
 
-            if (webcamRef.current && webcamRef.current.video && isActive) {
-                camera = new Camera(webcamRef.current.video, {
+            const video = await waitForWebcamVideo();
+
+            if (video && isActive) {
+                camera = new Camera(video, {
                     onFrame: async () => {
                         if (webcamRef.current?.video && isActive) {
                             await faceMesh?.send({ image: webcamRef.current.video });
@@ -1073,7 +1516,7 @@ const NanoCastingDirector = () => {
             if (camera) camera.stop();
             if (faceMesh) faceMesh.close();
         };
-    }, [phase, uploadMode, onResults, cameraEnabled]);
+    }, [phase, uploadMode, onResults, cameraEnabled, webcamReadyTick]);
 
 
     // Helper: Fetch Blob URL and convert to Base64 for API
@@ -2128,7 +2571,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                 // HYBRID -> Horizontal Split (Image 4)
                 finalPrompt += " [LAYOUT C]: Horizontal Split.\n";
                 finalPrompt += " UPPER SECTION (60%): 3 Full Standing Figures. LENS 1: Frontal, LENS 2: Right 3/4, LENS 3: Back View.\n";
-                finalPrompt += " LOWER SECTION (40%): Row of 5 HEAD PANELS. LENS 4: Frontal Close-Up Face (0-degree yaw). LENS 5: True Left Profile Face (90-degree left yaw). LENS 6: True Right Profile Face (90-degree right yaw). LENS 7: Upward Tilt Face (near-frontal yaw, chin raised). LENS 8: Downward Tilt Face (near-frontal yaw, chin lowered).\n";
+                finalPrompt += " LOWER SECTION (40%): Row of 5 HEAD PANELS. LENS 4: Frontal Close-Up Face (0-degree yaw). LENS 5: True Left Profile Face (90-degree left yaw; nose/snout/faceplate points screen-right). LENS 6: True Right Profile Face (90-degree right yaw; nose/snout/faceplate points screen-left). LENS 7: Upward Tilt Face (near-frontal yaw, chin raised). LENS 8: Downward Tilt Face (near-frontal yaw, chin lowered).\n";
             }
             finalPrompt += " EXCLUSION RULE: NEVER duplicate any angle. No two panels may share the same rotation. Every single lens angle MUST be unique.\n\n";
 
@@ -2136,8 +2579,8 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
             finalPrompt += `- The head panels are a technical angle set, not expressive variations.\n`;
             finalPrompt += `- Each head panel must occupy a distinct mandatory angle bucket.\n`;
             finalPrompt += `- Frontal close-up = 0-degree yaw, both eyes equally visible, symmetrical face presentation.\n`;
-            finalPrompt += `- True left profile = 90-degree left yaw, one eye visible, true left-side silhouette.\n`;
-            finalPrompt += `- True right profile = 90-degree right yaw, one eye visible, true right-side silhouette.\n`;
+            finalPrompt += `- True left profile = 90-degree left yaw, one eye visible, true left-side silhouette, nose/snout/faceplate points screen-right.\n`;
+            finalPrompt += `- True right profile = 90-degree right yaw, one eye visible, true right-side silhouette, nose/snout/faceplate points screen-left.\n`;
             finalPrompt += `- Upward tilt = near-frontal yaw, chin elevated, nostril and under-chin visibility.\n`;
             finalPrompt += `- Downward tilt = near-frontal yaw, chin lowered, forehead and top-plane emphasis.\n`;
             finalPrompt += `- Do not substitute 3/4 views for profile views.\n`;
@@ -2149,6 +2592,10 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
             finalPrompt += `- Frontal close-up must not drift into 3/4.\n`;
             finalPrompt += `- Upward tilt and downward tilt must remain near-frontal in yaw.\n`;
             finalPrompt += `- Do not produce a second left-leaning 3/4 view when a true right profile is required.\n\n`;
+            finalPrompt += NANOCAST_PROFILE_PAIR_VISUAL_LOCK;
+            if (refLayout === 'split_focus') {
+                finalPrompt += NANOCAST_HYBRID_PROFILE_SLOT_LOCK;
+            }
 
             if (identitySource !== 'biometric') {
                 finalPrompt += `GENERATE CHARACTER REFERENCE SHEET:\n`;
@@ -2354,6 +2801,16 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
 
             // Timeout Helper
             const timeoutPromise = (ms: number): Promise<never> => new Promise((_, reject) => setTimeout(() => reject(new Error('Request timed out')), ms));
+            const generateReferenceSheetAttempt = (promptText: string): Promise<string> => Promise.race([
+                GeminiService.generateImage(
+                    promptText,
+                    state.apiKey,
+                    state.model,
+                    imageRefs,
+                    { aspectRatio: '16:9', imageSize: state.imageResolution, creditRenderType: 'character_sheet', thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements }
+                ),
+                timeoutPromise(timeoutMs)
+            ]);
 
             // --- PROGRESS SIMULATION TIMER ---
             let currentPercent = 5;
@@ -2372,16 +2829,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
 
             while (attempts <= maxRetries) {
                 try {
-                    res = await Promise.race([
-                        GeminiService.generateImage(
-                            finalPrompt,
-                            state.apiKey,
-                            state.model,
-                            imageRefs,
-                            { aspectRatio: '16:9', imageSize: state.imageResolution, creditRenderType: 'character_sheet', thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements }
-                        ),
-                        timeoutPromise(timeoutMs) // Dynamic Timeout
-                    ]);
+                    res = await generateReferenceSheetAttempt(finalPrompt);
                     break; // Success
                 } catch (error: unknown) {
                     const message = getErrorMessage(error);
@@ -2411,6 +2859,53 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
             } catch(e) {
                 console.warn(e);
             }
+
+            if (refLayout === 'split_focus') {
+                try {
+                    const validation = await detectNanoCastHybridProfileDuplicate(safeRefSheetUrl);
+                    if (validation.hasDuplicate) {
+                        dispatch({
+                            type: 'ADD_LOG',
+                            payload: {
+                                message: `NanoCast Hybrid duplicate profile pair detected (${(validation.maxSimilarity * 100).toFixed(1)}%). Running correction pass...`,
+                                type: 'info'
+                            }
+                        });
+
+                        const correctionPrompt = `${finalPrompt}
+
+NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
+- Previous output repeated the same side-profile closeup in LENS 5 and LENS 6.
+- Re-render the sheet and force LENS 5 and LENS 6 to be opposite profile directions.
+- LENS 5 must be anatomical LEFT PROFILE with nose/snout/faceplate pointing screen-right.
+- LENS 6 must be anatomical RIGHT PROFILE with nose/snout/faceplate pointing screen-left.
+- Do not reuse, crop, scale, relight, or re-label the same side profile for both slots.
+- If the two profile panels could be mistaken for the same silhouette, redraw the incorrect panel before final output.`;
+
+                        const correctedRawUrl = await generateReferenceSheetAttempt(correctionPrompt);
+                        safeRefSheetUrl = await materializeDisplayUrl(correctedRawUrl);
+
+                        const secondValidation = await detectNanoCastHybridProfileDuplicate(safeRefSheetUrl);
+                        if (secondValidation.hasDuplicate) {
+                            dispatch({
+                                type: 'ADD_LOG',
+                                payload: {
+                                    message: `NanoCast Hybrid still shows possible duplicate profile angles (${(secondValidation.maxSimilarity * 100).toFixed(1)}%).`,
+                                    type: 'error'
+                                }
+                            });
+                        } else {
+                            dispatch({
+                                type: 'ADD_LOG',
+                                payload: { message: "NanoCast Hybrid correction resolved duplicate profile angles.", type: 'success' }
+                            });
+                        }
+                    }
+                } catch (validationErr) {
+                    console.warn("NanoCast reference sheet uniqueness validation failed:", validationErr);
+                }
+            }
+
             setRefSheetUrl(prev => {
                 if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev);
                 return safeRefSheetUrl;
@@ -2461,28 +2956,40 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
     const isScanning = activeSector && !capturedAngles[activeSector];
 
     const resetScan = () => {
+        resetScanTracking();
+
         // Revoke URLs to free memory
         Object.keys(capturedAngles).forEach(key => setAngle(key as keyof typeof capturedAngles, null));
 
         // CRITICAL: Reset the ref that tracks captured angles, otherwise auto-scan thinks it's done
         capturedAnglesRef.current = { center: null, left: null, right: null, up: null, down: null };
 
-        // Reset local scan state
-        setActiveSector(null);
-        setStabilityProgress(0);
-        sectorStableFramesRef.current = 0;
-
         // Clear persistence
         dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: null });
         setFinalCharacterUrl(null);
         setPhase(1);
+
+        if (!uploadMode) {
+            setCameraEnabled(true);
+            setWebcamReadyTick(tick => tick + 1);
+        }
     };
 
     // Helper: Handle file upload
     const handleFileUpload = (angle: keyof typeof capturedAngles, file: File) => {
+        void ensureScanAudioContext();
         const url = URL.createObjectURL(file);
         setAngle(angle, url);
     };
+
+    const clearAngleForRetake = useCallback((angle: BiometricCaptureAngle) => {
+        resetScanTracking();
+        setAngle(angle, null);
+        if (!uploadMode) {
+            setCameraEnabled(true);
+            setWebcamReadyTick(tick => tick + 1);
+        }
+    }, [resetScanTracking, setAngle, uploadMode]);
 
     return (
         <div className="flex h-full bg-bg text-fg overflow-hidden relative font-sans select-none">
@@ -2918,7 +3425,10 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                         {/* Camera Toggle */}
                                         <HelpTooltip zone="nano" id="cameraControl">
                                             <button
-                                                onClick={() => setCameraEnabled(!cameraEnabled)}
+                                                onClick={() => {
+                                                    void ensureScanAudioContext();
+                                                    setCameraEnabled(!cameraEnabled);
+                                                }}
                                                 className={`p-3 rounded-full border transition-all ${cameraEnabled ? 'bg-surface border-accent text-accent -[0_0_15px_rgba(250,204,21,0.3)]' : 'bg-black border-white/20 text-white/50 hover:text-white'}`}
                                                 title={cameraEnabled ? "Disable Camera" : "Enable Camera"}
                                             >
@@ -2928,13 +3438,19 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
 
                                         <div className="flex bg-black/90 backdrop-blur rounded-full border border-border p-2 gap-2 ">
                                             <button
-                                                onClick={() => setUploadMode(false)}
+                                                onClick={() => {
+                                                    void ensureScanAudioContext();
+                                                    setUploadMode(false);
+                                                }}
                                                 className={`px-5 py-2 rounded-full text-xs font-black uppercase tracking-wider transition-all border ${!uploadMode ? 'bg-surface border-accent text-accent -[0_0_15px_rgba(250,204,21,0.3)]' : 'border-transparent text-white hover:text-accent hover:bg-white/5'}`}
                                             >
                                                 Auto-Scan
                                             </button>
                                             <button
-                                                onClick={() => setUploadMode(true)}
+                                                onClick={() => {
+                                                    void ensureScanAudioContext();
+                                                    setUploadMode(true);
+                                                }}
                                                 className={`px-5 py-2 rounded-full text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 border ${uploadMode ? 'bg-surface border-accent text-accent -[0_0_15px_rgba(250,204,21,0.3)]' : 'border-transparent text-white hover:text-accent hover:bg-white/5'}`}
                                             >
                                                 <Upload className="w-3 h-3" /> Upload
@@ -2951,12 +3467,16 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                                         screenshotFormat="image/jpeg"
                                                         className="h-full w-full object-cover"
                                                         videoConstraints={{ width: 1280, height: 720, facingMode: "user" }}
+                                                        onUserMedia={() => setWebcamReadyTick(tick => tick + 1)}
                                                     />
                                                 ) : (
                                                     <div className="flex flex-col items-center justify-center text-muted gap-6 animate-pulse">
                                                         <div className="relative">
                                                             <button
-                                                                onClick={() => setCameraEnabled(true)}
+                                                                onClick={() => {
+                                                                    void ensureScanAudioContext();
+                                                                    setCameraEnabled(true);
+                                                                }}
                                                                 className="group relative flex flex-col items-center gap-4"
                                                             >
                                                                 <div className="w-24 h-24 rounded-full border-4 border-dashed border-accent/30 flex items-center justify-center group-hover:border-accent group-hover:bg-accent/10 transition-all duration-500">
@@ -3067,7 +3587,10 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
 
                                                 <div className="absolute bottom-[15%] left-1/2 -translate-x-1/2 z-30 pointer-events-auto">
                                                     <button
-                                                        onClick={() => capturedAngles.center ? activeSector && captureCurrentFrame(activeSector) : captureCurrentFrame('center')}
+                                                        onClick={() => {
+                                                            void ensureScanAudioContext();
+                                                            capturedAngles.center ? activeSector && captureCurrentFrame(activeSector) : captureCurrentFrame('center');
+                                                        }}
                                                         className="px-8 py-3 bg-black/90 hover:bg-black border border-accent/50 hover:border-accent text-accent rounded-full -[0_0_20px_rgba(250,204,21,0.2)] hover:-[0_0_30px_rgba(250,204,21,0.6)] text-sm font-black uppercase tracking-widest flex items-center gap-3 transition-all group scale-100 hover:scale-110"
                                                     >
                                                         <CameraIcon className="w-5 h-5 group-hover:rotate-12 transition-transform" />
@@ -3098,7 +3621,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                                         <>
                                                             <img src={capturedAngles[angle]!} className="w-full h-full object-cover opacity-80" />
                                                             <button
-                                                                onClick={() => setAngle(angle, null)}
+                                                                onClick={() => clearAngleForRetake(angle)}
                                                                 className="absolute top-2 right-2 bg-black/50 p-2 rounded-full hover:bg-red-500/50 transition-colors"
                                                             >
                                                                 <RefreshCw className="w-4 h-4 text-white" />
@@ -3112,7 +3635,10 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                                                 type="file"
                                                                 accept="image/*"
                                                                 className="hidden"
-                                                                onClick={(e) => { (e.target as HTMLInputElement).value = ''; }}
+                                                                onClick={(e) => {
+                                                                    void ensureScanAudioContext();
+                                                                    (e.target as HTMLInputElement).value = '';
+                                                                }}
                                                                 onChange={(e) => {
                                                                     if (e.target.files?.[0]) handleFileUpload(angle, e.target.files[0]);
                                                                 }}
@@ -3137,7 +3663,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                         <div
                                             key={label}
                                             onClick={() => {
-                                                if (capturedAngles[label]) setAngle(label, null);
+                                                if (capturedAngles[label]) clearAngleForRetake(label);
                                             }}
                                             className={`border p-3 rounded-lg flex items-center justify-between group transition-all cursor-pointer hover:bg-surface-2 ${capturedAngles[label] ? 'bg-success/5 border-success/30' : 'bg-surface border-border'}`}
                                         >

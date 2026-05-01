@@ -41,6 +41,14 @@ type GenerationType = 'standard' | 'character_sheet';
 type ResolutionTier = '1k' | '2k' | '4k';
 
 const CREDIT_PRICING_VERSION = '1-2-6';
+const NANO_BANANA_2_IMAGE_MODEL = 'gemini-3.1-flash-image-preview';
+const LEGACY_HOSTED_IMAGE_MODELS = new Set([
+  'gemini-2.5-flash-image',
+  'imagen-4.0-generate-001'
+]);
+
+const normalizeHostedProviderModel = (model: string): string =>
+  LEGACY_HOSTED_IMAGE_MODELS.has(model) ? NANO_BANANA_2_IMAGE_MODEL : model;
 
 class HttpError extends Error {
   status: number;
@@ -225,6 +233,7 @@ serve(async (req) => {
     if (!payload?.model || !executionFingerprint) {
       throw new Error("Invalid request payload: missing payload.model or executionFingerprint");
     }
+    const providerModel = normalizeHostedProviderModel(payload.model);
 
     const creditMetadata = readHostedCreditMetadata(requestBody);
 
@@ -268,7 +277,7 @@ serve(async (req) => {
             p_cost: creditMetadata.requiredCredits,
             p_is_byok: false,
             p_provider: 'gemini',
-            p_provider_model: payload.model
+            p_provider_model: providerModel
         }),
         10000, "start_generation_rpc"
     );
@@ -311,7 +320,7 @@ serve(async (req) => {
         .from('generations')
         .update({ 
              request_payload: payload.requestBody,
-             provider_model: payload.model
+             provider_model: providerModel
         })
         .eq('id', job.id);
 

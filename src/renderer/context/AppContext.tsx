@@ -13,6 +13,10 @@ import {
     calculateRequiredGenerationCredits,
     type InsufficientCreditModalState
 } from '../utils/billingProducts';
+import {
+    normalizeImageGenerationModel,
+    type ImageGenerationModel
+} from '../constants/generationModels';
 
 export const APP_SCHEMA_VERSION = 5; // bump when persisted state shape changes
 // --- SHARED TYPES ---
@@ -435,7 +439,7 @@ export interface BackgroundJob {
 
 export interface AppState {
     apiKey: string;
-    model: 'imagen-4.0-generate-001' | 'gemini-2.5-flash-image' | 'gemini-3.1-flash-image-preview';
+    model: ImageGenerationModel;
     view: ViewMode;
     cast: CastMember[];
     tokens: StageToken[];
@@ -492,6 +496,8 @@ export interface AppState {
     imageResolution: '1K' | '2K' | '4K';
     enableImageThinking: boolean;
     enableGoogleGrounding: boolean;
+    biometricSoundEnabled: boolean;
+    biometricSoundVolume: number;
 
     // Director Canvas Refinement Tracking
     latestCompositeSource?: 'directorCanvas' | 'legacy';
@@ -689,6 +695,8 @@ export type Action =
     | { type: 'SET_IMAGE_RESOLUTION'; payload: '1K' | '2K' | '4K' }
     | { type: 'SET_ENABLE_IMAGE_THINKING'; payload: boolean }
     | { type: 'SET_ENABLE_GOOGLE_GROUNDING'; payload: boolean }
+    | { type: 'SET_BIOMETRIC_SOUND_ENABLED'; payload: boolean }
+    | { type: 'SET_BIOMETRIC_SOUND_VOLUME'; payload: number }
     | { type: 'SET_TOKENS'; payload: StageToken[] }
     | { type: 'SET_ANNOTATIONS'; payload: StageAnnotation[] }
     | { type: 'SYNC_SPATIAL_DESCRIPTORS' }
@@ -735,6 +743,12 @@ const loadJson = <T,>(key: string, fallback: T): T => {
     } catch {
         return fallback;
     }
+};
+
+const clampBiometricSoundVolume = (value: unknown): number => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 70;
+    return Math.min(100, Math.max(0, Math.round(numeric)));
 };
 
 // --- UNDO / REDO HISTORY (paid-launch safety) ---
@@ -904,16 +918,11 @@ const defaultRefSlots: ReferenceSlot[] = Array.from({ length: 10 }, (_, i) => ({
 
 const getInitialModel = (): AppState['model'] => {
     const saved = localStorage.getItem('nano_model');
-    const valid: AppState['model'][] = [
-        'imagen-4.0-generate-001',
-        'gemini-2.5-flash-image',
-        'gemini-3.1-flash-image-preview',
-    ];
-    if (saved) {
-        const maybeModel = saved as AppState['model'];
-        if (valid.includes(maybeModel)) return maybeModel;
+    const normalized = normalizeImageGenerationModel(saved);
+    if (saved !== normalized) {
+        localStorage.setItem('nano_model', normalized);
     }
-    return 'gemini-3.1-flash-image-preview';
+    return normalized;
 };
 
 const DEFAULT_REGION_EDIT: RegionEditState = {
@@ -975,6 +984,8 @@ export const initialState: AppState = {
     imageResolution: loadJson<'1K' | '2K' | '4K'>('nano_image_resolution', '2K'),
     enableImageThinking: localStorage.getItem('nano_enable_image_thinking') !== 'false',
     enableGoogleGrounding: localStorage.getItem('nano_enable_google_grounding') === 'true' ? true : false,
+    biometricSoundEnabled: loadJson<boolean>('nano_biometric_sound_enabled', true),
+    biometricSoundVolume: clampBiometricSoundVolume(loadJson<number>('nano_biometric_sound_volume', 70)),
     floorPlane: loadJson<FloorPlane | null>('nano_floor_plane', null),
     occupiedVolumes: loadJson<OccupiedVolume[]>('nano_occupied_volumes', []),
     isDepthProcessing: false,
@@ -1190,7 +1201,7 @@ export const reducer = (state: AppState, action: Action): AppState => {
             };
         }
         case 'SET_MODEL':
-            return { ...state, model: action.payload };
+            return { ...state, model: normalizeImageGenerationModel(action.payload) };
         case 'SET_BILLING_MODE': {
             const overrideMode = action.payload;
             return { 
@@ -1613,6 +1624,8 @@ export const reducer = (state: AppState, action: Action): AppState => {
                 imageResolution: state.imageResolution,
                 enableImageThinking: state.enableImageThinking,
                 enableGoogleGrounding: state.enableGoogleGrounding,
+                biometricSoundEnabled: state.biometricSoundEnabled,
+                biometricSoundVolume: state.biometricSoundVolume,
                 isStoryboardEnabled: state.isStoryboardEnabled,
                 billingMode: state.billingMode,
                 billingEntitlements: state.billingEntitlements,
@@ -1697,6 +1710,10 @@ export const reducer = (state: AppState, action: Action): AppState => {
             return { ...state, enableImageThinking: action.payload };
         case 'SET_ENABLE_GOOGLE_GROUNDING':
             return { ...state, enableGoogleGrounding: action.payload };
+        case 'SET_BIOMETRIC_SOUND_ENABLED':
+            return { ...state, biometricSoundEnabled: action.payload };
+        case 'SET_BIOMETRIC_SOUND_VOLUME':
+            return { ...state, biometricSoundVolume: clampBiometricSoundVolume(action.payload) };
         case 'SET_SAVE_PATH':
             localStorage.setItem('nano_save_path', action.payload || '');
             return { ...state, saveDirectoryPath: action.payload };
@@ -2607,6 +2624,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             localStorage.setItem('nano_image_resolution', JSON.stringify(state.imageResolution));
             localStorage.setItem('nano_enable_image_thinking', JSON.stringify(state.enableImageThinking));
             localStorage.setItem('nano_enable_google_grounding', JSON.stringify(state.enableGoogleGrounding));
+            localStorage.setItem('nano_biometric_sound_enabled', JSON.stringify(state.biometricSoundEnabled));
+            localStorage.setItem('nano_biometric_sound_volume', JSON.stringify(state.biometricSoundVolume));
             localStorage.setItem('nano_billing_mode', JSON.stringify(state.billingMode));
         } catch (e) {
             console.warn('Config persistence failed', e);
@@ -2626,6 +2645,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         state.imageResolution,
         state.enableImageThinking,
         state.enableGoogleGrounding,
+        state.biometricSoundEnabled,
+        state.biometricSoundVolume,
         state.billingMode
     ]);
 

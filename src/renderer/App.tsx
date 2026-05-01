@@ -1,4 +1,4 @@
-import { useEffect, useState, Component, useCallback, useRef } from 'react';
+import { useEffect, useState, Component, useCallback, useRef, useMemo } from 'react';
 import type { ReactNode, ErrorInfo } from 'react';
 import SceneCanvas from './components/SceneCanvas';
 import WardrobeStudio from './components/WardrobeStudio';
@@ -13,12 +13,12 @@ import { SupabaseAuth, supabase } from './services/SupabaseClient';
 
 import type {
   ViewMode,
-  AppState,
   CastMember
 } from './context/AppContext';
 import {
   useAppContext
 } from './context/AppContext';
+import { NANO_BANANA_2_IMAGE_MODEL } from './constants/generationModels';
 import { HelpProvider } from './context/HelpContext';
 import CastingForge from './components/CastingForge';
 import NanoCastingDirector from './components/NanoCastingDirector';
@@ -31,6 +31,7 @@ import { useRecentGenerationsStore } from './stores/useRecentGenerationsStore';
 import ActorSaveModal from './components/ActorSaveModal';
 import {
   INSUFFICIENT_HOSTED_CREDITS_EVENT,
+  getByokOwnership,
   type InsufficientCreditModalState
 } from './utils/billingProducts';
 
@@ -42,7 +43,10 @@ import {
   Copy,
   X,
   Hammer,
-  HelpCircle
+  HelpCircle,
+  CreditCard,
+  ExternalLink,
+  KeyRound
 } from 'lucide-react';
 
 // --- 1. TYPES & INTERFACES ---
@@ -67,6 +71,62 @@ type GenerationTimingMetrics = {
   db_completed_at?: number;
   error?: string;
   error_message?: string;
+};
+
+type HostedUsageMetadata = {
+  requiredCredits?: number;
+  generationType?: string;
+  resolutionTier?: string;
+  creditPricingVersion?: string;
+};
+
+type HostedUsageRow = {
+  id: string;
+  created_at?: string | null;
+  status?: string | null;
+  provider_model?: string | null;
+  billing_metadata?: HostedUsageMetadata | null;
+};
+
+const getHostedUsageCredits = (row: HostedUsageRow): number => {
+  const requiredCredits = Number(row.billing_metadata?.requiredCredits);
+  return Number.isFinite(requiredCredits) && requiredCredits > 0 ? requiredCredits : 0;
+};
+
+const formatHostedUsageKind = (row: HostedUsageRow): string => {
+  const generationType = row.billing_metadata?.generationType;
+  const resolutionTier = row.billing_metadata?.resolutionTier;
+  if (generationType && resolutionTier) return `${generationType.replace(/_/g, ' ')} - ${resolutionTier.toUpperCase()}`;
+  if (resolutionTier) return resolutionTier.toUpperCase();
+  if (generationType) return generationType.replace(/_/g, ' ');
+  return row.provider_model?.includes('gemini') ? 'image generation' : 'generation';
+};
+
+const isMissingColumnError = (error: unknown, columnName: string): boolean => {
+  const message = getErrorMessage(error).toLowerCase();
+  return message.includes(columnName.toLowerCase()) && (
+    message.includes('does not exist') ||
+    message.includes('could not find') ||
+    message.includes('schema cache')
+  );
+};
+
+const isMissingBillingMetadataColumn = (error: unknown): boolean =>
+  isMissingColumnError(error, 'billing_metadata');
+
+const isMissingCreditLedgerResetColumn = (error: unknown): boolean =>
+  isMissingColumnError(error, 'credit_ledger_reset_at');
+
+const formatHostedUsageDate = (value?: string | null): string => {
+  if (!value) return 'Unknown time';
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime())) return 'Unknown time';
+  return timestamp.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  });
 };
 
 const getErrorMessage = (error: unknown): string => {
@@ -394,8 +454,125 @@ const App = () => {
   const backgroundPollInFlightRef = useRef(false);
   const backgroundPollErrorCountsRef = useRef<Record<string, number>>({});
   const backgroundPollLastWarnAtRef = useRef<Record<string, number>>({});
+  const creditUsagePopoverRef = useRef<HTMLDivElement | null>(null);
+  const [showCreditUsage, setShowCreditUsage] = useState(false);
+  const [creditUsageRows, setCreditUsageRows] = useState<HostedUsageRow[]>([]);
+  const [creditUsageLoading, setCreditUsageLoading] = useState(false);
+  const [creditUsageError, setCreditUsageError] = useState<string | null>(null);
+  const [creditUsageWarning, setCreditUsageWarning] = useState<string | null>(null);
+  const [creditUsageResetAt, setCreditUsageResetAt] = useState<string | null>(null);
   
   useEffect(() => { prevCreditsRef.current = state.hostedCredits; }, [state.hostedCredits]);
+
+  const creditUsageTotal = useMemo(
+    () => creditUsageRows.reduce((sum, row) => sum + getHostedUsageCredits(row), 0),
+    [creditUsageRows]
+  );
+
+  const refreshHostedUsage = useCallback(async () => {
+    const supabaseClient = supabase;
+    const hostedUserId = state.hostedSession?.user?.id;
+
+    if (!supabaseClient || state.billingEntitlements.effectiveBillingMode !== 'hosted' || !hostedUserId) {
+      setCreditUsageRows([]);
+      setCreditUsageError(null);
+      setCreditUsageWarning(null);
+      setCreditUsageResetAt(null);
+      return;
+    }
+
+    setCreditUsageLoading(true);
+    setCreditUsageError(null);
+    setCreditUsageWarning(null);
+
+    try {
+      const warnings: string[] = [];
+      let ledgerResetAt: string | null = null;
+
+      const { data: profileData, error: profileError } = await supabaseClient
+        .from('profiles')
+        .select('credit_ledger_reset_at')
+        .eq('id', hostedUserId)
+        .single();
+
+      if (profileError) {
+        if (isMissingCreditLedgerResetColumn(profileError)) {
+          warnings.push('Apply the credit_ledger_reset_at migration to reset this ledger whenever credits are reloaded.');
+        } else {
+          throw profileError;
+        }
+      } else {
+        const resetAt = (profileData as { credit_ledger_reset_at?: unknown } | null)?.credit_ledger_reset_at;
+        ledgerResetAt = typeof resetAt === 'string' && resetAt.trim() ? resetAt : null;
+      }
+
+      setCreditUsageResetAt(ledgerResetAt);
+
+      const baseUsageQuery = (select: string) => {
+        let query = supabaseClient
+          .from('generations')
+          .select(select)
+          .eq('user_id', hostedUserId);
+
+        if (ledgerResetAt) {
+          query = query.gte('created_at', ledgerResetAt);
+        }
+
+        return query
+          .order('created_at', { ascending: false })
+          .limit(25);
+      };
+
+      const { data, error } = await baseUsageQuery('id, created_at, status, provider_model, billing_metadata');
+
+      if (error && isMissingBillingMetadataColumn(error)) {
+        const fallback = await baseUsageQuery('id, created_at, status, provider_model');
+        if (fallback.error) throw fallback.error;
+
+        setCreditUsageRows(
+          (fallback.data || []).map((row) => ({
+            ...(row as unknown as HostedUsageRow),
+            billing_metadata: null
+          }))
+        );
+        warnings.push('Apply the billing_metadata migration to show exact per-generation credit costs. Recent jobs are shown without cost details for now.');
+        setCreditUsageWarning(warnings.join(' '));
+        return;
+      }
+
+      if (error) throw error;
+
+      const rows = (data || []).map((row) => row as unknown as HostedUsageRow);
+
+      setCreditUsageRows(rows);
+      setCreditUsageWarning(warnings.length > 0 ? warnings.join(' ') : null);
+    } catch (error: unknown) {
+      setCreditUsageRows([]);
+      setCreditUsageWarning(null);
+      setCreditUsageResetAt(null);
+      setCreditUsageError(getErrorMessage(error));
+    } finally {
+      setCreditUsageLoading(false);
+    }
+  }, [state.billingEntitlements.effectiveBillingMode, state.hostedSession?.user?.id]);
+
+  useEffect(() => {
+    if (!showCreditUsage) return;
+    void refreshHostedUsage();
+  }, [showCreditUsage, refreshHostedUsage, state.hostedCredits]);
+
+  useEffect(() => {
+    if (!showCreditUsage) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!creditUsagePopoverRef.current?.contains(event.target as Node)) {
+        setShowCreditUsage(false);
+      }
+    };
+
+    window.addEventListener('mousedown', handlePointerDown);
+    return () => window.removeEventListener('mousedown', handlePointerDown);
+  }, [showCreditUsage]);
 
   const refreshCreditsNow = useCallback(async () => {
     if (state.billingEntitlements.effectiveBillingMode === 'hosted' && state.hostedSession?.user?.id) {
@@ -764,29 +941,100 @@ const App = () => {
   // Settings Modal State
   const [showSettings, setShowSettings] = useState(false);
   const [tempKey, setTempKey] = useState(state.apiKey);
-  const [tempModel, setTempModel] = useState<AppState['model']>(state.model);
   const [tempBillingMode, setTempBillingMode] = useState<'hosted' | 'byok'>(state.billingMode);
-  const modelOptions: Array<{ id: AppState['model']; name: string; desc: string }> = [
-    { id: 'gemini-2.5-flash-image', name: 'Gemini 2.5 Flash (Image)', desc: 'Lightning fast multi-modal image generation (Recommended)' },
-    { id: 'gemini-3.1-flash-image-preview', name: 'Gemini 3.1 Flash (Preview)', desc: 'Reasoning-capable 4k model (Requires proper billing quota)' },
-    { id: 'imagen-4.0-generate-001', name: 'Imagen 4.0', desc: 'Text-to-image focus' }
-  ];
 
   // Auth UI State
   const [authEmail, setAuthEmail] = useState('');
   const [authPass, setAuthPass] = useState('');
   const [isAuthLoading, setIsAuthLoading] = useState(false);
+  const [billingPortalBusy, setBillingPortalBusy] = useState(false);
+  const [billingPortalError, setBillingPortalError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!showSettings) return;
+    setTempKey(state.apiKey);
+    setTempBillingMode(state.billingMode);
+  }, [showSettings, state.apiKey, state.billingMode]);
+
+  const byokOwnership = useMemo(
+    () => getByokOwnership({
+      entitlements: state.billingEntitlements,
+      hostedSession: state.hostedSession,
+      apiKey: state.apiKey
+    }),
+    [state.apiKey, state.billingEntitlements, state.hostedSession]
+  );
+  const hasHostedAccountContext =
+    state.billingEntitlements.hasHostedAccess &&
+    Boolean(state.hostedSession?.user?.id);
+  const hasBothHostedAndByok = hasHostedAccountContext && byokOwnership.ownsAnyByok;
+  const shouldShowByokHostedSuggestion =
+    state.billingEntitlements.effectiveBillingMode === 'hosted' &&
+    byokOwnership.ownsAnyByok;
+  const byokLicenseLabel = byokOwnership.byokTier
+    ? `${byokOwnership.byokTier === 'agency' ? 'Agency Commercial' : 'Indie'} BYOK license`
+    : 'BYOK license';
 
   const closeSettings = () => {
     setShowSettings(false);
+    setBillingPortalError(null);
     if (state.view === 'settings') {
       dispatch({ type: 'SET_VIEW', payload: 'casting' }); // Fallback to casting
     }
   };
 
+  const openExternalUrl = async (url: string, reservedWindow?: Window | null): Promise<boolean> => {
+    if (window.electronAPI?.openExternal) {
+      await window.electronAPI.openExternal(url);
+      return true;
+    }
+
+    if (reservedWindow && !reservedWindow.closed) {
+      reservedWindow.location.href = url;
+      reservedWindow.focus();
+      return true;
+    }
+
+    const openedWindow = window.open(url, '_blank', 'noopener,noreferrer');
+    return Boolean(openedWindow);
+  };
+
+  const switchToByokMode = () => {
+    dispatch({ type: 'SET_BILLING_MODE', payload: 'byok' });
+    setTempBillingMode('byok');
+    dispatch({ type: 'ADD_LOG', payload: { message: 'Switched to BYOK Mode.', type: 'info' } });
+    if (!state.apiKey.trim()) {
+      setShowSettings(true);
+    }
+  };
+
+  const handleManageHostedSubscription = async () => {
+    setBillingPortalBusy(true);
+    setBillingPortalError(null);
+    const reservedPortalWindow = window.electronAPI?.openExternal ? null : window.open('about:blank', '_blank');
+
+    try {
+      const portalUrl = await SupabaseAuth.createBillingPortalSession();
+      const opened = await openExternalUrl(portalUrl, reservedPortalWindow);
+      if (!opened) {
+        setBillingPortalError('Billing portal popup was blocked. Please allow popups and try again.');
+        dispatch({ type: 'ADD_LOG', payload: { message: 'Billing portal popup was blocked.', type: 'error' } });
+        return;
+      }
+      dispatch({ type: 'ADD_LOG', payload: { message: 'Hosted subscription portal opened.', type: 'info' } });
+    } catch (error: unknown) {
+      reservedPortalWindow?.close();
+      const message = getErrorMessage(error);
+      setBillingPortalError(message);
+      dispatch({ type: 'ADD_LOG', payload: { message: `Billing portal unavailable: ${message}`, type: 'error' } });
+    } finally {
+      setBillingPortalBusy(false);
+    }
+  };
+
   const saveSettings = () => {
     dispatch({ type: 'SET_API_KEY', payload: tempKey });
-    dispatch({ type: 'SET_MODEL', payload: tempModel });
+    dispatch({ type: 'SET_MODEL', payload: NANO_BANANA_2_IMAGE_MODEL });
     dispatch({ type: 'SET_BILLING_MODE', payload: tempBillingMode });
     closeSettings();
     dispatch({ type: 'ADD_LOG', payload: { message: "Settings saved", type: 'success' } });
@@ -1237,23 +1485,112 @@ const App = () => {
               <FramedPanel className="scale-[0.80] origin-right lg:scale-90 pointer-events-auto">
                 
                 {/* Credits Segment */}
-                <div 
-                  className="flex items-center gap-3 px-1 cursor-help opacity-90 hover:opacity-100 transition-opacity"
-                  title={state.billingEntitlements.effectiveBillingMode === "hosted" ? `Hosted credits remaining: ${state.hostedCredits ?? "—"}` : "BYOK mode uses your own API key"}
+                <div
+                  ref={creditUsagePopoverRef}
+                  className="relative"
+                  onMouseEnter={() => {
+                    if (state.billingEntitlements.effectiveBillingMode === "hosted") setShowCreditUsage(true);
+                  }}
                 >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (state.billingEntitlements.effectiveBillingMode === "hosted") setShowCreditUsage(prev => !prev);
+                    }}
+                    className="flex items-center gap-3 px-1 cursor-help opacity-90 hover:opacity-100 transition-opacity focus:outline-none"
+                    title={state.billingEntitlements.effectiveBillingMode === "hosted" ? `Hosted credits remaining: ${state.hostedCredits ?? "-"}` : "BYOK mode uses your own API key"}
+                  >
                   <span className="text-[#888] text-[12px] font-semibold tracking-[0.5px]">
                     {state.billingEntitlements.effectiveBillingMode === "hosted" ? "HOSTED" : "BYOK"}
                   </span>
                   <div className="w-px h-[18px] bg-[#333]" />
                   <span className="text-white text-[18px] font-semibold flex items-center min-w-[24px] justify-center">
-                    {state.billingEntitlements.effectiveBillingMode === "byok" ? "—" : (
+                    {state.billingEntitlements.effectiveBillingMode === "byok" ? "-" : (
                       state.billingEntitlements.effectiveBillingMode === "hosted" && state.hostedCredits === null ? (
                         <div className="w-[18px] h-[18px] border-[2.5px] border-white/20 border-t-white rounded-full animate-spin" title="Loading credits..."></div>
                       ) : (
-                        String(state.hostedCredits ?? "—")
+                        String(state.hostedCredits ?? "-")
                       )
                     )}
                   </span>
+                  </button>
+
+                  {showCreditUsage && state.billingEntitlements.effectiveBillingMode === "hosted" && (
+                    <div className="absolute right-0 top-[calc(100%+12px)] z-[80] w-[340px] rounded-xl border border-white/10 bg-[#111113] shadow-2xl shadow-black/60 p-3 text-left">
+                      <div className="flex items-start justify-between gap-4 border-b border-white/10 pb-2">
+                        <div>
+                          <div className="text-[10px] font-black uppercase tracking-[0.18em] text-blue-400">Hosted Usage</div>
+                          <div className="text-xs text-gray-400 mt-1">
+                            {creditUsageResetAt ? `Since reload: ${formatHostedUsageDate(creditUsageResetAt)}` : 'Current credit spend ledger'}
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-[10px] text-gray-500 uppercase font-bold">{creditUsageResetAt ? 'Batch Spend' : 'Known Total'}</div>
+                          <div className="text-lg font-black text-white">{creditUsageTotal}</div>
+                        </div>
+                      </div>
+
+                      {creditUsageWarning && !creditUsageLoading && !creditUsageError && (
+                        <div className="mt-2 rounded-lg border border-yellow-500/20 bg-yellow-500/10 px-3 py-2 text-[11px] leading-snug text-yellow-100">
+                          {creditUsageWarning}
+                        </div>
+                      )}
+
+                      <div className="mt-2 max-h-[300px] overflow-y-auto pr-1 space-y-1">
+                        {creditUsageLoading ? (
+                          <div className="py-6 flex items-center justify-center">
+                            <div className="w-5 h-5 border-[2.5px] border-white/20 border-t-white rounded-full animate-spin" />
+                          </div>
+                        ) : creditUsageError ? (
+                          <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-[11px] text-red-200">
+                            Usage history unavailable: {creditUsageError}
+                          </div>
+                        ) : creditUsageRows.length === 0 ? (
+                          <div className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-4 text-[11px] text-gray-400">
+                            {creditUsageResetAt ? 'No hosted generation charges since the last credit reload.' : 'No hosted generation charges found yet.'}
+                          </div>
+                        ) : (
+                          creditUsageRows.map((row) => {
+                            const credits = getHostedUsageCredits(row);
+                            const hasKnownCredits = credits > 0;
+                            const status = String(row.status || 'UNKNOWN').toUpperCase();
+                            const statusClass = status === 'COMPLETED'
+                              ? 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20'
+                              : status === 'FAILED' || status === 'CANCELED' || status === 'EXPIRED'
+                                ? 'text-red-300 bg-red-500/10 border-red-500/20'
+                                : 'text-yellow-300 bg-yellow-500/10 border-yellow-500/20';
+
+                            return (
+                              <div key={row.id} className="rounded-lg bg-black/30 border border-white/5 px-3 py-2">
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <div className="text-xs font-bold text-gray-200 truncate">{formatHostedUsageKind(row)}</div>
+                                    <div className="text-[10px] text-gray-500 mt-0.5">{formatHostedUsageDate(row.created_at)}</div>
+                                  </div>
+                                  <div className="text-right shrink-0">
+                                    <div className="text-sm font-black text-white">{hasKnownCredits ? credits : '--'}</div>
+                                    <div className="text-[9px] uppercase text-gray-500">{hasKnownCredits ? 'credits' : 'cost n/a'}</div>
+                                  </div>
+                                </div>
+                                <div className="flex items-center justify-between gap-2 mt-2">
+                                  <span className={`text-[9px] uppercase font-black tracking-wider border rounded px-1.5 py-0.5 ${statusClass}`}>{status}</span>
+                                  <span className="text-[9px] text-gray-600 font-mono">{row.id.slice(0, 8)}</span>
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => void refreshHostedUsage()}
+                        className="mt-2 w-full rounded-lg border border-white/10 bg-white/[0.03] hover:bg-white/[0.06] text-[10px] font-bold uppercase tracking-wider text-gray-300 py-2 transition-colors"
+                      >
+                        Refresh Usage
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 <div className="w-px h-[18px] bg-[#333] mx-3" />
@@ -1285,6 +1622,26 @@ const App = () => {
               </FramedPanel>
             </div>
           </header>
+
+          {shouldShowByokHostedSuggestion && (
+            <div className="flex flex-col gap-3 border-b border-blue-400/20 bg-blue-500/10 px-4 py-3 text-blue-100 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex min-w-0 items-start gap-3">
+                <KeyRound className="mt-0.5 h-4 w-4 shrink-0 text-blue-300" />
+                <p className="text-xs font-semibold leading-relaxed">
+                  BYOK license active. Switch to BYOK Mode to use your own Google/Vertex API key and preserve Hosted credits.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={switchToByokMode}
+                className="flex min-h-[34px] shrink-0 items-center justify-center gap-2 rounded-lg border border-blue-300/40 bg-blue-400/15 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-blue-50 transition-colors hover:border-blue-200 hover:bg-blue-400/20"
+              >
+                <KeyRound className="h-3.5 w-3.5" />
+                Switch to BYOK Mode
+              </button>
+            </div>
+          )}
+
           {/* Main Content Area */}
           <main className="relative flex-1 min-h-0 overflow-hidden">
             {state.view === 'casting' && <CastingForge />}
@@ -1351,6 +1708,47 @@ const App = () => {
                   <h2 className="text-lg font-bold text-white mb-4">Configuration</h2>
                   <div className="space-y-4">
                     {/* BILLING MODE & ENTITLEMENTS */}
+                    {hasBothHostedAndByok && (
+                      <div className="rounded-lg border border-blue-400/30 bg-blue-500/10 p-4">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                          <div className="min-w-0">
+                            <label className="block text-xs font-bold uppercase tracking-wider text-blue-200">Account Dashboard</label>
+                            <p className="mt-2 text-sm leading-relaxed text-blue-50">
+                              You have both Managed API credits and a BYOK Desktop license. BYOK may save money for high-volume generation, but your Hosted credits remain available.
+                            </p>
+                            <p className="mt-2 text-[10px] font-bold uppercase tracking-wider text-blue-200/80">
+                              {byokLicenseLabel} active
+                            </p>
+                          </div>
+                          <div className="flex shrink-0 flex-col gap-2 sm:min-w-[220px]">
+                            <button
+                              type="button"
+                              onClick={handleManageHostedSubscription}
+                              disabled={billingPortalBusy}
+                              className="flex min-h-[40px] items-center justify-center gap-2 rounded-lg border border-blue-300/40 bg-blue-400/15 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-blue-50 transition-colors hover:border-blue-200 hover:bg-blue-400/20 disabled:cursor-wait disabled:opacity-60"
+                            >
+                              <CreditCard className="h-4 w-4" />
+                              {billingPortalBusy ? 'Opening Portal...' : 'Manage Hosted Subscription'}
+                              <ExternalLink className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={switchToByokMode}
+                              className="flex min-h-[40px] items-center justify-center gap-2 rounded-lg border border-yellow-300/40 bg-yellow-400/15 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-yellow-50 transition-colors hover:border-yellow-200 hover:bg-yellow-400/20"
+                            >
+                              <KeyRound className="h-4 w-4" />
+                              Use BYOK Mode
+                            </button>
+                          </div>
+                        </div>
+                        {billingPortalError && (
+                          <div className="mt-3 rounded-lg border border-red-400/25 bg-red-500/10 px-3 py-2 text-xs leading-relaxed text-red-100">
+                            Billing portal unavailable: {billingPortalError}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     {import.meta.env.DEV ? (
                       <>
                         <div>
@@ -1553,21 +1951,13 @@ const App = () => {
                       </p>
                     </div>
                     <div>
-                      <label className="block text-xs font-bold text-gray-400 uppercase mb-2 tracking-wider">Active Engine</label>
-                      <div className="grid grid-cols-1 gap-2">
-                        {modelOptions.map(m => (
-                          <button
-                            key={m.id}
-                            onClick={() => setTempModel(m.id)}
-                            className={`text-left p-3 rounded-lg border transition-all ${tempModel === m.id ? 'bg-yellow-500/10 border-yellow-500 ' : 'bg-[#09090b] border-[#27272a] hover:border-gray-600'}`}
-                          >
-                            <div className="flex justify-between items-center mb-1">
-                              <span className={`text-xs font-bold ${tempModel === m.id ? 'text-yellow-500' : 'text-gray-200'}`}>{m.name}</span>
-                              {tempModel === m.id && <div className="w-2 h-2 rounded-full bg-yellow-500 -[0_0_8px_rgba(234,179,8,0.6)]"></div>}
-                            </div>
-                            <p className="text-[10px] text-gray-500">{m.desc}</p>
-                          </button>
-                        ))}
+                      <label className="block text-xs font-bold text-gray-400 uppercase mb-2 tracking-wider">NanoBanana 2 Engine</label>
+                      <div className="text-left p-3 rounded-lg border bg-yellow-500/10 border-yellow-500">
+                        <div className="flex justify-between items-center mb-1">
+                          <span className="text-xs font-bold text-yellow-500">NanoBanana 2</span>
+                          <div className="w-2 h-2 rounded-full bg-yellow-500 shadow-[0_0_8px_rgba(234,179,8,0.6)]"></div>
+                        </div>
+                        <p className="text-[10px] text-gray-400">Premium NanoBanana 2 image model locked for biometric character sheets and digital doubles.</p>
                       </div>
                     </div>
 
@@ -1585,8 +1975,46 @@ const App = () => {
                         </button>
                       </div>
 
+                      <div className="pt-3 border-t border-white/5 space-y-3">
+                        <div className="flex items-start justify-between gap-4">
+                          <div>
+                            <label className="block text-xs font-bold text-gray-500 uppercase">Biometric Scan Sounds</label>
+                            <p className="text-[9px] text-gray-500">Angle-complete tones for NanoCast acquisition.</p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => dispatch({ type: 'SET_BIOMETRIC_SOUND_ENABLED', payload: !state.biometricSoundEnabled })}
+                            className="shrink-0 relative inline-flex h-5 w-9 items-center rounded-full transition-colors"
+                            style={{ backgroundColor: state.biometricSoundEnabled ? '#eab308' : '#52525b' }}
+                            aria-pressed={state.biometricSoundEnabled}
+                          >
+                            <span
+                              className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${state.biometricSoundEnabled ? 'translate-x-5' : 'translate-x-1'}`}
+                            />
+                          </button>
+                        </div>
+
+                        <div className={`space-y-1 transition-opacity ${state.biometricSoundEnabled ? 'opacity-100' : 'opacity-45'}`}>
+                          <div className="flex items-center justify-between gap-3">
+                            <label className="text-[10px] font-bold uppercase tracking-wider text-gray-500">Volume</label>
+                            <span className="text-[10px] font-mono font-bold text-gray-400">{state.biometricSoundVolume}%</span>
+                          </div>
+                          <input
+                            type="range"
+                            min="0"
+                            max="100"
+                            step="5"
+                            value={state.biometricSoundVolume}
+                            disabled={!state.biometricSoundEnabled}
+                            onChange={(e) => dispatch({ type: 'SET_BIOMETRIC_SOUND_VOLUME', payload: Number(e.target.value) })}
+                            className="w-full accent-yellow-500 disabled:cursor-not-allowed"
+                            aria-label="Biometric scan sound volume"
+                          />
+                        </div>
+                      </div>
+
                       <div>
-                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Image Resolution (Gemini 3.1)</label>
+                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Image Resolution (NanoBanana 2)</label>
                         <select
                           id="render-quality-selector"
                           className="w-full bg-[#09090b] border border-[#27272a] rounded px-2 py-1.5 text-xs text-white focus:border-yellow-500 outline-none"
@@ -1601,7 +2029,7 @@ const App = () => {
 
                       <div className="flex items-start justify-between gap-4 pt-2">
                         <div>
-                          <label className="block text-xs font-bold text-gray-500 uppercase">Thinking Mode (Gemini 3.1)</label>
+                          <label className="block text-xs font-bold text-gray-500 uppercase">Thinking Mode (NanoBanana 2)</label>
                           <p className="text-[9px] text-gray-500">Improves prompt adherence at the cost of speed.</p>
                         </div>
                         <button
@@ -1670,3 +2098,4 @@ const App = () => {
 };
 
 export default App;
+

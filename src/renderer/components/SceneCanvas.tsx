@@ -63,6 +63,7 @@ import { LibraryAssetMaterializer } from '../services/LibraryAssetMaterializer';
 import { useProductionExports } from '../hooks/useProductionExports';
 import { useAdvancedRender } from '../hooks/useAdvancedRender';
 import { buildPlacementIntentsFromAnnotations, buildAnchorSurfaceFromZone, buildAllowanceMaskFromAnchor, buildForegroundProtectMaskFromDepth } from '../utils/spatialHelpers';
+import { NANO_BANANA_2_IMAGE_MODEL } from '../constants/generationModels';
 
 import React from 'react';
 
@@ -2424,7 +2425,7 @@ Output: environment plate only.
             if (!captured) throw new Error('Stage capture returned empty.');
 
             // Pick a Gemini image model for mask generation
-            const maskModel = (state.model && String(state.model).includes('gemini')) ? state.model : 'gemini-2.5-flash-image';
+            const maskModel = NANO_BANANA_2_IMAGE_MODEL;
 
             const prompt =
                 "VISIBLE HUMAN ANATOMY PROTECTION MASK: Create a pure black & white segmentation mask where ALL visible human anatomy is PURE WHITE (#FFFFFF): face, hair, ears, neck, hands, fingers, exposed skin, and any visible body parts belonging to the subject. Non-human objects, added fabric, head coverings, props, staffs, sky, rocks, and background must be PURE BLACK (#000000). No gray. No gradients. Clean edges.";
@@ -2612,7 +2613,7 @@ Output: environment plate only.
         dispatch({ type: 'SET_PROCESSING', payload: true });
         dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: 5, text: 'Region Edit: Preparing composite state...' } });
         try {
-            const editModel = state.model === 'imagen-4.0-generate-001' ? 'gemini-2.5-flash-image' : state.model;
+            const editModel = NANO_BANANA_2_IMAGE_MODEL;
 
             const captured = await captureSceneImage();
             const startingBase = (viewMode === 'result' && state.resultImage) ? state.resultImage : captured;

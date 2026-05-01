@@ -4,6 +4,28 @@
 ALTER TABLE public.generations ADD COLUMN IF NOT EXISTS request_payload jsonb;
 ALTER TABLE public.generations ADD COLUMN IF NOT EXISTS provider_model text;
 ALTER TABLE public.generations ADD COLUMN IF NOT EXISTS timing_metrics jsonb DEFAULT '{}'::jsonb;
+ALTER TABLE public.generations ADD COLUMN IF NOT EXISTS billing_metadata jsonb DEFAULT '{}'::jsonb;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS credit_ledger_reset_at timestamptz;
+
+-- Reset the visible hosted-usage ledger when a user's balance is topped up.
+-- Generation deductions move the balance downward and will not reset the ledger.
+CREATE OR REPLACE FUNCTION public.mark_credit_ledger_reload()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  NEW.credit_ledger_reset_at = now();
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS profiles_credit_ledger_reload_marker ON public.profiles;
+
+CREATE TRIGGER profiles_credit_ledger_reload_marker
+BEFORE UPDATE OF credit_balance ON public.profiles
+FOR EACH ROW
+WHEN (COALESCE(NEW.credit_balance, 0) > COALESCE(OLD.credit_balance, 0))
+EXECUTE FUNCTION public.mark_credit_ledger_reload();
 
 -- 2. Extend the status tracking enum to prevent redundant parallel job execution safely
 ALTER TYPE generation_status ADD VALUE IF NOT EXISTS 'PROCESSING';

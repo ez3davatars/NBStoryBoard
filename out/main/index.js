@@ -930,6 +930,13 @@ function registerAppCloseIpcHandlers() {
     setImageWorkerQuitting(true);
     app.quit();
   });
+  ipcMain.handle("shell:openExternal", async (_event, url) => {
+    if (typeof url !== "string" || !/^https?:\/\//i.test(url)) {
+      throw new Error("Blocked invalid external URL.");
+    }
+    await shell.openExternal(url);
+    return true;
+  });
 }
 function createWindow() {
   const mainWindow = new BrowserWindow({

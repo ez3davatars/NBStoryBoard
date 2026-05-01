@@ -114,5 +114,42 @@ export const SupabaseAuth = {
     }
 
     return checkoutUrl;
+  },
+
+  createBillingPortalSession: async (): Promise<string> => {
+    if (!supabaseUrl || !supabaseAnonKey) {
+      throw new Error("Supabase is not configured. Check environment variables.");
+    }
+
+    const token = await SupabaseAuth.getValidJwt();
+    const endpoint = `${supabaseUrl}/functions/v1/create-billing-portal-session`;
+
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      cache: 'no-store',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        apikey: supabaseAnonKey,
+        'Content-Type': 'application/json',
+        Accept: 'application/json'
+      },
+      body: JSON.stringify({ client: 'desktop' })
+    });
+
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`Billing portal session failed (${response.status}): ${text || response.statusText}`);
+    }
+
+    const data = JSON.parse(text) as {
+      url?: string;
+    };
+
+    const portalUrl = data.url;
+    if (!portalUrl) {
+      throw new Error("Billing portal session did not return a URL.");
+    }
+
+    return portalUrl;
   }
 };

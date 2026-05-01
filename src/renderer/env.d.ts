@@ -64,6 +64,7 @@ declare global {
     confirmDiscardSession?: () => void;
     onRequestAppClose?: (callback: () => void) => void;
     confirmClose?: () => void;
+    openExternal?: (url: string) => Promise<boolean>;
     showSaveDialog?: (options: SaveDialogOptions) => Promise<string | null>;
     showOpenDialog?: (options: OpenDialogOptions) => Promise<string[] | null>;
     deleteFile?: (path: string) => Promise<boolean>;

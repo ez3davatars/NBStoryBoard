@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.on('request-app-close', () => callback());
     },
     confirmClose: () => ipcRenderer.send('confirm-close'),
+    openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
     showSaveDialog: (options: SaveDialogOptions) => ipcRenderer.invoke('dialog:showSaveDialog', options),
     showOpenDialog: (options: OpenDialogOptions) => ipcRenderer.invoke('dialog:showOpenDialog', options),
     deleteFile: (path: string) => ipcRenderer.invoke('file:delete', path),

@@ -105,6 +105,7 @@ PANEL COMPLETENESS:
 - Fill every required slot exactly once.
 - Do not leave blank slots.
 - Do not overlap two camera views in one slot.
+- Do not add extra slots, bonus panels, unlabeled duplicate views, or a second row where a single row is specified.
 `;
 
 const REFERENCE_SHEET_SPLIT_HARD_CONSTRAINTS = `
@@ -116,9 +117,16 @@ SPLIT LAYOUT SLOT MAP (STRICT):
 
 - RIGHT GRID (2x2, exactly 4 slots):
   R1 = headshot FRONT
-  R2 = headshot LEFT 3/4 or LEFT PROFILE
-  R3 = headshot RIGHT 3/4 or RIGHT PROFILE
+  R2 = headshot EXTREME LEFT PROFILE (anatomical left-side profile; nose/snout points toward screen-right)
+  R3 = headshot EXTREME RIGHT PROFILE (anatomical right-side profile; nose/snout points toward screen-left)
   R4 = headshot LOOKING UP (still same identity)
+
+SPLIT PROFILE PAIR LOCK:
+- R2 and R3 are paired technical opposite views, not two generic side closeups.
+- R2 must show the subject looking toward screen-right with the nose/snout/face protruding to the RIGHT edge of its panel.
+- R3 must show the subject looking toward screen-left with the nose/snout/face protruding to the LEFT edge of its panel.
+- R2 and R3 must have opposite silhouettes. The ear/head-back mass, muzzle/nose direction, collar direction, and visible side hardware/clothing edge must all flip.
+- If R2 and R3 both point the same screen direction, the sheet is invalid and must be internally redrawn before final output.
 
 HARD FAILURE CONDITIONS (MUST NOT OCCUR):
 - Two heads in one body slot
@@ -134,19 +142,24 @@ FORM LAYOUT SLOT MAP (STRICT):
   T2 = LEFT PROFILE
   T3 = BACK/REAR
 
-- BOTTOM GRID (exactly 4 headshot slots):
+- BOTTOM SINGLE HORIZONTAL ROW (exactly 4 headshot slots, one row only):
   B1 = FRONT
-  B2 = EXTREME LEFT PROFILE
-  B3 = EXTREME RIGHT PROFILE
+  B2 = EXTREME LEFT PROFILE (anatomical left-side profile; nose/snout points toward screen-right)
+  B3 = EXTREME RIGHT PROFILE (anatomical right-side profile; nose/snout points toward screen-left)
   B4 = LOOKING UP
+
+FORM LAYOUT HARD RULE:
+- The bottom band is one horizontal strip with four equal-width cells: B1, B2, B3, B4.
+- Do not make a 2x2 grid, do not stack two rows of headshots, and do not add unlabeled duplicate headshots above the labeled row.
+- Total sheet count is exactly 7 panels: 3 full-body panels plus 4 headshot panels.
 `;
 
 const REFERENCE_SHEET_FACE_HARD_CONSTRAINTS = `
 FACE LAYOUT SLOT MAP (STRICT):
 - TOP ROW (exactly 4 headshot slots):
   T1 = FRONT
-  T2 = EXTREME LEFT PROFILE
-  T3 = EXTREME RIGHT PROFILE
+  T2 = EXTREME LEFT PROFILE (anatomical left-side profile; nose/snout points toward screen-right)
+  T3 = EXTREME RIGHT PROFILE (anatomical right-side profile; nose/snout points toward screen-left)
   T4 = LOOKING UP
 
 - BOTTOM ROW (exactly 3 full-body slots):
@@ -157,12 +170,17 @@ FACE LAYOUT SLOT MAP (STRICT):
 
 const REFERENCE_SHEET_CALLOUT_LABELS_BASE = `
 CALLOUT LABELS ENABLED:
-Create the reference sheet with clean professional annotation labels and thin leader lines. Label only visible or user-provided details such as hairstyle, clothing pieces, accessories, footwear, logo placement, and view angles. Do not invent measurements, materials, brand names, character names, height, or hidden details. If height is not provided, do not add a height scale. Keep labels minimal, readable, correctly spelled, and placed outside the character silhouette whenever possible.
+Create the reference sheet with clean professional annotation labels and thin leader lines. The annotation priority is WARDROBE FIRST: clothing construction, collar/neckline, sleeve shape, gloves, panels, seams, piping/trim, belts/waist details, leg panels, boots/footwear, accessories, logo placement, and view angles. Do not invent measurements, materials, brand names, character names, height, or hidden details. If height is not provided, do not add a height scale. Keep labels minimal, readable, correctly spelled, and placed outside the character silhouette whenever possible.
 
 CALLOUT TEXT RULES:
 - Callout labels are the only permitted text on the sheet.
+- Every view-angle label must match the artwork in that exact slot. A label is invalid if the face/body angle underneath it does not match.
+- At least 70 percent of non-view callouts must describe clothing, accessories, footwear, or logo placement.
+- Facial callouts are limited to one or two identity-critical marks only, such as a distinctive scar, facial hair, makeup, or eyewear.
+- Do not label generic facial anatomy such as green eyes, refined facial features, jaw detail, gaze direction, nostrils, cheekbones, lips, or nose unless the user explicitly requested that exact detail.
+- In headshot panels, use visible collar, neckline, shoulder, trim, jewelry, headwear, or hairstyle callouts before any face-anatomy callouts.
 - Do not add captions, paragraphs, watermarks, brand names, character names, ages, heights, measurements, or material claims.
-- If an item is ambiguous, use generic wording such as Bag, Outerwear, Footwear, Accessory Detail, Wardrobe Detail, or Logo Placement.
+- If an item is ambiguous, use generic wardrobe wording such as Collar Detail, Sleeve Panel, Chest Panel, Waist Detail, Glove Detail, Boot Detail, Footwear Detail, Accessory Detail, Wardrobe Detail, or Logo Placement.
 - Do not let labels or leader lines cover the face, eyes, silhouette read, logo, or key costume details.
 - Avoid clutter; use only the most important visible labels.
 `;
@@ -173,17 +191,20 @@ const getReferenceSheetCalloutPrompt = (layout: RefSheetLayoutMode, logoPlacemen
   if (layout === 'form_focus') {
     prompt += `
 FORM SHEET CALLOUT FOCUS:
-- Prioritize Front View, Three-Quarter View, Side Profile, Full Body, hairstyle, main outfit pieces, accessories, footwear${logoPlacement ? `, and Logo Placement at ${logoPlacement}` : ', and logo placement only if visible or explicitly provided'}.
-- Use general view labels when a precise detail is not visible.`;
+- Prioritize wardrobe documentation across the full-body row: collar/neckline, chest panels, shoulder/sleeve construction, gloves, waist/hip details, leg panels, back panels, boots/footwear${logoPlacement ? `, and Logo Placement at ${logoPlacement}` : ', and logo placement only if visible or explicitly provided'}.
+- Headshot labels should mostly identify visible collar, neckline, shoulder trim, hairstyle, headwear, jewelry, or eyewear. Avoid generic face labels.
+- Use general wardrobe labels when a precise clothing detail is not visible.`;
   } else if (layout === 'face_focus') {
     prompt += `
 FACE SHEET CALLOUT FOCUS:
-- Prioritize Front Face, Side Face, Three-Quarter Face, hairline, eye shape, visible facial hair, visible or provided marks, and Expression Reference.
-- Do not invent biometric measurements, skin analysis, age, or facial proportions.`;
+- Even in face-focus mode, prioritize visible wardrobe and styling anchors: collar/neckline, shoulder panels, trim/piping, headwear, earrings, eyewear, hair silhouette, and logo placement if naturally visible.
+- Keep facial labels rare. Do not call out eyes, jawline, gaze, nostrils, lips, cheekbones, facial proportions, or generic beauty/identity terms.
+- Use facial labels only for explicit user-provided or visually distinctive marks such as scars, facial hair, makeup, or glasses.`;
   } else {
     prompt += `
 SPLIT SHEET CALLOUT FOCUS:
-- Prioritize Source/Reference Side, Generated/Character Side, matching identity anchors, hairstyle, wardrobe match, facial detail${logoPlacement ? `, and Logo Placement at ${logoPlacement}` : ', and logo placement only if visible or explicitly provided'}.
+- Prioritize wardrobe match and construction continuity: front garment features, side-profile garment thickness, rear/back-panel details, sleeves, gloves, pants/leg panels, boots/footwear, accessories${logoPlacement ? `, and Logo Placement at ${logoPlacement}` : ', and logo placement only if visible or explicitly provided'}.
+- Use headshot callouts for visible collar/neckline, trim, headwear, hair silhouette, jewelry, or eyewear before face details.
 - Keep source/generated labels clear and do not imply invented identity facts.`;
   }
 
@@ -193,15 +214,51 @@ SPLIT SHEET CALLOUT FOCUS:
 const REFERENCE_SHEET_UNIQUENESS_AUDIT = `
 ANGLE UNIQUENESS AUDIT (MANDATORY BEFORE FINAL OUTPUT):
 - Every full-body slot must belong to a different yaw bucket.
+- Every headshot profile slot must belong to a different yaw bucket.
 - Do not repeat FRONT, BACK, LEFT PROFILE, or RIGHT PROFILE buckets.
 - FRONT signature: both eyes and chest are centered and symmetric.
-- LEFT PROFILE signature: one eye visible, muzzle points to viewer-right.
-- RIGHT PROFILE signature: one eye visible, muzzle points to viewer-left.
-- BACK signature: no muzzle visible, back-of-head and spine dominate.
+- LEFT PROFILE signature: one eye visible, anatomical left side shown, nose/snout points to screen-right.
+- RIGHT PROFILE signature: one eye visible, anatomical right side shown, nose/snout points to screen-left.
+- BACK signature: no face or nose/snout visible, back-of-head and spine dominate.
+- The left-profile and right-profile headshots must face opposite screen directions. Never draw both noses pointing the same way.
+- Opposite profile slots must not share the same silhouette, crop, rim light, facial side, muzzle/nose direction, collar direction, or visible side clothing/hardware.
 - If any slot duplicates another slot's yaw bucket, regenerate internally before returning.
 `;
 
 const REFERENCE_SHEET_DUPLICATE_SIMILARITY_THRESHOLD = 0.94;
+const REFERENCE_SHEET_HEADSHOT_PROFILE_DUPLICATE_SIMILARITY_THRESHOLD = 0.86;
+const REFERENCE_SHEET_SPLIT_HEADSHOT_PROFILE_DUPLICATE_SIMILARITY_THRESHOLD = 0.82;
+const REFERENCE_SHEET_FORM_REPEATED_HEADSHOT_ROW_THRESHOLD = 0.82;
+
+const REFERENCE_SHEET_FORM_ROW_CONTRACT = `
+FORM LAYOUT ROW CONTRACT (CRITICAL):
+- The form sheet has exactly two horizontal bands.
+- Top band: exactly 3 full-body panels in one row.
+- Bottom band: exactly 4 headshot panels in one row.
+- The bottom band must never become two stacked rows, a 2x2 grid, a 2x4 grid, or a set of repeated unlabeled head tiles.
+- B1, B2, B3, and B4 are the only headshot panels. Do not create extra front heads, extra profile heads, or duplicate crops above them.
+`;
+
+const REFERENCE_SHEET_DIRECTION_LABEL_CONTRACT = `
+CAMERA DIRECTION AND LABEL CONTRACT (MAXIMUM PRIORITY):
+- Treat panel labels as a binding technical contract, not decorative text.
+- The visible artwork in each slot must match the slot label directly beneath or beside it.
+- EXTREME LEFT PROFILE means an anatomical left-side profile: one eye visible, face in true 90-degree side silhouette, nose/snout pointing toward screen-right.
+- EXTREME RIGHT PROFILE means an anatomical right-side profile: one eye visible, face in true 90-degree side silhouette, nose/snout pointing toward screen-left.
+- B2/T2/R2 and B3/T3/R3 must be screen-opposed silhouettes. One profile must look right, the other must look left.
+- Do not reuse, clone, mirror-label, or slightly crop the same profile image for both profile slots.
+- If the generated head angle and the label disagree, correct the artwork before final output; do not merely change the label.
+- Do not substitute a 3/4 head view when a true 90-degree profile is requested.
+`;
+
+const REFERENCE_SHEET_PROFILE_PAIR_VISUAL_LOCK = `
+PROFILE PAIR VISUAL LOCK (CRITICAL):
+- Before final output, compare the two profile headshot slots as silhouettes.
+- They must read as opposite camera yaw directions at a glance.
+- Same-direction side profiles are not acceptable even if one is scaled, cropped, relit, shifted, mirrored in label text, or placed in a different grid cell.
+- Do not reuse the same side profile portrait for both profile slots.
+- For animal, creature, robot, mascot, helmet, or stylized characters, use the snout/visor/faceplate/nose protrusion and collar/neck direction to prove the left/right difference.
+`;
 
 type RefSheetLayoutMode = 'form_focus' | 'face_focus' | 'split_focus';
 
@@ -211,6 +268,13 @@ type SlotRect = {
   y: number;
   w: number;
   h: number;
+};
+
+type DuplicateAngleValidation = {
+  hasDuplicate: boolean;
+  maxSimilarity: number;
+  pair: string | null;
+  scope: 'full-body' | 'headshot-profile' | 'layout';
 };
 
 type PermissionRequestDirectoryHandle = FileSystemDirectoryHandle & {
@@ -318,12 +382,47 @@ const getFullBodySlotRects = (layout: RefSheetLayoutMode): SlotRect[] => {
   ];
 };
 
+const getHeadshotProfileSlotRects = (layout: RefSheetLayoutMode): SlotRect[] => {
+  if (layout === 'form_focus') {
+    return [
+      { label: 'B2_EXTREME_LEFT_PROFILE_HEADSHOT', x: 0.25, y: 0.66, w: 0.25, h: 0.27 },
+      { label: 'B3_EXTREME_RIGHT_PROFILE_HEADSHOT', x: 0.5, y: 0.66, w: 0.25, h: 0.27 }
+    ];
+  }
+
+  if (layout === 'face_focus') {
+    return [
+      { label: 'T2_EXTREME_LEFT_PROFILE_HEADSHOT', x: 0.25, y: 0.02, w: 0.25, h: 0.47 },
+      { label: 'T3_EXTREME_RIGHT_PROFILE_HEADSHOT', x: 0.5, y: 0.02, w: 0.25, h: 0.47 }
+    ];
+  }
+
+  return [
+    { label: 'R2_EXTREME_LEFT_PROFILE_HEADSHOT', x: 0.725, y: 0.02, w: 0.275, h: 0.43 },
+    { label: 'R3_EXTREME_RIGHT_PROFILE_HEADSHOT', x: 0.45, y: 0.52, w: 0.275, h: 0.43 }
+  ];
+};
+
+const getFormRepeatedHeadshotRowSlotPairs = (): Array<[SlotRect, SlotRect]> => {
+  const rowH = 0.2;
+  const topY = 0.57;
+  const bottomY = 0.79;
+  return [0, 1, 2, 3].map((index) => {
+    const x = index * 0.25;
+    return [
+      { label: `FORM_HEADSHOT_EXTRA_TOP_C${index + 1}`, x, y: topY, w: 0.25, h: rowH },
+      { label: `FORM_HEADSHOT_EXPECTED_BOTTOM_C${index + 1}`, x, y: bottomY, w: 0.25, h: rowH }
+    ];
+  });
+};
+
 const computeSlotSimilarity = (
   sourceCanvas: HTMLCanvasElement,
   a: SlotRect,
   b: SlotRect
 ): number => {
   const SIZE = 64;
+  const ANALYSIS_SIZE = 192;
   const width = sourceCanvas.width;
   const height = sourceCanvas.height;
 
@@ -335,6 +434,62 @@ const computeSlotSimilarity = (
     return { sx, sy, sw, sh };
   };
 
+  const drawForegroundNormalizedSlot = (slot: SlotRect, target: HTMLCanvasElement) => {
+    const slotCanvas = document.createElement('canvas');
+    slotCanvas.width = ANALYSIS_SIZE;
+    slotCanvas.height = ANALYSIS_SIZE;
+    const slotCtx = slotCanvas.getContext('2d');
+    const targetCtx = target.getContext('2d');
+    if (!slotCtx || !targetCtx) return;
+
+    const p = toPixels(slot);
+    slotCtx.drawImage(sourceCanvas, p.sx, p.sy, p.sw, p.sh, 0, 0, ANALYSIS_SIZE, ANALYSIS_SIZE);
+
+    const imageData = slotCtx.getImageData(0, 0, ANALYSIS_SIZE, ANALYSIS_SIZE);
+    const data = imageData.data;
+    let minX = ANALYSIS_SIZE;
+    let minY = ANALYSIS_SIZE;
+    let maxX = -1;
+    let maxY = -1;
+
+    for (let y = 0; y < ANALYSIS_SIZE; y++) {
+      for (let x = 0; x < ANALYSIS_SIZE; x++) {
+        const idx = (y * ANALYSIS_SIZE + x) * 4;
+        const alpha = data[idx + 3];
+        const luma = (data[idx] * 0.2126) + (data[idx + 1] * 0.7152) + (data[idx + 2] * 0.0722);
+        if (alpha > 24 && luma > 22) {
+          minX = Math.min(minX, x);
+          minY = Math.min(minY, y);
+          maxX = Math.max(maxX, x);
+          maxY = Math.max(maxY, y);
+        }
+      }
+    }
+
+    if (maxX <= minX || maxY <= minY) {
+      targetCtx.drawImage(slotCanvas, 0, 0, ANALYSIS_SIZE, ANALYSIS_SIZE, 0, 0, SIZE, SIZE);
+      return;
+    }
+
+    const pad = 10;
+    minX = Math.max(0, minX - pad);
+    minY = Math.max(0, minY - pad);
+    maxX = Math.min(ANALYSIS_SIZE - 1, maxX + pad);
+    maxY = Math.min(ANALYSIS_SIZE - 1, maxY + pad);
+
+    targetCtx.drawImage(
+      slotCanvas,
+      minX,
+      minY,
+      Math.max(1, maxX - minX + 1),
+      Math.max(1, maxY - minY + 1),
+      0,
+      0,
+      SIZE,
+      SIZE
+    );
+  };
+
   const ca = document.createElement('canvas');
   const cb = document.createElement('canvas');
   ca.width = SIZE; ca.height = SIZE;
@@ -343,10 +498,8 @@ const computeSlotSimilarity = (
   const ctxB = cb.getContext('2d');
   if (!ctxA || !ctxB) return 0;
 
-  const pa = toPixels(a);
-  const pb = toPixels(b);
-  ctxA.drawImage(sourceCanvas, pa.sx, pa.sy, pa.sw, pa.sh, 0, 0, SIZE, SIZE);
-  ctxB.drawImage(sourceCanvas, pb.sx, pb.sy, pb.sw, pb.sh, 0, 0, SIZE, SIZE);
+  drawForegroundNormalizedSlot(a, ca);
+  drawForegroundNormalizedSlot(b, cb);
 
   const dataA = ctxA.getImageData(0, 0, SIZE, SIZE).data;
   const dataB = ctxB.getImageData(0, 0, SIZE, SIZE).data;
@@ -363,10 +516,12 @@ const computeSlotSimilarity = (
   return 1 - (sumSqrDiff / maxDiff);
 };
 
-const detectDuplicateFullBodyAngles = async (
+const detectDuplicateSlotAngles = async (
   sheetUrl: string,
-  layout: RefSheetLayoutMode
-): Promise<{ hasDuplicate: boolean; maxSimilarity: number; pair: string | null }> => {
+  slots: SlotRect[],
+  threshold: number,
+  scope: DuplicateAngleValidation['scope']
+): Promise<DuplicateAngleValidation> => {
   const sourceBlob = await resolveImageBlob(sheetUrl);
   const tempUrl = URL.createObjectURL(sourceBlob);
 
@@ -377,11 +532,10 @@ const detectDuplicateFullBodyAngles = async (
     sourceCanvas.height = img.height;
     const ctx = sourceCanvas.getContext('2d');
     if (!ctx) {
-      return { hasDuplicate: false, maxSimilarity: 0, pair: null };
+      return { hasDuplicate: false, maxSimilarity: 0, pair: null, scope };
     }
 
     ctx.drawImage(img, 0, 0);
-    const slots = getFullBodySlotRects(layout);
 
     let maxSimilarity = 0;
     let maxPair: string | null = null;
@@ -397,13 +551,99 @@ const detectDuplicateFullBodyAngles = async (
     }
 
     return {
-      hasDuplicate: maxSimilarity >= REFERENCE_SHEET_DUPLICATE_SIMILARITY_THRESHOLD,
+      hasDuplicate: maxSimilarity >= threshold,
       maxSimilarity,
-      pair: maxPair
+      pair: maxPair,
+      scope
     };
   } finally {
     URL.revokeObjectURL(tempUrl);
   }
+};
+
+const detectDuplicateFullBodyAngles = async (
+  sheetUrl: string,
+  layout: RefSheetLayoutMode
+): Promise<DuplicateAngleValidation> =>
+  detectDuplicateSlotAngles(
+    sheetUrl,
+    getFullBodySlotRects(layout),
+    REFERENCE_SHEET_DUPLICATE_SIMILARITY_THRESHOLD,
+    'full-body'
+  );
+
+const detectDuplicateHeadshotProfileAngles = async (
+  sheetUrl: string,
+  layout: RefSheetLayoutMode
+): Promise<DuplicateAngleValidation> =>
+  detectDuplicateSlotAngles(
+    sheetUrl,
+    getHeadshotProfileSlotRects(layout),
+    layout === 'split_focus'
+      ? REFERENCE_SHEET_SPLIT_HEADSHOT_PROFILE_DUPLICATE_SIMILARITY_THRESHOLD
+      : REFERENCE_SHEET_HEADSHOT_PROFILE_DUPLICATE_SIMILARITY_THRESHOLD,
+    'headshot-profile'
+  );
+
+const detectFormRepeatedHeadshotRows = async (
+  sheetUrl: string
+): Promise<DuplicateAngleValidation> => {
+  const sourceBlob = await resolveImageBlob(sheetUrl);
+  const tempUrl = URL.createObjectURL(sourceBlob);
+
+  try {
+    const img = await loadImageElement(tempUrl);
+    const sourceCanvas = document.createElement('canvas');
+    sourceCanvas.width = img.width;
+    sourceCanvas.height = img.height;
+    const ctx = sourceCanvas.getContext('2d');
+    if (!ctx) {
+      return { hasDuplicate: false, maxSimilarity: 0, pair: null, scope: 'layout' };
+    }
+
+    ctx.drawImage(img, 0, 0);
+
+    let maxSimilarity = 0;
+    let maxPair: string | null = null;
+    let repeatedColumns = 0;
+
+    for (const [topSlot, bottomSlot] of getFormRepeatedHeadshotRowSlotPairs()) {
+      const similarity = computeSlotSimilarity(sourceCanvas, topSlot, bottomSlot);
+      if (similarity >= REFERENCE_SHEET_FORM_REPEATED_HEADSHOT_ROW_THRESHOLD) {
+        repeatedColumns += 1;
+      }
+      if (similarity > maxSimilarity) {
+        maxSimilarity = similarity;
+        maxPair = `${topSlot.label} vs ${bottomSlot.label}`;
+      }
+    }
+
+    return {
+      hasDuplicate: repeatedColumns >= 2,
+      maxSimilarity,
+      pair: maxPair,
+      scope: 'layout'
+    };
+  } finally {
+    URL.revokeObjectURL(tempUrl);
+  }
+};
+
+const detectDuplicateReferenceSheetAngles = async (
+  sheetUrl: string,
+  layout: RefSheetLayoutMode
+): Promise<DuplicateAngleValidation> => {
+  const checks = await Promise.all([
+    detectDuplicateFullBodyAngles(sheetUrl, layout),
+    detectDuplicateHeadshotProfileAngles(sheetUrl, layout),
+    ...(layout === 'form_focus' ? [detectFormRepeatedHeadshotRows(sheetUrl)] : [])
+  ]);
+
+  return checks.reduce((strongest, current) => {
+    if (current.hasDuplicate && !strongest.hasDuplicate) return current;
+    if (current.hasDuplicate === strongest.hasDuplicate && current.maxSimilarity > strongest.maxSimilarity) return current;
+    return strongest;
+  });
 };
 
 async function materializeDisplayUrl(url: string | null | undefined): Promise<string> {
@@ -1993,18 +2233,31 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
       let finalPrompt = REFERENCE_SHEET_PROMPT;
 
       if (refLayout === 'form_focus') {
-        finalPrompt += " [LAYOUT A - CLASSIC]: Split canvas horizontally. Top 65% height: ROW OF EXACTLY 3 Full Body views with DISTINCT ANGLES (1. Front, 2. Side Profile, 3. Back). Bottom 35% height: Grid of EXACTLY 4 Headshots with VARIED ANGLES (Front, EXTREME LEFT PROFILE, EXTREME RIGHT PROFILE, Looking Up). Ensure headshots are MACRO-DETAILED and hyper-sharp.";
+        finalPrompt += " [LAYOUT A - CLASSIC]: Split canvas horizontally. Top 65% height: SINGLE ROW OF EXACTLY 3 Full Body views with DISTINCT ANGLES (T1 Front, T2 Left Profile Side View, T3 Back). Bottom 35% height: SINGLE HORIZONTAL ROW OF EXACTLY 4 Headshots only (B1 Front, B2 EXTREME LEFT PROFILE nose/snout points screen-right, B3 EXTREME RIGHT PROFILE nose/snout points screen-left, B4 Looking Up). Do not create a second headshot row. Do not make a 2x2 grid. Do not add duplicate unlabeled headshot tiles. Ensure headshots are MACRO-DETAILED and hyper-sharp.";
         finalPrompt += REFERENCE_SHEET_FORM_HARD_CONSTRAINTS;
       } else if (refLayout === 'face_focus') {
-        finalPrompt += " [LAYOUT B - FACE FIRST]: Split canvas horizontally. Top 55% height: Row of EXACTLY 4 Large Headshots showing VARIED ANGLES (Front, EXTREME LEFT PROFILE, EXTREME RIGHT PROFILE, Looking Up). Bottom 45% height: Row of EXACTLY 3 Full Body views with DISTINCT ANGLES (1. Front, 2. Side Profile, 3. Back). Headshots must maintain perfect identity.";
+        finalPrompt += " [LAYOUT B - FACE FIRST]: Split canvas horizontally. Top 55% height: Row of EXACTLY 4 Large Headshots showing VARIED ANGLES (T1 Front, T2 EXTREME LEFT PROFILE nose/snout points screen-right, T3 EXTREME RIGHT PROFILE nose/snout points screen-left, T4 Looking Up). Bottom 45% height: Row of EXACTLY 3 Full Body views with DISTINCT ANGLES (1. Front, 2. Left Profile Side View, 3. Back). Headshots must maintain perfect identity.";
         finalPrompt += REFERENCE_SHEET_FACE_HARD_CONSTRAINTS;
       } else if (refLayout === 'split_focus') {
-        finalPrompt += " [LAYOUT C - STUDIO]: Split canvas vertically. Left 45% width: Vertical stack of EXACTLY 3 Full Body views with DISTINCT ANGLES (1. Front, 2. Side Profile, 3. Back). DO NOT ADD A FOURTH VIEW. Right 55% width: 2x2 Grid of Large Headshots with VARIED ANGLES (Front, EXTREME LEFT PROFILE, EXTREME RIGHT PROFILE, Looking Up). Highest possible facial resolution.";
+        finalPrompt += " [LAYOUT C - STUDIO]: Split canvas vertically. Left 45% width: Vertical stack of EXACTLY 3 Full Body views with DISTINCT ANGLES (1. Front, 2. Left Profile Side View, 3. Back). DO NOT ADD A FOURTH VIEW. Right 55% width: 2x2 Grid of Large Headshots with VARIED ANGLES (R1 Front, R2 EXTREME LEFT PROFILE nose/snout points screen-right, R3 EXTREME RIGHT PROFILE nose/snout points screen-left, R4 Looking Up). Highest possible facial resolution.";
         finalPrompt += REFERENCE_SHEET_SPLIT_HARD_CONSTRAINTS;
       }
 
       finalPrompt += REFERENCE_SHEET_GLOBAL_HARD_CONSTRAINTS;
       finalPrompt += REFERENCE_SHEET_UNIQUENESS_AUDIT;
+      finalPrompt += REFERENCE_SHEET_DIRECTION_LABEL_CONTRACT;
+      finalPrompt += REFERENCE_SHEET_PROFILE_PAIR_VISUAL_LOCK;
+      if (refLayout === 'form_focus') {
+        finalPrompt += REFERENCE_SHEET_FORM_ROW_CONTRACT;
+      }
+      if (refLayout === 'split_focus') {
+        finalPrompt += `
+SPLIT LAYOUT FINAL PROFILE CHECK:
+- R2 top-right profile and R3 bottom-left profile must be opposite screen directions.
+- R2 must look screen-right. R3 must look screen-left.
+- If R2 and R3 could be mistaken for the same side profile, redraw one slot before final output.
+`;
+      }
       finalPrompt += " EXCLUSION RULE: NEVER put two identical profile views next to each other. The Left Profile and Right Profile MUST face opposite directions.\n";
 
       finalPrompt += "\n\nCRITICAL ROTATION OVERRIDE: While the identity and costume must match the reference, YOU MUST NOT COPY THE CAMERA ANGLE OF THE REFERENCE IMAGE across all panels. You MUST dynamically rotate the character's head and body in 3D space to precisely match the requested viewpoints (Profile, 3/4, Back, etc) for each individual panel.\n\n";
@@ -2014,7 +2267,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
         finalPrompt += "\nTEXT EXCEPTION OVERRIDE: The base negative word 'text' does not apply to the requested professional callout labels. It still applies to unrelated captions, watermarks, random text, misspelled filler, signatures, UI text, and decorative typography.\n";
       }
 
-      finalPrompt += "\nSTRICT NEGATIVE ADDENDUM: double-head, two heads on one body, conjoined anatomy, fused torso, ghost body, mirrored twin body, duplicate neck, duplicate torso, extra body in slot, empty panel slot, panel overlap artifacts.\n";
+      finalPrompt += "\nSTRICT NEGATIVE ADDENDUM: double-head, two heads on one body, conjoined anatomy, fused torso, ghost body, mirrored twin body, duplicate neck, duplicate torso, extra body in slot, empty panel slot, panel overlap artifacts, extra headshot row, repeated headshot row, duplicate front head, duplicate profile tile, unlabeled headshot tile, 2x2 bottom grid in Form layout.\n";
 
       // BRANDING INJECTION
       const targetReferenceUrl = state.lastCastedImage;
@@ -2068,12 +2321,12 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
       let safeRefSheetUrl = await generateRefSheetAttempt(finalPrompt);
 
       try {
-        const validation = await detectDuplicateFullBodyAngles(safeRefSheetUrl, refLayout);
+        const validation = await detectDuplicateReferenceSheetAngles(safeRefSheetUrl, refLayout);
         if (validation.hasDuplicate) {
           dispatch({
             type: 'ADD_LOG',
             payload: {
-              message: `Reference sheet duplicate angle detected (${validation.pair || 'unknown pair'}, ${(validation.maxSimilarity * 100).toFixed(1)}%). Running auto-correction pass...`,
+              message: `Reference sheet duplicate ${validation.scope} angle detected (${validation.pair || 'unknown pair'}, ${(validation.maxSimilarity * 100).toFixed(1)}%). Running auto-correction pass...`,
               type: 'info'
             }
           });
@@ -2081,19 +2334,23 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
           const retryPrompt = `${finalPrompt}
 
 DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
-- Previous output repeated one or more full-body angles.
-- Re-render now and force unique yaw buckets for all full-body slots.
-- Specifically ensure FRONT, LEFT PROFILE, and BACK/REAR are all different and visually non-overlapping in silhouette.
+- Previous output repeated one or more requested camera angles.
+- Re-render now and force unique yaw buckets for all full-body slots and headshot profile slots.
+- Specifically ensure FRONT, LEFT PROFILE, RIGHT PROFILE, and BACK/REAR are all different and visually non-overlapping in silhouette.
+- The two profile headshots must be opposite screen directions: LEFT PROFILE nose/snout points screen-right; RIGHT PROFILE nose/snout points screen-left.
+- Never place two left-facing profiles or two right-facing profiles in the B2/B3, T2/T3, or R2/R3 slots.
+- For split sheets, R2 and R3 must not be the same side closeup. R2 must look screen-right; R3 must look screen-left.
+- For Form sheets, the bottom band must be a single row of exactly four labeled headshots: B1, B2, B3, B4. Remove any second row, extra unlabeled headshot, duplicate front head, or duplicated profile tile.
 - If one slot risks duplicating another, regenerate that slot internally before returning final image.`;
 
           safeRefSheetUrl = await generateRefSheetAttempt(retryPrompt);
 
-          const secondValidation = await detectDuplicateFullBodyAngles(safeRefSheetUrl, refLayout);
+          const secondValidation = await detectDuplicateReferenceSheetAngles(safeRefSheetUrl, refLayout);
           if (secondValidation.hasDuplicate) {
             dispatch({
               type: 'ADD_LOG',
               payload: {
-                message: `Reference sheet still shows possible duplicate full-body angles (${(secondValidation.maxSimilarity * 100).toFixed(1)}%).`,
+                message: `Reference sheet still shows possible duplicate ${secondValidation.scope} angles (${(secondValidation.maxSimilarity * 100).toFixed(1)}%).`,
                 type: 'error'
               }
             });

@@ -13,6 +13,7 @@ import {
   type InsufficientCreditModalState,
   toHostedResolutionTier
 } from '../utils/billingProducts';
+import { normalizeImageGenerationModel } from '../constants/generationModels';
 
 export type ExtractedStyle = {
   medium?: string;
@@ -569,6 +570,7 @@ export const GeminiService = {
     referenceImages: { url: string; label: string }[] = [],
     options: { aspectRatio?: string, imageSize?: HostedImageSize, creditRenderType?: HostedCreditRenderType, thinkingLevel?: boolean | 'minimal' | 'low' | 'medium' | 'high', googleGrounding?: boolean, strictMode?: boolean, billingMode?: BillingMode, entitlements?: GenerationEntitlements, onJobAccepted?: (generationId: string, acceptedAt?: number) => void, uiWaitWindowMs?: number } = {}
   ): Promise<string> {
+    const effectiveModel = normalizeImageGenerationModel(model);
 
     // --- API ACCESS LAYER ---
     // All features are available in both Hosted and BYOK. The only difference is API prerequisites.
@@ -582,9 +584,8 @@ export const GeminiService = {
       return `https://placehold.co/1024x576/1a1a1a/FFF?text=Demo+Mode:+${encodeURIComponent(prompt.substring(0, 20))}`;
     }
 
-    // MULTIMODAL PIPELINE (Gemini)
-    if (model.includes('gemini')) {
-      const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+    // MULTIMODAL PIPELINE (NanoBanana 2 / Gemini 3.1)
+    const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${effectiveModel}:generateContent`;
 
       const contentsParts: GeminiPart[] = [];
 
@@ -761,12 +762,12 @@ export const GeminiService = {
         } : {})
       };
 
-      const thinkingConfig = GeminiService._buildThinkingConfigForModel(model, desiredThinkingLevel);
+      const thinkingConfig = GeminiService._buildThinkingConfigForModel(effectiveModel, desiredThinkingLevel);
       if (thinkingConfig) {
         requestBody.generationConfig.thinkingConfig = thinkingConfig;
       }
       if (options.billingMode === 'hosted') {
-        return await GeminiService._executeHostedRequest(model, requestBody, options);
+        return await GeminiService._executeHostedRequest(effectiveModel, requestBody, options);
       }
       // ===============================================
 
@@ -815,30 +816,6 @@ export const GeminiService = {
       const imgData = extractInlineImageData(result);
       if (!imgData) throw new Error("No image returned from Gemini.");
       return `data:image/png;base64,${imgData}`;
-    }
-
-    // TEXT-TO-IMAGE PIPELINE (Imagen)
-    const baseUrl = "https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict";
-    const response = await fetch(`${baseUrl}?key=${apiKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        instances: [{ prompt: prompt }],
-        parameters: { sampleCount: 1 }
-      })
-    });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      let cleanMsg = errText;
-      try { cleanMsg = JSON.parse(errText).error?.message || cleanMsg; } catch { }
-      throw new Error(`Imagen Error: ${cleanMsg}`);
-    }
-
-    const result = await response.json();
-    const b64 = result.predictions?.[0]?.bytesBase64Encoded;
-    if (!b64) throw new Error("No image returned from Imagen.");
-    return `data:image/png;base64,${b64}`;
   },
 
   // Vision/Text-only analysis from a single image (returns model text)
@@ -1232,8 +1209,9 @@ Hard constraints:
     editMaskUrl?: string | null;
     instructions: string;
   }): Promise<string> {
-    const { apiKey, model = 'gemini-2.5-flash-image', sourceImageUrl, protectionMaskUrl, editMaskUrl, instructions } = args;
-    const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+    const { apiKey, model, sourceImageUrl, protectionMaskUrl, editMaskUrl, instructions } = args;
+    const effectiveModel = normalizeImageGenerationModel(model);
+    const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${effectiveModel}:generateContent`;
 
     const base = await GeminiService._resolveImageData(sourceImageUrl);
     const parts: GeminiPart[] = [];
