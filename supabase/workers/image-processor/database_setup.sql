@@ -7,6 +7,93 @@ ALTER TABLE public.generations ADD COLUMN IF NOT EXISTS timing_metrics jsonb DEF
 ALTER TABLE public.generations ADD COLUMN IF NOT EXISTS billing_metadata jsonb DEFAULT '{}'::jsonb;
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS credit_ledger_reset_at timestamptz;
 
+-- Track Stripe Checkout top-ups so replayed webhook events cannot add credits
+-- more than once. Credit packs are independent from BYOK/license entitlements.
+CREATE TABLE IF NOT EXISTS public.stripe_processed_events (
+  stripe_event_id text PRIMARY KEY,
+  stripe_session_id text NOT NULL UNIQUE,
+  user_id uuid NOT NULL,
+  product_key text NOT NULL,
+  purchase_kind text NOT NULL,
+  credits integer NOT NULL CHECK (credits > 0),
+  processed_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE OR REPLACE FUNCTION public.apply_stripe_credit_topup(
+  p_event_id text,
+  p_session_id text,
+  p_user_id uuid,
+  p_product_key text,
+  p_credits integer
+)
+RETURNS TABLE (
+  applied boolean,
+  credit_balance numeric
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  inserted_rows integer := 0;
+  next_credit_balance numeric;
+BEGIN
+  IF p_credits IS NULL OR p_credits <= 0 THEN
+    RAISE EXCEPTION 'credits must be a positive integer';
+  END IF;
+
+  IF p_product_key NOT IN ('credit_pack_100', 'credit_pack_500') THEN
+    RAISE EXCEPTION 'unsupported credit pack product_key: %', p_product_key;
+  END IF;
+
+  PERFORM 1 FROM public.profiles WHERE id = p_user_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'profile not found for user_id: %', p_user_id;
+  END IF;
+
+  INSERT INTO public.stripe_processed_events (
+    stripe_event_id,
+    stripe_session_id,
+    user_id,
+    product_key,
+    purchase_kind,
+    credits
+  )
+  VALUES (
+    p_event_id,
+    p_session_id,
+    p_user_id,
+    p_product_key,
+    'TOPUP_PURCHASE',
+    p_credits
+  )
+  ON CONFLICT DO NOTHING;
+
+  GET DIAGNOSTICS inserted_rows = ROW_COUNT;
+
+  IF inserted_rows = 0 THEN
+    SELECT p.credit_balance::numeric
+    INTO next_credit_balance
+    FROM public.profiles p
+    WHERE p.id = p_user_id;
+
+    applied := false;
+    credit_balance := next_credit_balance;
+    RETURN NEXT;
+    RETURN;
+  END IF;
+
+  UPDATE public.profiles p
+  SET credit_balance = COALESCE(p.credit_balance, 0) + p_credits
+  WHERE p.id = p_user_id
+  RETURNING p.credit_balance::numeric INTO next_credit_balance;
+
+  applied := true;
+  credit_balance := next_credit_balance;
+  RETURN NEXT;
+END;
+$$;
+
 -- Reset the visible hosted-usage ledger when a user's balance is topped up.
 -- Generation deductions move the balance downward and will not reset the ledger.
 CREATE OR REPLACE FUNCTION public.mark_credit_ledger_reload()

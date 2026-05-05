@@ -1,15 +1,25 @@
 import { useState } from 'react';
 import { AlertTriangle, CreditCard, KeyRound, SlidersHorizontal, X, Zap } from 'lucide-react';
 import { useAppContext } from '../../context/AppContext';
-import { SupabaseAuth } from '../../services/SupabaseClient';
+import { CheckoutSessionError, SupabaseAuth } from '../../services/SupabaseClient';
 import {
   getByokOwnership,
   type BillingProductKey
 } from '../../utils/billingProducts';
 
-const getErrorMessage = (error: unknown): string => {
-  if (error instanceof Error) return error.message;
-  return String(error);
+const CREDIT_CHECKOUT_AUTH_MESSAGE = 'Please sign in again before purchasing credits.';
+const CREDIT_CHECKOUT_UNAVAILABLE_MESSAGE =
+  'Credit checkout is temporarily unavailable. Please try again or contact support.';
+const CHECKOUT_UNAVAILABLE_MESSAGE =
+  'Checkout is temporarily unavailable. Please try again or contact support.';
+
+const isCreditPackCheckout = (productKey: BillingProductKey): boolean =>
+  productKey.startsWith('credit_pack_');
+
+const getCheckoutResponseField = (responseBody: unknown, key: string): string | undefined => {
+  if (!responseBody || typeof responseBody !== 'object') return undefined;
+  const value = (responseBody as Record<string, unknown>)[key];
+  return typeof value === 'string' ? value : undefined;
 };
 
 type CheckoutButtonProps = {
@@ -85,10 +95,37 @@ export const InsufficientCreditModal = () => {
     setBusyKey(productKey);
     setManualCheckoutUrl(null);
     setCheckoutError(null);
+    const isCreditPack = isCreditPackCheckout(productKey);
+    let accessToken: string | null = null;
+
+    try {
+      accessToken = await SupabaseAuth.getAccessToken();
+    } catch (error: unknown) {
+      if (isCreditPack) {
+        console.error('Credit checkout auth missing', { productKey, error });
+        setCheckoutError(CREDIT_CHECKOUT_AUTH_MESSAGE);
+        dispatch({ type: 'ADD_LOG', payload: { message: CREDIT_CHECKOUT_AUTH_MESSAGE, type: 'error' } });
+        setBusyKey(null);
+        return;
+      }
+      console.error('Checkout auth lookup failed', { productKey, error });
+    }
+
+    if (isCreditPack && !accessToken) {
+      console.error('Credit checkout auth missing', { productKey, hasAccessToken: false });
+      setCheckoutError(CREDIT_CHECKOUT_AUTH_MESSAGE);
+      dispatch({ type: 'ADD_LOG', payload: { message: CREDIT_CHECKOUT_AUTH_MESSAGE, type: 'error' } });
+      setBusyKey(null);
+      return;
+    }
+
     const reservedCheckoutWindow = window.electronAPI?.openExternal ? null : window.open('about:blank', '_blank');
 
     try {
-      const checkoutUrl = await SupabaseAuth.createCheckoutSession(productKey);
+      const checkoutUrl = await SupabaseAuth.createCheckoutSession(productKey, {
+        accessToken,
+        requireAuth: isCreditPack
+      });
       const opened = await openCheckoutUrl(checkoutUrl, reservedCheckoutWindow);
       if (!opened) {
         setManualCheckoutUrl(checkoutUrl);
@@ -100,9 +137,45 @@ export const InsufficientCreditModal = () => {
       closeModal();
     } catch (error: unknown) {
       reservedCheckoutWindow?.close();
-      const message = getErrorMessage(error);
-      setCheckoutError(message);
-      dispatch({ type: 'ADD_LOG', payload: { message: `Checkout failed: ${message}`, type: 'error' } });
+      const responseBody = error instanceof CheckoutSessionError ? error.responseBody : undefined;
+      const checkoutErrorDetails = error instanceof CheckoutSessionError
+        ? {
+            productKey,
+            status: error.status,
+            responseBody,
+            code: getCheckoutResponseField(responseBody, 'code'),
+            error: getCheckoutResponseField(responseBody, 'error'),
+            stripeCode: getCheckoutResponseField(responseBody, 'stripeCode'),
+            stripeMessage: getCheckoutResponseField(responseBody, 'stripeMessage'),
+            hasAccessToken: error.hasAccessToken
+          }
+        : {
+            productKey,
+            status: undefined,
+            responseBody,
+            code: undefined,
+            error: error instanceof Error ? error.message : String(error),
+            stripeCode: undefined,
+            stripeMessage: undefined,
+            hasAccessToken: Boolean(accessToken)
+          };
+
+      if (error instanceof CheckoutSessionError && error.reason === 'MISSING_URL') {
+        console.error('Checkout response missing url', checkoutErrorDetails);
+      } else {
+        console.error('Checkout failed', checkoutErrorDetails);
+      }
+
+      const isAuthFailure =
+        error instanceof CheckoutSessionError &&
+        (error.status === 401 || error.reason === 'AUTH_REQUIRED');
+      const userMessage = isAuthFailure
+        ? CREDIT_CHECKOUT_AUTH_MESSAGE
+        : isCreditPack
+          ? CREDIT_CHECKOUT_UNAVAILABLE_MESSAGE
+          : CHECKOUT_UNAVAILABLE_MESSAGE;
+      setCheckoutError(userMessage);
+      dispatch({ type: 'ADD_LOG', payload: { message: userMessage, type: 'error' } });
     } finally {
       setBusyKey(null);
     }
@@ -199,7 +272,7 @@ export const InsufficientCreditModal = () => {
             </div>
             {checkoutError && (
               <div className="mt-3 rounded-lg border border-red-400/25 bg-red-500/10 px-3 py-2 text-xs leading-relaxed text-red-100">
-                Checkout unavailable: {checkoutError}
+                {checkoutError}
               </div>
             )}
             {manualCheckoutUrl && (
