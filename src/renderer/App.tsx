@@ -469,6 +469,78 @@ const App = () => {
     [creditUsageRows]
   );
 
+  const billingHeaderState = useMemo(() => {
+    const mode = state.billingEntitlements.effectiveBillingMode;
+    const hostedUserId = state.hostedSession?.user?.id;
+
+    if (mode === 'hosted') {
+      if (!hostedUserId) {
+        return {
+          modeLabel: 'HOSTED',
+          valueLabel: 'SIGN IN',
+          title: 'Sign in to Hosted Cloud to view or use hosted credits.',
+          canOpenUsage: false,
+          isLoading: false,
+          needsAttention: true
+        };
+      }
+
+      if (state.hostedCredits === null) {
+        return {
+          modeLabel: 'HOSTED',
+          valueLabel: '',
+          title: 'Loading hosted credits...',
+          canOpenUsage: false,
+          isLoading: true,
+          needsAttention: false
+        };
+      }
+
+      return {
+        modeLabel: 'HOSTED',
+        valueLabel: String(state.hostedCredits),
+        title: `Hosted credits remaining: ${state.hostedCredits}`,
+        canOpenUsage: true,
+        isLoading: false,
+        needsAttention: false
+      };
+    }
+
+    if (mode === 'byok') {
+      const hasApiKey = Boolean(state.apiKey.trim());
+      return {
+        modeLabel: 'BYOK',
+        valueLabel: hasApiKey ? '-' : 'SET KEY',
+        title: hasApiKey
+          ? 'BYOK mode uses your own API key.'
+          : 'Add a Gemini API key before using BYOK generation.',
+        canOpenUsage: false,
+        isLoading: false,
+        needsAttention: !hasApiKey
+      };
+    }
+
+    return {
+      modeLabel: 'NONE',
+      valueLabel: 'CONFIG',
+      title: 'Configure Hosted Cloud sign-in or a BYOK API key.',
+      canOpenUsage: false,
+      isLoading: false,
+      needsAttention: true
+    };
+  }, [
+    state.apiKey,
+    state.billingEntitlements.effectiveBillingMode,
+    state.hostedCredits,
+    state.hostedSession?.user?.id
+  ]);
+
+  useEffect(() => {
+    if (!billingHeaderState.canOpenUsage && showCreditUsage) {
+      setShowCreditUsage(false);
+    }
+  }, [billingHeaderState.canOpenUsage, showCreditUsage]);
+
   const refreshHostedUsage = useCallback(async () => {
     const supabaseClient = supabase;
     const hostedUserId = state.hostedSession?.user?.id;
@@ -575,21 +647,27 @@ const App = () => {
   }, [showCreditUsage]);
 
   const refreshCreditsNow = useCallback(async () => {
-    if (state.billingEntitlements.effectiveBillingMode === 'hosted' && state.hostedSession?.user?.id) {
-      const credits = await SupabaseAuth.fetchHostedCredits(state.hostedSession.user.id);
-
-      if (import.meta.env.DEV) {
-        console.groupCollapsed('[Credit Sync] Refreshing Hosted Credits');
-        console.log('Authenticated User ID:', state.hostedSession.user.id);
-        console.log('Fetched Balance:', credits);
-        console.log('Previous Display:', prevCreditsRef.current);
-        console.log('Updated Display:', credits);
-        console.groupEnd();
+    const hostedUserId = state.hostedSession?.user?.id;
+    if (state.billingEntitlements.effectiveBillingMode !== 'hosted' || !hostedUserId) {
+      if (state.hostedCredits !== null) {
+        dispatch({ type: 'SET_HOSTED_CREDITS', payload: null });
       }
-
-      dispatch({ type: 'SET_HOSTED_CREDITS', payload: credits });
+      return;
     }
-  }, [state.billingEntitlements.effectiveBillingMode, state.hostedSession?.user?.id, dispatch]);
+
+    const credits = await SupabaseAuth.fetchHostedCredits(hostedUserId);
+
+    if (import.meta.env.DEV) {
+      console.groupCollapsed('[Credit Sync] Refreshing Hosted Credits');
+      console.log('Authenticated User ID:', hostedUserId);
+      console.log('Fetched Balance:', credits);
+      console.log('Previous Display:', prevCreditsRef.current);
+      console.log('Updated Display:', credits);
+      console.groupEnd();
+    }
+
+    dispatch({ type: 'SET_HOSTED_CREDITS', payload: credits });
+  }, [state.billingEntitlements.effectiveBillingMode, state.hostedCredits, state.hostedSession?.user?.id, dispatch]);
 
   const refreshCredits = useCallback(() => {
     if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
@@ -816,6 +894,17 @@ const App = () => {
       backgroundPollInFlightRef.current = false;
     };
   }, [state.backgroundJobs, dispatch]);
+
+  function performActivation(session: unknown) {
+    if (!session) {
+      setActivationStatus('idle');
+      setActivationError('');
+      return;
+    }
+
+    setActivationStatus('allowed');
+    setActivationError('');
+  }
 
   // Sync Supabase Hosted Auth Session
   useEffect(() => {
@@ -1493,33 +1582,35 @@ const App = () => {
                   ref={creditUsagePopoverRef}
                   className="relative"
                   onMouseEnter={() => {
-                    if (state.billingEntitlements.effectiveBillingMode === "hosted") setShowCreditUsage(true);
+                    if (billingHeaderState.canOpenUsage) setShowCreditUsage(true);
                   }}
                 >
                   <button
                     type="button"
                     onClick={() => {
-                      if (state.billingEntitlements.effectiveBillingMode === "hosted") setShowCreditUsage(prev => !prev);
+                      if (billingHeaderState.canOpenUsage) {
+                        setShowCreditUsage(prev => !prev);
+                      } else if (billingHeaderState.needsAttention) {
+                        setShowSettings(true);
+                      }
                     }}
-                    className="flex items-center gap-3 px-1 cursor-help opacity-90 hover:opacity-100 transition-opacity focus:outline-none"
-                    title={state.billingEntitlements.effectiveBillingMode === "hosted" ? `Hosted credits remaining: ${state.hostedCredits ?? "-"}` : "BYOK mode uses your own API key"}
+                    className={`flex items-center gap-3 px-1 opacity-90 hover:opacity-100 transition-opacity focus:outline-none ${billingHeaderState.canOpenUsage ? 'cursor-help' : 'cursor-pointer'}`}
+                    title={billingHeaderState.title}
                   >
                   <span className="text-[#888] text-[12px] font-semibold tracking-[0.5px]">
-                    {state.billingEntitlements.effectiveBillingMode === "hosted" ? "HOSTED" : "BYOK"}
+                    {billingHeaderState.modeLabel}
                   </span>
                   <div className="w-px h-[18px] bg-[#333]" />
-                  <span className="text-white text-[18px] font-semibold flex items-center min-w-[24px] justify-center">
-                    {state.billingEntitlements.effectiveBillingMode === "byok" ? "-" : (
-                      state.billingEntitlements.effectiveBillingMode === "hosted" && state.hostedCredits === null ? (
-                        <div className="w-[18px] h-[18px] border-[2.5px] border-white/20 border-t-white rounded-full animate-spin" title="Loading credits..."></div>
-                      ) : (
-                        String(state.hostedCredits ?? "-")
-                      )
+                  <span className={`font-semibold flex items-center justify-center ${billingHeaderState.needsAttention ? 'min-w-[52px] text-[10px] tracking-[0.12em] text-yellow-300' : 'min-w-[24px] text-[18px] text-white'}`}>
+                    {billingHeaderState.isLoading ? (
+                      <div className="w-[18px] h-[18px] border-[2.5px] border-white/20 border-t-white rounded-full animate-spin" title="Loading credits..."></div>
+                    ) : (
+                      billingHeaderState.valueLabel
                     )}
                   </span>
                   </button>
 
-                  {showCreditUsage && state.billingEntitlements.effectiveBillingMode === "hosted" && (
+                  {showCreditUsage && billingHeaderState.canOpenUsage && (
                     <div className="absolute right-0 top-[calc(100%+12px)] z-[80] w-[340px] rounded-xl border border-white/10 bg-[#111113] shadow-2xl shadow-black/60 p-3 text-left">
                       <div className="flex items-start justify-between gap-4 border-b border-white/10 pb-2">
                         <div>

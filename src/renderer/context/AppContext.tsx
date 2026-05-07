@@ -1229,9 +1229,12 @@ export const reducer = (state: AppState, action: Action): AppState => {
             return { ...state, billingEntitlements: action.payload };
         case 'SET_HOSTED_SESSION': {
             const nextSession = action.payload;
+            const currentUserId = state.hostedSession?.user?.id ?? null;
+            const nextUserId = nextSession?.user?.id ?? null;
             return { 
                 ...state, 
                 hostedSession: nextSession,
+                hostedCredits: currentUserId && currentUserId === nextUserId ? state.hostedCredits : null,
                 billingEntitlements: EntitlementResolver.resolveEntitlements(nextSession, state.apiKey, import.meta.env.DEV, state.billingMode)
             };
         }
