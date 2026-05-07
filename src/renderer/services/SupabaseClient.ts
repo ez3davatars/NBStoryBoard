@@ -126,6 +126,36 @@ export const SupabaseAuth = {
     return supabase.auth.onAuthStateChange(callback);
   },
 
+  activateDevice: async (deviceFingerprint: string, deviceLabel: string, appVersion: string) => {
+    if (!supabaseUrl || !supabaseAnonKey) {
+      throw new Error("Supabase is not configured.");
+    }
+    const token = await SupabaseAuth.getValidJwt();
+    const endpoint = `${supabaseUrl}/functions/v1/activate-device`;
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      cache: 'no-store',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: supabaseAnonKey,
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/json'
+      },
+      body: JSON.stringify({
+        deviceFingerprint,
+        deviceLabel,
+        platform: 'windows',
+        appVersion
+      })
+    });
+    const text = await response.text();
+    const data = JSON.parse(text);
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to communicate with activation server');
+    }
+    return data;
+  },
+
   fetchHostedCredits: async (userId: string): Promise<number | null> => {
     if (!supabase) return null;
     const { data, error } = await supabase

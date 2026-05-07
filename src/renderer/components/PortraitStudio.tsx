@@ -17,6 +17,7 @@ import { RecentGenerationsCacheService } from "../services/RecentGenerationsCach
 import RecentGenerationsStrip from "./recent/RecentGenerationsStrip";
 import { LibraryAssetMaterializer } from "../services/LibraryAssetMaterializer";
 import ActorSaveModal from "./ActorSaveModal";
+import { createUniqueDownloadFilename } from "../utils/downloadFilenames";
 import {
     buildPortraitPrompt,
     LIGHTING_PRESETS,
@@ -1452,7 +1453,7 @@ export default function PortraitStudio() {
                                     onClick={() => {
                                         const link = document.createElement("a");
                                         link.href = generatedImage;
-                                        link.download = `portrait_${dna.identity.sex.toLowerCase()}_${dna.identity.age}.png`;
+                                        link.download = createUniqueDownloadFilename(`portrait_${dna.identity.sex.toLowerCase()}_${dna.identity.age}.png`);
                                         link.click();
                                     }}
                                     className="p-2 bg-white/10 hover:bg-white/20 text-white rounded-lg backdrop-blur-md border border-white/10 transition-colors"
@@ -1690,7 +1691,7 @@ export default function PortraitStudio() {
                             onClick={() => {
                                 const link = document.createElement("a");
                                 link.href = generatedImage;
-                                link.download = `portrait_${dna.identity.sex.toLowerCase()}_${dna.identity.age}.png`;
+                                link.download = createUniqueDownloadFilename(`portrait_${dna.identity.sex.toLowerCase()}_${dna.identity.age}.png`);
                                 link.click();
                                 dispatch({ type: 'ADD_LOG', payload: { message: "Image Saved", type: 'success' } });
                             }}

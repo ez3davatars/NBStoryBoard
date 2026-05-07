@@ -835,12 +835,14 @@ const App = () => {
         const session = res?.data?.session || null;
         dispatch({ type: 'SET_HOSTED_SESSION', payload: session });
         checkJwtDebug(session);
+        performActivation(session);
       })
       .catch((err) => console.error("getSession unhandled error:", err));
 
     const authRes = SupabaseAuth.onAuthStateChange((_event, session) => {
       dispatch({ type: 'SET_HOSTED_SESSION', payload: session });
       checkJwtDebug(session);
+      performActivation(session);
     });
 
     return () => {
@@ -940,6 +942,8 @@ const App = () => {
 
   // Settings Modal State
   const [showSettings, setShowSettings] = useState(false);
+  const [activationStatus, setActivationStatus] = useState<'idle' | 'pending' | 'allowed' | 'denied'>('idle');
+  const [activationError, setActivationError] = useState('');
   const [tempKey, setTempKey] = useState(state.apiKey);
   const [tempBillingMode, setTempBillingMode] = useState<'hosted' | 'byok'>(state.billingMode);
 
@@ -1643,7 +1647,29 @@ const App = () => {
           )}
 
           {/* Main Content Area */}
-          <main className="relative flex-1 min-h-0 overflow-hidden">
+          <main className="relative flex-1 min-h-0 overflow-hidden flex flex-col">
+            {activationStatus === 'pending' ? (
+              <div className="flex-1 flex flex-col items-center justify-center bg-[#0f0f11] text-gray-400">
+                <div className="w-8 h-8 border-4 border-yellow-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+                <h2 className="text-xl font-bold text-white mb-2 tracking-widest uppercase">Verifying License</h2>
+                <p className="text-sm">Securely checking device entitlements...</p>
+              </div>
+            ) : activationStatus === 'denied' ? (
+              <div className="flex-1 flex flex-col items-center justify-center bg-[#0f0f11] text-gray-400 p-6 text-center">
+                <div className="w-16 h-16 bg-red-500/20 text-red-500 rounded-full flex items-center justify-center mb-6 border border-red-500/50">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="w-8 h-8"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </div>
+                <h2 className="text-2xl font-black text-white mb-3 tracking-widest uppercase">Access Denied</h2>
+                <p className="text-base max-w-md mb-6">{activationError}</p>
+                <button
+                  onClick={handleSignOut}
+                  className="px-6 py-3 bg-white/10 hover:bg-white/20 text-white font-bold rounded-lg transition-colors border border-white/10"
+                >
+                  Sign Out
+                </button>
+              </div>
+            ) : (
+              <>
             {state.view === 'casting' && <CastingForge />}
             {state.view === 'nano_cast' && <NanoCastingDirector />}
             {state.view === 'portrait' && <PortraitStudio />}
@@ -1651,6 +1677,8 @@ const App = () => {
             {state.view === 'props' && <PropAccessoryStudio />}
             {state.view === 'staging' && <SceneCanvas />}
             {state.view === 'veo' && <VeoPromptStudio />}
+              </>
+            )}
           </main>
 
           {/* Cinematic Loading Overlay */}

@@ -19,6 +19,7 @@ import type { WearableAnchorContract, WearablePlacement, WearableClass } from '.
 import { useRecentGenerationsStore } from '../stores/useRecentGenerationsStore';
 import { RecentGenerationsCacheService } from '../services/RecentGenerationsCacheService';
 import RecentGenerationsStrip from './recent/RecentGenerationsStrip';
+import { createUniqueDownloadFilename } from '../utils/downloadFilenames';
 
 type PermissionAwareDirectoryHandle = FileSystemDirectoryHandle & {
     queryPermission?: (descriptor?: { mode?: 'read' | 'readwrite' }) => Promise<PermissionState>;
@@ -1171,7 +1172,7 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                                                 <div className="h-4 w-px bg-gray-700 mx-2" />
 
                                                 <button onClick={() => openActorSaveModal()} className="p-1.5 hover:bg-indigo-500/20 text-gray-400 hover:text-indigo-400 rounded-lg transition-colors" title="Save to Actor Library"><Save className="w-4 h-4" /></button>
-                                                <button onClick={() => { const l = document.createElement('a'); l.href = appliedImage!; l.download = "applied-prop.png"; l.click(); }} className="p-1.5 hover:bg-white/10 text-gray-400 hover:text-white rounded-lg transition-colors" title="Download"><Download className="w-4 h-4" /></button>
+                                                <button onClick={() => { const l = document.createElement('a'); l.href = appliedImage!; l.download = createUniqueDownloadFilename("applied-prop.png"); l.click(); }} className="p-1.5 hover:bg-white/10 text-gray-400 hover:text-white rounded-lg transition-colors" title="Download"><Download className="w-4 h-4" /></button>
                                                 <button onClick={() => { setAppliedImage(null); useRecentGenerationsStore.getState().clearRecentGenerationsForStudio('props'); }} className="p-1.5 hover:bg-red-500/20 text-gray-400 hover:text-red-400 rounded-lg transition-colors" title="Clear Stage"><X className="w-4 h-4" /></button>
                                             </div>
                                         )}

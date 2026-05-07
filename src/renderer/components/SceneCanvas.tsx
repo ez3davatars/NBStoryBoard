@@ -64,6 +64,7 @@ import { useProductionExports } from '../hooks/useProductionExports';
 import { useAdvancedRender } from '../hooks/useAdvancedRender';
 import { buildPlacementIntentsFromAnnotations, buildAnchorSurfaceFromZone, buildAllowanceMaskFromAnchor, buildForegroundProtectMaskFromDepth } from '../utils/spatialHelpers';
 import { NANO_BANANA_2_IMAGE_MODEL } from '../constants/generationModels';
+import { createUniqueDownloadFilename } from '../utils/downloadFilenames';
 
 import React from 'react';
 
@@ -194,7 +195,7 @@ const SceneCanvas = () => {
                 // For data URLs we can download directly
                 const link = document.createElement('a');
                 link.href = url;
-                link.download = `NB_Result_${Date.now()}.png`;
+                link.download = createUniqueDownloadFilename('NB_Result.png');
                 link.click();
                 dispatch({ type: 'ADD_LOG', payload: { message: 'Result image downloaded successfully.', type: 'success' } });
                 return;
@@ -206,7 +207,7 @@ const SceneCanvas = () => {
             if (dataUrl) {
                 const link = document.createElement('a');
                 link.href = dataUrl;
-                link.download = `NB_Stage_${Date.now()}.png`;
+                link.download = createUniqueDownloadFilename('NB_Stage.png');
                 link.click();
                 dispatch({ type: 'ADD_LOG', payload: { message: 'Stage captured successfully.', type: 'success' } });
             } else {
@@ -227,7 +228,7 @@ const SceneCanvas = () => {
         dispatch({ type: 'ADD_LOG', payload: { message: 'Capturing Scene Depth Map...', type: 'info' } });
         const depthLink = document.createElement('a');
         depthLink.href = state.depthMapUrl;
-        depthLink.download = `NB_Scene_Depth_${Date.now()}.png`;
+        depthLink.download = createUniqueDownloadFilename('NB_Scene_Depth.png');
         depthLink.click();
         dispatch({ type: 'ADD_LOG', payload: { message: 'Depth map captured successfully.', type: 'success' } });
     };
@@ -3964,7 +3965,7 @@ Output: environment plate only.
                         if (!url) return;
                         const link = document.createElement('a');
                         link.href = url;
-                        link.download = `NB_shot_${variant.presetId}_${Date.now()}.png`;
+                        link.download = createUniqueDownloadFilename(`NB_shot_${variant.presetId}.png`);
                         link.click();
                     });
                     dispatch({ type: 'ADD_LOG', payload: { message: `Saved ${selectedShots.length} shot(s).`, type: 'success' } });
@@ -4788,7 +4789,7 @@ Output: environment plate only.
                               onSaveVariant={(url, prefix) => {
                                  const link = document.createElement('a');
                                  link.href = url;
-                                 link.download = `NB_${prefix}_${Date.now()}.png`;
+                                 link.download = createUniqueDownloadFilename(`NB_${prefix}.png`);
                                  link.click();
                                  dispatch({ type: 'ADD_LOG', payload: { message: 'Shot saved successfully.', type: 'success' } });
                               }}

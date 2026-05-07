@@ -22,6 +22,7 @@ import { LibraryAssetMaterializer } from '../services/LibraryAssetMaterializer';
 import { useRecentGenerationsStore } from '../stores/useRecentGenerationsStore';
 import { RecentGenerationsCacheService } from '../services/RecentGenerationsCacheService';
 import RecentGenerationsStrip from './recent/RecentGenerationsStrip';
+import { createUniqueDownloadFilename, createUniqueNumericLabel } from '../utils/downloadFilenames';
 
 type PermissionAwareDirectoryHandle = FileSystemDirectoryHandle & {
     queryPermission?: (descriptor?: { mode?: 'read' | 'readwrite' }) => Promise<PermissionState>;
@@ -88,10 +89,25 @@ const WardrobeStudio = () => {
         tryOnNote, brandingLogo, logoPosition,
         tryOnOutputMode, tryOnViews, tryOnSheetFB, tryOnSheetLR, activeTryOnView
     } = state.wardrobeState;
+    const tryOnOutputModeRef = useRef<WardrobeState['tryOnOutputMode']>(tryOnOutputMode);
+
+    useEffect(() => {
+        tryOnOutputModeRef.current = tryOnOutputMode;
+    }, [tryOnOutputMode]);
 
     // Local Helper to update global state
     const updateState = (updates: Partial<WardrobeState>) => {
         dispatch({ type: 'SET_WARDROBE_STATE', payload: updates });
+    };
+
+    const resetTryOnTurnaroundOutputs = (updates: Partial<WardrobeState> = {}) => {
+        updateState({
+            tryOnViews: null,
+            tryOnSheetFB: null,
+            tryOnSheetLR: null,
+            activeTryOnView: 'front',
+            ...updates
+        });
     };
 
     // Alias for setters (to minimize code churn)
@@ -105,7 +121,19 @@ const WardrobeStudio = () => {
     const setProcessedTryOnUrl = (val: string | null) => updateState({ processedTryOnUrl: val });
     const setBrandingLogo = (val: string | null) => updateState({ brandingLogo: val });
     const setLogoPosition = (val: string) => updateState({ logoPosition: val });
-    const setTryOnOutputMode = (val: 'front' | 'turnaround') => updateState({ tryOnOutputMode: val });
+    const setTryOnOutputMode = (val: 'front' | 'turnaround') => {
+        tryOnOutputModeRef.current = val;
+
+        if (val === 'front') {
+            resetTryOnTurnaroundOutputs({
+                fittedImage: activeTryOnView === 'front' ? fittedImage : (tryOnViews?.front ?? null),
+                tryOnOutputMode: 'front'
+            });
+            return;
+        }
+
+        updateState({ tryOnOutputMode: val });
+    };
     const setTryOnViews = (val: Record<'front' | 'back' | 'left' | 'right', string> | null) => updateState({ tryOnViews: val });
     const setTryOnSheetFB = (val: string | null) => updateState({ tryOnSheetFB: val });
     const setTryOnSheetLR = (val: string | null) => updateState({ tryOnSheetLR: val });
@@ -229,8 +257,18 @@ const WardrobeStudio = () => {
 
     const buildSubjectReferenceImages = (subject: CastMember) => {
         const refs: { url: string; label: string }[] = [];
-        if (tryOnCharacterSheet) refs.push({ url: tryOnCharacterSheet, label: "Character Sheet (Identity Anchor)" });
-        refs.push({ url: subject.previewUrl || subject.url, label: "Subject Reference" });
+        if (tryOnCharacterSheet) {
+            refs.push({
+                url: tryOnCharacterSheet,
+                label: "PRIMARY BIOMETRIC IDENTITY ANCHOR - Character Sheet (multi-angle face reference)"
+            });
+        }
+        refs.push({
+            url: subject.previewUrl || subject.url,
+            label: tryOnCharacterSheet
+                ? "Secondary Subject Reference (body/style only; face identity is subordinate to Character Sheet)"
+                : "Subject Reference (identity and style)"
+        });
         return refs;
     };
 
@@ -272,14 +310,23 @@ const WardrobeStudio = () => {
     const handleOpenSaveModal = (sourceOverride?: string, recentGenerationId?: string) => {
         const source = sourceOverride || fittedImage;
         if (!source) return;
+        const isTurnaroundSheet =
+            activeTryOnView === 'sheetFB' ||
+            activeTryOnView === 'sheetLR' ||
+            source === tryOnSheetFB ||
+            source === tryOnSheetLR;
+
         setSaveSourceImage(source);
         setSaveRecentGenerationId(recentGenerationId || null);
-        setNewActorName("Fitted Character");
+        setNewActorName(createUniqueNumericLabel(isTurnaroundSheet ? 'RefSheet' : 'Actor'));
         setShowSaveModal(true);
     };
 
     const confirmSaveToLibrary = async (nameOverride?: string, categoryOverride?: string) => {
-        const targetName = nameOverride || newActorName;
+        const requestedName = nameOverride || newActorName;
+        const targetName = requestedName && requestedName !== "Fitted Character"
+            ? requestedName
+            : createUniqueNumericLabel('Actor');
         const targetCategory = categoryOverride || saveCategory;
 
         const sourceImage = saveSourceImage || fittedImage;
@@ -1302,7 +1349,8 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
             }
         });
 
-        console.log('TRY-ON MODE:', tryOnOutputMode);
+        const requestedTryOnMode = tryOnOutputModeRef.current;
+        console.log('TRY-ON MODE:', requestedTryOnMode);
 
         // Reset output + editing state
         setRemoveTryOnBg(false);
@@ -1317,7 +1365,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
         dispatch({ type: 'SET_PROCESSING', payload: true });
 
         const getEtaMs = () =>
-            tryOnOutputMode === 'turnaround'
+            requestedTryOnMode === 'turnaround'
                 ? (state.imageResolution === '4K' ? 90000 : state.imageResolution === '2K' ? 70000 : 45000)
                 : (state.imageResolution === '4K' ? 45000 : state.imageResolution === '2K' ? 35000 : 25000);
 
@@ -1334,8 +1382,8 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
             if (currentPercent > 95) currentPercent = 95;
 
             let text = "Initiating Try-On Protocol";
-            if (currentPercent > 20) text = tryOnOutputMode === 'turnaround' ? "Processing Front/Back Sheet..." : "Matching Costume Structure...";
-            if (currentPercent > 45) text = tryOnOutputMode === 'turnaround' ? "Processing Left/Right Sheet..." : "Preserving Face Window...";
+            if (currentPercent > 20) text = requestedTryOnMode === 'turnaround' ? "Processing Left/Right Sheet..." : "Matching Costume Structure...";
+            if (currentPercent > 45) text = requestedTryOnMode === 'turnaround' ? "Processing Front/Back Sheet..." : "Preserving Face Window...";
             if (currentPercent > 75) text = "Finalizing Output...";
             if (currentPercent >= 95) text = "Finalizing Output... (Still working, please wait)";
 
@@ -1428,6 +1476,18 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  - If the costume has a dedicated face window, adjust the subject internally rather than changing the costume opening.
 `;
 
+            const headwearOrientationBlock = `
+ HEADWEAR ORIENTATION LOCK (3D GEOMETRY)
+ - Treat helmets, crowns, horns, crests, plumes, mohawks, brims, visors, and ridge attachments as fixed 3D objects attached to the head.
+ - Preserve the exact 3D orientation from the Costume Reference. Do not rotate, flip, or redraw the crest/plume to make a prettier silhouette for a given camera angle.
+ - The attachment plane must rotate with the helmet, head, and body across views.
+ - If the Costume Reference shows a front-to-back / mohawk / sagittal crest: FRONT and BACK panels show a narrow centered edge or thin stacked crest profile; LEFT and RIGHT profile panels show the broad full fan or length.
+ - Do NOT show a broad left-to-right red fan across the forehead or back of helmet in FRONT/BACK panels when the source crest is front-to-back.
+ - If the Costume Reference clearly shows a left-to-right / transverse crest: FRONT and BACK panels show the broad span; LEFT and RIGHT panels show a narrow edge.
+ - Back view must be the actual rear of the same helmet attachment, not a new front-facing crest pasted onto the rear.
+ - If a generic historical costume prior conflicts with the Costume Reference, the Costume Reference wins.
+`;
+
             const designAssemblyBlock = isDesignRef ? `
  DESIGN REFERENCE LOCK
  - Reconstruct only what is explicitly visible in the reference.
@@ -1443,18 +1503,35 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
             const sideViewLockBlock = `
  SIDE-VIEW LOCK
- - The Canonical Front/Back Sheet is the absolute source of truth.
+ - The Costume Reference is the absolute source of truth for the garment, headwear, and worn accessories.
  - Side views must be rotations of the same physical garment in 3D space, not reinterpretations or redesigns.
+ - The entire full body must rotate to a true 90-degree side profile: head, neck, shoulders, torso, pelvis, arms, legs, feet, armor/clothing, and accessories all share the same side-facing yaw.
+ - Do NOT keep the body/front armor facing the camera while only turning the head.
  - Do NOT invent new openings, new exposed anatomy, new glove separation, new ankle shaping, new footwear logic, or new costume structure.
- - Do NOT reinterpret the original Costume Reference if it conflicts with the Canonical Front/Back Sheet.
- - If a side detail is not visible in the Canonical Front/Back Sheet, keep it structurally consistent and non-revealing.
+ - Do NOT reinterpret the original Costume Reference.
+ - If a side detail is not visible in the Costume Reference, keep it structurally consistent and non-revealing.
+`;
+
+            const trueProfileBodyBlock = `
+ TRUE SIDE PROFILE BODY CONTRACT (NON-NEGOTIABLE)
+ - This is a technical full-body orthographic costume turnaround, not a portrait pose and not a fashion 3/4 pose.
+ - Each panel must show the subject standing upright in exact 90-degree side profile from head to toe.
+ - LEFT PANEL: show the subject's left side; nose, chest, knees, toes, and body centerline point directly toward the viewer's LEFT.
+ - RIGHT PANEL: show the subject's right side; nose, chest, knees, toes, and body centerline point directly toward the viewer's RIGHT.
+ - Body-profile test: only one eye, one ear, one shoulder contour, one arm silhouette, and one side edge of the torso/armor should be visible per panel.
+ - The torso and pelvis must be narrow side silhouettes. Front-facing chest plates, symmetrical shoulders, both arms equally visible, both knees equally visible, or front skirt/apron spread are invalid.
+ - Feet must be side-on: toes point left in the left panel and right in the right panel. Do not show front-facing feet.
+ - Helmet, hair, plume, headwear, shoulder armor, torso armor, skirt, sleeves, legwear, and footwear must rotate with the body as one rigid model.
+ - The head must stay naturally aligned with the torso. Do not twist the head toward camera to preserve face visibility.
+ - Camera is level, centered at full body height, with no close-up crop. Preserve full body from top of head/headwear to soles of feet.
+ - Forbidden substitutions: 3/4 view, front-facing body with side-looking head, head-only left/right study, bust/torso crop, over-the-shoulder pose, contrapposto turn, repeated front view, repeated back view.
 `;
 
             const effectiveTryOnNote = tryOnNote || "Transfer the garment exactly and preserve the visible design.";
 
             const sourceAppearanceContinuityBlock = `
  SOURCE APPEARANCE CONTINUITY LOCK (CRITICAL)
- - Preserve the complete worn appearance package established by the Subject Reference, Costume Reference, and Canonical Front/Back Sheet.
+ - Preserve the complete worn appearance package established by the Subject Reference, Costume Reference, and any canonical turnaround sheet available in this prompt.
  - Any element that is worn, attached, styled, or visibly part of the look must remain present and consistent across all generated views unless explicitly instructed otherwise.
  - This includes hairstyle state, headwear, jewelry, eyewear, veils, hoods, scarves, gloves, sleeves, footwear, attached adornments, and any other worn or source-established appearance elements.
  - Do NOT remove, simplify, restyle, reinterpret, swap, or silently omit worn elements in side, back, or profile views.
@@ -1471,6 +1548,23 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  - Preserve approximate hair length, fullness, parting, texture, and silhouette.
  - Hair continuity must coexist with all worn accessories and headwear.
  - If the costume covers or constrains hair (helmet, hood, headwrap), only the hair visible through costume openings should be shown.
+`;
+
+            const identityAnchorBlock = tryOnCharacterSheet ? `
+ PRIMARY IDENTITY ANCHOR LOCK (CHARACTER SHEET)
+ - The uploaded Character Sheet / Identity Anchor is the highest authority for the person's face, head, and visible neck identity in every generated view.
+ - Treat the Character Sheet as a multi-angle biometric reference, not style inspiration.
+ - Build one consistent 3D head model from all visible face panels: skull shape, forehead, hairline, brow ridge, eye spacing and depth, eye shape, nose bridge, nose slope, nose tip, nose projection, nostrils, cheekbones, nasolabial folds, mouth width, lip shape, jaw angle, chin shape, ears, ear placement, neck, facial hair, skin marks, age, and asymmetry.
+ - FRONT output must match the Character Sheet's front face. LEFT and RIGHT profile outputs must match the Character Sheet's side/profile facial geometry when visible.
+ - If a side/profile face is not fully visible in the Character Sheet, infer it conservatively from the same skull, nose, jaw, chin, mouth, brow, and ear geometry. Do NOT beautify, idealize, or replace it.
+ - Identity accuracy applies inside helmets, masks, and face openings: visible nose, mouth, chin, cheek, brow, eye, ear, jaw, and neck must match the Character Sheet exactly within the costume limits.
+ - Do NOT average the Character Sheet with the Subject Reference, Costume Reference, generated LR/FB sheet, or a generic costume wearer. If references conflict, Character Sheet wins for face/head identity.
+ - Camera angle, body angle, lighting, and costume can change. Biometric face/head geometry cannot change.
+ - FORBIDDEN: generic male face, different person, idealized face, beautified profile, aged or rejuvenated face, different nose projection, different jawline, different chin, different brow, different eye spacing, different mouth, wrong ear placement, invented profile, face drift between panels.
+` : `
+ SUBJECT IDENTITY LOCK
+ - Preserve the exact visible identity from the Subject Reference. Same person, no generic replacement, no age change, no beautification.
+ - Camera angle, body angle, lighting, and costume can change. Face/head geometry should not be redesigned.
 `;
 
             let brandingInstruction = "";
@@ -1492,7 +1586,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
             }
 
             // FRONT ONLY
-            if (tryOnOutputMode === 'front') {
+            if (requestedTryOnMode === 'front') {
                 console.log('Running FRONT branch');
 
                 const res = await GeminiService.generateImage(
@@ -1511,6 +1605,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  ${WEARABLE_FIDELITY_CONTRACT}
 
  ${fittingBlock}
+ ${headwearOrientationBlock}
  - Remove existing clothing/accessories from the subject before fitting the costume.
 
  COLOR & MATERIAL LOCK
@@ -1532,6 +1627,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  SUBJECT (IDENTITY LOCK — SUBORDINATE TO COSTUME STRUCTURE)
  - Use the Subject Reference image(s) to preserve the exact facial identity and likeness of the person.
  - Same face, same person, no morphing, no age change.
+ ${identityAnchorBlock}
  - CRITICAL: Identity must be preserved WITHIN the physical limits imposed by the costume.
  - If the costume covers, encloses, or restricts visibility of any body part, identity preservation must NOT cause
    the costume to open, remove, simplify, or expose areas the Costume Reference does not physically allow.
@@ -1553,6 +1649,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
  NEGATIVE CONSTRAINTS:
  opened costume that should be closed, removed headwear, exposed hair under helmet, widened face opening,
+ generic male face, different person, face drift, beautified profile, wrong nose projection, wrong jawline, wrong chin, wrong brow, wrong eye spacing, wrong mouth shape, wrong ear placement,
  face placed in wrong opening, face placed in decorative cavity, face placed in non-face opening,
  redesigned face hole, widened face window, shrunken face window, moved face window, broken face-window border,
  invented openings, extra cutouts, exposed neck when not shown, exposed wrists when not shown, exposed ankles when not shown, exposed hands when not shown, exposed feet when not shown,
@@ -1569,6 +1666,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                         imageSize: state.imageResolution,
                         thinkingLevel: state.enableImageThinking,
                         googleGrounding: state.enableGoogleGrounding,
+                        strictMode: true,
                         billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements
                     }
                 );
@@ -1623,8 +1721,8 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  - No text, no labels, no watermarks.
  `;
 
-            const fbSheet = await GeminiService.generateImage(
-                `Professional virtual try-on TURNAROUND SHEET.
+            const lrSheet = await GeminiService.generateImage(
+                `Professional virtual try-on TRUE SIDE PROFILE TURNAROUND SHEET.
 
  ${twoPanelFormat}
 
@@ -1632,15 +1730,18 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
  COSTUME (HARD TRANSFER AUTHORITY)
  - The Costume Reference (${costumeName}) is the absolute authority for the outfit.
- - Copy the costume exactly as shown.
- - Preserve the exact visible silhouette, enclosure, coverage, designed face-window placement, colors, textures, materials, and construction.
+ - Copy the costume exactly as shown while rotating the whole worn look into true side profiles.
+ - Preserve the exact visible silhouette, enclosure, coverage, designed face-window placement, colors, textures, materials, construction, headwear, helmet, plume, crest, and accessories.
  - Do NOT reinterpret it into a more wearable, more fitted, more anatomical, or more revealing version.
  - IGNORE filename text if it conflicts with the image.
  ${designAssemblyBlock}
+ ${sideViewLockBlock}
+ ${trueProfileBodyBlock}
 
  ${WEARABLE_FIDELITY_CONTRACT}
 
  ${fittingBlock}
+ ${headwearOrientationBlock}
 
  COLOR & MATERIAL LOCK
  - Preserve the exact costume colors from the Costume Reference.
@@ -1654,13 +1755,13 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  - Do NOT expose body parts unless the Costume Reference explicitly shows them.
 
  PANELS
- - LEFT PANEL: FRONT view, straight-on.
- - RIGHT PANEL: BACK view, straight-on.
+ - LEFT PANEL: TRUE LEFT-SIDE FULL-BODY PROFILE (90 degrees). The subject's nose, chest, knees, and toes point to the viewer's LEFT.
+ - RIGHT PANEL: TRUE RIGHT-SIDE FULL-BODY PROFILE (90 degrees). The subject's nose, chest, knees, and toes point to the viewer's RIGHT.
 
- STRUCTURE RULE
- - The front and back panels must depict the same exact physical garment.
- - Any enclosure or coverage shown in front must remain structurally consistent in back unless the reference explicitly shows otherwise.
- - Do NOT create a back opening or exposed head/neck zone unless explicitly visible in the Costume Reference.
+ PROFILE RULE
+ - The entire body and costume must be rotated side-on: helmet, plume/crest, head, neck, shoulders, torso, pelvis, arms, skirt/waist layer, legs, and feet.
+ - A head-only profile is invalid. A front-facing or 3/4 body with the head turned sideways is invalid.
+ - Do NOT show broad frontal chest armor, both shoulder pads symmetrically, both arms equally, or front-facing feet.
 
  === PRIORITY 2: COSTUME-DRIVEN RELIGHTING ===
 
@@ -1671,6 +1772,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  SUBJECT (IDENTITY LOCK — SUBORDINATE TO COSTUME STRUCTURE)
  - Use the Subject Reference image(s) to preserve the exact facial identity and likeness.
  - The LEFT and RIGHT panels must depict the SAME person.
+ ${identityAnchorBlock}
  - CRITICAL: Identity must be preserved WITHIN the physical limits imposed by the costume.
  - Do NOT let body anatomy or identity preservation override costume structure.
  ${sourceAppearanceContinuityBlock}
@@ -1680,11 +1782,13 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
  [FITTING NOTES]: ${effectiveTryOnNote}
 
- NEGATIVE:
+ NEGATIVE CONSTRAINTS (FORBIDDEN):
  opened costume that should be closed, removed headwear, exposed hair under helmet, widened face opening,
+ generic male face, different person, face drift, beautified profile, wrong nose projection, wrong jawline, wrong chin, wrong brow, wrong eye spacing, wrong mouth shape, wrong ear placement,
  face placed in wrong opening, face placed in decorative cavity, face placed in non-face opening,
  redesigned face hole, widened face window, shrunken face window, moved face window, broken face-window border,
  extra limbs, duplicate arms, duplicate sleeves, duplicate gloves, extra costume appendages, invented openings, extra cutouts, exposed neck when not shown, exposed wrists when not shown, exposed ankles when not shown, exposed hands when not shown, exposed feet when not shown, anatomy contouring, body-hugging reinterpretation, bodysuit reinterpretation, costume redesign, mascot redesign,
+ rotated helmet crest, flipped plume orientation, camera-facing crest on wrong view, narrow side plume when source crest is front-to-back, headwear orientation mismatch,
  missing worn accessory, removed accessory, dropped headwear, missing jewelry, removed jewelry, missing eyewear, removed eyewear, missing veil, removed veil, missing hood, removed hood, missing scarf, removed scarf, missing glove, removed glove, missing footwear, removed footwear, missing adornment, simplified adornment, omitted source appearance element, restyled hair, bun hairstyle, updo, tied-back hair, ponytail, braid, pinned hair, shorter hair, different hair volume, different hair silhouette,
  altered costume colors, shifted palette, desaturated costume, brighter costume, darker costume, material reinterpretation,
  portrait beauty lighting on enclosed face, missing occlusion shadows, missing contact shadows,
@@ -1697,61 +1801,61 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                     imageSize: state.imageResolution,
                     thinkingLevel: state.enableImageThinking,
                     googleGrounding: state.enableGoogleGrounding,
+                    strictMode: true,
                     billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements
                 }
             );
 
-            const lrImages: { url: string; label: string }[] = [
+            const fbImages: { url: string; label: string }[] = [
+                { url: lrSheet, label: "Canonical Left/Right Sheet (3D Headwear and Side Geometry Anchor)" },
                 ...subjectRefs,
-                costumeRef,
-                { url: fbSheet, label: "Canonical Front/Back Sheet" }
+                costumeRef
             ];
 
             const brandingInstructionLR = brandingLogo ? `
  BRANDING & IDENTITY (LOCK)
- - Match the logo placement and appearance exactly from the Canonical Front/Back Sheet.
+ - Preserve the logo placement and appearance consistently with the Costume Reference and side-geometry anchor.
  ` : '';
 
-            const lrSheet = await GeminiService.generateImage(
-                `Professional virtual try-on TURNAROUND SHEET of the SAME subject and SAME outfit.
+            const fbSheet = await GeminiService.generateImage(
+                `Professional virtual try-on FRONT/BACK TURNAROUND SHEET of the SAME subject and SAME outfit.
 
  ${twoPanelFormat}
 
  === PRIORITY 1: WARDROBE PHYSICAL STRUCTURE ===
 
  COSTUME & APPEARANCE CANON (ABSOLUTE LOCK)
- - The Canonical Front/Back Sheet is the absolute source of truth for the full worn look.
- - These side views must depict the same physical garment rotated in 3D space — NOT reinterpretations or redesigns.
+ - [IMAGE 1] Canonical Left/Right Sheet is the 3D orientation anchor for headwear, plume/crest direction, side volume, footwear, and costume thickness.
+ - The Costume Reference (${costumeName}) remains the authority for colors, materials, visible front details, and garment design.
+ - Rotate the same established full-body model from [IMAGE 1] into true front and back views.
+ - Do NOT copy the side camera angle from [IMAGE 1].
+ - OUTPUT ANGLE OVERRIDE: this sheet is FRONT/BACK only, not side/profile views.
+ - These front/back views must depict the same physical garment rotated in 3D space, not reinterpretations or redesigns.
  - Preserve the same costume structure, same visible coverage, same accessories, same hairstyle state, same headwear, same worn adornments, and same footwear across all turnaround views.
  - Do NOT add, remove, restyle, simplify, or reinterpret any source-established appearance element.
  - If the source-established look contains multiple simultaneous elements, preserve all of them together.
- ${sideViewLockBlock}
-
  ${WEARABLE_FIDELITY_CONTRACT}
+ ${headwearOrientationBlock}
+ ${fittingBlock}
 
  COLOR & MATERIAL LOCK
- - Preserve the exact costume colors established by the Canonical Front/Back Sheet.
+ - Preserve the exact costume colors established by the Costume Reference.
  - Do NOT shift, mute, brighten, darken, replace, or reinterpret the costume colors.
  - Preserve the exact visible material finish and fabric appearance.
 
  SILHOUETTE & STRUCTURE (STRICT LOCK)
- - Side views must preserve the exact volume, bulk, closure, and external silhouette established by the Canonical Front/Back Sheet.
- - Do NOT invent side-specific shaping that exposes more anatomy than the Canonical Front/Back Sheet implies.
+ - FRONT/BACK OVERRIDE: preserve the exact volume, bulk, closure, and external silhouette while rotating into front and rear camera angles.
+ - Front/back views must preserve the exact volume, bulk, closure, and external silhouette established by [IMAGE 1] and the Costume Reference.
+ - Do NOT invent front/back-specific shaping that exposes more anatomy than the Costume Reference implies.
 
  PANELS
- - LEFT PANEL: LEFT profile view (90 degrees), facing Viewer's LEFT.
- - RIGHT PANEL: RIGHT profile view (90 degrees), facing Viewer's RIGHT.
+ - LEFT PANEL: FRONT view, straight-on.
+ - RIGHT PANEL: BACK view, straight-on.
 
- PROFILE RULE
- - Left and right panels must be profile rotations of the already-established costume.
- - Do NOT introduce new arm, hand, leg, ankle, head, glove, or sleeve construction details not already established by the Canonical Front/Back Sheet.
-
- FOOTWEAR (CRITICAL LOCK & CONTEXTUAL MATCH)
- - The exact boot, sandal, or shoe design from the Canonical Front/Back Sheet MUST be preserved identically.
- - Do NOT change the strap design, height, armor coverage, or type of footwear.
- - If the subject has simple sandals in the Front/Back Sheet, do NOT upgrade them to armored boots or add greaves in the side view.
- - If the subject is barefoot in the Front/Back Sheet, they MUST be barefoot in both profile views. NO EXCEPTIONS. Do NOT add shoes if they are barefoot.
- - Do NOT hallucinate different shoes for the profile view.
+ STRUCTURE RULE
+ - The front and back panels must depict the same exact physical garment from [IMAGE 1] and the Costume Reference.
+ - Any enclosure or coverage shown in front must remain structurally consistent in back unless the reference explicitly shows otherwise.
+ - Do NOT create a back opening or exposed head/neck zone unless explicitly visible in the Costume Reference.
 
  === PRIORITY 2: COSTUME-DRIVEN RELIGHTING ===
 
@@ -1760,10 +1864,12 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  === PRIORITY 3: SUBJECT IDENTITY (within costume limits) ===
 
  SUBJECT IDENTITY (CRITICAL LOCK — SUBORDINATE TO COSTUME STRUCTURE)
- - The LEFT and RIGHT panels must depict the exact same person.
+ - The FRONT and BACK panels must depict the exact same person and same worn costume.
  - Preserve face identity and neutral upright posture.
+ - Reference images after [IMAGE 1] are for identity, garment detail, and material fidelity only. Do NOT copy their camera angles into the front/back panels.
+ ${identityAnchorBlock}
  - CRITICAL: Identity must be preserved WITHIN the physical limits imposed by the costume.
- - Do NOT let body anatomy or identity preservation override the costume structure established by the Canonical Front/Back Sheet.
+ - Do NOT let body anatomy or identity preservation override the costume structure established by the Costume Reference.
  ${sourceAppearanceContinuityBlock}
  ${hairConsistencyBlock}
 
@@ -1773,23 +1879,26 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
  NEGATIVE CONSTRAINTS (FORBIDDEN):
  opened costume that should be closed, removed headwear, exposed hair under helmet, widened face opening,
+ generic male face, different person, face drift, beautified profile, wrong nose projection, wrong jawline, wrong chin, wrong brow, wrong eye spacing, wrong mouth shape, wrong ear placement,
  face placed in wrong opening, face placed in decorative cavity, face placed in non-face opening,
  redesigned face hole, widened face window, shrunken face window, moved face window, broken face-window border,
  extra limbs, duplicate arms, duplicate sleeves, duplicate gloves, extra costume appendages, invented openings, exposed neck when not shown, exposed wrists when not shown, exposed ankles when not shown,
  exposed hands when not shown, exposed feet when not shown, anatomy contouring, body-hugging reinterpretation, bodysuit reinterpretation,
- costume redesign, side-view reinterpretation, outfit mismatch,
+ costume redesign, outfit mismatch, side-view body in front/back sheet, 3/4 view, three-quarter view, portrait crop,
+ rotated helmet crest, flipped plume orientation, camera-facing crest on wrong view, broad front/back plume when source crest is front-to-back, front-facing red fan pasted onto rear helmet, headwear orientation mismatch,
  missing worn accessory, removed accessory, dropped headwear, missing jewelry, removed jewelry, missing eyewear, removed eyewear, missing veil, removed veil, missing hood, removed hood, missing scarf, removed scarf, missing glove, removed glove, missing footwear, removed footwear, missing adornment, simplified adornment, omitted source appearance element, restyled hair, bun hairstyle, updo, tied-back hair, ponytail, braid, pinned hair, shorter hair, different hair volume, different hair silhouette,
  altered costume colors, shifted palette, desaturated costume, brighter costume, darker costume, material reinterpretation,
  portrait beauty lighting on enclosed face, missing occlusion shadows, missing contact shadows,
  text, watermark.`,
                 state.apiKey,
                 state.model,
-                lrImages,
+                fbImages,
                 {
                     aspectRatio: '1:1',
                     imageSize: state.imageResolution,
                     thinkingLevel: state.enableImageThinking,
                     googleGrounding: state.enableGoogleGrounding,
+                    strictMode: true,
                     billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements
                 }
             );
@@ -1925,7 +2034,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
     const downloadImage = (url: string, filename: string) => {
         const link = document.createElement('a');
         link.href = url;
-        link.download = filename;
+        link.download = createUniqueDownloadFilename(filename);
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
@@ -2259,7 +2368,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                                         <X className="w-3.5 h-3.5" /> Clear
                                                     </button>
                                                     <button
-                                                        onClick={() => downloadImage(designerImage!, `costume-${Date.now()}.png`)}
+                                                        onClick={() => downloadImage(designerImage!, 'costume.png')}
                                                         className="bg-white/10 hover:bg-white/20 text-white !px-3 !py-1.5 !min-w-0 !min-h-0 !w-auto !h-auto rounded-full transition-all border border-white/10 active:scale-95 flex items-center justify-center"
                                                         title="Download Generated Costume"
                                                     >
@@ -2269,7 +2378,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                             ) : (
                                                 <>
                                                     <button
-                                                        onClick={() => downloadImage(designerRefImage!, `reference-${Date.now()}.png`)}
+                                                        onClick={() => downloadImage(designerRefImage!, 'reference.png')}
                                                         className="bg-white/10 hover:bg-white/20 text-white px-6 py-3 rounded-full transition-all border border-white/10 active:scale-95 text-[10px] font-black uppercase tracking-widest flex items-center gap-2"
                                                         title="Download Reference"
                                                     >
@@ -2483,10 +2592,18 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                             studio="wardrobe"
                                             className="w-full max-w-3xl bg-black/80 backdrop-blur-md rounded-2xl border border-white/10"
                                             onSelectGeneration={(gen) => {
-                                                setFittedImage(gen.displayUrl);
+                                                tryOnOutputModeRef.current = 'front';
+                                                resetTryOnTurnaroundOutputs({
+                                                    fittedImage: gen.displayUrl,
+                                                    tryOnOutputMode: 'front'
+                                                });
                                             }}
                                             onExportGeneration={(gen) => {
-                                                setFittedImage(gen.displayUrl);
+                                                tryOnOutputModeRef.current = 'front';
+                                                resetTryOnTurnaroundOutputs({
+                                                    fittedImage: gen.displayUrl,
+                                                    tryOnOutputMode: 'front'
+                                                });
                                                 handleOpenSaveModal(gen.displayUrl, gen.id);
                                             }}
                                         />
@@ -2615,8 +2732,14 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                                     removeBg: false,
                                                     history: [],
                                                     historyIndex: -1,
-                                                    processedTryOnUrl: null
+                                                    processedTryOnUrl: null,
+                                                    tryOnOutputMode: 'front',
+                                                    tryOnViews: null,
+                                                    tryOnSheetFB: null,
+                                                    tryOnSheetLR: null,
+                                                    activeTryOnView: 'front'
                                                 });
+                                                tryOnOutputModeRef.current = 'front';
                                                 useRecentGenerationsStore.getState().clearRecentGenerationsForStudio('wardrobe');
                                             }} className="w-full bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white py-3 rounded-lg transition-all flex items-center justify-center gap-2 border border-red-500/20 hover:-[0_0_15px_rgba(239,68,68,0.4)] text-[10px] font-black uppercase tracking-wider" title="Clear/Discard">
                                                 <X className="w-4 h-4" /> Clear
@@ -2633,12 +2756,19 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                         studio="wardrobe"
                         className="shrink-0 mt-2"
                         onSelectGeneration={(gen) => {
-                            setFittedImage(gen.displayUrl);
-                            setActiveTryOnView('front');
+                            tryOnOutputModeRef.current = 'front';
+                            resetTryOnTurnaroundOutputs({
+                                fittedImage: gen.displayUrl,
+                                tryOnOutputMode: 'front'
+                            });
                         }}
                         onExportGeneration={(gen) => {
                             // Trigger the save modal flow with the selected generation
-                            setFittedImage(gen.displayUrl);
+                            tryOnOutputModeRef.current = 'front';
+                            resetTryOnTurnaroundOutputs({
+                                fittedImage: gen.displayUrl,
+                                tryOnOutputMode: 'front'
+                            });
                             handleOpenSaveModal(gen.displayUrl, gen.id);
                         }}
                     />

@@ -17,6 +17,7 @@ import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
 import { resolveDisplayUrl } from '../utils/assetUrlResolver';
 import { LibraryAssetMaterializer } from '../services/LibraryAssetMaterializer';
+import { createUniqueDownloadFilename } from '../utils/downloadFilenames';
 import HelpTooltip from './ui/HelpTooltip';
 import InlineHint from './ui/InlineHint';
 import ConfirmDialog from './ui/ConfirmDialog';
@@ -1432,7 +1433,7 @@ const NanoCastingDirector = () => {
             if (stateRef.current.saveDirectoryHandle) {
                 try {
                     const scansDir = await stateRef.current.saveDirectoryHandle.getDirectoryHandle('Scans', { create: true });
-                    const filename = `Scan_${sector.toUpperCase()}_${Date.now()}.png`;
+                    const filename = createUniqueDownloadFilename(`Scan_${sector.toUpperCase()}.png`);
                     const fileHandle = await scansDir.getFileHandle(filename, { create: true });
                     const writable = await fileHandle.createWritable();
 
@@ -2005,7 +2006,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
         if (!finalCharacterUrl) return;
         const a = document.createElement('a');
         a.href = finalCharacterUrl;
-        a.download = `NanoCast_${Date.now()}.png`;
+        a.download = createUniqueDownloadFilename('NanoCast.png');
         a.click();
         showToast("Poster Asset Extracted");
     };
@@ -4398,7 +4399,7 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                             onClick={() => {
                                                 const a = document.createElement('a');
                                                 a.href = refSheetUrl;
-                                                a.download = `RefSheet-${Date.now()}.png`;
+                                                a.download = createUniqueDownloadFilename('RefSheet.png');
                                                 a.click();
                                                 showToast("Download Started");
                                             }}
@@ -4443,7 +4444,7 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                             onClick={() => {
                                                 const a = document.createElement('a');
                                                 a.href = localBiometricSheetUrl;
-                                                a.download = `FastBiometric-${Date.now()}.png`;
+                                                a.download = createUniqueDownloadFilename('FastBiometric.png');
                                                 a.click();
                                                 showToast("Download Started");
                                             }}

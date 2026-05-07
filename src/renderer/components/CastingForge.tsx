@@ -29,6 +29,7 @@ import { isNativeParams, nativeLoadCover, nativeSaveCover, nativeWriteFile, nati
 import { useRecentGenerationsStore } from '../stores/useRecentGenerationsStore';
 import { RecentGenerationsCacheService } from '../services/RecentGenerationsCacheService';
 import RecentGenerationsStrip from './recent/RecentGenerationsStrip';
+import { createUniqueDownloadFilename } from '../utils/downloadFilenames';
 
 import coverRealism from '../assets/cover-realism.png';
 import coverAnim from '../assets/cover-anim.png';
@@ -2124,7 +2125,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
 
       const link = document.createElement('a');
       link.href = objectUrl;
-      link.download = `nano_banana_export_${Date.now()}.png`;
+      link.download = createUniqueDownloadFilename('nano_banana_export.png');
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -3015,7 +3016,7 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
                     onClick={() => {
                       const a = document.createElement('a');
                       a.href = refSheetUrl;
-                      a.download = `RefSheet-${Date.now()}.png`;
+                      a.download = createUniqueDownloadFilename('RefSheet.png');
                       a.click();
                       showToast("Download Started");
                     }}
@@ -3035,7 +3036,7 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
                           }
 
                           const root = await state.saveDirectoryHandle.getDirectoryHandle('ReferenceSheets', { create: true });
-                          const filename = `RefSheet-${Date.now()}.png`;
+                          const filename = createUniqueDownloadFilename('RefSheet.png');
                           const handle = await root.getFileHandle(filename, { create: true });
                           const writable = await handle.createWritable();
                           const res = await fetch(refSheetUrl);
@@ -3048,14 +3049,14 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
                           // Fallback
                           const a = document.createElement('a');
                           a.href = refSheetUrl;
-                          a.download = `RefSheet-Backup-${Date.now()}.png`;
+                          a.download = createUniqueDownloadFilename('RefSheet-Backup.png');
                           a.click();
                         }
                       } else {
                         showToast("No Save Folder. Downloading instead...");
                         const a = document.createElement('a');
                         a.href = refSheetUrl;
-                        a.download = `RefSheet-${Date.now()}.png`;
+                        a.download = createUniqueDownloadFilename('RefSheet.png');
                         a.click();
                       }
                     }}

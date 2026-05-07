@@ -949,6 +949,21 @@ const initialPropStudioState: PropAccessoryState = {
     applyNote: ''
 };
 
+const loadedWardrobeState = loadJson<WardrobeState>('nano_wardrobe_state', DEFAULT_WARDROBE_STATE);
+const initialWardrobeState: WardrobeState = {
+    ...loadedWardrobeState,
+    fittedImage: loadedWardrobeState.tryOnViews?.front ?? (
+        loadedWardrobeState.tryOnSheetFB || loadedWardrobeState.tryOnSheetLR
+            ? null
+            : loadedWardrobeState.fittedImage
+    ),
+    tryOnOutputMode: 'front',
+    tryOnViews: null,
+    tryOnSheetFB: null,
+    tryOnSheetLR: null,
+    activeTryOnView: 'front'
+};
+
 export const initialState: AppState = {
     apiKey: localStorage.getItem('nano_api_key') || '',
     model: getInitialModel(),
@@ -1023,7 +1038,7 @@ export const initialState: AppState = {
     }),
 
     // WARDROBE PERSISTENCE
-    wardrobeState: loadJson<WardrobeState>('nano_wardrobe_state', DEFAULT_WARDROBE_STATE),
+    wardrobeState: initialWardrobeState,
 
     // PROP STUDIO PERSISTENCE
     propStudioState: initialPropStudioState,
