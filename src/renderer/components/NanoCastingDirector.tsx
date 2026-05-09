@@ -153,6 +153,23 @@ type MorphVariant = 'masc' | 'fem' | 'youth_masc' | 'youth_fem';
 type ReferenceLayout = 'form_focus' | 'face_focus' | 'split_focus';
 type RefSheetStyleId = keyof typeof REF_SHEET_STYLES;
 type BiometricCaptureAngle = 'center' | 'left' | 'right' | 'up' | 'down';
+type NanoPitchSheetHandoff = {
+    source: "nanocast_biometric_scan";
+    createdAt: number;
+    identityImages: Array<{
+        angle: BiometricCaptureAngle;
+        imageUrl: string;
+    }>;
+    identityStrength: number;
+    heightIn?: number;
+    weightLbs?: number;
+    age?: number;
+    hairStyle?: string;
+    outfit?: string;
+    selectedStyle?: string | null;
+    finalCharacterUrl?: string | null;
+    mode: "scan_only" | "scan_plus_character";
+};
 type NanoRefSheetSlotRect = {
     label: string;
     x: number;
@@ -2011,6 +2028,77 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
         showToast("Poster Asset Extracted");
     };
 
+    const sendBiometricScanToPitchSheet = async (handoffMode: NanoPitchSheetHandoff["mode"]) => {
+        if (!capturedAngles.center || !capturedAngles.left || !capturedAngles.right) {
+            showToast("Requires Center + Left + Right scans");
+            dispatch({ type: 'ADD_LOG', payload: { message: "Pitch Sheet handoff requires Center + Left + Right scans.", type: 'error' } });
+            return;
+        }
+
+        if (handoffMode === "scan_plus_character" && !finalCharacterUrl) {
+            showToast("Generate a character first");
+            dispatch({ type: 'ADD_LOG', payload: { message: "Scan + Character pitch sheet handoff requires a generated character.", type: 'error' } });
+            return;
+        }
+
+        try {
+            const identityImages: NanoPitchSheetHandoff["identityImages"] = [];
+            const angles: BiometricCaptureAngle[] = ['center', 'left', 'right', 'up', 'down'];
+
+            for (const angle of angles) {
+                const rawUrl = capturedAngles[angle];
+                if (!rawUrl) continue;
+
+                const imageUrl = rawUrl.startsWith('blob:')
+                    ? await getBase64FromBlobUrl(rawUrl)
+                    : rawUrl;
+
+                identityImages.push({ angle, imageUrl });
+            }
+
+            if (identityImages.length === 0) {
+                throw new Error("No raw biometric angle captures available.");
+            }
+
+            let characterUrl: string | null = null;
+            if (handoffMode === "scan_plus_character" && finalCharacterUrl) {
+                characterUrl = finalCharacterUrl.startsWith('blob:')
+                    ? await getBase64FromBlobUrl(finalCharacterUrl)
+                    : finalCharacterUrl;
+            }
+
+            const payload: NanoPitchSheetHandoff = {
+                source: "nanocast_biometric_scan",
+                createdAt: Date.now(),
+                identityImages,
+                identityStrength: directorControls.identityStrength,
+                heightIn,
+                weightLbs,
+                age: directorControls.age,
+                hairStyle: directorControls.hairStyle,
+                outfit: directorControls.outfit,
+                selectedStyle,
+                finalCharacterUrl: handoffMode === "scan_plus_character" ? characterUrl : null,
+                mode: handoffMode
+            };
+
+            localStorage.setItem("portrait_pitchsheet_handoff", JSON.stringify(payload));
+            dispatch({ type: 'SET_VIEW', payload: 'portrait' });
+            dispatch({
+                type: 'ADD_LOG',
+                payload: {
+                    message: handoffMode === "scan_plus_character"
+                        ? "NanoCast scan + character sent to Portrait Studio Pitch Sheet"
+                        : "NanoCast biometric scan sent to Portrait Studio Pitch Sheet",
+                    type: 'success'
+                }
+            });
+            showToast("Pitch Sheet handoff ready");
+        } catch (error: unknown) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `Pitch Sheet handoff failed: ${getErrorMessage(error)}`, type: 'error' } });
+        }
+    };
+
     // --- SAVE TO ACTOR LIBRARY STATE ---
     const [showSaveModal, setShowSaveModal] = useState(false);
     const [saveCategory, setSaveCategory] = useState("realism");
@@ -3702,6 +3790,24 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                             <Cpu className="w-4 h-4" /> PREMIUM FORENSIC BOARD
                                         </button>
 
+                                        <button
+                                            disabled={!capturedAngles.center || !capturedAngles.left || !capturedAngles.right || isProcessing}
+                                            onClick={() => void sendBiometricScanToPitchSheet("scan_only")}
+                                            className="w-full py-4 bg-yellow-500/10 hover:bg-yellow-500/20 text-yellow-500 border border-yellow-500/30 hover:border-yellow-500/60 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        >
+                                            <LayoutTemplate className="w-4 h-4" /> Build Pitch Sheet From Scan
+                                        </button>
+
+                                        {finalCharacterUrl && (
+                                            <button
+                                                disabled={!capturedAngles.center || !capturedAngles.left || !capturedAngles.right || isProcessing}
+                                                onClick={() => void sendBiometricScanToPitchSheet("scan_plus_character")}
+                                                className="w-full py-4 bg-accent/10 hover:bg-accent/20 text-accent border border-accent/30 hover:border-accent/60 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                            >
+                                                <Sparkles className="w-4 h-4" /> Build Pitch Sheet From Scan + Character
+                                            </button>
+                                        )}
+
                                         <div className="flex gap-2">
                                             <button
                                                 onClick={resetScan}
@@ -4336,6 +4442,29 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                                     High-Fidelity AI Synthesis: Identity & layout are strictly enforced, but minor variations may occur. Always review for production use.
                                                 </div>
                                             </div>
+
+                                            {capturedAngles.center && capturedAngles.left && capturedAngles.right && (
+                                                <div className="grid grid-cols-1 gap-2">
+                                                    <button
+                                                        onClick={() => void sendBiometricScanToPitchSheet("scan_only")}
+                                                        disabled={isProcessing}
+                                                        className="w-full py-3 bg-yellow-500/10 hover:bg-yellow-500/20 text-yellow-500 border border-yellow-500/30 text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                                    >
+                                                        <LayoutTemplate className="w-3 h-3" />
+                                                        Build Pitch Sheet From Scan
+                                                    </button>
+                                                    {finalCharacterUrl && (
+                                                        <button
+                                                            onClick={() => void sendBiometricScanToPitchSheet("scan_plus_character")}
+                                                            disabled={isProcessing}
+                                                            className="w-full py-3 bg-accent/10 hover:bg-accent/20 text-accent border border-accent/30 text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                                        >
+                                                            <Sparkles className="w-3 h-3" />
+                                                            Build Pitch Sheet From Scan + Character
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            )}
 
                                             {identitySource === 'biometric' && (!capturedAngles.center || !capturedAngles.left || !capturedAngles.right) && (
                                                 <div className="text-center text-[9px] text-danger font-bold uppercase tracking-widest bg-danger/10 py-1 rounded">
