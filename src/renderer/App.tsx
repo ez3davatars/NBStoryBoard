@@ -28,12 +28,12 @@ import { HelpCenterDrawer } from './components/ui/HelpCenterDrawer';
 import { WelcomeModal } from './components/ui/WelcomeModal';
 import { InsufficientCreditModal } from './components/ui/InsufficientCreditModal';
 import { useRecentGenerationsStore } from './stores/useRecentGenerationsStore';
-import ActorSaveModal from './components/ActorSaveModal';
 import {
   INSUFFICIENT_HOSTED_CREDITS_EVENT,
   getByokOwnership,
   type InsufficientCreditModalState
 } from './utils/billingProducts';
+import { createUniqueDownloadFilename } from './utils/downloadFilenames';
 
 import {
   Settings,
@@ -138,26 +138,34 @@ const getErrorMessage = (error: unknown): string => {
   return String(error);
 };
 
-const actorLibraryStyleForCategory = (category: string): string => {
-  switch (category) {
-    case 'anim':
-      return 'family_3d';
-    case 'illustration':
-      return 'retro_anime';
-    case 'scifi':
-      return 'cyberpunk_neon';
-    case 'realism':
-    case 'uncategorized':
-    default:
-      return 'exact_studio';
-  }
+const getImageDownloadExtension = (url: string, mimeType?: string): string => {
+  const mimeExtension = mimeType?.match(/^image\/([a-z0-9.+-]+)/i)?.[1];
+  const dataUrlExtension = url.match(/^data:image\/([a-z0-9.+-]+)[;,]/i)?.[1];
+  const pathExtension = url
+    .split(/[?#]/)[0]
+    .match(/\.([a-z0-9]+)$/i)?.[1];
+  const extension = (mimeExtension || dataUrlExtension || pathExtension || 'png')
+    .toLowerCase()
+    .replace(/^x-/, '')
+    .replace(/\+xml$/, '');
+
+  if (extension === 'jpeg') return 'jpg';
+  if (['png', 'jpg', 'webp', 'gif', 'avif'].includes(extension)) return extension;
+  return 'png';
+};
+
+const triggerImageDownload = (url: string, filename: string): void => {
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
 };
 
 const ImageInspector = () => {
   const { state, dispatch } = useAppContext();
-  const [showSaveConfirm, setShowSaveConfirm] = useState(false);
   const [resolvedDisplay, setResolvedDisplay] = useState<string | null>(null);
-  const [showActorSaveModal, setShowActorSaveModal] = useState(false);
 
   useEffect(() => {
     if (!state.inspectImage) {
@@ -184,45 +192,47 @@ const ImageInspector = () => {
     dispatch({ type: 'SET_INSPECT_MASK', payload: null });
   };
 
-  const getInspectorSourceUrl = () => state.inspectImageSourceUrl || resolvedDisplay || state.inspectImage || '';
+  const getInspectorSourceUrl = () => resolvedDisplay || state.inspectImage || state.inspectImageSourceUrl || '';
 
-  const saveInspectorToActorLibrary = async (name: string, category: string) => {
-    const sourceUrl = getInspectorSourceUrl();
+  const downloadInspectorImage = async () => {
+    const sourceUrl = resolvedDisplay || state.inspectImage || state.inspectImageSourceUrl || '';
     if (!sourceUrl) return;
 
     try {
-      const mat = await LibraryAssetMaterializer.materializeCastAsset({
-        sourceUrl,
-        saveDirectoryPath: state.saveDirectoryPath,
-        actorName: name,
-        category,
-      });
-
-      const newActor: CastMember = {
-        id: `actor-inspect-${Date.now()}`,
-        url: mat.previewUrl,
-        localPath: mat.localPath || undefined,
-        previewUrl: mat.previewUrl,
-        sourceUrl: mat.sourceUrl,
-        tag: 'front',
-        name,
-        filename: mat.filename,
-        profile: {
-          identity: name,
-          wardrobe: '',
-          accessories: '',
-          style: actorLibraryStyleForCategory(category),
+      if (/^https?:\/\//i.test(sourceUrl)) {
+        const response = await fetch(sourceUrl, { mode: 'cors' });
+        if (!response.ok) {
+          throw new Error(`Download request failed: ${response.status}`);
         }
-      };
 
-      dispatch({ type: 'ADD_ACTOR_LIBRARY', payload: newActor });
-      dispatch({ type: 'ADD_LOG', payload: { message: `Saved to Actor Library: ${mat.filename || name}`, type: 'success' } });
-      setShowActorSaveModal(false);
-      setShowSaveConfirm(true);
-      setTimeout(() => setShowSaveConfirm(false), 2000);
+        const blob = await response.blob();
+        const extension = getImageDownloadExtension(sourceUrl, blob.type);
+        const filename = createUniqueDownloadFilename(`CDS_Inspect.${extension}`, extension);
+        const objectUrl = URL.createObjectURL(blob);
+
+        try {
+          triggerImageDownload(objectUrl, filename);
+        } finally {
+          setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+        }
+      } else {
+        const extension = getImageDownloadExtension(sourceUrl);
+        const filename = createUniqueDownloadFilename(`CDS_Inspect.${extension}`, extension);
+        triggerImageDownload(sourceUrl, filename);
+      }
+
+      dispatch({ type: 'ADD_LOG', payload: { message: "Image downloaded to your computer", type: 'success' } });
     } catch (err: unknown) {
-      console.error("Actor library save failed", err);
-      dispatch({ type: 'ADD_LOG', payload: { message: `Save failed: ${getErrorMessage(err)}`, type: 'error' } });
+      console.error("Inspector download failed", err);
+      const fallbackUrl = getInspectorSourceUrl();
+      if (fallbackUrl) {
+        const extension = getImageDownloadExtension(fallbackUrl);
+        const filename = createUniqueDownloadFilename(`CDS_Inspect.${extension}`, extension);
+        triggerImageDownload(fallbackUrl, filename);
+        dispatch({ type: 'ADD_LOG', payload: { message: "Image download started", type: 'info' } });
+        return;
+      }
+      dispatch({ type: 'ADD_LOG', payload: { message: `Download failed: ${getErrorMessage(err)}`, type: 'error' } });
     }
   };
 
@@ -259,21 +269,6 @@ const ImageInspector = () => {
             </div>
           )}
         </div>
-
-        {/* Save Confirmation Toast */}
-        {showSaveConfirm && (
-          <div className="fixed bottom-28 sm:bottom-32 left-1/2 -translate-x-1/2 z-[2005] max-w-[calc(100vw-2rem)] bg-black/80 backdrop-blur-xl border border-yellow-500/30 px-4 sm:px-8 py-4 rounded-2xl -[0_0_50px_rgba(234,179,8,0.25)] animate-in slide-in-from-bottom-5 fade-in duration-300 flex flex-col items-center gap-2">
-            <div className="flex items-center gap-3 text-yellow-400">
-              <UserPlus className="w-5 h-5 -[0_0_8px_rgba(234,179,8,0.5)]" />
-              <span className="font-black uppercase tracking-[0.2em] text-xs">Asset Secured</span>
-            </div>
-            <div className="flex items-center gap-2 w-full justify-center">
-              <span className="h-[1px] w-8 bg-gradient-to-r from-transparent to-blue-500/50"></span>
-              <span className="text-[10px] text-blue-400/80 font-mono tracking-wider uppercase">Saved to Actors</span>
-              <span className="h-[1px] w-8 bg-gradient-to-l from-transparent to-blue-500/50"></span>
-            </div>
-          </div>
-        )}
 
         <div className="fixed bottom-4 sm:bottom-12 left-1/2 -translate-x-1/2 flex flex-wrap justify-center gap-2 sm:gap-4 z-[2001] max-w-[calc(100vw-1.5rem)] bg-black/40 backdrop-blur-2xl border border-white/10 p-2 rounded-2xl ">
           <button
@@ -331,10 +326,10 @@ const ImageInspector = () => {
           <button
             onClick={(e) => {
               e.stopPropagation();
-              setShowActorSaveModal(true);
+              void downloadInspectorImage();
             }}
             className="w-12 h-12 sm:w-14 sm:h-14 bg-white/10 hover:bg-white text-white hover:text-black rounded-xl transition-all transform hover:scale-110 flex items-center justify-center border border-white/20"
-            title="Save to Actor Library"
+            title="Download to Computer"
           >
             <Download className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.5]" />
           </button>
@@ -350,17 +345,6 @@ const ImageInspector = () => {
             <Copy className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.5]" />
           </button>
         </div>
-
-        <ActorSaveModal
-          isOpen={showActorSaveModal}
-          initialName={`Actor ${state.actorLibrary.length + 1}`}
-          onClose={() => setShowActorSaveModal(false)}
-          onSave={(name, category) => {
-            void saveInspectorToActorLibrary(name, category);
-          }}
-          title="Save to Actor Library"
-          description="Select a Studio Folder to organize this actor:"
-        />
       </div>
     </div>
   );

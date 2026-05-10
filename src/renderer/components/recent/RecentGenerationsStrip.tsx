@@ -16,6 +16,10 @@ export type RecentGenerationsStripProps = {
   onExportGeneration?: (generation: RecentGeneration) => void;
 };
 
+const isPitchSheetPreviewGeneration = (generation: RecentGeneration) =>
+  generation.featureSource === 'character_pitch_sheet' ||
+  generation.displayLabel === 'Pitch Sheet Preview';
+
 // --- COMPONENT ---
 
 export default function RecentGenerationsStrip({
@@ -233,6 +237,7 @@ export default function RecentGenerationsStrip({
                 <AnimatePresence initial={false}>
                   {studioGenerations.map((generation) => {
                     const isActive = generation.id === activeId;
+                    const isPitchSheetPreview = isPitchSheetPreviewGeneration(generation);
                     return (
                       <motion.div
                         key={generation.id}
@@ -252,7 +257,7 @@ export default function RecentGenerationsStrip({
                                 ? 'border-yellow-500/80 shadow-[0_0_12px_rgba(234,179,8,0.2)]'
                                 : 'border-white/10 hover:border-white/25'
                             }`}
-                          title={generation.prompt || 'Recent generation'}
+                          title={isPitchSheetPreview ? 'Pitch Sheet Preview' : (generation.prompt || 'Recent generation')}
                         >
                           <img
                             src={generation.displayUrl}
@@ -260,6 +265,13 @@ export default function RecentGenerationsStrip({
                             className="w-full h-full object-cover"
                             loading="lazy"
                           />
+
+                          {isPitchSheetPreview && (
+                            <div className="absolute left-1 top-1 max-w-[calc(100%-0.5rem)] rounded bg-blue-500/80 border border-blue-200/30 px-1 py-0.5 text-[5.5px] font-black uppercase tracking-wide leading-[0.6rem] text-white shadow-[0_0_8px_rgba(59,130,246,0.25)]">
+                              <span className="block">Pitch Sheet</span>
+                              <span className="block">Preview</span>
+                            </div>
+                          )}
 
                           {/* Exported Badge */}
                           {generation.exported && (

@@ -4,6 +4,7 @@ import { Dropdown } from '../ui/Dropdown';
 import { getEffectiveResultAnchorForScene } from '../../context/AppContext';
 import type { DirectorMergeStrategy } from '../../context/AppContext';
 import type { Action, AppState, DirectorSettings, StageToken } from '../../context/AppContext';
+import { buildSourceImageMeta, getImageIntrinsicSize } from '../../utils/sourceImageSizing';
 
 type ExtractedStyle = {
  styleSummary?: string;
@@ -134,6 +135,21 @@ export const AnchorRefPanel = ({
  if (file) {
  const url = await fileToDataUrl(file);
  dispatch({ type: 'SET_BG', payload: url });
+ try {
+ const dimensions = await getImageIntrinsicSize(url);
+ const sourceImageMeta = buildSourceImageMeta(dimensions.width, dimensions.height);
+ if (sourceImageMeta) {
+ dispatch({
+ type: 'SET_REGION_EDIT',
+ payload: {
+ contextSizingMode: 'source-auto',
+ sourceImageMeta
+ }
+ });
+ }
+ } catch (error) {
+ console.warn('[Region Edit] Could not read uploaded source dimensions.', error);
+ }
  }
  if (inputEl) inputEl.value = '';
  }}

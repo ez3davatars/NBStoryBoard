@@ -67,6 +67,129 @@ async function materializeDisplayUrl(url: string | null | undefined): Promise<st
     return url;
 }
 
+type ResolvedLookSpec = {
+    sourceSummary: string;
+    primaryGarments: string[];
+    accessories: string[];
+    handheldItems: string[];
+    jewelry: string[];
+    broochPin: string[];
+    bagClutch: string[];
+    footwear: string[];
+    colorFormalityEra: string[];
+    explicitBarefoot: boolean;
+    structuredCompleteLook: boolean;
+    visibilityOcclusionGuidance: string;
+};
+
+const normalizeLookText = (value: string): string =>
+    value.toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+const collectTerms = (text: string, terms: string[]) =>
+    terms.filter(term => new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}s?\\b`, 'i').test(text));
+
+const formatResolvedTerms = (terms: string[], fallback: string): string =>
+    terms.length > 0 ? Array.from(new Set(terms)).join(', ') : fallback;
+
+const buildResolvedLookSpec = (wardrobe: WardrobeItem, fittingNotes: string): ResolvedLookSpec => {
+    const sourceSummary = [wardrobe.name, wardrobe.prompt, wardrobe.category, fittingNotes]
+        .filter(Boolean)
+        .join(' | ');
+    const text = normalizeLookText(sourceSummary);
+
+    const primaryGarments = collectTerms(text, [
+        'suit', 'blazer', 'jacket', 'shirt', 'blouse', 'vest', 'waistcoat', 'dress', 'gown',
+        'coat', 'robe', 'cloak', 'cape', 'uniform', 'armor', 'armour', 'tunic', 'skirt',
+        'pants', 'trousers', 'shorts', 'bodysuit', 'jumpsuit', 'helmet', 'hood'
+    ]);
+    const handheldItems = collectTerms(text, [
+        'clutch', 'purse', 'handbag', 'bag', 'case', 'briefcase', 'wallet', 'portfolio',
+        'book', 'phone', 'prop', 'cane', 'umbrella', 'sword', 'shield', 'staff'
+    ]);
+    const jewelry = collectTerms(text, [
+        'necklace', 'chain', 'pendant', 'choker', 'bracelet', 'bangle', 'ring', 'earring',
+        'brooch', 'pin', 'badge', 'medal', 'watch'
+    ]);
+    const broochPin = collectTerms(text, ['brooch', 'pin', 'badge', 'medal']);
+    const bagClutch = collectTerms(text, ['clutch', 'purse', 'handbag', 'bag', 'case', 'briefcase', 'wallet', 'portfolio']);
+    const accessories = Array.from(new Set([
+        ...handheldItems,
+        ...jewelry,
+        ...collectTerms(text, ['belt', 'tie', 'bowtie', 'scarf', 'glove', 'hat', 'crown', 'veil', 'glasses', 'sunglasses'])
+    ]));
+    const footwear = collectTerms(text, [
+        'shoe', 'shoes', 'boot', 'boots', 'heel', 'heels', 'loafer', 'loafers', 'dress shoe',
+        'sandal', 'sandals', 'slipper', 'slippers', 'sneaker', 'sneakers', 'footwear'
+    ]);
+    const colorFormalityEra = collectTerms(text, [
+        'black', 'white', 'red', 'blue', 'navy', 'gold', 'silver', 'green', 'purple', 'brown',
+        'formal', 'business', 'tailored', 'uniform', 'historical', 'victorian', 'medieval',
+        'fantasy', 'sci fi', 'sci-fi', 'cyberpunk', 'modern', 'vintage', 'polished', 'structured'
+    ]);
+    const explicitBarefoot =
+        /\b(barefoot|bare feet|beachwear|beach|swimwear|swimsuit|sleepwear|pajama|pyjama|spa|yoga|dance barefoot)\b/i.test(text);
+    const structuredCompleteLook =
+        /\b(formal|business|tailored|suit|blazer|uniform|armor|armour|historical|fantasy|sci[- ]?fi|structured|polished|costume|gown|dress|jacket|coat)\b/i.test(text);
+
+    const hasLayeredNeckAccessory =
+        /\b(necklace|chain|pendant|choker)\b/i.test(text) ||
+        /\b(jacket|blazer|shirt|collar|lapel|vest|waistcoat)\b/i.test(text);
+
+    return {
+        sourceSummary,
+        primaryGarments,
+        accessories,
+        handheldItems,
+        jewelry,
+        broochPin,
+        bagClutch,
+        footwear,
+        colorFormalityEra,
+        explicitBarefoot,
+        structuredCompleteLook,
+        visibilityOcclusionGuidance: hasLayeredNeckAccessory
+            ? 'Necklaces, chains, pendants, lapel accessories, and tucked jewelry must obey garment occlusion. If an item is inside a jacket/shirt opening or hidden under front layers, it stays hidden/occluded in rear and side views unless physically visible from that angle.'
+            : 'Accessories must only appear in views where they would be physically visible. Hidden or inside-garment items must remain hidden/occluded across alternate views.'
+    };
+};
+
+const buildResolvedLookContractBlock = (
+    spec: ResolvedLookSpec,
+    hasCharacterSheet: boolean,
+    mode: WardrobeState['tryOnOutputMode']
+): string => `
+ RESOLVED LOOK SPEC (CANONICAL - INTERNAL)
+ - Source wardrobe/fitting notes: ${spec.sourceSummary || 'selected wardrobe reference and current fitting notes'}
+ - Primary garments to resolve once: ${formatResolvedTerms(spec.primaryGarments, 'infer from selected wardrobe reference without inventing unrelated garments')}
+ - Accessory set to resolve once: ${formatResolvedTerms(spec.accessories, 'none unless clearly visible in the wardrobe reference or logically required for a complete look')}
+ - Handheld/singular items: ${formatResolvedTerms(spec.handheldItems, 'none unless clearly visible or explicitly requested')}
+ - Jewelry/adornments: ${formatResolvedTerms(spec.jewelry, 'none unless clearly visible or explicitly requested')}
+ - Brooch/pin/badge placement: ${formatResolvedTerms(spec.broochPin, 'only if present; one coherent placement only')}
+ - Bag/clutch/case logic: ${formatResolvedTerms(spec.bagClutch, 'only if present; one total single-item accessory only')}
+ - Footwear basis: ${formatResolvedTerms(spec.footwear, spec.explicitBarefoot ? 'explicit barefoot or barefoot-appropriate concept only' : 'infer complete compatible footwear if feet/lower legs/full body are visible')}
+ - Color/formality/era guidance: ${formatResolvedTerms(spec.colorFormalityEra, 'infer from wardrobe reference, material language, and fitting notes')}
+ - Look completion rule: ${spec.structuredCompleteLook ? 'treat as a structured complete styled look; do not leave lower-body styling unfinished or barefoot unless explicitly requested' : 'complete any visible lower-body styling coherently without adding conflicting accessories'}
+ - Visibility/occlusion guidance: ${spec.visibilityOcclusionGuidance}
+
+ STRICT VIRTUAL TRY-ON RULES
+ ${hasCharacterSheet ? '- Preserve the exact identity of the subject from the character sheet identity anchor: same facial structure, hairline/hairstyle logic, complexion, overall proportions, and same person across all requested views.' : '- Preserve the exact visible identity of the selected subject across all requested views.'}
+ - Render the same subject consistently across all requested views.
+ - Use one single resolved outfit interpretation based on the selected wardrobe and fitting notes.
+ - Use one single resolved accessory set. Do not invent or duplicate accessories.
+ - Do not duplicate handbags, clutches, brooches, necklaces, bracelets, lapel accessories, or other visible accessories.
+ - Only paired items may appear as pairs when appropriate, for example shoes, earrings, gloves, socks, stockings, or explicitly paired cuffs.
+ - Rings may be multiple only if they are already part of the resolved set; do not duplicate them beyond the intended set.
+ - Keep clothing, accessories, footwear, garment lengths, fit, colors, materials, and styling consistent across all views.
+ - If an accessory is hidden beneath or inside a garment in one view, do not expose it unrealistically in another view.
+ - If a necklace is tucked inside the jacket or shirt opening in the front view, it must remain physically consistent and should not appear exposed across the back of the neck in the back view unless that would truly be visible.
+ - Back views may only show accessories that would be physically visible from the back.
+ - Chains, straps, brooches, bags/clutches, shoulder-hung items, lapel accessories, and layered jewelry must keep physically coherent placement and occlusion.
+ - Always include complete and outfit-appropriate footwear unless the wardrobe explicitly calls for barefoot styling, culturally specific barefoot styling, or a clearly barefoot-appropriate concept.
+ - Footwear must match the outfit's formality, era, color logic, material language, and silhouette.
+ - Avoid visual contradictions, duplicate items, barefoot formalwear errors, inappropriate footwear, and identity drift.
+ - The result must look like one coherent person wearing one coherent outfit${mode === 'turnaround' ? ', seen from different angles' : ''}.
+`;
+
 const WardrobeLibrarySkeletonCard = () => (
     <div className="aspect-square rounded-lg border border-gray-800 overflow-hidden bg-black/40 relative">
         <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent animate-[shimmer_1.8s_linear_infinite]" />
@@ -255,21 +378,53 @@ const WardrobeStudio = () => {
         }
     };
 
+    const imageRoleName = (index: number) =>
+        `Image ${String.fromCharCode(64 + index)} ([IMAGE ${index}])`;
+
     const buildSubjectReferenceImages = (subject: CastMember) => {
         const refs: { url: string; label: string }[] = [];
-        if (tryOnCharacterSheet) {
-            refs.push({
-                url: tryOnCharacterSheet,
-                label: "PRIMARY BIOMETRIC IDENTITY ANCHOR - Character Sheet (multi-angle face reference)"
-            });
-        }
         refs.push({
             url: subject.previewUrl || subject.url,
-            label: tryOnCharacterSheet
-                ? "Secondary Subject Reference (body/style only; face identity is subordinate to Character Sheet)"
-                : "Subject Reference (identity and style)"
+            label: "Image A - Selected Subject / Virtual Try-On Target: primary body, proportions, pose continuity, and source style."
         });
         return refs;
+    };
+
+    const buildTryOnReferenceRoleBlock = (roles: {
+        costumeIndex: number;
+        identityAnchorIndex?: number;
+        brandingIndex?: number;
+        canonicalLrIndex?: number;
+    }) => {
+        const lines = [
+            `- ${imageRoleName(1)} is the selected subject / try-on target. Use it for current body proportions, pose/body continuity, source rendering style, and the final output subject.`
+        ];
+
+        lines.push(
+            `- ${imageRoleName(roles.costumeIndex)} is the wardrobe/costume source asset. Apply this wardrobe to the same person; do not copy identity from the wardrobe image.`
+        );
+
+        if (roles.identityAnchorIndex) {
+            lines.push(
+                `- ${imageRoleName(roles.identityAnchorIndex)} is the Character Sheet Identity Anchor. Identity reference only: use it to preserve the same person's facial identity and likeness. Do not copy its layout, labels, sheet format, annotations, panels, typography, or view grid.`
+            );
+        }
+
+        if (roles.brandingIndex) {
+            lines.push(`- ${imageRoleName(roles.brandingIndex)} is the branding/logo source asset only.`);
+        }
+
+        if (roles.canonicalLrIndex) {
+            lines.push(
+                `- ${imageRoleName(roles.canonicalLrIndex)} is the generated Left/Right geometry continuity sheet. Use it for costume/headwear side geometry only; it must not outrank the Character Sheet or Selected Subject for identity.`
+            );
+        }
+
+        return `
+ IMAGE ROLE MAP (READ BEFORE GENERATING)
+ ${lines.join('\n ')}
+ Do not rely on image order alone. Follow these named roles exactly.
+`;
     };
 
     const setTryOnDisplay = (view: TryOnDisplay) => {
@@ -1396,7 +1551,20 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
             const costumeText = `${costumeName} ${tryOnNote || ''}`.toLowerCase();
 
             const subjectRefs = buildSubjectReferenceImages(selectedCharacter);
-            const costumeRef = { url: selectedCostume.url, label: "Costume Reference" };
+            const hasCharacterSheet = Boolean(tryOnCharacterSheet);
+            const subjectImageRole = imageRoleName(1);
+            const costumeImageIndex = 2;
+            const costumeImageRole = imageRoleName(costumeImageIndex);
+            const identityAnchorImageIndex = hasCharacterSheet ? 3 : undefined;
+            const identityAnchorImageRole = identityAnchorImageIndex ? imageRoleName(identityAnchorImageIndex) : null;
+            const costumeRef = {
+                url: selectedCostume.url,
+                label: `${costumeImageRole} - Costume Reference: wardrobe source only, not identity source.`
+            };
+            const identityAnchorRef = tryOnCharacterSheet && identityAnchorImageRole ? {
+                url: tryOnCharacterSheet,
+                label: `${identityAnchorImageRole} - Character Sheet Identity Anchor: identity reference only, not output format or layout.`
+            } : null;
 
             const isDesignRef = isDesignReferenceSelected(selectedCostume);
 
@@ -1469,11 +1637,39 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
             const fittingBlock = `
  GARMENT TRANSFER (STRICT FIDELITY)
  - Transfer the exact garment from the Costume Reference onto the subject.
+ - Wardrobe must adapt to the same person; the person must not be replaced or redesigned to fit the wardrobe.
  - The costume may stretch or fit naturally to the person's body, but the designed structure must remain intact.
  - Preserve silhouette, proportions, coverage, padding, bulk, appendages, colors, materials, and visible construction details.
  - Fit the garment naturally only insofar as needed to look physically worn — do NOT redesign.
  - Do NOT convert structured or enclosed costumes into ordinary clothing or body-contoured reinterpretations.
- - If the costume has a dedicated face window, adjust the subject internally rather than changing the costume opening.
+ - If the costume has a dedicated face window, align the same person's face inside it without changing the costume opening or changing facial identity.
+`;
+
+            const accessoryFootwearComplianceBlock = `
+ VIRTUAL TRY-ON ACCESSORY AND FOOTWEAR COMPLIANCE RULES
+ - Apply the selected wardrobe cleanly and coherently to the subject.
+ - Do not duplicate accessories or outfit items.
+ - Any single handheld item such as a clutch, purse, handbag, bag, case, briefcase, wallet, handheld prop, book, phone, or portfolio must appear only once on the subject in each view.
+ - Do not place a single-item accessory in both hands. If the wardrobe includes one clutch, purse, handbag, case, briefcase, or prop, render one total item, not one per hand.
+ - Singular adornments such as a brooch, pendant, corsage, medal, badge, or statement accessory should remain singular unless the reference clearly shows a matched pair.
+ - Only naturally paired items may appear as pairs: shoes, boots, earrings, gloves, socks, stockings, cuffs, or symmetrical paired items explicitly intended as a pair.
+ - Do not invent unnecessary extra accessories. Add a completion item only when it is logically needed and does not conflict with the wardrobe reference.
+ - Keep accessory usage realistic, intentional, and non-redundant.
+ - Ensure the outfit appears complete, polished, believable, and production-ready.
+
+ FOOTWEAR COMPLETION
+ - If feet, ankles, lower legs, or full body are visible, include complete footwear or foot coverings appropriate to the wardrobe unless the concept is explicitly intended to be barefoot.
+ - Do not leave the subject barefoot for businesswear, formalwear, tailored looks, blazers, structured jacket outfits, uniforms, historical clothing, fantasy armor, sci-fi structured clothing, polished costume looks, or any outfit that visually implies complete styling.
+ - Barefoot is allowed only for clearly appropriate cases such as swimwear, sleepwear, beachwear, spa looks, dance/yoga concepts, culturally specific barefoot styling, or an explicit barefoot instruction.
+ - If the Costume Reference clearly shows shoes, boots, sandals, heels, slippers, armored boots, shoe covers, or foot coverings, copy that footwear exactly.
+ - If the Costume Reference does not clearly show footwear, infer appropriate footwear from outfit formality, styling category, time period, silhouette, and material language.
+ - Do not leave lower-body styling unfinished. Footwear must feel like part of the same wardrobe system.
+
+ ACCESSORY OCCLUSION / VISIBILITY
+ - Accessories must obey physical visibility from each camera angle.
+ - If a necklace, chain, pendant, choker, tie, scarf, lapel accessory, brooch, strap, bag, or shoulder-hung item is tucked inside, hidden beneath, or occluded by a garment in one view, keep it physically consistent in every other view.
+ - A necklace tucked inside a jacket or shirt opening in the front view must not become an exposed necklace across the back of the neck in the back view unless that rear exposure would be physically visible from the resolved garment layers.
+ - Back views may show only accessories that would actually be visible from the back of the same outfit.
 `;
 
             const headwearOrientationBlock = `
@@ -1528,6 +1724,12 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 `;
 
             const effectiveTryOnNote = tryOnNote || "Transfer the garment exactly and preserve the visible design.";
+            const resolvedLookSpec = buildResolvedLookSpec(selectedCostume, effectiveTryOnNote);
+            const resolvedLookContractBlock = buildResolvedLookContractBlock(
+                resolvedLookSpec,
+                hasCharacterSheet,
+                requestedTryOnMode
+            );
 
             const sourceAppearanceContinuityBlock = `
  SOURCE APPEARANCE CONTINUITY LOCK (CRITICAL)
@@ -1552,29 +1754,40 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
             const identityAnchorBlock = tryOnCharacterSheet ? `
  PRIMARY IDENTITY ANCHOR LOCK (CHARACTER SHEET)
- - The uploaded Character Sheet / Identity Anchor is the highest authority for the person's face, head, and visible neck identity in every generated view.
- - Treat the Character Sheet as a multi-angle biometric reference, not style inspiration.
+ - ${identityAnchorImageRole} is an identity reference only. Use this to preserve the same person's facial identity and likeness.
+ - Do not copy ${identityAnchorImageRole}'s layout, labels, sheet format, annotations, panels, typography, headshot grid, dividers, or callout text.
+ - ${identityAnchorImageRole} is the highest identity authority for the person's face, head, skin tone, hairline/hairstyle, visible neck identity, and overall likeness in every generated view.
+ - ${subjectImageRole} is the selected subject for body/proportion/source style continuity, but if it conflicts with ${identityAnchorImageRole}, the Character Sheet wins for identity.
+ - Treat the Character Sheet as a hard biometric identity reference, not style inspiration, not a loose mood reference, and not a target composition.
+ - Preserve the exact same person shown in the identity anchor. Do not invent a new face, substitute a different person, or convert the subject into a generic fashion-model face.
+ - Maintain facial identity, facial structure, skin tone, age range, ethnicity presentation, head shape, nose/eyes/lips/jaw relationships, hairstyle/hairline, braid/cornrow structure when visible and relevant, and overall likeness.
  - Build one consistent 3D head model from all visible face panels: skull shape, forehead, hairline, brow ridge, eye spacing and depth, eye shape, nose bridge, nose slope, nose tip, nose projection, nostrils, cheekbones, nasolabial folds, mouth width, lip shape, jaw angle, chin shape, ears, ear placement, neck, facial hair, skin marks, age, and asymmetry.
  - FRONT output must match the Character Sheet's front face. LEFT and RIGHT profile outputs must match the Character Sheet's side/profile facial geometry when visible.
  - If a side/profile face is not fully visible in the Character Sheet, infer it conservatively from the same skull, nose, jaw, chin, mouth, brow, and ear geometry. Do NOT beautify, idealize, or replace it.
  - Identity accuracy applies inside helmets, masks, and face openings: visible nose, mouth, chin, cheek, brow, eye, ear, jaw, and neck must match the Character Sheet exactly within the costume limits.
  - Do NOT average the Character Sheet with the Subject Reference, Costume Reference, generated LR/FB sheet, or a generic costume wearer. If references conflict, Character Sheet wins for face/head identity.
+ - Apply the wardrobe to this same person. The wardrobe may change; the person must not change.
+ - For turnaround or alternate views, render the same person consistently from the required angle.
  - Camera angle, body angle, lighting, and costume can change. Biometric face/head geometry cannot change.
- - FORBIDDEN: generic male face, different person, idealized face, beautified profile, aged or rejuvenated face, different nose projection, different jawline, different chin, different brow, different eye spacing, different mouth, wrong ear placement, invented profile, face drift between panels.
+ - FORBIDDEN: generic male face, generic fashion model face, different person, identity drift, facial substitution, ethnicity drift, age drift, idealized face, beautified profile, aged or rejuvenated face, hairstyle substitution unless explicitly requested, different nose projection, different jawline, different chin, different brow, different eye spacing, different mouth, wrong ear placement, invented profile, face drift between panels.
 ` : `
  SUBJECT IDENTITY LOCK
- - Preserve the exact visible identity from the Subject Reference. Same person, no generic replacement, no age change, no beautification.
+ - ${subjectImageRole} is the primary identity reference.
+ - Preserve the exact visible identity from the Subject Reference. Same person, no generic replacement, no facial substitution, no ethnicity drift, no age change, no beautification.
  - Camera angle, body angle, lighting, and costume can change. Face/head geometry should not be redesigned.
 `;
 
             let brandingInstruction = "";
             const baseImages: { url: string; label: string }[] = [
                 ...subjectRefs,
-                costumeRef
+                costumeRef,
+                ...(identityAnchorRef ? [identityAnchorRef] : [])
             ];
+            let brandingImageIndex: number | undefined;
 
             if (brandingLogo) {
-                baseImages.push({ url: brandingLogo, label: "Branding Logo" });
+                brandingImageIndex = baseImages.length + 1;
+                baseImages.push({ url: brandingLogo, label: `${imageRoleName(brandingImageIndex)} - Branding Logo` });
                 brandingInstruction = `
  BRANDING & IDENTITY (OVERRIDE)
  - Place the Branding Logo onto the clothing.
@@ -1585,6 +1798,41 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  `;
             }
 
+            const baseImageRoleBlock = buildTryOnReferenceRoleBlock({
+                costumeIndex: costumeImageIndex,
+                identityAnchorIndex: identityAnchorImageIndex,
+                brandingIndex: brandingImageIndex
+            });
+
+            const identityPriorityBlock = tryOnCharacterSheet ? `
+ ABSOLUTE IDENTITY PRIORITY ORDER (HARD)
+ 1. ${identityAnchorImageRole} Character Sheet Identity Anchor: strongest identity authority only.
+ 2. ${subjectImageRole} Selected Subject / try-on target: output subject, body/proportions, pose continuity, and source style.
+ 3. ${costumeImageRole} Costume Reference: wardrobe source only.
+ 4. Styling notes, lighting, and branding.
+ Identity strength does not grant layout authority. Never copy the Character Sheet format into the output.
+ Wardrobe must adapt to the same person. The person must not be replaced to fit the wardrobe.
+ If any wardrobe/style instruction conflicts with identity, preserve identity first while maintaining physically plausible garment coverage.
+` : `
+ ABSOLUTE IDENTITY PRIORITY ORDER
+ 1. ${subjectImageRole} Selected Subject identity and likeness.
+ 2. ${costumeImageRole} Costume Reference as wardrobe source only.
+ 3. Styling notes, lighting, and branding.
+ Wardrobe must adapt to the selected subject. Do not replace the person with a different wearer.
+`;
+
+            const identityAnchorFormatFirewall = tryOnCharacterSheet ? `
+ CHARACTER SHEET FORMAT FIREWALL (NON-NEGOTIABLE)
+ - ${identityAnchorImageRole} is for identity only. It is not the target output format.
+ - Do not output a character sheet.
+ - Do not reproduce the reference sheet format.
+ - Do not include multiple headshot panels.
+ - Do not include labels, callouts, dividers, annotation text, typography, or view names from the identity anchor.
+ - Do not copy the layout of the character sheet.
+ - Do not include labels like FRONT VIEW, LEFT PROFILE VIEW, RIGHT PROFILE VIEW, BACK VIEW, headshot, profile, or any reference-sheet title.
+ - Generate a clean virtual try-on render unless Turnaround is selected.
+` : '';
+
             // FRONT ONLY
             if (requestedTryOnMode === 'front') {
                 console.log('Running FRONT branch');
@@ -1592,7 +1840,12 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                 const res = await GeminiService.generateImage(
                     `Perform a professional virtual try-on and fashion fitting.
 
- === PRIORITY 1: WARDROBE PHYSICAL STRUCTURE ===
+ ${baseImageRoleBlock}
+ ${identityPriorityBlock}
+ ${identityAnchorFormatFirewall}
+ ${resolvedLookContractBlock}
+
+ === PRIORITY 3: WARDROBE PHYSICAL STRUCTURE ===
 
  COSTUME (HARD TRANSFER AUTHORITY)
  - The Costume Reference (${costumeName}) is the absolute authority for the outfit.
@@ -1606,6 +1859,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
  ${fittingBlock}
  ${headwearOrientationBlock}
+ ${accessoryFootwearComplianceBlock}
  - Remove existing clothing/accessories from the subject before fitting the costume.
 
  COLOR & MATERIAL LOCK
@@ -1615,41 +1869,48 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
  FOOTWEAR (CONTEXTUAL MATCH)
  - If the Costume Reference explicitly shows shoes, feet, or foot coverings, copy them exactly.
- - Do NOT invent footwear logic not visible in the Costume Reference.
- - Do NOT expose feet unless explicitly visible in the Costume Reference.
+ - If footwear is not visible in the Costume Reference and the result shows the lower body, infer footwear appropriate to the wardrobe's formality, period, material language, and silhouette.
+ - Do NOT expose bare feet unless the wardrobe concept is explicitly barefoot, beachwear, swimwear, sleepwear, spa, dance/yoga, or otherwise clearly barefoot-appropriate.
 
- === PRIORITY 2: COSTUME-DRIVEN RELIGHTING ===
+ === PRIORITY 4: COSTUME-DRIVEN RELIGHTING ===
 
  ${COSTUME_RELIGHTING_CONTRACT}
 
- === PRIORITY 3: SUBJECT IDENTITY (within costume limits) ===
+ === IDENTITY ENFORCEMENT DURING FITTING ===
 
- SUBJECT (IDENTITY LOCK — SUBORDINATE TO COSTUME STRUCTURE)
- - Use the Subject Reference image(s) to preserve the exact facial identity and likeness of the person.
+ SUBJECT (HARD IDENTITY LOCK - COSTUME MAY ONLY LIMIT VISIBILITY)
+ - Use the named identity reference image(s) to preserve the exact facial identity and likeness of the person.
  - Same face, same person, no morphing, no age change.
  ${identityAnchorBlock}
  - CRITICAL: Identity must be preserved WITHIN the physical limits imposed by the costume.
  - If the costume covers, encloses, or restricts visibility of any body part, identity preservation must NOT cause
    the costume to open, remove, simplify, or expose areas the Costume Reference does not physically allow.
- - The body exists only to support the costume transfer. Do NOT prioritize body contour over costume structure.
+ - The wardrobe adapts to the same person. Do NOT change face, head, skin tone, age, ethnicity presentation, body build, or likeness to fit the garment.
 
- === PRIORITY 4: STYLE & IMAGE QUALITY ===
+ === PRIORITY 5: STYLE & IMAGE QUALITY ===
 
  STYLE MATCH
  - The final rendering style should match the Subject Reference style: ${subjectStyle}.
  - If the Subject Reference is a realistic photograph, render the fitted costume as realistic material with realistic texture and lighting.
+ - Style instructions must not alter identity, face structure, skin tone, age, ethnicity presentation, hairline, or likeness.
 
  COMPOSITION
+ - Output exactly one clean front-facing virtual try-on image of the same person wearing the selected wardrobe.
  - Single subject only. Full body visible. No cropping head/feet.
  - Solid black studio background (#000000), no gradients, no shadows on background.
+ - No character sheet layout, no reference sheet grid, no headshot panels, no labels, no callouts, no dividers, no annotation text.
 
  ${brandingInstruction}
 
  [FITTING NOTES]: ${effectiveTryOnNote}
 
  NEGATIVE CONSTRAINTS:
+ character sheet, reference sheet layout, sheet grid, headshot panels, annotation labels, callouts, dividers, typography, FRONT VIEW label, LEFT PROFILE VIEW label, BACK VIEW label,
  opened costume that should be closed, removed headwear, exposed hair under helmet, widened face opening,
- generic male face, different person, face drift, beautified profile, wrong nose projection, wrong jawline, wrong chin, wrong brow, wrong eye spacing, wrong mouth shape, wrong ear placement,
+ duplicate clutch, duplicate purse, duplicate handbag, duplicate bag, duplicate case, duplicate briefcase, one clutch in both hands, one purse in both hands, duplicated handheld prop, unnecessary extra accessories,
+ inappropriate bare feet, barefoot businesswear, barefoot formalwear, barefoot tailored outfit, barefoot uniform, barefoot armor, missing shoes, missing footwear, unfinished lower-body styling, inappropriate shoes, mismatched footwear,
+ exposed rear necklace when tucked in front, necklace across back of neck when front-tucked, physically impossible accessory visibility, hidden accessory becoming exposed in another view,
+ generic male face, generic fashion model face, different person, identity drift, facial substitution, ethnicity drift, age drift, hairstyle substitution, face drift, beautified profile, wrong nose projection, wrong jawline, wrong chin, wrong brow, wrong eye spacing, wrong mouth shape, wrong ear placement,
  face placed in wrong opening, face placed in decorative cavity, face placed in non-face opening,
  redesigned face hole, widened face window, shrunken face window, moved face window, broken face-window border,
  invented openings, extra cutouts, exposed neck when not shown, exposed wrists when not shown, exposed ankles when not shown, exposed hands when not shown, exposed feet when not shown,
@@ -1717,8 +1978,9 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  - Subtle center divider is allowed; no frames, no collage borders, no extra panels.
  - Same solid black studio background (#000000) and consistent studio lighting in both panels.
  - Full body visible in both panels (no cropping head/feet).
- - FOOTWEAR CONSISTENCY (CRITICAL): The subject must have the EXACT SAME footwear (or lack thereof) in both panels.
+ - FOOTWEAR CONSISTENCY (CRITICAL): The subject must have complete, appropriate, matching footwear or foot coverings in both panels unless the concept is explicitly barefoot-appropriate.
  - No text, no labels, no watermarks.
+ - Do not include the Character Sheet's headshot grid, annotation labels, typography, callouts, title text, or reference sheet layout.
  `;
 
             const lrSheet = await GeminiService.generateImage(
@@ -1726,7 +1988,12 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
  ${twoPanelFormat}
 
- === PRIORITY 1: WARDROBE PHYSICAL STRUCTURE ===
+ ${baseImageRoleBlock}
+ ${identityPriorityBlock}
+ ${identityAnchorFormatFirewall}
+ ${resolvedLookContractBlock}
+
+ === PRIORITY 3: WARDROBE PHYSICAL STRUCTURE ===
 
  COSTUME (HARD TRANSFER AUTHORITY)
  - The Costume Reference (${costumeName}) is the absolute authority for the outfit.
@@ -1742,6 +2009,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
  ${fittingBlock}
  ${headwearOrientationBlock}
+ ${accessoryFootwearComplianceBlock}
 
  COLOR & MATERIAL LOCK
  - Preserve the exact costume colors from the Costume Reference.
@@ -1763,18 +2031,18 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  - A head-only profile is invalid. A front-facing or 3/4 body with the head turned sideways is invalid.
  - Do NOT show broad frontal chest armor, both shoulder pads symmetrically, both arms equally, or front-facing feet.
 
- === PRIORITY 2: COSTUME-DRIVEN RELIGHTING ===
+ === PRIORITY 4: COSTUME-DRIVEN RELIGHTING ===
 
  ${COSTUME_RELIGHTING_CONTRACT}
 
- === PRIORITY 3: SUBJECT IDENTITY (within costume limits) ===
+ === IDENTITY ENFORCEMENT DURING SIDE TURNAROUND ===
 
- SUBJECT (IDENTITY LOCK — SUBORDINATE TO COSTUME STRUCTURE)
- - Use the Subject Reference image(s) to preserve the exact facial identity and likeness.
+ SUBJECT (HARD IDENTITY LOCK - COSTUME MAY ONLY LIMIT VISIBILITY)
+ - Use the named identity reference image(s) to preserve the exact facial identity and likeness.
  - The LEFT and RIGHT panels must depict the SAME person.
  ${identityAnchorBlock}
  - CRITICAL: Identity must be preserved WITHIN the physical limits imposed by the costume.
- - Do NOT let body anatomy or identity preservation override costume structure.
+ - Do NOT let body anatomy or costume pressure replace, genericize, beautify, age-shift, ethnicity-shift, or facially substitute the person.
  ${sourceAppearanceContinuityBlock}
  ${hairConsistencyBlock}
 
@@ -1783,8 +2051,12 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  [FITTING NOTES]: ${effectiveTryOnNote}
 
  NEGATIVE CONSTRAINTS (FORBIDDEN):
+ character sheet, reference sheet layout, sheet grid, headshot panels, annotation labels, callouts, typography, copied identity-anchor layout, extra panels beyond the requested left/right views,
  opened costume that should be closed, removed headwear, exposed hair under helmet, widened face opening,
- generic male face, different person, face drift, beautified profile, wrong nose projection, wrong jawline, wrong chin, wrong brow, wrong eye spacing, wrong mouth shape, wrong ear placement,
+ duplicate clutch, duplicate purse, duplicate handbag, duplicate bag, duplicate case, duplicate briefcase, one clutch in both hands, one purse in both hands, duplicated handheld prop, unnecessary extra accessories,
+ inappropriate bare feet, barefoot businesswear, barefoot formalwear, barefoot tailored outfit, barefoot uniform, barefoot armor, missing shoes, missing footwear, unfinished lower-body styling, inappropriate shoes, mismatched footwear between panels,
+ exposed rear necklace when tucked in front, necklace across back of neck when front-tucked, physically impossible accessory visibility, hidden accessory becoming exposed between panels,
+ generic male face, generic fashion model face, different person, identity drift, facial substitution, ethnicity drift, age drift, hairstyle substitution, face drift, beautified profile, wrong nose projection, wrong jawline, wrong chin, wrong brow, wrong eye spacing, wrong mouth shape, wrong ear placement,
  face placed in wrong opening, face placed in decorative cavity, face placed in non-face opening,
  redesigned face hole, widened face window, shrunken face window, moved face window, broken face-window border,
  extra limbs, duplicate arms, duplicate sleeves, duplicate gloves, extra costume appendages, invented openings, extra cutouts, exposed neck when not shown, exposed wrists when not shown, exposed ankles when not shown, exposed hands when not shown, exposed feet when not shown, anatomy contouring, body-hugging reinterpretation, bodysuit reinterpretation, costume redesign, mascot redesign,
@@ -1806,11 +2078,21 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                 }
             );
 
+            const canonicalLrImageIndex = baseImages.length + 1;
+            const canonicalLrImageRole = imageRoleName(canonicalLrImageIndex);
             const fbImages: { url: string; label: string }[] = [
-                { url: lrSheet, label: "Canonical Left/Right Sheet (3D Headwear and Side Geometry Anchor)" },
-                ...subjectRefs,
-                costumeRef
+                ...baseImages,
+                {
+                    url: lrSheet,
+                    label: `${canonicalLrImageRole} - Generated Left/Right Geometry Continuity Sheet: side costume/headwear geometry only, not identity authority.`
+                }
             ];
+            const fbImageRoleBlock = buildTryOnReferenceRoleBlock({
+                costumeIndex: costumeImageIndex,
+                identityAnchorIndex: identityAnchorImageIndex,
+                brandingIndex: brandingImageIndex,
+                canonicalLrIndex: canonicalLrImageIndex
+            });
 
             const brandingInstructionLR = brandingLogo ? `
  BRANDING & IDENTITY (LOCK)
@@ -1822,13 +2104,18 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
  ${twoPanelFormat}
 
- === PRIORITY 1: WARDROBE PHYSICAL STRUCTURE ===
+ ${fbImageRoleBlock}
+ ${identityPriorityBlock}
+ ${identityAnchorFormatFirewall}
+ ${resolvedLookContractBlock}
+
+ === PRIORITY 3: WARDROBE PHYSICAL STRUCTURE ===
 
  COSTUME & APPEARANCE CANON (ABSOLUTE LOCK)
- - [IMAGE 1] Canonical Left/Right Sheet is the 3D orientation anchor for headwear, plume/crest direction, side volume, footwear, and costume thickness.
+ - ${canonicalLrImageRole} Canonical Left/Right Sheet is the 3D orientation anchor for headwear, plume/crest direction, side volume, footwear, and costume thickness.
  - The Costume Reference (${costumeName}) remains the authority for colors, materials, visible front details, and garment design.
- - Rotate the same established full-body model from [IMAGE 1] into true front and back views.
- - Do NOT copy the side camera angle from [IMAGE 1].
+ - Rotate the same established full-body costume geometry from ${canonicalLrImageRole} into true front and back views, while preserving identity from the Character Sheet/Selected Subject roles above.
+ - Do NOT copy the side camera angle from ${canonicalLrImageRole}.
  - OUTPUT ANGLE OVERRIDE: this sheet is FRONT/BACK only, not side/profile views.
  - These front/back views must depict the same physical garment rotated in 3D space, not reinterpretations or redesigns.
  - Preserve the same costume structure, same visible coverage, same accessories, same hairstyle state, same headwear, same worn adornments, and same footwear across all turnaround views.
@@ -1837,6 +2124,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  ${WEARABLE_FIDELITY_CONTRACT}
  ${headwearOrientationBlock}
  ${fittingBlock}
+ ${accessoryFootwearComplianceBlock}
 
  COLOR & MATERIAL LOCK
  - Preserve the exact costume colors established by the Costume Reference.
@@ -1845,7 +2133,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
  SILHOUETTE & STRUCTURE (STRICT LOCK)
  - FRONT/BACK OVERRIDE: preserve the exact volume, bulk, closure, and external silhouette while rotating into front and rear camera angles.
- - Front/back views must preserve the exact volume, bulk, closure, and external silhouette established by [IMAGE 1] and the Costume Reference.
+ - Front/back views must preserve the exact volume, bulk, closure, and external silhouette established by ${canonicalLrImageRole} and the Costume Reference.
  - Do NOT invent front/back-specific shaping that exposes more anatomy than the Costume Reference implies.
 
  PANELS
@@ -1853,23 +2141,23 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  - RIGHT PANEL: BACK view, straight-on.
 
  STRUCTURE RULE
- - The front and back panels must depict the same exact physical garment from [IMAGE 1] and the Costume Reference.
+ - The front and back panels must depict the same exact physical garment from ${canonicalLrImageRole} and the Costume Reference.
  - Any enclosure or coverage shown in front must remain structurally consistent in back unless the reference explicitly shows otherwise.
  - Do NOT create a back opening or exposed head/neck zone unless explicitly visible in the Costume Reference.
 
- === PRIORITY 2: COSTUME-DRIVEN RELIGHTING ===
+ === PRIORITY 4: COSTUME-DRIVEN RELIGHTING ===
 
  ${COSTUME_RELIGHTING_CONTRACT}
 
- === PRIORITY 3: SUBJECT IDENTITY (within costume limits) ===
+ === IDENTITY ENFORCEMENT DURING FRONT/BACK TURNAROUND ===
 
- SUBJECT IDENTITY (CRITICAL LOCK — SUBORDINATE TO COSTUME STRUCTURE)
+ SUBJECT IDENTITY (HARD LOCK - COSTUME MAY ONLY LIMIT VISIBILITY)
  - The FRONT and BACK panels must depict the exact same person and same worn costume.
  - Preserve face identity and neutral upright posture.
- - Reference images after [IMAGE 1] are for identity, garment detail, and material fidelity only. Do NOT copy their camera angles into the front/back panels.
+ - ${canonicalLrImageRole} is for costume/headwear geometry continuity only. It must not override the Character Sheet or Selected Subject for face/head identity.
  ${identityAnchorBlock}
  - CRITICAL: Identity must be preserved WITHIN the physical limits imposed by the costume.
- - Do NOT let body anatomy or identity preservation override the costume structure established by the Costume Reference.
+ - Do NOT let body anatomy or costume pressure replace, genericize, beautify, age-shift, ethnicity-shift, or facially substitute the person.
  ${sourceAppearanceContinuityBlock}
  ${hairConsistencyBlock}
 
@@ -1878,8 +2166,12 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  [FITTING NOTES]: ${effectiveTryOnNote}
 
  NEGATIVE CONSTRAINTS (FORBIDDEN):
+ character sheet, reference sheet layout, sheet grid, headshot panels, annotation labels, callouts, typography, copied identity-anchor layout, extra panels beyond the requested front/back views,
  opened costume that should be closed, removed headwear, exposed hair under helmet, widened face opening,
- generic male face, different person, face drift, beautified profile, wrong nose projection, wrong jawline, wrong chin, wrong brow, wrong eye spacing, wrong mouth shape, wrong ear placement,
+ duplicate clutch, duplicate purse, duplicate handbag, duplicate bag, duplicate case, duplicate briefcase, one clutch in both hands, one purse in both hands, duplicated handheld prop, unnecessary extra accessories,
+ inappropriate bare feet, barefoot businesswear, barefoot formalwear, barefoot tailored outfit, barefoot uniform, barefoot armor, missing shoes, missing footwear, unfinished lower-body styling, inappropriate shoes, mismatched footwear between panels,
+ exposed rear necklace when tucked in front, necklace across back of neck when front-tucked, physically impossible accessory visibility, hidden accessory becoming exposed between panels,
+ generic male face, generic fashion model face, different person, identity drift, facial substitution, ethnicity drift, age drift, hairstyle substitution, face drift, beautified profile, wrong nose projection, wrong jawline, wrong chin, wrong brow, wrong eye spacing, wrong mouth shape, wrong ear placement,
  face placed in wrong opening, face placed in decorative cavity, face placed in non-face opening,
  redesigned face hole, widened face window, shrunken face window, moved face window, broken face-window border,
  extra limbs, duplicate arms, duplicate sleeves, duplicate gloves, extra costume appendages, invented openings, exposed neck when not shown, exposed wrists when not shown, exposed ankles when not shown,

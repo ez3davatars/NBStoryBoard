@@ -19,6 +19,9 @@ export type RecentGeneration = {
   createdAt: number;
   prompt?: string;
   mode?: 'hosted' | 'byok';
+  displayLabel?: string;
+  generationStatus?: 'preview';
+  featureSource?: 'character_pitch_sheet' | string;
   exported: boolean;
 };
 

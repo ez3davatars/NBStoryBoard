@@ -37,6 +37,7 @@ import type {
     ReferenceSlot,
     RegionEditLayer,
     RegionEditState,
+    RegionSourceImageMeta,
     Shot,
     StageAnnotation,
     StageToken,
@@ -158,6 +159,141 @@ const toFiniteNumber = (value: unknown, fallback: number): number => {
 
 const REGION_EDIT_MAX_EDGE = 2048;
 const REGION_EDIT_MAX_PIXELS = 2048 * 2048;
+
+type RegionEditTargetDimensions = { width: number; height: number };
+
+type ObjectContainRect = {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+};
+
+const getObjectContainRect = (
+    imageWidth: number,
+    imageHeight: number,
+    frameWidth: number,
+    frameHeight: number
+): ObjectContainRect => {
+    const safeImageWidth = Math.max(1, imageWidth);
+    const safeImageHeight = Math.max(1, imageHeight);
+    const safeFrameWidth = Math.max(1, frameWidth);
+    const safeFrameHeight = Math.max(1, frameHeight);
+    const scale = Math.min(safeFrameWidth / safeImageWidth, safeFrameHeight / safeImageHeight);
+    const width = safeImageWidth * scale;
+    const height = safeImageHeight * scale;
+    return {
+        x: (safeFrameWidth - width) / 2,
+        y: (safeFrameHeight - height) / 2,
+        width,
+        height
+    };
+};
+
+const getRegionEditImageSize = (dimensions: RegionEditTargetDimensions): '1K' | '2K' | '4K' => {
+    const longEdge = Math.max(dimensions.width, dimensions.height);
+    if (longEdge > 2048) return '4K';
+    if (longEdge > 1024) return '2K';
+    return '1K';
+};
+
+const normalizeRefName = (value: string): string =>
+    value
+        .toLowerCase()
+        .replace(/\.[a-z0-9]+$/i, '')
+        .replace(/[_-]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+const fileBaseNameFromPath = (value?: string): string | null => {
+    if (!value) return null;
+    if (value.startsWith('data:') || value.startsWith('blob:')) return null;
+    try {
+        const decoded = decodeURIComponent(value);
+        const clean = decoded.split(/[?#]/)[0] || decoded;
+        const parts = clean.split(/[\\/]/).filter(Boolean);
+        return parts[parts.length - 1] || null;
+    } catch {
+        const clean = value.split(/[?#]/)[0] || value;
+        const parts = clean.split(/[\\/]/).filter(Boolean);
+        return parts[parts.length - 1] || null;
+    }
+};
+
+const getReferenceSlotMatchName = (slot: ReferenceSlot, fallbackIndex: number): string =>
+    slot.name ||
+    fileBaseNameFromPath(slot.localPath) ||
+    fileBaseNameFromPath(slot.sourceUrl) ||
+    `Reference ${slot.index || fallbackIndex + 1}`;
+
+const isReplaceInstruction = (instruction: string): boolean =>
+    /\breplace\b/i.test(instruction);
+
+const resolveNamedReferenceFromInstruction = (
+    instruction: string,
+    refs: ReferenceSlot[],
+    selectedRefId?: string
+): ReferenceSlot | null => {
+    const normalizedInstruction = normalizeRefName(instruction);
+    if (!normalizedInstruction) return null;
+
+    const refsWithImages = refs.filter(ref => Boolean(ref.url));
+    const candidates = refsWithImages.map((ref, index) => {
+        const rawName = getReferenceSlotMatchName(ref, index);
+        return {
+            ref,
+            normalizedName: normalizeRefName(rawName),
+            index,
+            isSelected: selectedRefId ? String(ref.index) === selectedRefId : Boolean(ref.active)
+        };
+    }).filter(candidate => candidate.normalizedName.length > 0);
+
+    let matches = candidates.filter(candidate =>
+        normalizedInstruction.includes(candidate.normalizedName)
+    );
+
+    const numberMatch =
+        normalizedInstruction.match(/reference(?:\s+stack)?\s*#?\s*(\d+)/) ||
+        normalizedInstruction.match(/ref\s*#?\s*(\d+)/);
+
+    if (numberMatch) {
+        const requestedNumber = Number(numberMatch[1]);
+        const bySlotIndex = refsWithImages.find(ref => ref.index === requestedNumber);
+        if (bySlotIndex) return bySlotIndex;
+
+        const refIndex = requestedNumber - 1;
+        if (refsWithImages[refIndex]) return refsWithImages[refIndex];
+    }
+
+    if (matches.length === 1) return matches[0].ref;
+
+    if (matches.length > 1) {
+        const selected = matches.find(match => match.isSelected);
+        if (selected) return selected.ref;
+
+        const exactish = matches.find(match => normalizedInstruction === match.normalizedName);
+        if (exactish) return exactish.ref;
+
+        return matches[0].ref;
+    }
+
+    return null;
+};
+
+const buildReplacementSourceInstruction = (
+    instruction: string,
+    referenceLabel: string
+): string => `
+Image A is the direct edit target.
+The edit mask corresponds to Image A.
+Image B is the replacement source asset: ${referenceLabel}.
+Replace only the masked region in Image A using the subject/content from Image B.
+Match perspective, scale, lighting, local realism, and scene context.
+Do not stretch or distort the inserted asset.
+Preserve all unmasked areas of Image A exactly.
+
+Layer instruction: ${instruction}
+`;
 
 // B. Scene Blocking Component
 
@@ -2251,18 +2387,27 @@ Output: environment plate only.
 
     const prepareRegionEditInputs = useCallback(async (
         baseUrl: string,
-        editMaskUrl: string
+        editMaskUrl: string,
+        sourceAuto?: { sourceImageMeta: RegionSourceImageMeta }
     ): Promise<{ baseDataUrl: string; maskDataUrl: string; wasDownscaled: boolean; width: number; height: number; editedPixels: number }> => {
         const baseImg = await loadDataUrlImage(baseUrl);
         const maskImg = await loadDataUrlImage(editMaskUrl);
 
         const baseW = Math.max(1, toFiniteNumber(baseImg.naturalWidth || baseImg.width, 1));
         const baseH = Math.max(1, toFiniteNumber(baseImg.naturalHeight || baseImg.height, 1));
-        const edgeScale = Math.min(1, REGION_EDIT_MAX_EDGE / Math.max(baseW, baseH));
-        const pixelScale = Math.min(1, Math.sqrt(REGION_EDIT_MAX_PIXELS / Math.max(1, baseW * baseH)));
-        const scale = Math.min(edgeScale, pixelScale);
-        const targetW = Math.max(1, Math.round(baseW * scale));
-        const targetH = Math.max(1, Math.round(baseH * scale));
+        const sourceMeta = sourceAuto?.sourceImageMeta;
+        const targetW = sourceMeta
+            ? Math.max(1, Math.round(sourceMeta.derivedRenderWidth))
+            : Math.max(1, Math.round(baseW * Math.min(
+                Math.min(1, REGION_EDIT_MAX_EDGE / Math.max(baseW, baseH)),
+                Math.min(1, Math.sqrt(REGION_EDIT_MAX_PIXELS / Math.max(1, baseW * baseH)))
+            )));
+        const targetH = sourceMeta
+            ? Math.max(1, Math.round(sourceMeta.derivedRenderHeight))
+            : Math.max(1, Math.round(baseH * Math.min(
+                Math.min(1, REGION_EDIT_MAX_EDGE / Math.max(baseW, baseH)),
+                Math.min(1, Math.sqrt(REGION_EDIT_MAX_PIXELS / Math.max(1, baseW * baseH)))
+            )));
 
         const baseCanvas = document.createElement('canvas');
         const maskCanvas = document.createElement('canvas');
@@ -2285,7 +2430,24 @@ Output: environment plate only.
             maskCtx.fillStyle = '#000000';
             maskCtx.fillRect(0, 0, targetW, targetH);
             maskCtx.imageSmoothingEnabled = false;
-            maskCtx.drawImage(maskImg, 0, 0, targetW, targetH);
+            if (sourceMeta) {
+                const maskW = Math.max(1, toFiniteNumber(maskImg.naturalWidth || maskImg.width, 1));
+                const maskH = Math.max(1, toFiniteNumber(maskImg.naturalHeight || maskImg.height, 1));
+                const sourceRect = getObjectContainRect(sourceMeta.width, sourceMeta.height, maskW, maskH);
+                maskCtx.drawImage(
+                    maskImg,
+                    sourceRect.x,
+                    sourceRect.y,
+                    sourceRect.width,
+                    sourceRect.height,
+                    0,
+                    0,
+                    targetW,
+                    targetH
+                );
+            } else {
+                maskCtx.drawImage(maskImg, 0, 0, targetW, targetH);
+            }
 
             const maskData = maskCtx.getImageData(0, 0, targetW, targetH);
             const pixels = maskData.data;
@@ -2309,7 +2471,9 @@ Output: environment plate only.
             return {
                 baseDataUrl: baseCanvas.toDataURL('image/jpeg', 0.92),
                 maskDataUrl: maskCanvas.toDataURL('image/png'),
-                wasDownscaled: scale < 0.999,
+                wasDownscaled: sourceMeta
+                    ? sourceMeta.width !== targetW || sourceMeta.height !== targetH
+                    : targetW !== baseW || targetH !== baseH,
                 width: targetW,
                 height: targetH,
                 editedPixels
@@ -2615,20 +2779,48 @@ Output: environment plate only.
         dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: 5, text: 'Region Edit: Preparing composite state...' } });
         try {
             const editModel = NANO_BANANA_2_IMAGE_MODEL;
+            const sourceAutoMeta =
+                viewMode === 'stage' &&
+                state.backgroundUrl &&
+                regionEdit.contextSizingMode === 'source-auto' &&
+                regionEdit.sourceImageMeta
+                    ? regionEdit.sourceImageMeta
+                    : null;
 
-            const captured = await captureSceneImage();
-            const startingBase = (viewMode === 'result' && state.resultImage) ? state.resultImage : captured;
+            const captured = sourceAutoMeta ? null : await captureSceneImage();
+            const startingBase = sourceAutoMeta && state.backgroundUrl
+                ? state.backgroundUrl
+                : (viewMode === 'result' && state.resultImage)
+                    ? state.resultImage
+                    : captured;
 
             if (!startingBase) {
                 throw new Error('No base image available for region edit.');
             }
 
             let base: string = startingBase;
-            const regionEditImageSize: '1K' | '2K' | '4K' | undefined =
-                state.imageResolution === '4K' ? '2K' : state.imageResolution;
+            const sourceAutoTargetDimensions = sourceAutoMeta
+                ? {
+                    width: sourceAutoMeta.derivedRenderWidth,
+                    height: sourceAutoMeta.derivedRenderHeight
+                }
+                : null;
+            const regionEditImageSize: '1K' | '2K' | '4K' | undefined = sourceAutoTargetDimensions
+                ? getRegionEditImageSize(sourceAutoTargetDimensions)
+                : state.imageResolution === '4K'
+                    ? '2K'
+                    : state.imageResolution;
             let loggedRegionEditDownscale = false;
 
-            if (state.imageResolution === '4K') {
+            if (sourceAutoMeta) {
+                dispatch({
+                    type: 'ADD_LOG',
+                    payload: {
+                        message: `Region Edit source-auto sizing: ${sourceAutoMeta.derivedRenderWidth}x${sourceAutoMeta.derivedRenderHeight}.`,
+                        type: 'info'
+                    }
+                });
+            } else if (state.imageResolution === '4K') {
                 dispatch({
                     type: 'ADD_LOG',
                     payload: {
@@ -2757,7 +2949,11 @@ Output: environment plate only.
 
                 // Get intrinsic dimensions of base to properly align resolution with the mask
                 // This prevents backend mapping failures or letterboxing offsets
-                const preparedEdit = await prepareRegionEditInputs(base, maskToSend);
+                const preparedEdit = await prepareRegionEditInputs(
+                    base,
+                    maskToSend,
+                    sourceAutoMeta ? { sourceImageMeta: sourceAutoMeta } : undefined
+                );
                 if (preparedEdit.wasDownscaled && !loggedRegionEditDownscale) {
                     loggedRegionEditDownscale = true;
                     dispatch({
@@ -2769,16 +2965,40 @@ Output: environment plate only.
                     });
                 }
 
+                const replacementRef = !layer.id.startsWith('intent-') && isReplaceInstruction(promptText)
+                    ? resolveNamedReferenceFromInstruction(promptText, state.referenceSlots)
+                    : null;
+                const replacementRefLabel = replacementRef
+                    ? getReferenceSlotMatchName(replacementRef, Math.max(0, replacementRef.index - 1))
+                    : '';
+                const referenceImages = replacementRef?.url
+                    ? [{ url: replacementRef.url, label: `Image B replacement source asset: ${replacementRefLabel}` }]
+                    : [];
+                const effectivePromptText = replacementRef
+                    ? buildReplacementSourceInstruction(promptText, replacementRefLabel)
+                    : promptText;
+
+                if (replacementRef?.url) {
+                    dispatch({
+                        type: 'ADD_LOG',
+                        payload: {
+                            message: `Replace mode using Reference Stack asset: ${replacementRefLabel}.`,
+                            type: 'info'
+                        }
+                    });
+                }
+
                 base = await GeminiService.editImageWithMask(
                     preparedEdit.baseDataUrl,
                     preparedEdit.maskDataUrl,
-                    promptText,
+                    effectivePromptText,
                     state.apiKey,
                     editModel,
-                    [],
+                    referenceImages,
                     { 
-                        aspectRatio: state.director.aspectRatio,
+                        aspectRatio: sourceAutoTargetDimensions ? undefined : state.director.aspectRatio,
                         imageSize: regionEditImageSize,
+                        targetDimensions: sourceAutoTargetDimensions || undefined,
                         billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', 
                         entitlements: state.billingEntitlements,
                         expectedResponseType: 'image'

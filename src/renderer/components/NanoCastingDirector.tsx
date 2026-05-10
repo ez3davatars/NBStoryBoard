@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { nativeJoinPath, nativeListFiles, nativeReadFile } from '../utils/NativeFileAssets';
 import { nativeSelectFolder } from '../utils/NativeFileAssets';
-import type { CastMember, WardrobeItem } from '../context/AppContext';
+import type { CastMember, PendingPitchSheetHandoff, PendingRefSheetHandoff, WardrobeItem } from '../context/AppContext';
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
 import { resolveDisplayUrl } from '../utils/assetUrlResolver';
@@ -21,6 +21,11 @@ import { createUniqueDownloadFilename } from '../utils/downloadFilenames';
 import HelpTooltip from './ui/HelpTooltip';
 import InlineHint from './ui/InlineHint';
 import ConfirmDialog from './ui/ConfirmDialog';
+import {
+    PROMPT_PRIORITY_ORDER_BLOCK,
+    PROMPT_PRIORITY_ORDER_LABEL,
+    buildAuthoritativeIdentityContract
+} from '../../prompts/identityContracts';
 
 import BodyScopeSelector from './BodyScopeSelector';
 import type { BodyScope } from './BodyScopeSelector';
@@ -68,6 +73,18 @@ import coverComicBook from '../assets/style-comic-book.png';
 import coverCyberpunk from '../assets/style-cyberpunk.png';
 import coverExactStudio from '../assets/style-exact-studio.png';
 
+
+const CHARACTER_PITCH_SHEET_PREVIEW_HELP =
+    "Character Pitch Sheet Preview creates cinematic character design boards from text, portrait, or scan references. Results are active and usable, but exact likeness, body proportions, and panel consistency may vary while this feature is refined.";
+
+const CharacterPitchSheetPreviewPill = () => (
+    <span
+        title={CHARACTER_PITCH_SHEET_PREVIEW_HELP}
+        className="inline-flex items-center justify-center rounded-full border border-blue-400/25 bg-blue-500/10 px-1.5 py-0.5 text-[7px] font-black uppercase leading-none tracking-[0.16em] text-blue-200 shadow-[0_0_8px_rgba(96,165,250,0.14)]"
+    >
+        PREVIEW
+    </span>
+);
 
 
 
@@ -153,23 +170,8 @@ type MorphVariant = 'masc' | 'fem' | 'youth_masc' | 'youth_fem';
 type ReferenceLayout = 'form_focus' | 'face_focus' | 'split_focus';
 type RefSheetStyleId = keyof typeof REF_SHEET_STYLES;
 type BiometricCaptureAngle = 'center' | 'left' | 'right' | 'up' | 'down';
-type NanoPitchSheetHandoff = {
-    source: "nanocast_biometric_scan";
-    createdAt: number;
-    identityImages: Array<{
-        angle: BiometricCaptureAngle;
-        imageUrl: string;
-    }>;
-    identityStrength: number;
-    heightIn?: number;
-    weightLbs?: number;
-    age?: number;
-    hairStyle?: string;
-    outfit?: string;
-    selectedStyle?: string | null;
-    finalCharacterUrl?: string | null;
-    mode: "scan_only" | "scan_plus_character";
-};
+type NanoPitchSheetHandoff = PendingPitchSheetHandoff;
+type NanoRefSheetHandoff = PendingRefSheetHandoff;
 type NanoRefSheetSlotRect = {
     label: string;
     x: number;
@@ -203,6 +205,16 @@ NANOCAST HYBRID SPLIT PROFILE LOCK:
 - LENS 6 = true right profile, nose/snout/faceplate points screen-left.
 - LENS 5 and LENS 6 must not share the same silhouette, crop, rim light, side hardware, collar direction, or muzzle/nose direction.
 - If LENS 5 and LENS 6 could be mistaken for the same side profile, the sheet is invalid.
+`;
+
+const NANOCAST_HEADSHOT_BACKGROUND_ISOLATION_LOCK = `
+HEADSHOT / REFERENCE PORTRAIT BACKGROUND ISOLATION LOCK:
+Use the uploaded portrait only as an identity reference for the subject's face, head shape, hairline, age, skin tone, and facial proportions. Do not copy or preserve the uploaded portrait's background. Fully isolate the head/face from the source image and place all reference headshots on the clean neutral studio background used by this character sheet. No rooms, doors, walls, furniture, windows, home interiors, source-photo lighting environments, or background objects may appear in any headshot panel.
+- This also applies to uploaded/captured scan references: use them for face/head identity only, never as an environment or lighting/background reference.
+- Preserve facial identity, head shape, hairline, expression neutrality, skin tone, and angle accuracy while replacing any source-photo environment with the sheet's clean studio/neutral background.
+
+HEADSHOT BACKGROUND NEGATIVE EXCLUSIONS:
+Exclude source image background, bedroom, hallway, door frame, wall corner, window, furniture, home interior, office background, uneven source lighting, cropped room details, original photo environment.
 `;
 
 const BIOMETRIC_CAPTURE_TONES: Record<BiometricCaptureAngle, { notes: number[]; accent: number; duration: number }> = {
@@ -273,6 +285,24 @@ const REF_LAYOUT_OPTIONS: Array<{ id: ReferenceLayout; label: string }> = [
 
 const REF_SHEET_STYLE_IDS = Object.keys(REF_SHEET_STYLES) as RefSheetStyleId[];
 const isRefSheetStyleId = (value: string): value is RefSheetStyleId => REF_SHEET_STYLE_IDS.includes(value as RefSheetStyleId);
+
+const formatIdentityAnchorAngle = (angle: string | undefined, fallbackIndex: number): string => {
+    switch ((angle || '').toLowerCase()) {
+        case 'center':
+        case 'front':
+            return 'Front';
+        case 'left':
+            return 'Left Profile';
+        case 'right':
+            return 'Right Profile';
+        case 'up':
+            return 'Upward Angle';
+        case 'down':
+            return 'Downward Angle';
+        default:
+            return `Angle ${fallbackIndex + 1}`;
+    }
+};
 
 const formatHeight = (inches: number) => {
     const ft = Math.floor(inches / 12);
@@ -972,6 +1002,7 @@ const NanoCastingDirector = () => {
     }, [selectedStyle]);
 
     const [identitySource, setIdentitySource] = useState<'hybrid' | 'biometric' | 'generated'>('hybrid');
+    const [refSheetIdentityAnchors, setRefSheetIdentityAnchors] = useState<NanoRefSheetHandoff['identityImages'] | null>(null);
     // sheetContent is now derived from refLayout (face_focus = head, others = full)
     // Numeric body controls (more precise than categorical presets)
     const [weightLbs, setWeightLbs] = useState<number>(170); // 90–300
@@ -2082,7 +2113,8 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                 mode: handoffMode
             };
 
-            localStorage.setItem("portrait_pitchsheet_handoff", JSON.stringify(payload));
+            localStorage.removeItem("portrait_pitchsheet_handoff");
+            dispatch({ type: 'SET_PENDING_PITCH_SHEET_HANDOFF', payload });
             dispatch({ type: 'SET_VIEW', payload: 'portrait' });
             dispatch({
                 type: 'ADD_LOG',
@@ -2221,19 +2253,17 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
 
     // Consumes handoffs from PortraitStudio Send To Ref Sheet
     useEffect(() => {
-        const raw = localStorage.getItem("nano_refsheet_handoff");
-        if (!raw) return;
-
-        try {
-            const payload = JSON.parse(raw);
-
+        const consumeHandoff = (payload: NanoRefSheetHandoff, fromLegacyStorage: boolean) => {
             if (!payload?.imageUrl) return;
 
+            const identityAnchors = (payload.identityImages || []).filter(anchor => Boolean(anchor.imageUrl));
+
             setFinalCharacterUrl(payload.imageUrl);
+            setRefSheetIdentityAnchors(identityAnchors.length ? identityAnchors : null);
             setPhase(5);
             setShowSettings(true);
             setSidebarMode("director");
-            setIdentitySource("generated"); // This is the Portrait mode in the advanced panel
+            setIdentitySource("generated"); // Keeps the existing UI mode while preserving hidden original anchors when supplied.
 
             if (typeof payload.weightLbs === "number") {
                 setWeightLbs(payload.weightLbs);
@@ -2255,17 +2285,39 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                 dispatch({ type: 'SET_LAST_CASTED_PROMPT', payload: payload.compiledPrompt });
             }
 
-            localStorage.removeItem("nano_refsheet_handoff");
+            if (fromLegacyStorage) {
+                localStorage.removeItem("nano_refsheet_handoff");
+            } else {
+                dispatch({ type: 'CLEAR_PENDING_REF_SHEET_HANDOFF' });
+                localStorage.removeItem("nano_refsheet_handoff");
+            }
+
+            if (import.meta.env.DEV) {
+                console.info("[IdentityAnchor] refSheetHandoffIdentityAnchors:", identityAnchors.length);
+                console.info("[IdentityAnchor] generatedSheetRole:", payload.generatedSheetRole || "identity_fallback");
+            }
 
             dispatch({
                 type: 'ADD_LOG',
                 payload: { message: "Portrait Ref Sheet handoff loaded into NanoCast", type: 'success' }
             });
+        };
+
+        if (state.pendingRefSheetHandoff) {
+            consumeHandoff(state.pendingRefSheetHandoff, false);
+            return;
+        }
+
+        const raw = localStorage.getItem("nano_refsheet_handoff");
+        if (!raw) return;
+
+        try {
+            consumeHandoff(JSON.parse(raw) as NanoRefSheetHandoff, true);
         } catch (e) {
             console.error("Failed to load nano_refsheet_handoff", e);
             localStorage.removeItem("nano_refsheet_handoff");
         }
-    }, [dispatch]);
+    }, [dispatch, state.pendingRefSheetHandoff]);
 
     const generateLocalBiometricSheet = async () => {
         dispatch({ type: 'SET_PROCESSING', payload: true });
@@ -2532,29 +2584,53 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
 
             // 1. PREPARE IMAGE REFERENCES FIRST
             const imageRefs: { url: string; label: string }[] = [];
+            const handoffIdentityAnchors = (refSheetIdentityAnchors || []).filter(anchor => Boolean(anchor.imageUrl));
+            const usesCapturedBiometricAnchors = identitySource === 'biometric';
+            const usesHandoffBiometricAnchors = !usesCapturedBiometricAnchors && handoffIdentityAnchors.length > 0;
+            const hasAuthoritativeBiometricAnchors = usesCapturedBiometricAnchors || usesHandoffBiometricAnchors;
+            let generatedLayoutRefIndex = -1;
 
-            // A. Biometric or Portrait Refs
-            if (identitySource === 'biometric') {
+            // A. Identity refs. Original biometric images are permanent identity anchors.
+            // Generated sheets, previews, and styled outputs must never replace these anchors.
+            // Style is allowed to change presentation only; it cannot override identity.
+            if (usesCapturedBiometricAnchors) {
                 const angles: (keyof typeof capturedAngles)[] = ['center', 'left', 'right', 'up', 'down'];
                 for (const angle of angles) {
                     const blobUrl = capturedAngles[angle];
                     if (blobUrl) {
                         const b64 = await getBase64FromBlobUrl(blobUrl);
-                        imageRefs.push({ url: b64, label: `Reference: ${angle}` });
+                        imageRefs.push({ url: b64, label: `Original Actor Likeness Anchor: ${formatIdentityAnchorAngle(angle, imageRefs.length)}` });
                     }
+                }
+            } else if (usesHandoffBiometricAnchors) {
+                for (const anchor of handoffIdentityAnchors) {
+                    const identityUrl = anchor.imageUrl.startsWith('blob:')
+                        ? await getBase64FromBlobUrl(anchor.imageUrl)
+                        : anchor.imageUrl;
+                    imageRefs.push({
+                        url: identityUrl,
+                        label: `Original Actor Likeness Anchor: ${formatIdentityAnchorAngle(anchor.angle, imageRefs.length)}`
+                    });
+                }
+
+                if (finalCharacterUrl) {
+                    imageRefs.push({ url: finalCharacterUrl, label: 'Generated Sheet Layout and Costume Guide Only - Not Actor Likeness' });
+                    generatedLayoutRefIndex = imageRefs.length;
                 }
             } else {
                 imageRefs.push({ url: finalCharacterUrl!, label: 'Character Reference' });
             }
 
-            // Capture the count of biometric/identity images BEFORE adding the logo
-            const identityRefLimit = imageRefs.length;
+            // Count only true identity refs; layout-only/generated refs may be attached but must not expand the identity authority range.
+            const identityRefLimit = hasAuthoritativeBiometricAnchors
+                ? imageRefs.filter(ref => ref.label.startsWith('Original Actor Likeness Anchor')).length
+                : imageRefs.length;
 
             // CRITICAL VALIDATION: Ensure we actually have identity images
             if (identitySource === 'biometric' && identityRefLimit === 0) {
                 throw new Error("No biometric scans found. Please re-scan logic.");
             }
-            if (identitySource === 'generated' && identityRefLimit === 0) {
+            if (identitySource !== 'biometric' && identityRefLimit === 0) {
                 throw new Error("No portrait found. Please generate a portrait first.");
             }
 
@@ -2577,7 +2653,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
             // 2. SANITIZE KEYWORDS
             const getSafeKeywords = (style: string, originalKeywords: string) => {
                 let safe = originalKeywords;
-                if (identitySource === 'biometric') {
+                if (hasAuthoritativeBiometricAnchors) {
                     if (style === 'family_3d' || style === 'pixar') {
                         safe = safe.replace(/Disney-Pixar/gi, 'High-End 3D Render').replace(/expressive features,?/gi, '').replace(/exaggerated,?/gi, '').replace(/cartoon proportions,?/gi, '');
                     }
@@ -2600,34 +2676,49 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
             const safeKeywords = getSafeKeywords(targetStyleKey, styleConfig.keywords);
 
             // 3. PROMPT CONSTRUCTION
-            const isPortraitLockedSheet = identitySource !== 'biometric' && Boolean(finalCharacterUrl);
+            const hasGeneratedSheetLayoutReference = generatedLayoutRefIndex > 0;
+            const isPortraitLockedSheet = identitySource !== 'biometric' && Boolean(finalCharacterUrl) && !hasAuthoritativeBiometricAnchors;
             const allowTypedOutfitOverride =
-                identitySource === 'biometric' &&
+                hasAuthoritativeBiometricAnchors &&
                 !selectedWardrobeItem &&
+                !hasGeneratedSheetLayoutReference &&
                 !!directorControls.outfit?.trim();
             const allowHairOverride =
-                identitySource === 'biometric' &&
+                hasAuthoritativeBiometricAnchors &&
                 !!directorControls.hairStyle?.trim();
             
             const wardrobeMode = isPortraitLockedSheet
                 ? 'portrait_lock'
                 : selectedWardrobeItem
                     ? 'wardrobe_asset'
-                    : allowTypedOutfitOverride
-                        ? 'typed_outfit'
-                        : 'none';
+                    : hasGeneratedSheetLayoutReference
+                        ? 'generated_layout_reference'
+                        : allowTypedOutfitOverride
+                            ? 'typed_outfit'
+                            : 'none';
 
             const effectiveStylization = directorControls.stylization;
             const styleNote = "";
             let effectiveIdentityStrength = directorControls.identityStrength;
 
-            if (identitySource === 'biometric') {
+            if (hasAuthoritativeBiometricAnchors) {
                 // FORCE MAX IDENTITY for Biometric Scans
                 effectiveIdentityStrength = 100;
                 // Note: We removed the "Safety Clamp". Now we trust the Qualitative Tiers to handle high stylization without identity drift.
             }
 
             let finalPrompt = "";
+            finalPrompt += `${PROMPT_PRIORITY_ORDER_BLOCK}\n\n`;
+            finalPrompt += buildAuthoritativeIdentityContract({
+                sourceDescription: hasAuthoritativeBiometricAnchors
+                    ? "the original multi-view biometric source image set"
+                    : "the current approved portrait/reference image",
+                identityRangeText,
+                generatedLayoutReferenceText: hasGeneratedSheetLayoutReference
+                    ? `[IMAGE ${generatedLayoutRefIndex}] can guide board composition, presentation, lighting, and approved costume continuity only`
+                    : undefined
+            });
+            finalPrompt += `\n\n`;
 
             if (isPortraitLockedSheet) {
                 finalPrompt += `PORTRAIT AUTHORITY BLOCK (ABSOLUTE HIGHEST PRIORITY):\n`;
@@ -2642,6 +2733,8 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
             // 0. GLOBAL LAYOUT (MUST BE FIRST)
             finalPrompt += `REFERENCE SHEET BACKGROUND PROTOCOL:\n`;
             finalPrompt += "Background must be a SOLID BLACK STUDIO BACKDROP. No maps, no text, no scenery, no patterns.\n\n";
+            finalPrompt += NANOCAST_HEADSHOT_BACKGROUND_ISOLATION_LOCK;
+            finalPrompt += `\n`;
 
             finalPrompt += `LAYOUT & COMPOSITION PROTOCOL (AGGRESSIVE ENFORCEMENT):\n`;
             finalPrompt += `1. VARIATION LOCK: Every panel MUST show a unique viewpoint. NO DUPLICATE ANGLES.\n`;
@@ -2686,10 +2779,11 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                 finalPrompt += NANOCAST_HYBRID_PROFILE_SLOT_LOCK;
             }
 
-            if (identitySource !== 'biometric') {
+            if (!hasAuthoritativeBiometricAnchors) {
                 finalPrompt += `GENERATE CHARACTER REFERENCE SHEET:\n`;
                 finalPrompt += `Reference: Use [IMAGE 1] as the COMPLETE character authority.\n`;
                 finalPrompt += `IDENTITY LOCK: Preserve the exact face, skull shape, facial proportions, skin tone, hair, facial hair, and grooming from [IMAGE 1].\n`;
+                finalPrompt += `BACKGROUND EXCLUSION: [IMAGE 1] is not a background, room, lighting, or environment authority. Head panels must isolate the face/head identity and use the clean studio sheet background only.\n`;
                 finalPrompt += `WARDROBE LOCK: Preserve the exact wardrobe from [IMAGE 1], including clothing design, silhouette, colors, materials, seams, collar shape, sleeve shape, layering, visible accessories, and branding placement.\n`;
                 finalPrompt += `This is a turnaround/reference-sheet expansion of the existing approved portrait in [IMAGE 1]. It is NOT a redesign.\n`;
                 finalPrompt += `Every panel must read as the SAME approved character already shown in [IMAGE 1], merely rotated into new technical reference angles.\n`;
@@ -2697,6 +2791,13 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
             } else {
                 // BIOMETRIC IDENTITY STRENGTH INJECTION
                 finalPrompt += `IDENTITY WEIGHT: ${effectiveIdentityStrength}% (CRITICAL).\n`;
+            }
+
+            if (hasGeneratedSheetLayoutReference) {
+                finalPrompt += `GENERATED SHEET GUIDANCE:\n`;
+                finalPrompt += `[IMAGE ${generatedLayoutRefIndex}] is a layout, presentation, and approved costume-continuity guide only.\n`;
+                finalPrompt += `Do not use [IMAGE ${generatedLayoutRefIndex}] as the face, head, skull, age, skin tone, or identity authority. Identity comes only from ${identityRangeText}.\n`;
+                finalPrompt += `Use [IMAGE ${generatedLayoutRefIndex}] to preserve the pitch sheet's wardrobe silhouette, costume colors, material logic, panel feel, and board presentation when they do not conflict with the original identity anchors.\n\n`;
             }
 
             // --- B. COSTUME / WARDROBE ---
@@ -2707,11 +2808,11 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                 finalPrompt += `1. EXACT REPLICATION: You must strictly replicate the neckline, bust cut, collar structure, sleeves, fabric texture, drapery, colors, embroidery, and stylistic details of this exact garment.\n`;
                 finalPrompt += `2. NO RE-DESIGN: Do not reinterpret, lower, or reimagine the cut of the dress or suit. It is not an inspiration; it is the final approved technical asset.\n`;
                 finalPrompt += `3. FIT TO CHARACTER: The clothing should naturally fit the character's body type while maintaining its original geometry and structural cut exactly.\n`;
-                finalPrompt += `4. CLEAN SLATE: Completely replace whatever the character is wearing in [IMAGE 1] with the garment from [IMAGE ${wardrobeRefIndex}].\n\n`;
+                finalPrompt += `4. CLEAN SLATE: Completely replace whatever the character is wearing in ${identityRangeText} with the garment from [IMAGE ${wardrobeRefIndex}].\n\n`;
 
-                if (identitySource === 'biometric') {
+                if (hasAuthoritativeBiometricAnchors) {
                     finalPrompt += `RE-ASSERTING IDENTITY LOCK:\n`;
-                    finalPrompt += `The FACE in ALL views must be a PIXEL-PERFECT MATCH to [IMAGE 1]. Same person, same likeness, no morphing.\n\n`;
+                    finalPrompt += `The FACE in ALL views must match ${identityRangeText}. Same person, same likeness, no morphing.\n\n`;
                 }
             } else if (wardrobeMode === 'portrait_lock') {
                 finalPrompt += `WARDROBE LOCK (MAXIMUM PRIORITY):\n`;
@@ -2724,6 +2825,11 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
 
                 finalPrompt += `STYLE APPLICATION RULE:\n`;
                 finalPrompt += `The selected style may affect rendering treatment, lighting, and material response, but it must NOT change the approved wardrobe design from [IMAGE 1].\n\n`;
+            } else if (wardrobeMode === 'generated_layout_reference' && hasGeneratedSheetLayoutReference) {
+                finalPrompt += `WARDROBE CONTINUITY FROM GENERATED SHEET:\n`;
+                finalPrompt += `Use the costume and board presentation visible in [IMAGE ${generatedLayoutRefIndex}] as continuity guidance only.\n`;
+                finalPrompt += `Preserve the approved wardrobe silhouette, colors, materials, layering, accessories, footwear, and prop placement from [IMAGE ${generatedLayoutRefIndex}] while keeping identity locked to ${identityRangeText}.\n`;
+                finalPrompt += `Do not copy a different face from [IMAGE ${generatedLayoutRefIndex}]. Do not let its style treatment change facial structure or body proportions.\n\n`;
             } else if (wardrobeMode === 'typed_outfit') {
                 finalPrompt += `COSTUME DIRECTIVE (ABSOLUTE OVERRIDE):\n`;
                 finalPrompt += `0. THE CHARACTER MUST WEAR: ${directorControls.outfit}.\n`;
@@ -2753,7 +2859,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
 
 
 
-            if (identitySource === 'biometric') {
+            if (hasAuthoritativeBiometricAnchors) {
                 if (isPhotoMode) {
                     promptStyleLabel = "Photorealistic Source (8k Photography)";
                 }
@@ -2767,14 +2873,14 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
             finalPrompt += `STYLE PROTOCOL: ${promptStyleLabel}\n`;
             finalPrompt += `Keywords: ${promptKeywords}\n`;
 
-            if (isRealisticMode && identitySource === 'biometric') {
+            if (isRealisticMode && hasAuthoritativeBiometricAnchors) {
                 if (isPhotoMode) {
                     finalPrompt += `Stylization Intensity: 0% (Biometric Lock)\n`;
                 } else {
                     // Unlock for CG Mode to allow stylized rendering
                     finalPrompt += `Stylization Intensity: ${effectiveStylization}%\n`;
                     finalPrompt += `STYLIZATION SCOPE: Apply style to MATERIAL, SHADER, LIGHTING, and TEXTURE only.\n`;
-                    finalPrompt += `GEOMETRY LOCK: The 3D Mesh of the face must be an EXACT topological match to [IMAGE 1]. Do not deform features for 'appeal'.\n`;
+                    finalPrompt += `GEOMETRY LOCK: The 3D Mesh of the face must be an exact topological match to ${identityRangeText}. Do not deform features for 'appeal'.\n`;
                 }
 
                 if (isPhotoMode) {
@@ -2805,40 +2911,41 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                 finalPrompt += `Stylization Intensity: ${effectiveStylization}%${styleNote}.\n\n`;
             }
 
-            if (identitySource === 'biometric') {
+            if (hasAuthoritativeBiometricAnchors) {
                 finalPrompt += `ADVANCED BODY MORPHOLOGY (NON-DESTRUCTIVE):\n`;
                 finalPrompt += `Target Height: ${formatHeight(heightIn)}\n`;
                 const promptWeight = Math.round(weightLbs / 5) * 5;
                 finalPrompt += `Target Mass: ${promptWeight} lbs\n`;
-                finalPrompt += `INSTRUCTION: Adjust the BODY MASS index to match ${promptWeight} lbs, but MAINTAIN THE EXACT CRANIAL STRUCTURE of [IMAGE 1].\n`;
+                finalPrompt += `INSTRUCTION: Adjust the BODY MASS index to match ${promptWeight} lbs, but MAINTAIN THE EXACT CRANIAL STRUCTURE from ${identityRangeText}.\n`;
                 finalPrompt += `Do not generate a generic 'heavy' or 'thin' face. Apply weight naturally to the body, neck, and jawline, but keep the eyes, nose, and mouth spacing IDENTICAL to the source.\n\n`;
             }
 
 
 
-            if (identitySource === 'biometric') {
+            if (hasAuthoritativeBiometricAnchors) {
                 // --- A. IDENTITY LOCK (MOVED TO END FOR PRIORITY) ---
                 finalPrompt += `FINAL IMAGE MASTERY: IDENTITY OVERRIDE (MAXIMUM PRIORITY):\n`;
 
                 const isRealistic = ['premium_cg', 'exact_studio'].includes(targetStyleKey);
                 if (isRealistic) {
-                    finalPrompt += `FINAL INSTRUCTION: The face in ALL views must be a PIXEL-PERFECT IDENTITY LIKENESS to [IMAGE 1]. PRESERVE FACIAL GEOMETRY ABOVE ALL ELSE.\n`;
-                    finalPrompt += `CRITICAL ROTATION OVERRIDE: While the identity must match, YOU MUST NOT COPY THE CAMERA ANGLE OF [IMAGE 1]. You MUST dynamically rotate the character's head and body in 3D space to precisely match the required LENS angle (Profile, 3/4, Back, etc) for each individual panel.\n`;
+                    finalPrompt += `FINAL INSTRUCTION: The face in ALL views must be a pixel-perfect identity likeness to ${identityRangeText}. PRESERVE FACIAL GEOMETRY ABOVE ALL ELSE.\n`;
+                    finalPrompt += `CRITICAL ROTATION OVERRIDE: While the identity must match, YOU MUST NOT COPY THE CAMERA ANGLE OF ${identityRangeText}. You MUST dynamically rotate the character's head and body in 3D space to precisely match the required LENS angle (Profile, 3/4, Back, etc) for each individual panel.\n`;
                     if (allowHairOverride) {
-                        finalPrompt += `GROOMING OVERRIDE: Apply the hairstyle "${directorControls.hairStyle}". Preserve facial hair from [IMAGE 1] but override head hair.\n`;
+                        finalPrompt += `GROOMING OVERRIDE: Apply the hairstyle "${directorControls.hairStyle}". Preserve facial hair from ${identityRangeText} but override head hair.\n`;
                     } else {
-                        finalPrompt += `GROOMING LOCK: The Hairstyle (or lack thereof) and Facial Hair must match [IMAGE 1] exactly. IMPORTANT: If the subject is BALD in [IMAGE 1], they MUST BE BALD in the output. Do not add hair. Do not change the beard style.\n`;
+                        finalPrompt += `GROOMING LOCK: The Hairstyle (or lack thereof) and Facial Hair must match ${identityRangeText} exactly. IMPORTANT: If the subject is bald in ${identityRangeText}, they MUST BE BALD in the output. Do not add hair. Do not change the beard style.\n`;
                     }
-                    finalPrompt += `TEXTURE PROJECTION: Treat [IMAGE 1] as the SOURCE TEXTURE MAP. Project the exact features (Eyes, Nose, Mouth, Skin Details) onto the model. Do not use a fallback generic face.\n`;
+                    finalPrompt += `TEXTURE PROJECTION: Treat ${identityRangeText} as the source texture map. Project the exact features (eyes, nose, mouth, skin details) onto the model. Do not use a fallback generic face.\n`;
 
                     finalPrompt += `MODE: MULTI-ANGLE IDENTITY REPLICATION. Ignore style-based facial adjustments. Pure Biometric fidelity required, but fully rotated per lens.\n`;
                     finalPrompt += `STYLIZATION SCOPE: The chosen Stylization Intensity (${effectiveStylization}%) applies ONLY to Lighting, Skin Texture Resolution, and Render Quality. It matches the *fidelity* of the style. It applies 0% deviation to the Identity/Geometry.\n`;
                 } else {
                     // STYLIZED: Allow caricature but prioritize recognition
-                    finalPrompt += `FINAL INSTRUCTION: HARMONIOUSLY ADAPT the face shape, eyes, and nose to match the [Style] aesthetic. The goal is a STYLIZED LIKENESS that resembles [IMAGE 1]. Adapt the proportions (e.g. Larger Eyes, Softer Jaw) but PRESERVE THE IDENTITY FEATURES (Nose shape, Jawline, Eye Color).\n`;
+                    finalPrompt += `FINAL INSTRUCTION: HARMONIOUSLY ADAPT the face shape, eyes, and nose to match the [Style] aesthetic. The goal is a stylized likeness that resembles ${identityRangeText}. Adapt surface language but PRESERVE IDENTITY FEATURES (nose shape, jawline, eye color, brow shape, eye spacing, hairline, age impression).\n`;
                 }
 
-                finalPrompt += `Use ${identityRangeText} as the source for the character's SKINTONE, FACE, and HAIR ONLY. IGNORE clothing and shoulders in [IMAGE 1].\n`;
+                finalPrompt += `Use ${identityRangeText} as the source for the character's skin tone, face, and hair only. Ignore clothing and shoulders in identity captures.\n`;
+                finalPrompt += `BACKGROUND EXCLUSION: Use ${identityRangeText} only for face/head identity extraction. Do not preserve or recreate the capture background, room, walls, doors, windows, furniture, or source lighting in any head panel.\n`;
                 if (directorControls.outfit) {
                     finalPrompt += `HEADSHOT WARDROBE LOCK: Even in extreme close-up or headshot views, the visible collar and shoulders MUST be the ${directorControls.outfit}. Do not use the clothing from the identity scan.\n`;
                 }
@@ -2846,13 +2953,14 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                 if (isRealistic) {
                     finalPrompt += `Primary Directive: Exact match of facial hair (beard/mustache/stubble) and grooming from ${identityRangeText}. Do NOT add hair that is not there.\n`;
                 } else {
-                    finalPrompt += `Reference [IMAGE 1] for key features (Facial Hair, Hair Color, Eye Color). Simplify the *Skin Shading* only. DO NOT SIMPLIFY THE COSTUME DETAILS. The outfit must remain highly detailed and accurate to the reference.\n`;
+                    finalPrompt += `Reference ${identityRangeText} for key features (facial hair, hair color, eye color, brow shape, nose shape, jawline). Simplify the skin shading only. DO NOT SIMPLIFY THE COSTUME DETAILS. The outfit must remain highly detailed and accurate to the reference.\n`;
                 }
             }
 
             // --- E. NEGATIVES ---
             finalPrompt += `\nNEGATIVE CONSTRAINTS:\n`;
             finalPrompt += `different person, face swap, identity replacement, recast identity, portrait mismatch, approved portrait ignored, generic face, younger face, idealized face, video game protagonist hallucination, generic action hero, muscular replacing overweight, slenderized body, idealized 3D template, stylized-hero hallucination, generic cartoon structure, altered skull, incorrect profile, inconsistent nose projection, inconsistent jawline, inconsistent ear placement, inconsistent beard silhouette, inconsistent hairline, off-model panels, panel-to-panel face drift, restyled face that changes identity, generic profile, beautified profile, style-averaged face, new character per panel, duplicate angle, repeated yaw bucket, near-identical head panel, second left profile, second near-left 3/4, profile replaced by 3/4, frontal drifting to 3/4, upward tilt with side yaw, downward tilt with side yaw, costume reinterpretation, branding loss, missing logo when visible, relocated logo, replaced logo, incorrect logo placement, stylized logo hallucination, shader inconsistency, mismatched stylization, unintended realism increase, realistic turnaround drift, photographic drift, raw DSLR look in premium CG, studio headshot photography in premium CG, documentary photo realism in premium CG, flattened CGI treatment, missing CGI shader response, missing subsurface scattering, missing rendered-digital-double look, technical identity-sheet realism, right-panel realism drift, closeup realism drift, flattened stylization, weak cyberpunk treatment, generic neutral studio lighting, missing neon rim light, missing teal/magenta separation, loss of futuristic render mood, inconsistent cyberpunk intensity across panels, dramatic hero panel with neutral supporting panels, neutral turnaround row, flat profile panels, uneven theatrical treatment, loss of animated eye language, loss of softened facial planes, loss of stylized nose treatment, mismatch between body-panel style and headshot-panel style, squeezed torso, narrow 3/4 body, narrow back view, stretched body, compressed body, body mass ignored, inconsistent shoulder width, inconsistent pelvis width, inconsistent limb thickness, different body mass across turnaround panels, mismatched full-body silhouette, unnatural neck twist, owl turn, over-rotated head, visible face in true back view, cheating face visibility in rear panel, head misaligned with torso, extra people, text, watermarks, scenery, maps, landscape, background graphics.\n`;
+            finalPrompt += `source image background, bedroom, hallway, door frame, wall corner, window, furniture, home interior, office background, uneven source lighting, cropped room details, original photo environment, source-photo room in headshot, copied portrait background.\n`;
             finalPrompt += `cropped legs, cut off feet, cowboy shot, 3/4 shot, knees up, waist up, torso only, close up body, cropped head.\n`;
             if (directorControls.outfit) {
                 finalPrompt += `EXTREMELY IMPORTANT: DO NOT COPY THE CLOTHING FROM THE SOURCE IMAGES. DO NOT RENDER THE ORIGINAL ATTIRE.\n`;
@@ -2860,7 +2968,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
             if (wardrobeMode === 'portrait_lock') {
                 finalPrompt += `portrait wardrobe drift, generic outfit replacement, tunic, robe, cloak, fantasy robe, biblical robe, peasant clothing, costume substitution, alternate wardrobe, stylized costume swap, random garment generation, clothing simplification, outfit redesign, changed silhouette, changed fabric, changed neckline, changed sleeves, changed layering, missing hoodie, missing shirt, missing pants, missing footwear, portrait outfit ignored.\n`;
             }
-            if (identitySource === 'biometric') {
+            if (hasAuthoritativeBiometricAnchors) {
                 finalPrompt += `generic face, random person, default avatar, face swap, extra people, text, watermarks, maps.\n`;
                 if (['premium_cg', 'exact_studio'].includes(targetStyleKey)) {
                     // REALISTIC: Ban caricature
@@ -2875,6 +2983,19 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
             }
             if (selectedWardrobeItem) {
                 finalPrompt += `face from costume image, identity from costume image, person from wardrobe ref, mixed identity, source photo clothing, mismatching clothes, casual clothes, t-shirt, polo shirt.\n`;
+            }
+
+            if (import.meta.env.DEV) {
+                console.info("[IdentityAnchor] biometricSources:", identityRefLimit);
+                console.info("[IdentityAnchor] generatedSheetUsedAsIdentity:", identitySource !== 'biometric' && !hasAuthoritativeBiometricAnchors);
+                console.info("[IdentityAnchor] generatedSheetUsedAsLayoutReference:", hasGeneratedSheetLayoutReference);
+                console.info("[PromptPriority]", PROMPT_PRIORITY_ORDER_LABEL);
+                console.info("[IdentityAnchor] renderStyle:", targetStyleKey, "boardStyle:", refLayout);
+                console.info("[IdentityAnchor] referenceSources:", imageRefs.map((ref, index) => ({
+                    index: index + 1,
+                    label: ref.label,
+                    sourceType: index < identityRefLimit ? "identity_anchor" : ref.label.includes("Guide Only") ? "layout_reference" : "support_reference"
+                })));
             }
 
             let res = null;
@@ -3055,6 +3176,7 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
 
         // Clear persistence
         dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: null });
+        setRefSheetIdentityAnchors(null);
         setFinalCharacterUrl(null);
         setPhase(1);
 
@@ -3794,8 +3916,10 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                             disabled={!capturedAngles.center || !capturedAngles.left || !capturedAngles.right || isProcessing}
                                             onClick={() => void sendBiometricScanToPitchSheet("scan_only")}
                                             className="w-full py-4 bg-yellow-500/10 hover:bg-yellow-500/20 text-yellow-500 border border-yellow-500/30 hover:border-yellow-500/60 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                            title={CHARACTER_PITCH_SHEET_PREVIEW_HELP}
                                         >
                                             <LayoutTemplate className="w-4 h-4" /> Build Pitch Sheet From Scan
+                                            <CharacterPitchSheetPreviewPill />
                                         </button>
 
                                         {finalCharacterUrl && (
@@ -3803,8 +3927,10 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                                 disabled={!capturedAngles.center || !capturedAngles.left || !capturedAngles.right || isProcessing}
                                                 onClick={() => void sendBiometricScanToPitchSheet("scan_plus_character")}
                                                 className="w-full py-4 bg-accent/10 hover:bg-accent/20 text-accent border border-accent/30 hover:border-accent/60 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                                title={CHARACTER_PITCH_SHEET_PREVIEW_HELP}
                                             >
                                                 <Sparkles className="w-4 h-4" /> Build Pitch Sheet From Scan + Character
+                                                <CharacterPitchSheetPreviewPill />
                                             </button>
                                         )}
 
@@ -4242,6 +4368,7 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                                 setRefSheetUrl(gen.displayUrl);
                                                 setShowRefSheet(true);
                                             } else {
+                                                setRefSheetIdentityAnchors(null);
                                                 setFinalCharacterUrl(gen.displayUrl);
                                             }
                                         }}
@@ -4250,6 +4377,7 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                                 setRefSheetUrl(gen.displayUrl);
                                                 handleOpenSaveModal('ref_sheet', gen.displayUrl, gen.id);
                                             } else {
+                                                setRefSheetIdentityAnchors(null);
                                                 setFinalCharacterUrl(gen.displayUrl);
                                                 handleOpenSaveModal('actor', gen.displayUrl, gen.id);
                                             }
@@ -4449,18 +4577,22 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                                         onClick={() => void sendBiometricScanToPitchSheet("scan_only")}
                                                         disabled={isProcessing}
                                                         className="w-full py-3 bg-yellow-500/10 hover:bg-yellow-500/20 text-yellow-500 border border-yellow-500/30 text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                                        title={CHARACTER_PITCH_SHEET_PREVIEW_HELP}
                                                     >
                                                         <LayoutTemplate className="w-3 h-3" />
                                                         Build Pitch Sheet From Scan
+                                                        <CharacterPitchSheetPreviewPill />
                                                     </button>
                                                     {finalCharacterUrl && (
                                                         <button
                                                             onClick={() => void sendBiometricScanToPitchSheet("scan_plus_character")}
                                                             disabled={isProcessing}
                                                             className="w-full py-3 bg-accent/10 hover:bg-accent/20 text-accent border border-accent/30 text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                                            title={CHARACTER_PITCH_SHEET_PREVIEW_HELP}
                                                         >
                                                             <Sparkles className="w-3 h-3" />
                                                             Build Pitch Sheet From Scan + Character
+                                                            <CharacterPitchSheetPreviewPill />
                                                         </button>
                                                     )}
                                                 </div>

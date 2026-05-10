@@ -12,6 +12,8 @@ const CREDIT_CHECKOUT_UNAVAILABLE_MESSAGE =
   'Credit checkout is temporarily unavailable. Please try again or contact support.';
 const CHECKOUT_UNAVAILABLE_MESSAGE =
   'Checkout is temporarily unavailable. Please try again or contact support.';
+const DUPLICATE_BYOK_PURCHASE_MESSAGE =
+  'You already have access to this BYOK license. Switch to BYOK mode, or add credits to keep generating in Hosted mode.';
 
 const isCreditPackCheckout = (productKey: BillingProductKey): boolean =>
   productKey.startsWith('credit_pack_');
@@ -164,6 +166,11 @@ export const InsufficientCreditModal = () => {
         console.error('Checkout response missing url', checkoutErrorDetails);
       } else {
         console.error('Checkout failed', checkoutErrorDetails);
+      }
+
+      if (getCheckoutResponseField(responseBody, 'code') === 'DUPLICATE_PURCHASE') {
+        setCheckoutError(DUPLICATE_BYOK_PURCHASE_MESSAGE);
+        return;
       }
 
       const isAuthFailure =

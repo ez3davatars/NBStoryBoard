@@ -90,6 +90,17 @@ type HostedBillingMetadata = {
   creditPricingVersion: typeof CREDIT_PRICING_VERSION;
 };
 
+type HostedCreditPreflightResult = {
+  billingMetadata: HostedBillingMetadata;
+  verified: boolean;
+};
+
+type HostedInsufficientCreditsResponse = {
+  code?: unknown;
+  requiredCredits?: unknown;
+  currentCredits?: unknown;
+};
+
 type SharedGenerationOptions = {
   billingMode?: BillingMode;
   entitlements?: GenerationEntitlements;
@@ -186,6 +197,27 @@ const buildHostedBillingMetadata = (
     requiredCredits,
     creditPricingVersion: CREDIT_PRICING_VERSION
   };
+};
+
+const dispatchInsufficientHostedCredits = (
+  details: InsufficientCreditModalState
+) => {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(INSUFFICIENT_HOSTED_CREDITS_EVENT, { detail: details }));
+  }
+};
+
+const isHostedInsufficientCreditsResponse = (
+  value: unknown
+): value is HostedInsufficientCreditsResponse =>
+  Boolean(value && typeof value === 'object' && (value as HostedInsufficientCreditsResponse).code === 'INSUFFICIENT_CREDITS');
+
+const tryParseJson = (text: string): unknown => {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
 };
 
 export const GeminiService = {
@@ -389,18 +421,27 @@ export const GeminiService = {
   async _assertHostedCreditsAvailable(
     requestBody: Record<string, unknown>,
     options: HostedExecutionOptions = {}
-  ): Promise<HostedBillingMetadata> {
+  ): Promise<HostedCreditPreflightResult> {
     const billingMetadata = buildHostedBillingMetadata(requestBody, options);
-    if (!supabase) return billingMetadata;
+    if (!supabase) return { billingMetadata, verified: false };
 
     const userObj = await supabase.auth.getUser();
     const userId = userObj.data?.user?.id;
-    if (!userId) return billingMetadata;
+    if (!userId) return { billingMetadata, verified: false };
 
     const currentCredits = await SupabaseAuth.fetchHostedCredits(userId);
-    if (currentCredits === null) return billingMetadata;
+    if (currentCredits === null) return { billingMetadata, verified: false };
 
-    if (billingMetadata.requiredCredits > currentCredits) {
+    const hasEnoughCredits = currentCredits >= billingMetadata.requiredCredits;
+    console.log("[Credit Preflight]", {
+      currentCredits,
+      requiredCredits: billingMetadata.requiredCredits,
+      hasEnoughCredits,
+      generationType: billingMetadata.generationType,
+      resolution: billingMetadata.resolutionTier
+    });
+
+    if (!hasEnoughCredits) {
       const details: InsufficientCreditModalState = {
         requiredCredits: billingMetadata.requiredCredits,
         currentCredits,
@@ -410,20 +451,19 @@ export const GeminiService = {
         openedAt: Date.now()
       };
 
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent(INSUFFICIENT_HOSTED_CREDITS_EVENT, { detail: details }));
-      }
-
+      console.log("[Credit Preflight] blocked before debit");
+      dispatchInsufficientHostedCredits(details);
       throw new InsufficientHostedCreditsError(details);
     }
 
-    return billingMetadata;
+    return { billingMetadata, verified: true };
   },
 
   async _executeHostedRequest(
     model: string,
     requestBody: Record<string, unknown>,
-    options: HostedExecutionOptions = {}
+    options: HostedExecutionOptions = {},
+    preflightMetadata?: HostedBillingMetadata
   ): Promise<string> {
     const electronApi = (window as Window & { electronAPI?: ElectronApiWithWorkerStatus }).electronAPI;
     if (electronApi && typeof electronApi.getWorkerStatus === 'function') {
@@ -436,7 +476,7 @@ export const GeminiService = {
     const token = await SupabaseAuth.getValidJwt();
     const idempotencyKey = "batch_" + Date.now() + "_" + Math.floor(Math.random() * 1000);
 
-    const billingMetadata = buildHostedBillingMetadata(requestBody, options);
+    const billingMetadata = preflightMetadata ?? buildHostedBillingMetadata(requestBody, options);
     const payloadBodyForEdge = {
       model,
       requestBody,
@@ -459,7 +499,9 @@ export const GeminiService = {
       throw new Error('Hosted Execution Error: Missing or malformed user JWT');
     }
 
-    await GeminiService._assertHostedCreditsAvailable(requestBody, options);
+    if (!preflightMetadata) {
+      await GeminiService._assertHostedCreditsAvailable(requestBody, options);
+    }
 
     const edgeUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-image`;
     const rawResponse = await fetch(edgeUrl, {
@@ -555,6 +597,23 @@ export const GeminiService = {
     }
 
     if (!rawResponse.ok) {
+      const parsedResponse = tryParseJson(responseText);
+      if (rawResponse.status === 402 && isHostedInsufficientCreditsResponse(parsedResponse)) {
+        const requiredCredits = Number(parsedResponse.requiredCredits ?? billingMetadata.requiredCredits);
+        const currentCredits = Number(parsedResponse.currentCredits ?? 0);
+        const details: InsufficientCreditModalState = {
+          requiredCredits: Number.isFinite(requiredCredits) && requiredCredits > 0
+            ? requiredCredits
+            : billingMetadata.requiredCredits,
+          currentCredits: Number.isFinite(currentCredits) ? currentCredits : 0,
+          imageSize: getHostedRequestImageSize(requestBody, options.imageSize),
+          resolutionTier: billingMetadata.resolutionTier,
+          renderType: billingMetadata.generationType,
+          openedAt: Date.now()
+        };
+        dispatchInsufficientHostedCredits(details);
+        throw new InsufficientHostedCreditsError(details);
+      }
       throw new Error(`generate-image ${rawResponse.status}: ${responseText}`);
     }
 
@@ -571,6 +630,7 @@ export const GeminiService = {
     options: { aspectRatio?: string, imageSize?: HostedImageSize, creditRenderType?: HostedCreditRenderType, thinkingLevel?: boolean | 'minimal' | 'low' | 'medium' | 'high', googleGrounding?: boolean, strictMode?: boolean, billingMode?: BillingMode, entitlements?: GenerationEntitlements, onJobAccepted?: (generationId: string, acceptedAt?: number) => void, uiWaitWindowMs?: number } = {}
   ): Promise<string> {
     const effectiveModel = normalizeImageGenerationModel(model);
+    let hostedPreflightMetadata: HostedBillingMetadata | undefined;
 
     // --- API ACCESS LAYER ---
     // All features are available in both Hosted and BYOK. The only difference is API prerequisites.
@@ -608,6 +668,9 @@ export const GeminiService = {
          if (host_uid === 'anon') {
              throw new Error("Authentication required: You must be logged into a valid Supabase session to use Hosted Mode uploads.");
          }
+
+         const hostedPreflight = await GeminiService._assertHostedCreditsAvailable({}, options);
+         hostedPreflightMetadata = hostedPreflight.verified ? hostedPreflight.billingMetadata : undefined;
       }
 
       // Inject references first
@@ -767,7 +830,7 @@ export const GeminiService = {
         requestBody.generationConfig.thinkingConfig = thinkingConfig;
       }
       if (options.billingMode === 'hosted') {
-        return await GeminiService._executeHostedRequest(effectiveModel, requestBody, options);
+        return await GeminiService._executeHostedRequest(effectiveModel, requestBody, options, hostedPreflightMetadata);
       }
       // ===============================================
 
@@ -1050,14 +1113,17 @@ export const GeminiService = {
     apiKey: string | null | undefined,
     model: string,
     referenceImages: { url: string; label: string }[] = [],
-    options: { aspectRatio?: string, imageSize?: HostedImageSize, creditRenderType?: HostedCreditRenderType, billingMode?: BillingMode, entitlements?: GenerationEntitlements, expectedResponseType?: 'image' } = {}
+    options: { aspectRatio?: string, imageSize?: HostedImageSize, creditRenderType?: HostedCreditRenderType, billingMode?: BillingMode, entitlements?: GenerationEntitlements, expectedResponseType?: 'image', targetDimensions?: { width: number; height: number } } = {}
   ): Promise<string> {
     if (!apiKey && options.billingMode !== 'hosted') throw new Error("No API Key provided.");
     const effectiveKey = options.billingMode === 'hosted' ? 'HOSTED_MODE' : (apiKey || '');
     const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+    const resolveMaxSize = options.targetDimensions
+      ? Math.max(2048, Math.min(4096, Math.max(options.targetDimensions.width, options.targetDimensions.height)))
+      : 2048;
 
-    const base = await GeminiService._resolveImageData(baseImageUrl, 2048);
-    const mask = await GeminiService._resolveImageData(maskDataUrl, 2048, { preservePng: true });
+    const base = await GeminiService._resolveImageData(baseImageUrl, resolveMaxSize);
+    const mask = await GeminiService._resolveImageData(maskDataUrl, resolveMaxSize, { preservePng: true });
 
     const parts: GeminiPart[] = [];
 
@@ -1068,12 +1134,16 @@ export const GeminiService = {
     // 2) Optional reference images
     for (const ref of referenceImages) {
       const r = await GeminiService._resolveImageData(ref.url);
+      parts.push({ text: `[REFERENCE SOURCE] ${ref.label}` });
       parts.push({ inlineData: { mimeType: r.mimeType, data: r.data } });
-      parts.push({ text: `[REF] ${ref.label}` });
     }
 
     // 3) Instruction prompt
-    const ar = options.aspectRatio ? `Target aspect ratio: ${options.aspectRatio}.` : '';
+    const targetDimensionInstruction = options.targetDimensions
+      ? `Target output dimensions: ${options.targetDimensions.width} x ${options.targetDimensions.height}. Preserve this exact source aspect ratio.`
+      : options.aspectRatio
+        ? `Target aspect ratio: ${options.aspectRatio}.`
+        : 'Preserve the source image dimensions and aspect ratio.';
     parts.push({
       text: `
 You are a precision image editor.
@@ -1089,7 +1159,7 @@ Perform the requested edit ONLY inside the white region.
 Preserve all black-region pixels exactly.
 
 Instruction: ${instruction}
-${ar}
+${targetDimensionInstruction}
 
 Hard constraints:
 - Remove only the targeted non-anatomical object or material inside the white region.
@@ -1111,15 +1181,19 @@ Hard constraints:
     else if (finalAspectRatio === "3:2") finalAspectRatio = "4:3";
     else if (finalAspectRatio === "21:9") finalAspectRatio = "16:9";
 
+    const imageConfig = options.targetDimensions
+      ? undefined
+      : {
+          aspectRatio: finalAspectRatio,
+          ...(options.imageSize && { imageSize: options.imageSize })
+        };
+
     const requestBody = {
         contents: [{ parts }],
         generationConfig: {
             responseModalities: ["IMAGE"],
             candidateCount: 1,
-            imageConfig: {
-                aspectRatio: finalAspectRatio,
-                ...(options.imageSize && { imageSize: options.imageSize })
-            },
+            ...(imageConfig && { imageConfig }),
             temperature: 0.2
         }
     };

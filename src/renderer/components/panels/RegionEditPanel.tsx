@@ -59,6 +59,15 @@ export const RegionEditPanel = ({
  const layers = regionEdit?.layers || [];
  const activeLayer = layers.find(l => l.id === regionEdit?.activeLayerId);
  const hasApiAccess = !!apiKey || billingMode === 'hosted';
+ const sourceImageMeta = regionEdit?.sourceImageMeta;
+ const showSourceAuto =
+ regionEdit?.contextSizingMode === 'source-auto' && Boolean(sourceImageMeta);
+ const sourceAutoLabel = sourceImageMeta
+ ? sourceImageMeta.width === sourceImageMeta.derivedRenderWidth &&
+ sourceImageMeta.height === sourceImageMeta.derivedRenderHeight
+ ? `Source Matched: ${sourceImageMeta.derivedRenderWidth} x ${sourceImageMeta.derivedRenderHeight}`
+ : `Auto: ${sourceImageMeta.derivedRenderWidth} x ${sourceImageMeta.derivedRenderHeight}`
+ : '';
 
  return (
  <SidebarPanel
@@ -118,6 +127,12 @@ export const RegionEditPanel = ({
  Erase
  </button>
  </div>
+
+ {showSourceAuto && (
+ <div className="mb-3 rounded border border-cyan-500/20 bg-cyan-500/10 px-2 py-1.5 text-[9px] font-bold uppercase tracking-wider text-cyan-200">
+ {sourceAutoLabel}
+ </div>
+ )}
 
  {/* Layer list */}
  <div className="space-y-2 mb-3">

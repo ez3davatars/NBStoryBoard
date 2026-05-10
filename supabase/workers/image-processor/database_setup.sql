@@ -5,7 +5,25 @@ ALTER TABLE public.generations ADD COLUMN IF NOT EXISTS request_payload jsonb;
 ALTER TABLE public.generations ADD COLUMN IF NOT EXISTS provider_model text;
 ALTER TABLE public.generations ADD COLUMN IF NOT EXISTS timing_metrics jsonb DEFAULT '{}'::jsonb;
 ALTER TABLE public.generations ADD COLUMN IF NOT EXISTS billing_metadata jsonb DEFAULT '{}'::jsonb;
+ALTER TABLE public.generations ADD COLUMN IF NOT EXISTS request_idempotency_key text;
+ALTER TABLE public.generations ADD COLUMN IF NOT EXISTS request_fingerprint text;
+ALTER TABLE public.generations ADD COLUMN IF NOT EXISTS generation_type text;
+ALTER TABLE public.generations ADD COLUMN IF NOT EXISTS cost numeric DEFAULT 0;
+ALTER TABLE public.generations ADD COLUMN IF NOT EXISTS is_byok boolean DEFAULT false;
+ALTER TABLE public.generations ADD COLUMN IF NOT EXISTS provider text;
+ALTER TABLE public.generations ADD COLUMN IF NOT EXISTS asset_url text;
+ALTER TABLE public.generations ADD COLUMN IF NOT EXISTS asset_storage_path text;
+ALTER TABLE public.generations ADD COLUMN IF NOT EXISTS provider_request_id text;
+ALTER TABLE public.generations ADD COLUMN IF NOT EXISTS asset_expires_at timestamptz;
+ALTER TABLE public.generations ADD COLUMN IF NOT EXISTS failure_code text;
+ALTER TABLE public.generations ADD COLUMN IF NOT EXISTS error_message text;
+ALTER TABLE public.generations ADD COLUMN IF NOT EXISTS completed_at timestamptz;
+ALTER TABLE public.generations ADD COLUMN IF NOT EXISTS failed_at timestamptz;
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS credit_ledger_reset_at timestamptz;
+
+CREATE UNIQUE INDEX IF NOT EXISTS generations_user_idempotency_key_idx
+ON public.generations (user_id, request_idempotency_key)
+WHERE request_idempotency_key IS NOT NULL;
 
 -- Track Stripe Checkout top-ups so replayed webhook events cannot add credits
 -- more than once. Credit packs are independent from BYOK/license entitlements.
@@ -139,6 +157,200 @@ BEGIN
     FOR UPDATE SKIP LOCKED
   )
   RETURNING generations.id, generations.provider_model, generations.request_payload;
+END;
+$$;
+
+-- Atomically create or replay a hosted generation job.
+-- For hosted credit jobs this either debits the full required cost or rejects
+-- without changing the user's profile balance. It must never partially debit.
+CREATE OR REPLACE FUNCTION public.start_generation(
+  p_user_id uuid,
+  p_request_idempotency_key text,
+  p_request_fingerprint text,
+  p_generation_type text,
+  p_cost numeric,
+  p_is_byok boolean,
+  p_provider text,
+  p_provider_model text
+)
+RETURNS public.generations
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  existing_job public.generations%ROWTYPE;
+  created_job public.generations%ROWTYPE;
+  current_balance numeric;
+BEGIN
+  IF p_user_id IS NULL THEN
+    RAISE EXCEPTION 'user_id is required';
+  END IF;
+
+  IF p_request_idempotency_key IS NULL OR length(trim(p_request_idempotency_key)) = 0 THEN
+    RAISE EXCEPTION 'request idempotency key is required';
+  END IF;
+
+  IF p_request_fingerprint IS NULL OR length(trim(p_request_fingerprint)) = 0 THEN
+    RAISE EXCEPTION 'request fingerprint is required';
+  END IF;
+
+  IF p_cost IS NULL OR p_cost < 0 THEN
+    RAISE EXCEPTION 'generation cost must be zero or greater';
+  END IF;
+
+  SELECT g.*
+  INTO existing_job
+  FROM public.generations g
+  WHERE g.user_id = p_user_id
+    AND g.request_idempotency_key = p_request_idempotency_key
+  FOR UPDATE;
+
+  IF FOUND THEN
+    RETURN existing_job;
+  END IF;
+
+  IF NOT COALESCE(p_is_byok, false) AND p_cost > 0 THEN
+    UPDATE public.profiles p
+    SET credit_balance = COALESCE(p.credit_balance, 0) - p_cost
+    WHERE p.id = p_user_id
+      AND COALESCE(p.credit_balance, 0) >= p_cost
+    RETURNING p.credit_balance::numeric INTO current_balance;
+
+    IF NOT FOUND THEN
+      SELECT COALESCE(p.credit_balance, 0)::numeric
+      INTO current_balance
+      FROM public.profiles p
+      WHERE p.id = p_user_id;
+
+      IF current_balance IS NULL THEN
+        RAISE EXCEPTION 'profile not found for user_id: %', p_user_id;
+      END IF;
+
+      RAISE EXCEPTION 'insufficient credits: required %, current %', p_cost, current_balance;
+    END IF;
+  ELSE
+    PERFORM 1 FROM public.profiles p WHERE p.id = p_user_id;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'profile not found for user_id: %', p_user_id;
+    END IF;
+  END IF;
+
+  INSERT INTO public.generations (
+    user_id,
+    request_idempotency_key,
+    request_fingerprint,
+    generation_type,
+    cost,
+    is_byok,
+    provider,
+    provider_model,
+    status
+  )
+  VALUES (
+    p_user_id,
+    p_request_idempotency_key,
+    p_request_fingerprint,
+    p_generation_type,
+    p_cost,
+    COALESCE(p_is_byok, false),
+    p_provider,
+    p_provider_model,
+    'PENDING'
+  )
+  RETURNING * INTO created_job;
+
+  RETURN created_job;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.fail_generation(
+  p_generation_id uuid,
+  p_failure_code text,
+  p_error_message text
+)
+RETURNS public.generations
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  target_job public.generations%ROWTYPE;
+  updated_job public.generations%ROWTYPE;
+  should_refund boolean := false;
+BEGIN
+  SELECT g.*
+  INTO target_job
+  FROM public.generations g
+  WHERE g.id = p_generation_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'generation not found: %', p_generation_id;
+  END IF;
+
+  should_refund :=
+    target_job.status IN ('PENDING', 'PROCESSING')
+    AND NOT COALESCE(target_job.is_byok, false)
+    AND COALESCE(target_job.cost, 0) > 0;
+
+  UPDATE public.generations g
+  SET
+    status = 'FAILED',
+    failure_code = p_failure_code,
+    error_message = p_error_message,
+    failed_at = COALESCE(g.failed_at, now()),
+    timing_metrics = COALESCE(g.timing_metrics, '{}'::jsonb) || jsonb_build_object(
+      'error_message', p_error_message,
+      'failure_code', p_failure_code
+    )
+  WHERE g.id = p_generation_id
+  RETURNING * INTO updated_job;
+
+  IF should_refund THEN
+    UPDATE public.profiles p
+    SET credit_balance = COALESCE(p.credit_balance, 0) + COALESCE(target_job.cost, 0)
+    WHERE p.id = target_job.user_id;
+  END IF;
+
+  RETURN updated_job;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.complete_generation(
+  p_generation_id uuid,
+  p_asset_url text,
+  p_asset_storage_path text,
+  p_provider_request_id text,
+  p_asset_expires_at timestamptz
+)
+RETURNS public.generations
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  updated_job public.generations%ROWTYPE;
+BEGIN
+  UPDATE public.generations g
+  SET
+    status = 'COMPLETED',
+    asset_url = p_asset_url,
+    asset_storage_path = p_asset_storage_path,
+    provider_request_id = p_provider_request_id,
+    asset_expires_at = p_asset_expires_at,
+    completed_at = now(),
+    error_message = NULL,
+    failure_code = NULL
+  WHERE g.id = p_generation_id
+    AND g.status IN ('PENDING', 'PROCESSING')
+  RETURNING * INTO updated_job;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'generation not found or not completable: %', p_generation_id;
+  END IF;
+
+  RETURN updated_job;
 END;
 $$;
 

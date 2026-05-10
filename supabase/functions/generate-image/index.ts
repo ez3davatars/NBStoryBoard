@@ -53,12 +53,14 @@ const normalizeHostedProviderModel = (model: string): string =>
 class HttpError extends Error {
   status: number;
   code: string;
+  details?: Record<string, unknown>;
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, details?: Record<string, unknown>) {
     super(message);
     this.name = 'HttpError';
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -71,6 +73,19 @@ const withTimeout = <T>(promise: Promise<T>, ms: number, name: string): Promise<
 
 const isObjectRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const isGenerationJob = (value: unknown): value is GenerationJob => {
+  if (!isObjectRecord(value)) return false;
+  return typeof value.id === 'string'
+    && typeof value.request_fingerprint === 'string'
+    && typeof value.status === 'string';
+};
+
+const readGenerationJob = (value: unknown): GenerationJob | null => {
+  if (isGenerationJob(value)) return value;
+  if (Array.isArray(value) && isGenerationJob(value[0])) return value[0];
+  return null;
+};
 
 const normalizeGenerationType = (value: unknown): GenerationType => {
   if (value === undefined || value === null || value === '') return 'standard';
@@ -166,6 +181,32 @@ const readHostedCreditMetadata = (body: GenerateImageRequestBody) => {
   };
 };
 
+const readHostedCreditBalance = async (
+  supabaseService: ReturnType<typeof createClient>,
+  userId: string
+): Promise<number> => {
+  const { data: profileData, error: profileErr } = await withTimeout(
+    supabaseService
+      .from('profiles')
+      .select('credit_balance')
+      .eq('id', userId)
+      .single(),
+    10000,
+    'profiles.credit_balance'
+  );
+
+  if (profileErr) {
+    throw new Error(`Could not validate hosted credit balance: ${profileErr.message}`);
+  }
+
+  const currentCredits = Number(profileData?.credit_balance ?? 0);
+  if (!Number.isFinite(currentCredits)) {
+    throw new Error('Could not validate hosted credit balance: credit_balance is not numeric.');
+  }
+
+  return currentCredits;
+};
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     const requestedHeaders = req.headers.get('Access-Control-Request-Headers');
@@ -176,6 +217,10 @@ serve(async (req) => {
         } 
     });
   }
+
+  let supabaseServiceForFailure: ReturnType<typeof createClient> | null = null;
+  let startedGenerationId: string | null = null;
+  let generationAccepted = false;
 
   try {
     const authHeader = req.headers.get('Authorization');
@@ -224,6 +269,7 @@ serve(async (req) => {
 
     // Service client ONLY
     const supabaseService = createClient(supabaseUrl, supabaseServerKey);
+    supabaseServiceForFailure = supabaseService;
     
     const userId = userData.user.id;
 
@@ -236,31 +282,17 @@ serve(async (req) => {
     const providerModel = normalizeHostedProviderModel(payload.model);
 
     const creditMetadata = readHostedCreditMetadata(requestBody);
-
-    const { data: profileData, error: profileErr } = await withTimeout(
-      supabaseService
-        .from('profiles')
-        .select('credit_balance')
-        .eq('id', userId)
-        .single(),
-      10000,
-      'profiles.credit_balance'
-    );
-
-    if (profileErr) {
-      throw new Error(`Could not validate hosted credit balance: ${profileErr.message}`);
-    }
-
-    const currentCredits = Number(profileData?.credit_balance ?? 0);
-    if (!Number.isFinite(currentCredits)) {
-      throw new Error('Could not validate hosted credit balance: credit_balance is not numeric.');
-    }
+    let currentCredits = await readHostedCreditBalance(supabaseService, userId);
 
     if (currentCredits < creditMetadata.requiredCredits) {
       throw new HttpError(
         402,
         'INSUFFICIENT_CREDITS',
-        `Insufficient hosted credits: this render needs ${creditMetadata.requiredCredits}, current balance is ${currentCredits}.`
+        `Insufficient hosted credits: this render needs ${creditMetadata.requiredCredits}, current balance is ${currentCredits}.`,
+        {
+          requiredCredits: creditMetadata.requiredCredits,
+          currentCredits
+        }
       );
     }
     
@@ -284,12 +316,22 @@ serve(async (req) => {
 
     if (startErr) {
       if (/insufficient|credit/i.test(startErr.message)) {
-        throw new HttpError(402, 'INSUFFICIENT_CREDITS', `start_generation rejected hosted credits: ${startErr.message}`);
+        currentCredits = await readHostedCreditBalance(supabaseService, userId);
+        throw new HttpError(
+          402,
+          'INSUFFICIENT_CREDITS',
+          `start_generation rejected hosted credits: ${startErr.message}`,
+          {
+            requiredCredits: creditMetadata.requiredCredits,
+            currentCredits
+          }
+        );
       }
       throw new Error(`start_generation failed: ${startErr.message}`);
     }
-    const job = jobData as GenerationJob | null;
+    const job = readGenerationJob(jobData);
     if (!job) throw new Error("start_generation returned no job");
+    startedGenerationId = job.id;
 
     // 2. Ownership & Replay Check
     if (job.request_fingerprint !== executionFingerprint) {
@@ -341,6 +383,7 @@ serve(async (req) => {
     }
 
     // 4. Return instant HTTP 202 
+    generationAccepted = true;
     return new Response(JSON.stringify({ generationId: job.id, status: 'PENDING', acceptedAt: Date.now() }), {
         status: 202,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
@@ -350,6 +393,18 @@ serve(async (req) => {
     const errMessage = err instanceof Error ? err.message : String(err);
     const errStack = err instanceof Error ? err.stack : undefined;
     console.error("Generate Image Orchestration Error:", errMessage, errStack);
+
+    if (startedGenerationId && !generationAccepted && supabaseServiceForFailure) {
+      const { error: failErr } = await supabaseServiceForFailure.rpc('fail_generation', {
+        p_generation_id: startedGenerationId,
+        p_failure_code: 'INTERNAL_ERROR',
+        p_error_message: `generate-image enqueue failed before provider call: ${errMessage}`
+      });
+
+      if (failErr) {
+        console.error('CRITICAL: fail_generation refund after enqueue failure failed', failErr);
+      }
+    }
     
     let status = 500;
     let publicMessage = 'Generation request failed';
@@ -380,7 +435,13 @@ serve(async (req) => {
     }
 
     // fail_generation relies on generation payload isolation
-    return new Response(JSON.stringify({ error: publicMessage, code }), {
+    const errorBody = {
+      error: publicMessage,
+      code,
+      ...(err instanceof HttpError ? err.details ?? {} : {})
+    };
+
+    return new Response(JSON.stringify(errorBody), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       status,
     });

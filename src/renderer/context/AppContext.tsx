@@ -61,6 +61,8 @@ export interface WhitelistProfile {
     wardrobe: string;
     accessories: string;
     style: string;
+    generationStatus?: 'preview';
+    featureSource?: 'character_pitch_sheet' | string;
 }
 
 export interface CastMember {
@@ -311,6 +313,16 @@ export interface RegionEditLayer {
 
 }
 
+export type RegionContextSizingMode = 'manual' | 'source-auto';
+
+export interface RegionSourceImageMeta {
+    width: number;
+    height: number;
+    derivedRenderWidth: number;
+    derivedRenderHeight: number;
+    aspectRatio: number;
+}
+
 export interface RegionEditState {
     isMaskMode: boolean;
     mode: RegionEditMode;
@@ -318,6 +330,8 @@ export interface RegionEditState {
     brushSoftness: number;
     activeLayerId: RegionLayerId;
     layers: RegionEditLayer[];
+    sourceImageMeta?: RegionSourceImageMeta;
+    contextSizingMode?: RegionContextSizingMode;
 
     // Protection mask: white = protected (do not edit)
     protectEnabled: boolean;
@@ -420,6 +434,43 @@ export type LiveStatusMessage = {
   text: string;
   type: 'info' | 'success' | 'error';
   createdAt: number;
+};
+
+export type PitchSheetHandoffAngle = 'center' | 'left' | 'right' | 'up' | 'down';
+
+export type PendingPitchSheetHandoff = {
+    source: 'nanocast_biometric_scan';
+    createdAt: number;
+    identityImages: Array<{
+        angle: PitchSheetHandoffAngle;
+        imageUrl: string;
+    }>;
+    identityStrength: number;
+    heightIn?: number;
+    weightLbs?: number;
+    age?: number;
+    hairStyle?: string;
+    outfit?: string;
+    selectedStyle?: string | null;
+    finalCharacterUrl?: string | null;
+    mode: 'scan_only' | 'scan_plus_character';
+};
+
+export type PendingRefSheetHandoff = {
+    source: 'portrait_studio';
+    createdAt: number;
+    imageUrl: string;
+    compiledPrompt: string;
+    weightLbs: number;
+    heightIn: number;
+    age: number;
+    hairStyle?: string;
+    identityImages?: Array<{
+        angle?: PitchSheetHandoffAngle | string;
+        imageUrl: string;
+        label?: string;
+    }>;
+    generatedSheetRole?: 'layout_reference_only' | 'identity_fallback';
 };
 
 export interface BackgroundJob {
@@ -533,6 +584,8 @@ export interface AppState {
 
     backgroundJobs: BackgroundJob[];
     liveStatus: LiveStatusMessage | null;
+    pendingPitchSheetHandoff: PendingPitchSheetHandoff | null;
+    pendingRefSheetHandoff: PendingRefSheetHandoff | null;
 }
 
 export interface WardrobeState {
@@ -606,6 +659,10 @@ const DEFAULT_PROP_STUDIO_STATE: PropAccessoryState = {
 
 export type Action =
     | { type: 'SET_VIEW'; payload: ViewMode }
+    | { type: 'SET_PENDING_PITCH_SHEET_HANDOFF'; payload: PendingPitchSheetHandoff }
+    | { type: 'CLEAR_PENDING_PITCH_SHEET_HANDOFF' }
+    | { type: 'SET_PENDING_REF_SHEET_HANDOFF'; payload: PendingRefSheetHandoff }
+    | { type: 'CLEAR_PENDING_REF_SHEET_HANDOFF' }
     | { type: 'SET_API_KEY'; payload: string }
     | { type: 'SET_MODEL'; payload: AppState['model'] }
     | { type: 'ADD_CAST'; payload: CastMember }
@@ -931,6 +988,8 @@ const DEFAULT_REGION_EDIT: RegionEditState = {
     brushSize: 40,
     brushSoftness: 0.35,
     activeLayerId: 'A',
+    contextSizingMode: 'manual',
+    sourceImageMeta: undefined,
     protectEnabled: false,
     protectMaskDataUrl: null,
     layers: [
@@ -1059,6 +1118,8 @@ export const initialState: AppState = {
     showCreditModal: false,
     creditModal: null,
     liveStatus: null,
+    pendingPitchSheetHandoff: null,
+    pendingRefSheetHandoff: null,
 };
 
 // --- DATA SANITIZATION ---
@@ -1207,6 +1268,14 @@ export const reducer = (state: AppState, action: Action): AppState => {
         }
         case 'SET_VIEW':
             return { ...state, view: action.payload };
+        case 'SET_PENDING_PITCH_SHEET_HANDOFF':
+            return { ...state, pendingPitchSheetHandoff: action.payload };
+        case 'CLEAR_PENDING_PITCH_SHEET_HANDOFF':
+            return { ...state, pendingPitchSheetHandoff: null };
+        case 'SET_PENDING_REF_SHEET_HANDOFF':
+            return { ...state, pendingRefSheetHandoff: action.payload };
+        case 'CLEAR_PENDING_REF_SHEET_HANDOFF':
+            return { ...state, pendingRefSheetHandoff: null };
         case 'SET_API_KEY': {
             const nextKey = action.payload;
             return { 
@@ -1505,6 +1574,10 @@ export const reducer = (state: AppState, action: Action): AppState => {
             return { ...state, showHelpHints: action.payload };
 
         case 'SET_BG': {
+            const resetRegionEditSizing: Pick<RegionEditState, 'contextSizingMode' | 'sourceImageMeta'> = {
+                contextSizingMode: 'manual',
+                sourceImageMeta: undefined
+            };
             let nextShots = state.shots;
             if (state.activeShotId) {
                 nextShots = state.shots.map(s => {
@@ -1529,6 +1602,7 @@ export const reducer = (state: AppState, action: Action): AppState => {
             return {
                 ...state,
                 backgroundUrl: action.payload,
+                regionEdit: { ...state.regionEdit, ...resetRegionEditSizing },
                 depthMapUrl: null,
                 depthMapHash: null,
                 sourceBackgroundHash: null,

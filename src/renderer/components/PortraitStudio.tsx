@@ -8,7 +8,7 @@ import { Dropdown } from "./ui/Dropdown";
 import type { CharacterDNA } from "../../types/characterDNA";
 import { computeBMI, deriveBuildDescription } from "../../types/characterDNA";
 import { useAppContext } from "../context/AppContext";
-import type { CastMember } from "../context/AppContext";
+import type { CastMember, PendingPitchSheetHandoff, PendingRefSheetHandoff } from "../context/AppContext";
 import { GeminiService } from "../services/GeminiService";
 import { NanobananaThinking } from "./ui/NanobananaThinking";
 import ConfirmDialog from "./ui/ConfirmDialog";
@@ -29,44 +29,16 @@ import {
     JAW_PRESETS
 } from "../../prompts/portraitPrompts";
 import {
-    buildPhysiqueProfile,
-    buildAnchorFirstCharacterPitchSheetPrompt,
-    buildCharacterPitchSheetAnchorPrompt,
     buildCharacterPitchSheetPrompt,
     defaultCharacterPitchSheetInput,
-    getDefaultStylePhysiqueFidelity,
-    requiresAnchorFirstPitchSheetWorkflow,
+    sanitizeVisibleBoardLanguage,
     type CharacterPitchSheetInput
 } from "../../prompts/characterPitchSheetPrompts";
+import { PROMPT_PRIORITY_ORDER_LABEL } from "../../prompts/identityContracts";
 
-export type NanoRefSheetHandoff = {
-    imageUrl: string;
-    compiledPrompt: string;
-    weightLbs: number;
-    heightIn: number;
-    age: number;
-    hairStyle?: string;
-    source: "portrait_studio";
-    createdAt: number;
-};
+export type NanoRefSheetHandoff = PendingRefSheetHandoff;
 
-type NanoPitchSheetHandoff = {
-    source: "nanocast_biometric_scan";
-    createdAt: number;
-    identityImages: Array<{
-        angle: "center" | "left" | "right" | "up" | "down";
-        imageUrl: string;
-    }>;
-    identityStrength: number;
-    heightIn?: number;
-    weightLbs?: number;
-    age?: number;
-    hairStyle?: string;
-    outfit?: string;
-    selectedStyle?: string | null;
-    finalCharacterUrl?: string | null;
-    mode: "scan_only" | "scan_plus_character";
-};
+type NanoPitchSheetHandoff = PendingPitchSheetHandoff;
 
 const DEFAULT_DNA: CharacterDNA = {
     id: "default",
@@ -129,7 +101,7 @@ type PortraitStudioMode = "portrait" | "pitch_sheet";
 type PitchSheetAdvancedSectionKey = "face" | "performance" | "material" | "production";
 type CharacterPitchSheetTextField = Exclude<
     keyof CharacterPitchSheetInput,
-    "referenceImageUrl" | "referenceImages" | "identitySource" | "identityStrength" | "characterStyleReferenceUrl" | "sourcePanelMode" | "characterRenderStyle" | "boardPresentationStyle" | "heightIn" | "weightLbs" | "frameSize" | "musculature" | "buildInterpretation" | "physiquePriority" | "stylePhysiqueFidelity"
+    "referenceImageUrl" | "referenceImages" | "identitySource" | "identityStrength" | "characterStyleReferenceUrl" | "sourcePanelMode" | "characterRenderStyle" | "boardPresentationStyle" | "heightIn" | "weightLbs" | "frameSize" | "musculature" | "buildInterpretation" | "physiquePriority" | "debugVisibleLabels"
 >;
 
 const LIFE_STAGE_OPTIONS: Array<{ type: "option"; label: string; value: LifeStage }> = [
@@ -247,73 +219,6 @@ const BOARD_PRESENTATION_STYLE_OPTIONS: Array<{
     { type: "option", value: "merchandising_sheet", label: "Merchandising Sheet" }
 ];
 
-const FRAME_SIZE_OPTIONS: Array<{
-    type: "option";
-    value: NonNullable<CharacterPitchSheetInput["frameSize"]>;
-    label: string;
-}> = [
-    { type: "option", value: "small", label: "Small" },
-    { type: "option", value: "medium", label: "Medium" },
-    { type: "option", value: "large", label: "Large" }
-];
-
-const MUSCULATURE_OPTIONS: Array<{
-    type: "option";
-    value: NonNullable<CharacterPitchSheetInput["musculature"]>;
-    label: string;
-}> = [
-    { type: "option", value: "minimal", label: "Minimal" },
-    { type: "option", value: "average", label: "Average" },
-    { type: "option", value: "athletic", label: "Athletic" },
-    { type: "option", value: "muscular", label: "Muscular" }
-];
-
-const BUILD_INTERPRETATION_OPTIONS: Array<{
-    type: "option";
-    value: string;
-    label: string;
-}> = [
-    { type: "option", value: "", label: "Auto Derived" },
-    { type: "option", value: "lean", label: "Lean" },
-    { type: "option", value: "lean_average", label: "Lean Average" },
-    { type: "option", value: "average", label: "Average" },
-    { type: "option", value: "athletic", label: "Athletic" },
-    { type: "option", value: "soft_average", label: "Soft Average" },
-    { type: "option", value: "stocky", label: "Stocky" }
-];
-
-const PHYSIQUE_PRIORITY_OPTIONS: Array<{
-    type: "option";
-    value: NonNullable<CharacterPitchSheetInput["physiquePriority"]>;
-    label: string;
-}> = [
-    { type: "option", value: "match_face_impression", label: "Match Face Impression" },
-    { type: "option", value: "balanced", label: "Balanced" },
-    { type: "option", value: "strict_body_specs", label: "Strict Body Specs" }
-];
-
-const STYLE_PHYSIQUE_FIDELITY_OPTIONS: Array<{
-    type: "option";
-    value: NonNullable<CharacterPitchSheetInput["stylePhysiqueFidelity"]>;
-    label: string;
-}> = [
-    { type: "option", value: "strict", label: "Strict" },
-    { type: "option", value: "balanced", label: "Balanced" },
-    { type: "option", value: "expressive", label: "Expressive" }
-];
-
-const PHYSIQUE_HEIGHT_FEET_OPTIONS: Array<{ type: "option"; value: string; label: string }> = [3, 4, 5, 6, 7, 8, 9].map(feet => ({
-    type: "option",
-    value: feet.toString(),
-    label: `${feet} ft`
-}));
-
-const PHYSIQUE_HEIGHT_INCH_OPTIONS: Array<{ type: "option"; value: string; label: string }> = Array.from({ length: 12 }, (_, inches) => ({
-    type: "option",
-    value: inches.toString(),
-    label: `${inches} in`
-}));
-
 const isPortraitStudioMode = (value: unknown): value is PortraitStudioMode => {
     return value === "portrait" || value === "pitch_sheet";
 };
@@ -335,6 +240,26 @@ const formatHeightFromInches = (totalInches: number): string => {
     const inches = totalInches % 12;
 
     return `${feet}'${inches}"`;
+};
+
+const parsePitchSheetHeightToInches = (value: string): number | undefined => {
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) return undefined;
+
+    const match = normalized.match(/(\d+)\s*(?:'|ft|feet)\s*(\d+)?/);
+    if (!match) return undefined;
+
+    return (Number(match[1]) * 12) + Number(match[2] || 0);
+};
+
+const parsePitchSheetWeightToLbs = (value: string): number | undefined => {
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) return undefined;
+
+    const match = normalized.match(/(\d+(?:\.\d+)?)\s*(?:lb|lbs|pound|pounds)\b/);
+    if (!match) return undefined;
+
+    return Math.round(Number(match[1]));
 };
 
 const dedupeLines = (value: string): string => {
@@ -386,6 +311,41 @@ const removeNanoCastWardrobeDirectionAutofill = (value: string, handoffOutfit?: 
 const isBiometricPitchSheetSource = (source: CharacterPitchSheetInput["identitySource"]): boolean => {
     return source === "biometric_multiview" || source === "biometric_plus_character";
 };
+
+const getPitchSheetAngleLabel = (angle: string | undefined, fallbackIndex: number): string => {
+    switch ((angle || "").toLowerCase()) {
+        case "center":
+        case "front":
+            return "Front";
+        case "left":
+            return "Left Profile";
+        case "right":
+            return "Right Profile";
+        case "up":
+            return "Upward Angle";
+        case "down":
+            return "Downward Angle";
+        default:
+            return `Angle ${fallbackIndex + 1}`;
+    }
+};
+
+const PITCH_SHEET_PREVIEW_HELP =
+    "Character Pitch Sheet Preview creates cinematic character design boards from text, portrait, or scan references. Results are active and usable, but exact likeness, body proportions, and panel consistency may vary while this feature is refined.";
+
+const PITCH_SHEET_PREVIEW_NOTE =
+    "Preview feature: designed for cinematic character boards and concept exploration. Identity, body, and style consistency may vary between generations.";
+
+function PitchSheetPreviewBadge({ className = "" }: { className?: string }) {
+    return (
+        <span
+            title={PITCH_SHEET_PREVIEW_HELP}
+            className={`inline-flex items-center justify-center rounded-full border border-blue-400/25 bg-blue-500/10 px-1.5 py-0.5 text-[7px] font-black uppercase leading-none tracking-[0.16em] text-blue-200 shadow-[0_0_8px_rgba(96,165,250,0.14)] ${className}`}
+        >
+            PREVIEW
+        </span>
+    );
+}
 
 // Local component for solid panels to ensure rendering stability
 function SolidPanel({ children, className = "" }: { children: React.ReactNode; className?: string }) {
@@ -508,52 +468,21 @@ export default function PortraitStudio() {
     const pitchSheetSourcePanelMode = pitchSheetInput.sourcePanelMode || defaultCharacterPitchSheetInput.sourcePanelMode || "costume_matched";
     const pitchSheetCharacterRenderStyle = pitchSheetInput.characterRenderStyle || defaultCharacterPitchSheetInput.characterRenderStyle || "biometric_realism";
     const pitchSheetBoardPresentationStyle = pitchSheetInput.boardPresentationStyle || defaultCharacterPitchSheetInput.boardPresentationStyle || "premium_film_board";
-    const pitchSheetStylePhysiqueFidelity = pitchSheetInput.stylePhysiqueFidelity || getDefaultStylePhysiqueFidelity(pitchSheetCharacterRenderStyle);
-    const pitchSheetFrameSize = pitchSheetInput.frameSize || defaultCharacterPitchSheetInput.frameSize || "medium";
-    const pitchSheetMusculature = pitchSheetInput.musculature || defaultCharacterPitchSheetInput.musculature || "average";
-    const pitchSheetPhysiquePriority = pitchSheetInput.physiquePriority || defaultCharacterPitchSheetInput.physiquePriority || "balanced";
-    const pitchSheetPhysiqueProfile = useMemo(() => buildPhysiqueProfile(pitchSheetInput), [pitchSheetInput]);
-    const pitchSheetHeightTotalInches = pitchSheetPhysiqueProfile.heightIn;
-    const pitchSheetHeightFeet = typeof pitchSheetHeightTotalInches === "number"
-        ? Math.floor(pitchSheetHeightTotalInches / 12).toString()
-        : "";
-    const pitchSheetHeightInches = typeof pitchSheetHeightTotalInches === "number"
-        ? (pitchSheetHeightTotalInches % 12).toString()
-        : "";
 
     const updatePitchSheetInput = (field: CharacterPitchSheetTextField, value: string) => {
-        setPitchSheetInput(prev => ({ ...prev, [field]: value }));
-    };
-
-    const updatePitchSheetHeightPart = (part: "feet" | "inches", value: string) => {
-        const parsed = Number(value);
-        if (!Number.isFinite(parsed)) return;
-
         setPitchSheetInput(prev => {
-            const currentProfile = buildPhysiqueProfile(prev);
-            const currentTotalInches = currentProfile.heightIn;
-            const currentFeet = typeof currentTotalInches === "number" ? Math.floor(currentTotalInches / 12) : 5;
-            const currentInches = typeof currentTotalInches === "number" ? currentTotalInches % 12 : 0;
-            const nextFeet = part === "feet" ? parsed : currentFeet;
-            const nextInches = part === "inches" ? parsed : currentInches;
-            const nextHeightIn = (nextFeet * 12) + nextInches;
+            const next: CharacterPitchSheetInput = { ...prev, [field]: value };
 
-            return {
-                ...prev,
-                heightIn: nextHeightIn,
-                height: formatHeightFromInches(nextHeightIn)
-            };
+            if (field === "height") {
+                next.heightIn = parsePitchSheetHeightToInches(value);
+            }
+
+            if (field === "build") {
+                next.weightLbs = parsePitchSheetWeightToLbs(value);
+            }
+
+            return next;
         });
-    };
-
-    const updatePitchSheetWeightInput = (value: string) => {
-        const parsed = Number(value);
-        const nextValue = value === "" || !Number.isFinite(parsed) ? undefined : parsed;
-
-        setPitchSheetInput(prev => ({
-            ...prev,
-            weightLbs: nextValue
-        }));
     };
 
     const togglePitchSheetSection = (section: PitchSheetAdvancedSectionKey) => {
@@ -599,6 +528,12 @@ export default function PortraitStudio() {
                     wardrobe: isPitchSheetMode ? pitchSheetInput.wardrobeDirection : '',
                     accessories: isPitchSheetMode ? pitchSheetInput.propsSignatureItems : '',
                     style: actorLibraryStyleForCategory(category),
+                    ...(isPitchSheetMode
+                        ? {
+                            generationStatus: 'preview' as const,
+                            featureSource: 'character_pitch_sheet' as const,
+                        }
+                        : {}),
                 },
             };
 
@@ -755,12 +690,17 @@ export default function PortraitStudio() {
     const [newPresetName, setNewPresetName] = useState("");
 
     useEffect(() => {
-        const raw = localStorage.getItem("portrait_pitchsheet_handoff");
-        if (!raw) return;
+        if (localStorage.getItem("portrait_pitchsheet_handoff")) {
+            localStorage.removeItem("portrait_pitchsheet_handoff");
+        }
+
+        const payload: NanoPitchSheetHandoff | null = state.pendingPitchSheetHandoff;
+        if (!payload) return;
 
         try {
-            const payload = JSON.parse(raw) as NanoPitchSheetHandoff;
-            if (payload?.source !== "nanocast_biometric_scan" || !Array.isArray(payload.identityImages) || payload.identityImages.length === 0) {
+            if (payload.source !== "nanocast_biometric_scan" || !Array.isArray(payload.identityImages) || payload.identityImages.length === 0) {
+                dispatch({ type: "ADD_LOG", payload: { message: "Pitch Sheet handoff was empty. Please send the NanoCast scan again.", type: "error" } });
+                dispatch({ type: "CLEAR_PENDING_PITCH_SHEET_HANDOFF" });
                 return;
             }
 
@@ -770,7 +710,9 @@ export default function PortraitStudio() {
             const referenceImages = payload.identityImages.map(image => ({
                 angle: image.angle,
                 imageUrl: image.imageUrl,
-                label: `${image.angle.toUpperCase()} biometric identity reference`
+                label: image.angle === "center"
+                    ? "Actor Likeness Guide"
+                    : "Profile Likeness Guide"
             }));
             const height = typeof payload.heightIn === "number" ? formatHeightFromInches(payload.heightIn) : "";
             const build = [
@@ -778,14 +720,13 @@ export default function PortraitStudio() {
                 height ? `${height} frame` : ""
             ].filter(Boolean).join(", ");
             const styleText = payload.selectedStyle
-                ? `NanoCast ${payload.selectedStyle} cinematic character design`
-                : "NanoCast biometric cinematic character design";
+                ? `${payload.selectedStyle} cinematic actor-based character design`
+                : "Cinematic actor-based character design";
             const hairNotes = payload.hairStyle
-                ? `Hair direction from NanoCast: ${payload.hairStyle}.`
-                : "Preserve hair, hairline, facial hair, and grooming from the biometric angle references.";
-            const productionNote = `NanoCast biometric handoff loaded ${referenceImages.length} raw angle reference(s). Keep the user in pitch-sheet mode for character name, world, props, personality, environment, and production notes.`;
+                ? `Hair and grooming direction: ${payload.hairStyle}.`
+                : "Preserve hair, hairline, facial hair, and grooming consistently across every view.";
+            const productionNote = "Maintain actor-based likeness continuity across hero portrait, head studies, turnaround views, and expression study.";
 
-            localStorage.removeItem("portrait_pitchsheet_handoff");
             setMode("pitch_sheet");
             setGeneratedImage(null);
             setPitchSheetInput(prev => ({
@@ -793,7 +734,7 @@ export default function PortraitStudio() {
                 referenceImageUrl: undefined,
                 referenceImages,
                 identitySource,
-                identityStrength: 100,
+                identityStrength: payload.identityStrength || 100,
                 characterStyleReferenceUrl: payload.mode === "scan_plus_character" ? payload.finalCharacterUrl || undefined : undefined,
                 visualAge: typeof payload.age === "number" ? `${payload.age} years` : prev.visualAge,
                 height: height || prev.height,
@@ -803,23 +744,25 @@ export default function PortraitStudio() {
                 designLanguage: styleText,
                 wardrobeDirection: removeNanoCastWardrobeDirectionAutofill(prev.wardrobeDirection, payload.outfit),
                 lightingMood: payload.mode === "scan_plus_character"
-                    ? "Use the generated NanoCast character image for approved lighting and style, with biometric identity taking priority"
+                    ? prev.lightingMood || defaultCharacterPitchSheetInput.lightingMood
                     : prev.lightingMood,
                 faceDetails: [
-                    "Biometric multi-view scan supplied as the strict actor identity source.",
+                    "Actor likeness study supplied as the strict actor likeness source.",
                     hairNotes,
-                    "Preserve exact skull geometry, facial proportions, asymmetry, skin tone, age impression, and emotional presence from the raw angle captures."
+                    "Preserve exact skull geometry, facial proportions, asymmetry, skin tone, age impression, and emotional presence."
                 ].join(" "),
                 materialCostumeNotes: removeNanoCastWardrobeAutofillFromMaterialNotes(prev.materialCostumeNotes),
                 productionNotes: dedupeLines([prev.productionNotes, productionNote].filter(Boolean).join("\n"))
             }));
 
+            dispatch({ type: "CLEAR_PENDING_PITCH_SHEET_HANDOFF" });
             dispatch({ type: "ADD_LOG", payload: { message: "NanoCast biometric scan loaded into Character Pitch Sheet", type: "success" } });
         } catch (error) {
-            console.error("Failed to load portrait_pitchsheet_handoff", error);
-            localStorage.removeItem("portrait_pitchsheet_handoff");
+            console.error("Failed to load pending pitch sheet handoff", error);
+            dispatch({ type: "CLEAR_PENDING_PITCH_SHEET_HANDOFF" });
+            dispatch({ type: "ADD_LOG", payload: { message: "Pitch Sheet handoff could not be loaded. Please send the NanoCast scan again.", type: "error" } });
         }
-    }, [dispatch]);
+    }, [dispatch, state.pendingPitchSheetHandoff]);
 
     useEffect(() => {
         if (mode !== "pitch_sheet") return;
@@ -983,9 +926,7 @@ export default function PortraitStudio() {
     // --- COMPILER (PHASE 2) ---
     const compiledPrompt = useMemo(() => {
         if (mode === "pitch_sheet") {
-            return requiresAnchorFirstPitchSheetWorkflow(pitchSheetInput)
-                ? buildAnchorFirstCharacterPitchSheetPrompt(pitchSheetInput)
-                : buildCharacterPitchSheetPrompt(pitchSheetInput);
+            return buildCharacterPitchSheetPrompt(pitchSheetInput);
         }
 
         return buildPortraitPrompt(dna);
@@ -1000,16 +941,24 @@ export default function PortraitStudio() {
             return [];
         }
 
+        const safePitchSheetInput = sanitizeVisibleBoardLanguage(pitchSheetInput);
+
+        const originalIdentityAnchors = (safePitchSheetInput.referenceImages || []).map((ref, index) => ({
+            url: ref.imageUrl,
+            // Original biometric images are permanent identity anchors for every pitch sheet generation.
+            // Generated boards or styled outputs must never replace these anchors as the identity source.
+            label: `Original Actor Likeness Anchor: ${getPitchSheetAngleLabel(ref.angle, index)}`
+        }));
+
         return [
-            ...(pitchSheetInput.referenceImages || []).map((ref, index) => ({
-                url: ref.imageUrl,
-                label: ref.label || `${ref.angle || `Angle ${index + 1}`} Identity Reference`
-            })),
-            ...(pitchSheetInput.referenceImageUrl
-                ? [{ url: pitchSheetInput.referenceImageUrl, label: "Character Identity Reference" }]
+            ...originalIdentityAnchors,
+            ...(safePitchSheetInput.referenceImageUrl
+                ? [{ url: safePitchSheetInput.referenceImageUrl, label: "Actor Likeness Guide" }]
                 : []),
-            ...(pitchSheetInput.characterStyleReferenceUrl
-                ? [{ url: pitchSheetInput.characterStyleReferenceUrl, label: "Approved Character Style Reference" }]
+            ...(safePitchSheetInput.characterStyleReferenceUrl
+                // Style references can guide presentation, lighting, and costume continuity only.
+                // Style cannot override the actor identity locked by the original anchors above.
+                ? [{ url: safePitchSheetInput.characterStyleReferenceUrl, label: "Board Presentation Guide Only - Not Actor Likeness" }]
                 : [])
         ];
     };
@@ -1151,7 +1100,22 @@ export default function PortraitStudio() {
         }, 800);
 
         try {
-            const baseReferenceImages = buildGenerationReferenceImages();
+            const referenceImages = buildGenerationReferenceImages();
+            if (import.meta.env.DEV && isPitchSheetMode) {
+                const biometricSources = isBiometricPitchSheetSource(pitchSheetInput.identitySource)
+                    ? (pitchSheetInput.referenceImages || []).filter(ref => Boolean(ref.imageUrl)).length
+                    : 0;
+                console.info("[IdentityAnchor] biometricSources:", biometricSources);
+                console.info("[IdentityAnchor] generatedSheetUsedAsIdentity:", false);
+                console.info("[IdentityAnchor] generatedSheetUsedAsLayoutReference:", Boolean(pitchSheetInput.characterStyleReferenceUrl));
+                console.info("[PromptPriority]", PROMPT_PRIORITY_ORDER_LABEL);
+                console.info("[IdentityAnchor] renderStyle:", pitchSheetCharacterRenderStyle, "boardStyle:", pitchSheetBoardPresentationStyle);
+                console.info("[IdentityAnchor] referenceSources:", referenceImages.map((ref, index) => ({
+                    index: index + 1,
+                    label: ref.label,
+                    sourceType: ref.label.includes("Presentation Guide") ? "layout_reference" : "identity_anchor"
+                })));
+            }
             const generationOptions = {
                 imageSize: state.imageResolution,
                 thinkingLevel: state.enableImageThinking,
@@ -1159,64 +1123,9 @@ export default function PortraitStudio() {
                 billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
                 entitlements: state.billingEntitlements
             };
-            let promptForGeneration = compiledPrompt;
-            let referenceImages = baseReferenceImages;
-
-            if (mode === "pitch_sheet" && requiresAnchorFirstPitchSheetWorkflow(pitchSheetInput)) {
-                dispatch({ type: "ADD_LOG", payload: { message: "Anchor-first pitch sheet workflow enabled for identity stability", type: "info" } });
-
-                setProgress({ phase: 'anchoring', percent: 14, text: 'Generating canonical hero portrait anchor...' });
-                const heroAnchorRaw = await GeminiService.generateImage(
-                    buildCharacterPitchSheetAnchorPrompt(pitchSheetInput, "hero_portrait"),
-                    state.apiKey,
-                    state.model,
-                    baseReferenceImages,
-                    { ...generationOptions, thinkingLevel: 'high', googleGrounding: false, strictMode: true }
-                );
-                const heroAnchorUrl = /^https?:\/\//i.test(heroAnchorRaw) ? await remoteUrlToDataUrl(heroAnchorRaw) : heroAnchorRaw;
-
-                setProgress({ phase: 'anchoring', percent: 38, text: 'Generating canonical front full-body anchor...' });
-                const fullBodyAnchorRefs = [
-                    ...baseReferenceImages,
-                    { url: heroAnchorUrl, label: "Canonical Hero Portrait Anchor" }
-                ];
-                const fullBodyAnchorRaw = await GeminiService.generateImage(
-                    buildCharacterPitchSheetAnchorPrompt(pitchSheetInput, "front_full_body"),
-                    state.apiKey,
-                    state.model,
-                    fullBodyAnchorRefs,
-                    { ...generationOptions, thinkingLevel: 'high', googleGrounding: false, strictMode: true }
-                );
-                const fullBodyAnchorUrl = /^https?:\/\//i.test(fullBodyAnchorRaw) ? await remoteUrlToDataUrl(fullBodyAnchorRaw) : fullBodyAnchorRaw;
-
-                setProgress({ phase: 'anchoring', percent: 58, text: 'Generating canonical head/profile anchor...' });
-                const headProfileAnchorRefs = [
-                    ...fullBodyAnchorRefs,
-                    { url: fullBodyAnchorUrl, label: "Canonical Front Full-Body Anchor" }
-                ];
-                const headProfileAnchorRaw = await GeminiService.generateImage(
-                    buildCharacterPitchSheetAnchorPrompt(pitchSheetInput, "head_profile"),
-                    state.apiKey,
-                    state.model,
-                    headProfileAnchorRefs,
-                    { ...generationOptions, thinkingLevel: 'high', googleGrounding: false, strictMode: true }
-                );
-                const headProfileAnchorUrl = /^https?:\/\//i.test(headProfileAnchorRaw) ? await remoteUrlToDataUrl(headProfileAnchorRaw) : headProfileAnchorRaw;
-
-                referenceImages = [
-                    ...baseReferenceImages,
-                    { url: heroAnchorUrl, label: "Canonical Hero Portrait Anchor" },
-                    { url: fullBodyAnchorUrl, label: "Canonical Front Full-Body Anchor" },
-                    { url: headProfileAnchorUrl, label: "Canonical Head/Profile Anchor" }
-                ];
-                promptForGeneration = buildAnchorFirstCharacterPitchSheetPrompt(pitchSheetInput);
-
-                dispatch({ type: "ADD_LOG", payload: { message: "Canonical anchors generated; composing final pitch sheet board", type: "info" } });
-                setProgress({ phase: 'generating', percent: 72, text: 'Composing final board from canonical anchors...' });
-            }
 
             const url = await GeminiService.generateImage(
-                promptForGeneration,
+                compiledPrompt,
                 state.apiKey,
                 state.model,
                 referenceImages,
@@ -1229,7 +1138,7 @@ export default function PortraitStudio() {
             
             setGeneratedImage(stableDisplayUrl); // Set local state for preview
             dispatch({ type: "SET_LAST_CASTED_IMAGE", payload: stableDisplayUrl });
-            dispatch({ type: "SET_LAST_CASTED_PROMPT", payload: promptForGeneration });
+            dispatch({ type: "SET_LAST_CASTED_PROMPT", payload: compiledPrompt });
             dispatch({ type: "ADD_LOG", payload: { message: isPitchSheetMode ? "Character Pitch Sheet Generated" : "Portrait Generated", type: "success" } });
 
             // --- RECENT GENERATIONS: Cache result silently ---
@@ -1246,8 +1155,15 @@ export default function PortraitStudio() {
                             localCachePath: cacheResult.localCachePath,
                             displayUrl: cacheResult.displayUrl,
                             createdAt: Date.now(),
-                            prompt: promptForGeneration,
+                            prompt: compiledPrompt,
                             mode: (state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok') || 'byok',
+                            ...(isPitchSheetMode
+                                ? {
+                                    displayLabel: 'Pitch Sheet Preview',
+                                    generationStatus: 'preview' as const,
+                                    featureSource: 'character_pitch_sheet' as const,
+                                }
+                                : {}),
                         });
                     }
                 }).catch((e) => {
@@ -1330,9 +1246,6 @@ export default function PortraitStudio() {
                 height: formatHeightFromCm(dna.morphology.heightCm),
                 heightIn: Math.round(dna.morphology.heightCm / 2.54),
                 weightLbs: Math.round(dna.morphology.weightKg / 0.453592),
-                frameSize: prev.frameSize || "medium",
-                musculature: dna.morphology.buildDescription.toLowerCase().includes("athletic") ? "athletic" : (prev.musculature || "average"),
-                physiquePriority: prev.physiquePriority || "balanced",
                 build: dna.morphology.buildDescription,
                 designLanguage: `${dna.identity.ethnicity} cinematic realism, preserving the approved Portrait Studio identity`,
                 lightingMood: lightingLabel,
@@ -1364,6 +1277,16 @@ export default function PortraitStudio() {
             return;
         }
 
+        const identityImages = isPitchSheetMode && isBiometricPitchSheetSource(pitchSheetInput.identitySource)
+            ? (pitchSheetInput.referenceImages || [])
+                .filter(ref => Boolean(ref.imageUrl))
+                .map(ref => ({
+                    angle: ref.angle,
+                    imageUrl: ref.imageUrl,
+                    label: ref.label
+                }))
+            : undefined;
+
         const handoff: NanoRefSheetHandoff = {
             imageUrl,
             compiledPrompt,
@@ -1372,10 +1295,13 @@ export default function PortraitStudio() {
             age: dna.identity.age,
             hairStyle: dna.hair.style || "",
             source: "portrait_studio",
-            createdAt: Date.now()
+            createdAt: Date.now(),
+            identityImages,
+            generatedSheetRole: identityImages?.length ? "layout_reference_only" : "identity_fallback"
         };
 
-        localStorage.setItem("nano_refsheet_handoff", JSON.stringify(handoff));
+        dispatch({ type: "SET_PENDING_REF_SHEET_HANDOFF", payload: handoff });
+        localStorage.removeItem("nano_refsheet_handoff");
 
         dispatch({ type: "SET_LAST_CASTED_IMAGE", payload: imageUrl });
         dispatch({ type: "SET_LAST_CASTED_PROMPT", payload: compiledPrompt });
@@ -1416,11 +1342,21 @@ export default function PortraitStudio() {
 
                     <section className="flex flex-col gap-8">
                         {/* IDENTITY - Stronger Header */}
-                        <div className="flex justify-between items-center">
-                            <h3 className="text-base font-black text-white/80 uppercase tracking-[0.15em] flex items-center gap-3 border-l-4 border-yellow-500/50 pl-4">
-                                <Fingerprint className="w-5 h-5 opacity-70" /> {mode === "pitch_sheet" ? "Pitch Sheet Brief" : "Identity Matrix"}
-                            </h3>
-                            <div className="flex items-center gap-3">
+                        <div className="flex justify-between items-start gap-4">
+                            <div className="flex flex-col gap-2">
+                                <div className="flex items-center gap-3">
+                                    <h3 className="text-base font-black text-white/80 uppercase tracking-[0.15em] flex items-center gap-3 border-l-4 border-yellow-500/50 pl-4">
+                                        <Fingerprint className="w-5 h-5 opacity-70" /> {mode === "pitch_sheet" ? "Pitch Sheet Brief" : "Identity Matrix"}
+                                    </h3>
+                                    {isPitchSheetMode && <PitchSheetPreviewBadge />}
+                                </div>
+                                {isPitchSheetMode && (
+                                    <p className="max-w-xl pl-5 text-[11px] leading-relaxed text-blue-100/65">
+                                        {PITCH_SHEET_PREVIEW_NOTE}
+                                    </p>
+                                )}
+                            </div>
+                            <div className="flex items-center gap-3 flex-wrap justify-end">
                                 <div className="flex bg-black/40 p-1 rounded-lg border border-white/5">
                                     <button
                                         onClick={() => setMode("portrait")}
@@ -1433,12 +1369,15 @@ export default function PortraitStudio() {
                                     </button>
                                     <button
                                         onClick={() => setMode("pitch_sheet")}
-                                        className={`px-4 py-1.5 rounded-lg text-[10px] uppercase tracking-wider whitespace-nowrap transition-all duration-200 ${mode === "pitch_sheet"
+                                        title={PITCH_SHEET_PREVIEW_HELP}
+                                        className={`px-3 py-1.5 rounded-lg text-[10px] uppercase tracking-wider whitespace-nowrap transition-all duration-200 inline-flex items-center justify-center gap-1.5 ${mode === "pitch_sheet"
                                             ? 'bg-gradient-to-r from-yellow-500 to-yellow-600 text-white font-semibold '
                                             : 'text-white/60 hover:bg-white/5 font-medium'
                                             }`}
                                     >
-                                        Character Pitch Sheet
+                                        <span>Character Pitch Sheet</span>
+                                        <span className={mode === "pitch_sheet" ? "text-white/70" : "text-white/25"}>&middot;</span>
+                                        <PitchSheetPreviewBadge className={mode === "pitch_sheet" ? "border-white/25 bg-white/10 text-white shadow-none" : ""} />
                                     </button>
                                 </div>
 
@@ -1863,124 +1802,6 @@ export default function PortraitStudio() {
                                                 boardPresentationStyle: value as NonNullable<CharacterPitchSheetInput["boardPresentationStyle"]>
                                             }))}
                                         />
-                                    </div>
-                                </div>
-
-                                <div className="flex flex-col gap-4 rounded-2xl border border-white/10 bg-black/20 p-4 relative z-20">
-                                    <div className="flex items-center justify-between gap-4">
-                                        <label className="text-[10px] font-bold text-yellow-500/70 uppercase tracking-widest">
-                                            Physique Accuracy
-                                        </label>
-                                        <span className="text-[9px] font-black text-white/35 uppercase tracking-[0.2em]">
-                                            Body Consistency Lock
-                                        </span>
-                                    </div>
-
-                                    <div className="grid grid-cols-2 xl:grid-cols-3 gap-4">
-                                        <div className="flex flex-col gap-1.5">
-                                            <label className="text-xs font-bold text-gray-500 uppercase tracking-widest pl-1">
-                                                Height
-                                            </label>
-                                            <div className="grid grid-cols-2 gap-2">
-                                                <Dropdown
-                                                    options={PHYSIQUE_HEIGHT_FEET_OPTIONS}
-                                                    value={pitchSheetHeightFeet}
-                                                    placeholder="ft"
-                                                    onChange={(value) => updatePitchSheetHeightPart("feet", value)}
-                                                />
-                                                <Dropdown
-                                                    options={PHYSIQUE_HEIGHT_INCH_OPTIONS}
-                                                    value={pitchSheetHeightInches}
-                                                    placeholder="in"
-                                                    onChange={(value) => updatePitchSheetHeightPart("inches", value)}
-                                                />
-                                            </div>
-                                        </div>
-                                        <Input
-                                            label="Weight"
-                                            type="number"
-                                            min={70}
-                                            max={360}
-                                            value={pitchSheetInput.weightLbs ?? ""}
-                                            onChange={(e) => updatePitchSheetWeightInput(e.target.value)}
-                                            placeholder="170 lb"
-                                        />
-                                        <div className="flex flex-col gap-1.5">
-                                            <label className="text-xs font-bold text-gray-500 uppercase tracking-widest pl-1">
-                                                Frame Size
-                                            </label>
-                                            <Dropdown
-                                                options={FRAME_SIZE_OPTIONS}
-                                                value={pitchSheetFrameSize}
-                                                onChange={(value) => setPitchSheetInput(prev => ({
-                                                    ...prev,
-                                                    frameSize: value as NonNullable<CharacterPitchSheetInput["frameSize"]>
-                                                }))}
-                                            />
-                                        </div>
-                                        <div className="flex flex-col gap-1.5">
-                                            <label className="text-xs font-bold text-gray-500 uppercase tracking-widest pl-1">
-                                                Musculature
-                                            </label>
-                                            <Dropdown
-                                                options={MUSCULATURE_OPTIONS}
-                                                value={pitchSheetMusculature}
-                                                onChange={(value) => setPitchSheetInput(prev => ({
-                                                    ...prev,
-                                                    musculature: value as NonNullable<CharacterPitchSheetInput["musculature"]>
-                                                }))}
-                                            />
-                                        </div>
-                                        <div className="flex flex-col gap-1.5">
-                                            <label className="text-xs font-bold text-gray-500 uppercase tracking-widest pl-1">
-                                                Build Interpretation
-                                            </label>
-                                            <Dropdown
-                                                options={BUILD_INTERPRETATION_OPTIONS}
-                                                value={pitchSheetInput.buildInterpretation || ""}
-                                                onChange={(value) => setPitchSheetInput(prev => ({
-                                                    ...prev,
-                                                    buildInterpretation: value
-                                                        ? value as NonNullable<CharacterPitchSheetInput["buildInterpretation"]>
-                                                        : undefined
-                                                }))}
-                                            />
-                                        </div>
-                                        <div className="flex flex-col gap-1.5">
-                                            <label className="text-xs font-bold text-gray-500 uppercase tracking-widest pl-1">
-                                                Physique Priority
-                                            </label>
-                                            <Dropdown
-                                                options={PHYSIQUE_PRIORITY_OPTIONS}
-                                                value={pitchSheetPhysiquePriority}
-                                                onChange={(value) => setPitchSheetInput(prev => ({
-                                                    ...prev,
-                                                    physiquePriority: value as NonNullable<CharacterPitchSheetInput["physiquePriority"]>
-                                                }))}
-                                            />
-                                        </div>
-                                        <div className="flex flex-col gap-1.5">
-                                            <label className="text-xs font-bold text-gray-500 uppercase tracking-widest pl-1">
-                                                Style Physique Fidelity
-                                            </label>
-                                            <Dropdown
-                                                options={STYLE_PHYSIQUE_FIDELITY_OPTIONS}
-                                                value={pitchSheetStylePhysiqueFidelity}
-                                                onChange={(value) => setPitchSheetInput(prev => ({
-                                                    ...prev,
-                                                    stylePhysiqueFidelity: value as NonNullable<CharacterPitchSheetInput["stylePhysiqueFidelity"]>
-                                                }))}
-                                            />
-                                        </div>
-                                    </div>
-
-                                    <div className="rounded-xl border border-yellow-500/10 bg-yellow-500/[0.035] px-4 py-3">
-                                        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-yellow-500/70">
-                                            Interpreted Build
-                                        </p>
-                                        <p className="mt-1 text-xs text-white/65 leading-relaxed">
-                                            {pitchSheetPhysiqueProfile.summary}. {pitchSheetPhysiqueProfile.heightLabel} / {pitchSheetPhysiqueProfile.weightLabel}. Style fidelity: {pitchSheetStylePhysiqueFidelity}.
-                                        </p>
                                     </div>
                                 </div>
 
@@ -2410,7 +2231,7 @@ export default function PortraitStudio() {
                     </div>
                     <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-gray-500 mb-1">
                         <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-                        {isPitchSheetMode ? "Live Pitch Stream" : "Live DNA Stream"}
+                        {isPitchSheetMode ? "PITCH SHEET \u00b7 PREVIEW" : "Live DNA Stream"}
                     </div>
                     <div className="flex justify-between items-end relative z-10">
                         <div className="flex flex-col gap-0.5">
@@ -2429,7 +2250,7 @@ export default function PortraitStudio() {
                             </div>
                             {isPitchSheetMode ? (
                                 <div className="text-[10px] text-yellow-500 uppercase font-bold tracking-wider">
-                                    {pitchSheetInput.sheetStyle || "Pitch Sheet"}
+                                    {pitchSheetInput.sheetStyle ? `${pitchSheetInput.sheetStyle} \u00b7 Preview` : "PITCH SHEET \u00b7 PREVIEW"}
                                 </div>
                             ) : null}
                             {!isPitchSheetMode && (
@@ -2498,7 +2319,7 @@ export default function PortraitStudio() {
                     <div className="h-12 bg-black/60 border-b border-white/5 flex items-center justify-between px-5 shrink-0">
                         <div className="flex items-center gap-3">
                             <Terminal className="w-4 h-4 text-green-500/50" />
-                            <span className="text-[10px] font-mono text-green-500/50 uppercase tracking-widest">{isPitchSheetMode ? "PITCH_SHEET_COMPILER_V1.EXE" : "DNA_COMPILER_V1.EXE"}</span>
+                            <span className="text-[10px] font-mono text-green-500/50 uppercase tracking-widest">{isPitchSheetMode ? "PITCH_SHEET_PREVIEW_COMPILER_V1.EXE" : "DNA_COMPILER_V1.EXE"}</span>
                         </div>
                         <div className="flex gap-1.5">
                             {[0, 150, 300].map((delay, i) => (
@@ -2541,6 +2362,7 @@ export default function PortraitStudio() {
                                             <Wand2 className="w-5 h-5 -[0_0_6px_rgba(255,215,0,0.35)] transition-transform duration-200 group-hover:-translate-y-px relative z-10" />
                                         )}
                                         <span className="relative z-10">{isGenerating ? generatingButtonLabel : generateButtonLabel}</span>
+                                        {isPitchSheetMode && <PitchSheetPreviewBadge className="relative z-10 border-white/25 bg-black/10 text-white shadow-none" />}
                                     </button>
 
                                     {/* Randomize row */}
@@ -2594,9 +2416,12 @@ export default function PortraitStudio() {
                                     <div className="flex gap-3">
                                         <button
                                             onClick={handleGenerate}
-                                            className="flex-1 bg-yellow-500/10 hover:bg-yellow-500/20 text-yellow-500 border border-yellow-500/50 font-semibold rounded-xl px-6 py-3 transition-all flex items-center justify-center gap-2 uppercase tracking-wide text-xs"
+                                            disabled={isGenerating}
+                                            className="flex-1 bg-yellow-500/10 hover:bg-yellow-500/20 text-yellow-500 border border-yellow-500/50 font-semibold rounded-xl px-6 py-3 transition-all flex items-center justify-center gap-2 uppercase tracking-wide text-xs disabled:opacity-35 disabled:cursor-not-allowed"
                                         >
-                                            <RefreshCw className="w-4 h-4" /> {generateButtonLabel}
+                                            <RefreshCw className="w-4 h-4" />
+                                            <span>{generateButtonLabel}</span>
+                                            {isPitchSheetMode && <PitchSheetPreviewBadge className="border-yellow-400/30 bg-yellow-500/10 text-yellow-200 shadow-none" />}
                                         </button>
                                         <button
                                             onClick={handleStartNew}
@@ -2615,6 +2440,7 @@ export default function PortraitStudio() {
                                     className="w-full bg-yellow-500/10 hover:bg-yellow-500/20 text-yellow-500 border border-yellow-500/40 font-semibold rounded-xl px-5 py-3 transition-all flex items-center justify-center gap-2 uppercase tracking-wide text-xs"
                                 >
                                     <Sparkles className="w-4 h-4" /> Build Pitch Sheet From Character
+                                    <PitchSheetPreviewBadge className="border-yellow-400/30 bg-yellow-500/10 text-yellow-200 shadow-none" />
                                 </button>
                             )}
 
@@ -2673,7 +2499,13 @@ export default function PortraitStudio() {
                                         identity: isPitchSheetMode ? pitchSheetSubjectName : dna.identity.ethnicity,
                                         wardrobe: isPitchSheetMode ? pitchSheetInput.wardrobeDirection : '',
                                         accessories: isPitchSheetMode ? pitchSheetInput.propsSignatureItems : '',
-                                        style: isPitchSheetMode ? 'Character Pitch Sheet' : 'Portrait'
+                                        style: isPitchSheetMode ? 'Character Pitch Sheet Preview' : 'Portrait',
+                                        ...(isPitchSheetMode
+                                            ? {
+                                                generationStatus: 'preview' as const,
+                                                featureSource: 'character_pitch_sheet' as const,
+                                            }
+                                            : {})
                                     }
                                 };
                                 dispatch({ type: 'ADD_CAST', payload: newCast });
