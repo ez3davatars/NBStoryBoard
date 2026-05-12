@@ -1,6 +1,7 @@
 import { SidebarPanel } from '../ui/SidebarPanel';
 import { Sparkles, RefreshCcw } from 'lucide-react';
 import { GeminiService } from '../../services/GeminiService';
+import { ensureAuthenticatedForGeneration } from '../../services/AuthGenerationGate';
 import type { Action, AppState, GroundingAudit } from '../../context/AppContext';
 import { DebouncedTextarea } from '../ui/DebouncedTextarea';
 
@@ -182,6 +183,9 @@ export const ActorIntelligencePanel = ({
                                     onClick={async () => {
                                         if (state.billingEntitlements.effectiveBillingMode === 'byok' && !state.apiKey) {
                                             dispatch({ type: 'ADD_LOG', payload: { message: "BYOK mode is selected. Add your API key in Settings to continue.", type: 'error' } });
+                                            return;
+                                        }
+                                        if (!(await ensureAuthenticatedForGeneration({ billingMode: state.billingEntitlements.effectiveBillingMode, featureLabel: 'Actor intelligence analysis' }))) {
                                             return;
                                         }
                                         setAnalyzingTokenId(token.id);

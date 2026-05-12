@@ -49,6 +49,7 @@ import type {
 } from '../context/AppContext';
 import type { ShotVariant } from '../types/shots';
 import { GeminiService, type ExtractedStyle, type SceneIntent } from '../services/GeminiService';
+import { ensureAuthenticatedForGeneration } from '../services/AuthGenerationGate';
 import { DepthService } from '../services/DepthService';
 import {
     compileV3DirectorPrompt,
@@ -59,6 +60,11 @@ import {
     buildStrictPrompt,
     buildLoosePrompt
 } from '../utils/promptHelpers';
+import {
+    buildSourcePreservingReferenceImages,
+    buildStagingSourcePreservationPromptBlock,
+    resolveStagingIntent
+} from '../utils/stagingSourceIntent';
 import { sanitizeStyleForStrictIdentity } from '../utils/analysisSanitizers';
 import { LibraryAssetMaterializer } from '../services/LibraryAssetMaterializer';
 import { useProductionExports } from '../hooks/useProductionExports';
@@ -369,11 +375,11 @@ const SceneCanvas = () => {
         dispatch({ type: 'ADD_LOG', payload: { message: 'Depth map captured successfully.', type: 'success' } });
     };
 
-    const ensureStagingAiAccess = useCallback((featureLabel: string): boolean => {
+    const ensureStagingAiAccess = useCallback(async (featureLabel: string): Promise<boolean> => {
         const billingMode = state.billingEntitlements?.effectiveBillingMode || state.billingMode;
         
         if (billingMode === 'hosted') {
-            return true;
+            return await ensureAuthenticatedForGeneration({ billingMode, featureLabel });
         }
 
         if (billingMode === 'byok') {
@@ -591,8 +597,27 @@ const SceneCanvas = () => {
         () => getActorIdentityReferenceSetsForScene(state, state.activeShotId || 'default'),
         [state]
     );
+    const stagingSourceIntent = useMemo(
+        () => resolveStagingIntent({
+            prompt: bgPrompt || state.director.subject,
+            hasUploadedSourceImage: !!state.backgroundUrl
+        }),
+        [bgPrompt, state.director.subject, state.backgroundUrl]
+    );
+    const sourcePreservationPromptBlock = useMemo(
+        () => buildStagingSourcePreservationPromptBlock(stagingSourceIntent, {
+            selectedAspectRatio: state.director.aspectRatio
+        }),
+        [stagingSourceIntent, state.director.aspectRatio]
+    );
     
     const compiledPrompt = useMemo(() => {
+        if (sourcePreservationPromptBlock) {
+            return [
+                sourcePreservationPromptBlock,
+                compileV3DirectorPrompt(state.director, state.referenceSlots, state.tokens, bgPrompt)
+            ].join('\n\n');
+        }
         const forceStrictReplace = state.director.replaceAnchorSubjects;
         if (!strictMode && !forceStrictReplace) {
             return compileV3DirectorPrompt(state.director, state.referenceSlots, state.tokens, bgPrompt);
@@ -608,7 +633,7 @@ const SceneCanvas = () => {
             actorIdentitySets: promptIdentitySets,
             tokens: state.tokens
         });
-    }, [strictMode, bgPrompt, state.director, state.depthMapUrl, state.referenceSlots, activeReferences, promptIdentitySets, state.tokens]);
+    }, [sourcePreservationPromptBlock, strictMode, bgPrompt, state.director, state.depthMapUrl, state.referenceSlots, activeReferences, promptIdentitySets, state.tokens]);
 
 
     const [dragItem, setDragItem] = useState<{ id: string, type: 'token' | 'annotation', startX: number, startY: number, initialX: number, initialY: number } | null>(null);
@@ -682,7 +707,7 @@ const SceneCanvas = () => {
             return;
         }
         if (state.isDepthProcessing) return;
-        if (!ensureStagingAiAccess('Depth Map')) return;
+        if (!(await ensureStagingAiAccess('Depth Map'))) return;
 
         dispatch({ type: 'SET_DEPTH_PROCESSING', payload: true });
         dispatch({ type: 'SET_DEPTH_MAP', payload: null });
@@ -742,7 +767,7 @@ const SceneCanvas = () => {
 
     // Style Transfer Pipeline: Phase 1 Logic
     const handleAutoStyleEnvironment = async () => {
-        if (!ensureStagingAiAccess('Style Environment')) return;
+        if (!(await ensureStagingAiAccess('Style Environment'))) return;
 
         // StageTokens are actors if they have a sourceImage or cutoutUrl in this context
         const activeToken = state.tokens.find((t: StageToken) => t.id === state.selection);
@@ -1548,7 +1573,7 @@ Output: environment plate only.
 
     // Unified Workflow Generate Button
     const generateBg = async (overrideBgUrl?: string | unknown) => {
-        if (!ensureStagingAiAccess('Environment Plate Generation')) return;
+        if (!(await ensureStagingAiAccess('Environment Plate Generation'))) return;
         const activeBgUrl = (typeof overrideBgUrl === 'string' ? overrideBgUrl : undefined) || state.backgroundUrl;
         const hasSourceScene = !!activeBgUrl;
         const hasPromptText = !!bgPrompt?.trim() || !!state.director.subject?.trim();
@@ -1620,6 +1645,17 @@ Output: environment plate only.
 
             const identitySets = getActorIdentityReferenceSetsForScene(state, state.activeShotId || 'default');
             const hasStrictIdentityRefs = identitySets.some(s => s.identityPriority === 'strict' && hasStrongFaceAnchor(s));
+            const activeIdentityLocks = identitySets.flatMap(set => set.identityLock ? [set.identityLock] : []);
+            const renderPromptText = (bgPrompt || state.director.subject || '').trim();
+            const renderSourceIntent = resolveStagingIntent({
+                prompt: renderPromptText,
+                hasUploadedSourceImage: !!activeBgUrl
+            });
+            const renderSourcePreservationBlock = buildStagingSourcePreservationPromptBlock(renderSourceIntent, {
+                selectedAspectRatio: state.director.aspectRatio
+            });
+            const shouldUseSourcePreservingTransform =
+                renderSourceIntent.mode === 'source_preserving_layout_transform' && !!activeBgUrl;
 
             let safeExtractedStyle = extractedStyle;
             if (hasStrictIdentityRefs && extractedStyle) {
@@ -1627,7 +1663,17 @@ Output: environment plate only.
                 console.warn(`[IdentityPrecedence] Subject/style analysis demoted in STAGE generation because strict actor refs are present`);
             }
 
-            const shouldUseStrictPipeline = strictMode || state.director.replaceAnchorSubjects;
+            const shouldUseStrictPipeline = !shouldUseSourcePreservingTransform && (strictMode || state.director.replaceAnchorSubjects);
+
+            if (shouldUseSourcePreservingTransform) {
+                dispatch({
+                    type: 'ADD_LOG',
+                    payload: {
+                        message: 'Source-to-deliverable intent detected. Preserving uploaded image as Image A and adapting layout only.',
+                        type: 'info'
+                    }
+                });
+            }
 
             if (shouldUseStrictPipeline) {
                 const plan = buildRegionPlan({ token: tokenOverrides });
@@ -1821,6 +1867,7 @@ Output: environment plate only.
                                 strictMode: true,
                                 billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
                                 entitlements: state.billingEntitlements,
+                                identityLocks: passIdentitySet?.identityLock ? [passIdentitySet.identityLock] : undefined,
                                 onJobAccepted: (id) => {
                                     passJobId = id;
                                     dispatch({ type: 'ADD_BACKGROUND_JOB', payload: { id, status: 'polling_foreground', context: 'scene_render', startedAt: Date.now() } });
@@ -2041,6 +2088,7 @@ Output: environment plate only.
                     limitedRefs,
                     { 
                         aspectRatio: state.director.aspectRatio, imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, uiWaitWindowMs: stageUiWaitWindowMs,
+                        identityLocks: activeIdentityLocks,
                         onJobAccepted: (id) => {
                             actualGenId = id;
                             dispatch({ type: 'ADD_BACKGROUND_JOB', payload: { id, status: 'polling_foreground', context: 'scene_render', startedAt: Date.now() } });
@@ -2088,7 +2136,16 @@ Output: environment plate only.
                     });
                 }
 
-                if (activeBgUrl && !references.some(r => r.url === activeBgUrl)) {
+                if (shouldUseSourcePreservingTransform && activeBgUrl) {
+                    const sourceFirstReferences = buildSourcePreservingReferenceImages(
+                        activeBgUrl,
+                        references,
+                        14
+                    );
+                    references.splice(0, references.length, ...sourceFirstReferences);
+                    urls.clear();
+                    sourceFirstReferences.forEach((reference) => urls.add(reference.url));
+                } else if (activeBgUrl && !references.some(r => r.url === activeBgUrl)) {
                     references.push({ url: activeBgUrl, label: "Environment/Lighting Anchor" });
                 }
 
@@ -2105,6 +2162,7 @@ Output: environment plate only.
                 );
 
                 const loosePromptText = [
+                    renderSourcePreservationBlock,
                     buildLoosePrompt(
                         dnaForRender,
                         state.tokens,
@@ -2125,6 +2183,7 @@ Output: environment plate only.
                     references.slice(0, 14),
                     { 
                         aspectRatio: state.director.aspectRatio, imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, uiWaitWindowMs: stageUiWaitWindowMs,
+                        identityLocks: activeIdentityLocks,
                         onJobAccepted: (id) => {
                             actualGenId = id;
                             dispatch({ type: 'ADD_BACKGROUND_JOB', payload: { id, status: 'polling_foreground', context: 'scene_render', startedAt: Date.now() } });
@@ -2580,7 +2639,7 @@ Output: environment plate only.
     };
 
     const generateFaceProtectionMask = async () => {
-        if (!ensureStagingAiAccess('Protection Mask')) return;
+        if (!(await ensureStagingAiAccess('Protection Mask'))) return;
         setProtectStatus('generating');
         try {
             const captured = (viewMode === 'result' && state.resultImage)
@@ -2767,7 +2826,7 @@ Output: environment plate only.
     };
 
     const applyRegionEditQueue = async () => {
-        if (!ensureStagingAiAccess('Region Edit')) return;
+        if (!(await ensureStagingAiAccess('Region Edit'))) return;
         if (!regionEdit.layers.some((l) => l.enabled && l.maskDataUrl && (l.prompt || '').trim())) {
             dispatch({ type: 'ADD_LOG', payload: { message: 'No enabled mask layers with both mask + prompt.', type: 'error' } });
             return;
@@ -3079,7 +3138,7 @@ Output: environment plate only.
         const slot = state.referenceSlots.find(s => s.index === inspectRefIndex);
         if (!slot || !slot.url) return;
         
-        if (!ensureStagingAiAccess('Auto-Analyze DNA')) return;
+        if (!(await ensureStagingAiAccess('Auto-Analyze DNA'))) return;
 
         setAnalyzingTokenId('ref');
         setInspectAnalysis('Analyzing DNA...');

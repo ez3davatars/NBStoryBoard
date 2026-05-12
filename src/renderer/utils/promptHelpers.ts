@@ -7,6 +7,8 @@ import type { ActorIdentityReferenceSet, ShotsActorOption } from '../context/App
 import { SHOT_PRESETS, type ShotPresetDefinition } from './shotsPresets';
 import { buildSceneTruthSnapshotBlock } from './sceneTruthHelpers';
 import { stripShotDirectiveContamination } from './analysisSanitizers';
+import { buildPoseCoherenceContract, buildPoseCoherenceNegativeTokens } from '../../prompts/poseCoherence';
+import { buildStyleCategoryContract, buildStyleNegativePrompt } from '../../prompts/styleContracts';
 
 export const SCENE_LOCK_NEGATIVE_TOKENS = "scene alteration, background change, lighting shift, camera angle change, style deviation, new composition, structural change, reimagined scene, time of day shift, seasonal change, architectural alteration, furniture movement, lens flares, color grading shift, original studio background, white backgrounds showing through gaps";
 
@@ -91,6 +93,23 @@ type PresetPromptOption = {
   prompt: string;
 };
 
+const buildExtractedStyleCategoryBlock = (extractedStyle?: ExtractedStyle | null): string => {
+  if (!extractedStyle) return '';
+  const styleSeed = extractedStyle.renderStyle || extractedStyle.medium || '';
+  return buildStyleCategoryContract(styleSeed, {
+    selectedStyleLabel: extractedStyle.renderStyle || extractedStyle.medium || 'scene character style',
+    sourceImagePolicy: 'Actor/source references control identity, body, wardrobe, and placement only; source-photo realism must not override the active character render category.',
+    boardPresentationPolicy: 'Staging controls scene layout, placement, camera, and environment composition only.',
+    lightingPolicy: 'Scene lighting and cinematic grading must be interpreted within the active character render category.',
+    appliesTo: 'every visible staged character, inserted actor, replacement subject, shot variant, and scene thumbnail'
+  });
+};
+
+const buildExtractedStyleCategoryNegative = (extractedStyle?: ExtractedStyle | null): string => {
+  if (!extractedStyle) return '';
+  return buildStyleNegativePrompt(extractedStyle.renderStyle || extractedStyle.medium || '');
+};
+
 type StrictPromptPlanEntry = {
   region: number;
   token: StageToken;
@@ -109,6 +128,10 @@ export const compileV3DirectorPrompt = (director: DirectorSettings, slots: Refer
   const activeRefs = getActiveReferenceSlots(slots);
 
   const segments: string[] = [];
+  const hasVisibleHumanSubject =
+    activeRefs.length > 0 ||
+    tokens.length > 0 ||
+    /\b(actor|character|person|human|subject|body|wardrobe|costume)\b/i.test(`${director.subject} ${bgPrompt}`);
 
   // 0) Output contract (put first for better compliance)
   segments.push(
@@ -128,7 +151,8 @@ export const compileV3DirectorPrompt = (director: DirectorSettings, slots: Refer
     ? 'text, numbers, annotations, outlines, bounding boxes, arrows, circles, ui elements, red lines, green lines, marker strokes, sketches, overlay'
     : '';
   const sceneLockNegs = director.sceneLock ? SCENE_LOCK_NEGATIVE_TOKENS : '';
-  const neg = mergeNegatives(director.negativePrompt || '', safetyNegs, markerNegs, sceneLockNegs);
+  const poseNegs = hasVisibleHumanSubject ? buildPoseCoherenceNegativeTokens() : '';
+  const neg = mergeNegatives(director.negativePrompt || '', safetyNegs, markerNegs, sceneLockNegs, poseNegs);
   if (neg.trim()) {
     segments.push(`NON-NEGOTIABLE — DO NOT INCLUDE ANY OF THE FOLLOWING:\n${formatNegativesForGemini(neg.trim())}`);
   }
@@ -147,6 +171,17 @@ export const compileV3DirectorPrompt = (director: DirectorSettings, slots: Refer
       `- Do NOT reinterpret spatial layout.\n` +
       `- Lighting must respect layer separation.`
   );
+
+  if (hasVisibleHumanSubject) {
+    segments.push(buildPoseCoherenceContract({
+      strictness: 'scene',
+      subjectScope: 'visible_body',
+      stanceType: 'anchor_preserved',
+      footingMode: 'anchor_preserved',
+      twistAllowed: false,
+      twistIntensity: 0
+    }));
+  }
 
   // 3) Replacement / Mapping priority: Marker > Spatial > Replace
   if (director.markerType) {
@@ -467,6 +502,14 @@ export const buildStrictPrompt = (
         refStackBlock,
         "",
         "CRITICAL COMMANDS (ZERO TOLERANCE):",
+        buildPoseCoherenceContract({
+            strictness: 'scene',
+            subjectScope: 'visible_body',
+            stanceType: 'anchor_preserved',
+            footingMode: 'anchor_preserved',
+            twistAllowed: false,
+            twistIntensity: 0
+        }),
         "1. SINGLE IMAGE OUTPUT: Generate ONLY the final rendered scene. Do NOT render a collage, sidebar, dashboard, or layout showing the references. If the output is not a single clean 16:9 scene, it is a FAILURE.",
         "- UNIFORM ENVIRONMENT: All background details (walls, props, lighting) must remain 100% identical to the CLEAN_BG_PLATE outside of the character regions.",
         director.replaceAnchorSubjects
@@ -514,6 +557,7 @@ export const buildStrictPrompt = (
 - Render Style: ${extractedStyle.renderStyle}
 - Color Palette: ${extractedStyle.palette}
 - Mood/Vibe: ${extractedStyle.mood}
+${buildExtractedStyleCategoryBlock(extractedStyle)}
 
 ANTI-STYLE-DRIFT GUARDRAIL: This style envelope MUST ONLY affect the rendering look, colors, and visual treatment. It MUST NOT reinterpret or replace the requested location, scene category, furniture, props, or world (e.g., do not turn a cafe into a dungeon). The core scene nouns from the Director Notes remain mandatory and primary.` : "",
         extractedStyle ? "\n" : "",
@@ -588,6 +632,16 @@ export const buildLoosePrompt = (
 
     if (refStackBlock) p += `${refStackBlock}\n\n`;
     p += "Cinematic composition. ";
+    if (activeSlots.length > 0 || sortedTokens.length > 0) {
+        p += `\n${buildPoseCoherenceContract({
+            strictness: 'scene',
+            subjectScope: 'visible_body',
+            stanceType: 'anchor_preserved',
+            footingMode: 'anchor_preserved',
+            twistAllowed: false,
+            twistIntensity: 0
+        })}\n\n`;
+    }
 
     sortedTokens.forEach((t, i) => {
         const center = t.x + t.width / 2;
@@ -622,6 +676,10 @@ CRITICAL: You are compositing these characters into the provided background anch
 
 ### ANATOMY & REALISM GUARDRAIL
 CRITICAL NEGATIVE PROMPT: You MUST NOT generate extra limbs, extra legs, phantom body parts, or disembodied characters. Ensure perfect anatomical structure. Characters must have exactly two legs and two arms. No floating legs under tables or detached hands.\n`;
+    const extractedStyleNegative = buildExtractedStyleCategoryNegative(extractedStyle);
+    if (extractedStyleNegative) {
+        p += `\n### STYLE CATEGORY NEGATIVES\nselected style category drift, ${extractedStyleNegative}.\n`;
+    }
 
     if (extractedStyle) {
         p += `\n### STYLE ENVELOPE (VISUAL TREATMENT ONLY):
@@ -629,6 +687,7 @@ CRITICAL NEGATIVE PROMPT: You MUST NOT generate extra limbs, extra legs, phantom
 - Render Style: ${extractedStyle.renderStyle}
 - Color Palette: ${extractedStyle.palette}
 - Mood/Vibe: ${extractedStyle.mood}
+${buildExtractedStyleCategoryBlock(extractedStyle)}
 
 ANTI-STYLE-DRIFT GUARDRAIL: This style envelope MUST ONLY affect the rendering look, colors, and visual treatment. It MUST NOT reinterpret or replace the requested location, scene category, furniture, props, or world (e.g., do not turn a modern office into a fantasy tavern). The core scene nouns remain mandatory and primary.\n`;
     }
@@ -1124,7 +1183,15 @@ export function buildExactPoseLockBlock(isShotVariant = false): string {
       "Preserve seated, mounted, standing, leaning, holding, touching, and riding relationships exactly. Do not detach a subject from a mount/seat/prop or move them beside it.",
       "Do not solve a close-up or alternate angle by re-staging the actor. The actor remains in the same physical place and pose; only the camera changes.",
       "Do not shrink the head. Do not widen the shoulders. Do not mutate the face or hair structure.",
-      "Do not reinterpret the performance. Treat the source result as a frozen moment in time viewed from a different camera."
+      "Do not reinterpret the performance. Treat the source result as a frozen moment in time viewed from a different camera.",
+      buildPoseCoherenceContract({
+        strictness: 'scene',
+        subjectScope: 'visible_body',
+        stanceType: 'anchor_preserved',
+        footingMode: 'anchor_preserved',
+        twistAllowed: false,
+        twistIntensity: 0
+      })
     ].join('\n');
   }
 
@@ -1143,7 +1210,15 @@ export function buildExactPoseLockBlock(isShotVariant = false): string {
     "If a limb or hand is partially hidden in the anchor, infer only the hidden continuation of the same pose, not a new pose.",
     "Do not convert a symmetrical pose into an asymmetrical one or vice versa.",
     "Do not change weight distribution or balance.",
-    "No re-acting, no new animation beat, no new gesture."
+    "No re-acting, no new animation beat, no new gesture.",
+    buildPoseCoherenceContract({
+      strictness: 'scene',
+      subjectScope: 'visible_body',
+      stanceType: 'anchor_preserved',
+      footingMode: 'anchor_preserved',
+      twistAllowed: false,
+      twistIntensity: 0
+    })
   ].join('\n');
 }
 

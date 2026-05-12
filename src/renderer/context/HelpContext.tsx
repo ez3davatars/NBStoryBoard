@@ -24,6 +24,18 @@ interface HelpMap {
 
 // 1. Load map verbatim
 const helpMap = helpMapRaw as HelpMap;
+const helpZoneAliases: Record<string, string> = {
+ nano: 'nanoCast',
+ nano_cast: 'nanoCast',
+ staging: 'stage'
+};
+const emittedMissingHelpWarnings = new Set<string>();
+
+const warnMissingHelpOnce = (key: string, message: string) => {
+ if (process.env.NODE_ENV !== 'development' || emittedMissingHelpWarnings.has(key)) return;
+ emittedMissingHelpWarnings.add(key);
+ console.warn(message);
+};
 
 interface HelpContextType {
  useHelp: (zone: string, id: string) => HelpConfig | null;
@@ -36,19 +48,16 @@ export const HelpProvider: React.FC<{ children: React.ReactNode }> = ({ children
  // 3. Pure Selector Hook
  const getHelp = (zone: string, id: string): HelpConfig | null => {
  // Strict lookup: Zone -> ID
- const zoneData = helpMap.zones[zone];
+ const resolvedZone = helpMap.zones[zone] ? zone : helpZoneAliases[zone] ?? zone;
+ const zoneData = helpMap.zones[resolvedZone];
  if (!zoneData) {
- if (process.env.NODE_ENV === 'development') {
- console.warn(`[HelpContext] Zone not found: ${zone}`);
- }
+ warnMissingHelpOnce(`zone:${zone}`, `[HelpContext] Zone not found: ${zone}`);
  return null;
  }
 
  const config = zoneData[id];
  if (!config) {
- if (process.env.NODE_ENV === 'development') {
- console.warn(`[HelpContext] ID not found in zone ${zone}: ${id}`);
- }
+ warnMissingHelpOnce(`id:${resolvedZone}:${id}`, `[HelpContext] ID not found in zone ${resolvedZone}: ${id}`);
  return null;
  }
 

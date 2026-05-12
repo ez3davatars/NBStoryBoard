@@ -39,8 +39,8 @@ function isInsideCacheDir(filePath: string, cacheDirPath: string): boolean {
   if (!filePath || !cacheDirPath) return false;
   // Normalize path separators for comparison
   const normalizedFile = filePath.replace(/\\/g, '/').toLowerCase();
-  const normalizedCache = cacheDirPath.replace(/\\/g, '/').toLowerCase();
-  return normalizedFile.startsWith(normalizedCache);
+  const normalizedCache = cacheDirPath.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  return normalizedFile === normalizedCache || normalizedFile.startsWith(`${normalizedCache}/`);
 }
 
 // --- DATA URL TO UINT8ARRAY ---

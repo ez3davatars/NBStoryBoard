@@ -10,6 +10,7 @@ import VeoPromptStudio from './components/VeoPromptStudio';
 import { StorageService } from './services/StorageService';
 import { LOGO_BASE64 } from './assets/logo';
 import { SupabaseAuth, supabase } from './services/SupabaseClient';
+import { SIGN_IN_REQUIRED_EVENT } from './services/AuthGenerationGate';
 
 import type {
   ViewMode,
@@ -1015,6 +1016,7 @@ const App = () => {
 
   // Settings Modal State
   const [showSettings, setShowSettings] = useState(false);
+  const [showSignInRequiredModal, setShowSignInRequiredModal] = useState(false);
   const [activationStatus, setActivationStatus] = useState<'idle' | 'pending' | 'allowed' | 'denied'>('idle');
   const [activationError, setActivationError] = useState('');
   const [tempKey, setTempKey] = useState(state.apiKey);
@@ -1051,6 +1053,21 @@ const App = () => {
   const byokLicenseLabel = byokOwnership.byokTier
     ? `${byokOwnership.byokTier === 'agency' ? 'Agency Commercial' : 'Indie'} BYOK license`
     : 'BYOK license';
+
+  useEffect(() => {
+    const handleSignInRequired = () => {
+      setShowSignInRequiredModal(true);
+    };
+
+    window.addEventListener(SIGN_IN_REQUIRED_EVENT, handleSignInRequired);
+    return () => window.removeEventListener(SIGN_IN_REQUIRED_EVENT, handleSignInRequired);
+  }, []);
+
+  useEffect(() => {
+    if (state.hostedSession?.user?.id) {
+      setShowSignInRequiredModal(false);
+    }
+  }, [state.hostedSession?.user?.id]);
 
   const closeSettings = () => {
     setShowSettings(false);
@@ -1771,6 +1788,58 @@ const App = () => {
           <HelpCenterDrawer />
           <WelcomeModal />
           <InsufficientCreditModal />
+
+          {showSignInRequiredModal && (
+            <div
+              className="fixed inset-0 z-[4500] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="sign-in-required-title"
+            >
+              <div className="sign-in-required-modal w-full max-w-[520px] rounded-xl border border-yellow-400/35 bg-[#17171a] p-6 shadow-[0_24px_90px_rgba(0,0,0,0.62),0_0_34px_rgba(234,179,8,0.08)]">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h2 id="sign-in-required-title" className="text-lg font-black uppercase tracking-[0.16em] text-white">
+                      SIGN IN REQUIRED
+                    </h2>
+                    <p className="mt-4 text-sm leading-relaxed text-zinc-200">
+                      Please sign in to use Hosted generation, manage credits, and save your results.
+                    </p>
+                    <p className="mt-3 text-xs leading-relaxed text-zinc-400">
+                      If you want to use your own API key, switch to BYOK mode after signing in or from Settings.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowSignInRequiredModal(false)}
+                    className="sign-in-required-close flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors focus:outline-none"
+                    aria-label="Close sign in required dialog"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+                <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setShowSignInRequiredModal(false)}
+                    className="sign-in-required-secondary flex min-h-[44px] w-full items-center justify-center rounded-lg px-5 py-3 text-xs font-black uppercase tracking-[0.14em] transition-colors focus:outline-none sm:w-auto sm:min-w-[128px]"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowSignInRequiredModal(false);
+                      setShowSettings(true);
+                    }}
+                    className="sign-in-required-primary flex min-h-[44px] w-full items-center justify-center rounded-lg px-5 py-3 text-xs font-black uppercase tracking-[0.14em] transition-colors focus:outline-none sm:w-auto sm:min-w-[128px]"
+                  >
+                    Sign In
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Footer / Logs */}
           <footer className="border-t border-[#27272a] bg-black px-3 sm:px-4 py-2 text-[10px] font-mono">

@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
+import { ensureAuthenticatedForGeneration } from '../services/AuthGenerationGate';
 import type { WardrobeItem, CastMember, WardrobeState } from '../context/AppContext';
 import { nativeJoinPath, nativeListFiles, nativeWriteFile } from '../utils/NativeFileAssets';
 // Style Imports for Save Modal
@@ -23,6 +24,13 @@ import { useRecentGenerationsStore } from '../stores/useRecentGenerationsStore';
 import { RecentGenerationsCacheService } from '../services/RecentGenerationsCacheService';
 import RecentGenerationsStrip from './recent/RecentGenerationsStrip';
 import { createUniqueDownloadFilename, createUniqueNumericLabel } from '../utils/downloadFilenames';
+import {
+    buildPoseCoherenceNegativeTokens,
+    buildTurnaroundPoseCoherenceContract,
+    buildTurnaroundViewDefinitionContract,
+    getTurnaroundPanelOrientations
+} from '../../prompts/poseCoherence';
+import { buildStyleCategoryContract, buildStyleNegativePrompt } from '../../prompts/styleContracts';
 
 type PermissionAwareDirectoryHandle = FileSystemDirectoryHandle & {
     queryPermission?: (descriptor?: { mode?: 'read' | 'readwrite' }) => Promise<PermissionState>;
@@ -82,14 +90,314 @@ type ResolvedLookSpec = {
     visibilityOcclusionGuidance: string;
 };
 
+type BodyFitProfile = {
+    presentation: "male" | "female" | "androgynous" | "unspecified";
+    frameSize: "small" | "medium" | "broad";
+    shoulderWidth: "narrow" | "average" | "broad";
+    shoulderSlope: "flat" | "natural" | "sloped";
+    chestVolume: "flat" | "average" | "full";
+    waistShape: "straight" | "defined" | "tapered" | "fuller";
+    hipShape: "narrow" | "average" | "full";
+    armThickness: "slim" | "average" | "full";
+    posture: "upright" | "neutral" | "relaxed";
+    legShape?: "slim" | "average" | "full";
+};
+
+type BodyNoteInterpretation = {
+    hasBodyDirectives: boolean;
+    hasUpperTorsoDirectives: boolean;
+    directives: string[];
+};
+
+type TryOnGarmentFit = WardrobeState['tryOnGarmentFit'];
+type TryOnFabricBehavior = WardrobeState['tryOnFabricBehavior'];
+type TryOnOutputFraming = WardrobeState['tryOnOutputFraming'];
+type TryOnIdentityAnchorSource = 'upload' | 'selected-subject';
+
+const LAUNCH_OUTPUT_FRAMING: TryOnOutputFraming = 'full_body';
+
+const GARMENT_FIT_OPTIONS: Array<{ value: TryOnGarmentFit; label: string }> = [
+    { value: 'slim', label: 'Slim Fit' },
+    { value: 'tailored', label: 'Tailored Fit' },
+    { value: 'standard', label: 'Standard Fit' },
+    { value: 'relaxed', label: 'Relaxed Fit' },
+    { value: 'oversized', label: 'Oversized' }
+];
+
+const FABRIC_BEHAVIOR_OPTIONS: Array<{ value: TryOnFabricBehavior; label: string }> = [
+    { value: 'structured_crisp', label: 'Structured / Crisp' },
+    { value: 'balanced', label: 'Balanced' },
+    { value: 'soft_draped', label: 'Soft / Draped' }
+];
+
 const normalizeLookText = (value: string): string =>
     value.toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
 
 const collectTerms = (text: string, terms: string[]) =>
     terms.filter(term => new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}s?\\b`, 'i').test(text));
 
+const hasAnyLookTerm = (text: string, terms: string[]) =>
+    terms.some(term => new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(text));
+
 const formatResolvedTerms = (terms: string[], fallback: string): string =>
     terms.length > 0 ? Array.from(new Set(terms)).join(', ') : fallback;
+
+const inferFittingNoteBodyGuidance = (fittingNotes: string): BodyNoteInterpretation => {
+    const text = normalizeLookText(fittingNotes);
+    const directives: string[] = [];
+
+    const muscularBuild = hasAnyLookTerm(text, [
+        'muscular build', 'muscular', 'athletic build', 'athletic', 'powerful build',
+        'strong build', 'built', 'physically strong'
+    ]);
+    const wideChest = hasAnyLookTerm(text, [
+        'wide chest', 'broad chest', 'barrel chested', 'large chest', 'full chest',
+        'wide upper chest', 'broad upper chest', 'wide ribcage', 'broad ribcage'
+    ]);
+    const broadShoulders = hasAnyLookTerm(text, [
+        'broad shoulders', 'wide shoulders', 'strong shoulders', 'large shoulders',
+        'shoulder width', 'wide shoulder line'
+    ]);
+    const slimBuild = hasAnyLookTerm(text, ['slim build', 'slender build', 'thin build', 'lean build', 'narrow frame']);
+    const curvyBuild = hasAnyLookTerm(text, ['curvy', 'hourglass', 'defined waist', 'wide hips', 'full hips', 'full bust']);
+    const fullerBuild = hasAnyLookTerm(text, ['fuller build', 'plus size', 'heavyset', 'stocky', 'soft body']);
+
+    if (muscularBuild) {
+        directives.push('Muscular build: stronger upper torso, more shoulder mass, fuller chest, more athletic arm/torso structure, and visible shirt support from the chest and ribcage.');
+    }
+    if (wideChest) {
+        directives.push('Wide chest: visibly broader pectoral/chest span, wider upper ribcage, stronger front silhouette, and garment drape shaped by chest volume rather than a flat torso.');
+    }
+    if (broadShoulders) {
+        directives.push('Broad shoulders: increased shoulder span, stronger shoulder line, shoulder seams placed near the wider shoulder break, and sleeves hanging from a broader upper frame.');
+    }
+    if (slimBuild) {
+        directives.push('Slim build: reduced torso mass, narrower frame, less chest volume, and garment ease scaled to a lean body.');
+    }
+    if (curvyBuild) {
+        directives.push('Curvy build: stronger waist/hip contour, bust or chest shaping where relevant, and garment drape following the waist and hip transition.');
+    }
+    if (fullerBuild) {
+        directives.push('Fuller build: more body volume through torso/arms/hips where relevant, garment ease that respects the body underneath, and no flattening into a narrow mannequin.');
+    }
+
+    return {
+        hasBodyDirectives: directives.length > 0,
+        hasUpperTorsoDirectives: muscularBuild || wideChest || broadShoulders,
+        directives
+    };
+};
+
+const inferBodyFitProfile = (
+    subject: CastMember,
+    fittingNotes: string,
+    hasCharacterSheet: boolean
+): BodyFitProfile => {
+    const profile = subject.profile;
+    const text = normalizeLookText([
+        subject.name,
+        profile?.identity,
+        profile?.wardrobe,
+        profile?.accessories,
+        profile?.style,
+        fittingNotes,
+        hasCharacterSheet ? 'character sheet body anchor' : ''
+    ].filter(Boolean).join(' '));
+
+    const feminine = hasAnyLookTerm(text, ['female', 'woman', 'women', 'feminine', 'girl', 'lady', 'mother', 'queen', 'princess', 'heroine', 'wife']);
+    const masculine = hasAnyLookTerm(text, ['male', 'man', 'men', 'masculine', 'boy', 'gentleman', 'father', 'king', 'prince', 'hero', 'husband']);
+    const androgynous = hasAnyLookTerm(text, ['androgynous', 'nonbinary', 'non binary', 'gender neutral']);
+
+    const presentation: BodyFitProfile['presentation'] = androgynous
+        ? 'androgynous'
+        : feminine && !masculine
+            ? 'female'
+            : masculine && !feminine
+                ? 'male'
+                : 'unspecified';
+
+    const upperTorsoGuidance = inferFittingNoteBodyGuidance(fittingNotes);
+    const wideChest = hasAnyLookTerm(text, ['wide chest', 'broad chest', 'barrel chested', 'wide ribcage', 'broad ribcage', 'wide upper chest']);
+    const broadShoulders = hasAnyLookTerm(text, ['broad shoulders', 'wide shoulders', 'strong shoulders', 'wide shoulder line']);
+    const muscular = hasAnyLookTerm(text, ['muscular', 'muscular build', 'athletic build', 'powerful build', 'strong build']);
+    const broadFrame = hasAnyLookTerm(text, ['broad', 'large', 'strong', 'powerful', 'muscular', 'stocky', 'heavy', 'barrel chested', 'wide frame']) ||
+        upperTorsoGuidance.hasUpperTorsoDirectives;
+    const smallFrame = hasAnyLookTerm(text, ['small', 'petite', 'slim', 'thin', 'narrow', 'delicate', 'youth', 'lean']);
+    const curvy = hasAnyLookTerm(text, ['curvy', 'hourglass', 'full bust', 'wide hips', 'full hips', 'busty']);
+    const athletic = hasAnyLookTerm(text, ['athletic', 'v shaped', 'v shape', 'tapered', 'broad shouldered']) || muscular;
+    const fuller = hasAnyLookTerm(text, ['fuller', 'plus size', 'soft', 'heavyset', 'stocky', 'round']);
+    const relaxedPosture = hasAnyLookTerm(text, ['relaxed', 'slouched', 'casual', 'soft posture']);
+    const uprightPosture = hasAnyLookTerm(text, ['upright', 'formal', 'military', 'regal', 'poised']);
+
+    return {
+        presentation,
+        frameSize: broadFrame ? 'broad' : smallFrame ? 'small' : 'medium',
+        shoulderWidth: broadFrame || athletic || broadShoulders ? 'broad' : smallFrame ? 'narrow' : 'average',
+        shoulderSlope: hasAnyLookTerm(text, ['sloped shoulder', 'sloping shoulder', 'dropped shoulder']) ? 'sloped' : broadFrame || athletic ? 'flat' : 'natural',
+        chestVolume: curvy || wideChest || muscular || hasAnyLookTerm(text, ['full chest', 'bust', 'busty', 'broad chest']) ? 'full' : smallFrame ? 'flat' : 'average',
+        waistShape: fuller ? 'fuller' : curvy || presentation === 'female' ? 'defined' : athletic ? 'tapered' : 'straight',
+        hipShape: curvy ? 'full' : smallFrame || athletic ? 'narrow' : 'average',
+        armThickness: broadFrame || athletic ? 'full' : smallFrame ? 'slim' : 'average',
+        posture: relaxedPosture ? 'relaxed' : uprightPosture ? 'upright' : 'neutral',
+        legShape: broadFrame || fuller ? 'full' : smallFrame ? 'slim' : 'average'
+    };
+};
+
+const describeGarmentFitMode = (mode: TryOnGarmentFit): string => {
+    switch (mode) {
+        case 'slim':
+            return 'Slim Fit: closer to the body with minimal ease, clear body-following silhouette, and controlled tension at chest, waist, arms, and hem.';
+        case 'tailored':
+            return 'Tailored Fit: shaped and polished with clean shoulder placement, intentional waist control, structured seams, and professional garment ease.';
+        case 'relaxed':
+            return 'Relaxed Fit: comfortable ease with looser torso and sleeve fall, visible gravity, and soft movement without looking oversized or sloppy.';
+        case 'oversized':
+            return 'Oversized: intentionally roomy with dropped ease, broader silhouette, lower tension, longer sleeve/hem behavior, and believable fabric weight.';
+        case 'standard':
+        default:
+            return 'Standard Fit: natural everyday garment ease, neither tight nor baggy, with believable room over the subject-specific body.';
+    }
+};
+
+const describeFabricBehavior = (mode: TryOnFabricBehavior): string => {
+    switch (mode) {
+        case 'structured_crisp':
+            return 'Structured / Crisp: sharper garment planes, cleaner seams, controlled wrinkles, stronger collar/cuff/hem shape, and fabric that holds form.';
+        case 'soft_draped':
+            return 'Soft / Draped: softer fold transitions, more visible gravity, gentler sleeve and hem fall, and fabric that conforms fluidly over body volumes.';
+        case 'balanced':
+        default:
+            return 'Balanced: realistic medium fabric behavior with moderate structure, natural fold density, believable tension, and clean premium finish.';
+    }
+};
+
+const describeOutputFraming = (mode: TryOnOutputFraming): string => {
+    switch (mode) {
+        case 'bust':
+            return 'Bust: render head, neck, shoulders, and upper chest. Focus on collar, neckline, upper garment fit, and face.';
+        case 'half_body':
+            return 'Torso: render head to hips or upper thigh. Must include the complete torso garment, full visible sleeves, cuffs when applicable, waist/hip area, and bottom hem. Do not crop off sleeves, hands, hips, or garment hem unless impossible.';
+        case 'full_body':
+        default:
+            return 'Full Body: render the complete head-to-toe subject, including footwear when relevant.';
+    }
+};
+
+const describeTurnaroundFraming = (mode: TryOnOutputFraming): string => {
+    switch (mode) {
+        case 'bust':
+            return 'Bust turnaround: each panel should use the same upper-body crop from upper chest/bust to top of head, preserving collar, neckline, shoulders, and upper garment fit.';
+        case 'half_body':
+            return 'Torso turnaround: each panel should show head to hips or upper thigh, preserving the complete torso garment, full visible sleeves, cuffs when applicable, waist/hip area, and bottom hem.';
+        case 'full_body':
+        default:
+            return 'Full-body turnaround: each panel should show the full standing subject from top of head/headwear to soles of feet.';
+    }
+};
+
+const buildOutputFramingBlock = (mode: TryOnOutputFraming): string => `
+ OUTPUT FRAMING RULE
+ Follow the selected output framing precisely.
+ - ${describeOutputFraming(mode)}
+ ${mode === 'half_body' ? `
+ TORSO FRAMING RULE
+ Torso framing is not a tight crop. It must show the full upper garment fit from shoulders through waist/hips, including sleeve length and hem behavior.
+ The crop should preserve enough body context to judge natural garment drape.
+` : ''}
+ Do not ignore the selected framing.
+ Do not generate a sheet layout in place of framing.
+`;
+
+const buildBodyAwareFittingBlock = (
+    profile: BodyFitProfile,
+    noteGuidance: BodyNoteInterpretation,
+    fittingNotes: string,
+    fitMode: TryOnGarmentFit,
+    fabricBehavior: TryOnFabricBehavior,
+    hasCharacterSheet: boolean
+): string => `
+ BODY FIT INTERPRETATION (INTERNAL)
+ - Presentation: ${profile.presentation}
+ - Frame size: ${profile.frameSize}; shoulder width: ${profile.shoulderWidth}; shoulder slope: ${profile.shoulderSlope}
+ - Chest/bust volume: ${profile.chestVolume}; waist shape: ${profile.waistShape}; hip shape: ${profile.hipShape}
+ - Arm thickness: ${profile.armThickness}; posture: ${profile.posture}; leg shape: ${profile.legShape || 'average'}
+ - Visual source authority: infer final body proportions from the Selected Subject image first. Use this compact profile as guidance, not a reason to override the visible body.
+ ${hasCharacterSheet ? '- Character Sheet Identity Anchor is also body proportion guidance: preserve both identity and body silhouette consistency across front and turnaround outputs.' : '- If no Character Sheet Identity Anchor is provided, rely on the Selected Subject image for body shape, posture, and proportion guidance.'}
+
+ FITTING NOTES PRIORITY RULE
+ User-entered Fitting Notes are high-priority body-direction instructions and must materially influence the generated result.
+ Do not treat fitting notes as optional flavor text.
+ Fitting notes must influence body interpretation, upper torso shape, shoulder width, chest volume, waist shape, sleeve tension, garment drape, and silhouette.
+ If fitting notes conflict with generic model defaults, fitting notes win.
+ ${fittingNotes.trim() ? `Active user Fitting Notes: "${fittingNotes.trim()}"` : 'No explicit user body-direction fitting notes were entered; rely on the selected subject image and wardrobe reference.'}
+
+ BODY NOTE INTERPRETATION RULE
+ Translate fitting-note physique language into actual body-shape changes before rendering the garment.
+ Do not merely repeat the words in the prompt without visible effect.
+ ${noteGuidance.hasBodyDirectives
+        ? noteGuidance.directives.map(directive => `- ${directive}`).join('\n ')
+        : '- No explicit physique override was detected in the fitting notes; preserve the selected subject body as shown.'}
+
+ UPPER TORSO ENFORCEMENT RULE
+ If fitting notes include "muscular build", "wide chest", "broad shoulders", or similar upper-body instructions, the subject must visibly show broader chest, wider shoulder line, stronger upper torso silhouette, more substantial shirt support from the chest/ribcage, and more believable masculine torso volume where appropriate.
+ The shirt must drape over a real chest, not a flat mannequin torso.
+ ${noteGuidance.hasUpperTorsoDirectives
+        ? 'ACTIVE UPPER-TORSO DIRECTIVE: Do not produce a narrow generic torso, flat chest, weak shoulder span, unchanged body shape, or straight hanging shirt with no upper-body structure underneath.'
+        : 'If no upper-torso fitting note is present, do not invent extra body mass beyond the selected subject/reference image.'}
+
+ HUMAN BODY PRIORITY RULE
+ The body underneath remains primary.
+ The garment conforms to the body.
+ The garment must not erase or flatten the subject's muscular or broad-chested structure.
+ Garment Fit mode and Fabric Behavior mode must adapt to the body directives, not override or neutralize them.
+ Body-aware fitting may change only the garment's worn drape, ease, tension, and contact with the body. It must not change the selected wardrobe's design architecture, sleeve length, cuff design, collar, placket, button layout, hem, embroidery, trim, color, material, or coverage.
+
+ GARMENT FIT MODE
+ - ${describeGarmentFitMode(fitMode)}
+
+ FABRIC BEHAVIOR MODE
+ - ${describeFabricBehavior(fabricBehavior)}
+
+ VISIBLE QUALITY SETTINGS ENFORCEMENT
+ The selected Garment Fit and Fabric Behavior settings must be visible in the final image.
+ Fit mode must change closeness, ease, sleeve tension, torso silhouette, and hem fall.
+ Fabric Behavior must change wrinkle density, fold softness, fabric weight, and the way the garment hangs from shoulders, chest/bust, arms, waist, and hem.
+ Relaxed Fit must show comfortable real garment ease without becoming a flat hanging rectangle.
+ Soft / Draped fabric must show soft gravity-driven folds, subtle tension transitions, natural sleeve bend behavior, and believable hem weight.
+ Settings must not be neutralized by copying the wardrobe reference image as a flat product silhouette.
+
+ BODY-AWARE GARMENT FIT RULE
+ The garment must conform naturally to the selected subject's body shape and posture.
+ The clothing should not look pasted on, flat, or templated.
+ Fit must respond to shoulder width and slope, chest or bust volume, waist shape, hip shape where relevant, arm thickness, posture, and overall frame size.
+ Fit response must preserve the selected wardrobe design exactly; refit the same garment, do not redesign it.
+ Show believable garment ease, seam placement, and silhouette.
+ Preserve the subject's real body presence while making the garment look professionally fitted.
+ For structured or enclosed costumes, preserve the exact costume design and coverage while still showing believable wearer volume, contact, scale, and integration.
+
+ FABRIC DRAPE RULE
+ Garment behavior must reflect fabric weight and structure.
+ Show natural drape, tension, and gravity.
+ Include subtle folds, seam pull, and shape transitions where appropriate: shoulders, chest/bust, underarm, sleeve bend, waist, hem, side seams, and cuff area.
+ Do not create excessive wrinkles, but do create believable garment life.
+ Avoid perfectly flat or evenly hanging fabric.
+
+ BODY PRESENTATION FIT RULE
+ Male, female, and other body presentations should not use the same default garment shaping.
+ Fit should adapt appropriately to the subject's body structure.
+ For men: respect chest width, shoulder structure, sleeve fall, waist taper or straightness.
+ For women: respect bust shaping, waist definition, hip shaping, and garment contouring where appropriate.
+ For all subjects: preserve believable anatomy and fit without caricature.
+ Do not force all clothing into one neutral mannequin silhouette.
+
+ GARMENT CONSTRUCTION RULE
+ Collars, plackets, buttons, cuffs, hems, and seams must sit naturally on the body.
+ - Collars should wrap the neck believably.
+ - Shoulder seams should sit near the shoulder break.
+ - Sleeves should reflect arm volume and sleeve length.
+ - Hems should fall naturally against torso/hips.
+ - Button fronts should align with body center without looking printed on.
+`;
 
 const buildResolvedLookSpec = (wardrobe: WardrobeItem, fittingNotes: string): ResolvedLookSpec => {
     const sourceSummary = [wardrobe.name, wardrobe.prompt, wardrobe.category, fittingNotes]
@@ -172,7 +480,7 @@ const buildResolvedLookContractBlock = (
  - Visibility/occlusion guidance: ${spec.visibilityOcclusionGuidance}
 
  STRICT VIRTUAL TRY-ON RULES
- ${hasCharacterSheet ? '- Preserve the exact identity of the subject from the character sheet identity anchor: same facial structure, hairline/hairstyle logic, complexion, overall proportions, and same person across all requested views.' : '- Preserve the exact visible identity of the selected subject across all requested views.'}
+ ${hasCharacterSheet ? '- Preserve the exact identity of the subject from the character sheet identity anchor: same facial structure, complexion, overall proportions, and same person across all requested views. Preserve hairstyle, hairline presentation, facial hair, and grooming from the selected subject/reference image.' : '- Preserve the exact visible identity, hairstyle, facial hair, and grooming of the selected subject across all requested views.'}
  - Render the same subject consistently across all requested views.
  - Use one single resolved outfit interpretation based on the selected wardrobe and fitting notes.
  - Use one single resolved accessory set. Do not invent or duplicate accessories.
@@ -210,6 +518,7 @@ const WardrobeStudio = () => {
         fittedImage, tryOnMask, restorationLayer, removeBg: removeTryOnBg,
         fringeSize, brushSize, history, historyIndex, isBrushActive: globalIsBrushActive,
         tryOnNote, brandingLogo, logoPosition,
+        tryOnGarmentFit, tryOnFabricBehavior,
         tryOnOutputMode, tryOnViews, tryOnSheetFB, tryOnSheetLR, activeTryOnView
     } = state.wardrobeState;
     const tryOnOutputModeRef = useRef<WardrobeState['tryOnOutputMode']>(tryOnOutputMode);
@@ -244,6 +553,8 @@ const WardrobeStudio = () => {
     const setProcessedTryOnUrl = (val: string | null) => updateState({ processedTryOnUrl: val });
     const setBrandingLogo = (val: string | null) => updateState({ brandingLogo: val });
     const setLogoPosition = (val: string) => updateState({ logoPosition: val });
+    const setTryOnGarmentFit = (val: TryOnGarmentFit) => updateState({ tryOnGarmentFit: val });
+    const setTryOnFabricBehavior = (val: TryOnFabricBehavior) => updateState({ tryOnFabricBehavior: val });
     const setTryOnOutputMode = (val: 'front' | 'turnaround') => {
         tryOnOutputModeRef.current = val;
 
@@ -280,6 +591,7 @@ const WardrobeStudio = () => {
 
     // Character Sheet reference (identity anchor for turnarounds)
     const [tryOnCharacterSheet, setTryOnCharacterSheet] = useState<string | null>(null);
+    const [tryOnCharacterSheetSource, setTryOnCharacterSheetSource] = useState<TryOnIdentityAnchorSource | null>(null);
 
     // --- COSTUME DESIGNER: REFERENCE INPUT (SESSION ONLY) ---
     type DesignerRefKind = 'sketch' | 'costume';
@@ -372,11 +684,34 @@ const WardrobeStudio = () => {
         try {
             const dataUrl = await fileToDataUrl(file);
             setTryOnCharacterSheet(dataUrl);
+            setTryOnCharacterSheetSource('upload');
             showToast("Character sheet loaded.");
         } finally {
             e.target.value = "";
         }
     };
+
+    const handleUseSelectedSubjectAsAnchor = () => {
+        if (!selectedCharacter) {
+            showToast("Select a subject first.");
+            return;
+        }
+
+        setTryOnCharacterSheet(selectedCharacter.previewUrl || selectedCharacter.url);
+        setTryOnCharacterSheetSource('selected-subject');
+        showToast("Selected subject loaded as identity anchor.");
+    };
+
+    const clearTryOnCharacterSheet = () => {
+        setTryOnCharacterSheet(null);
+        setTryOnCharacterSheetSource(null);
+    };
+
+    const tryOnCharacterSheetStatus = tryOnCharacterSheet
+        ? tryOnCharacterSheetSource === 'selected-subject'
+            ? 'Loaded from selected subject.'
+            : 'Loaded.'
+        : 'None loaded.';
 
     const imageRoleName = (index: number) =>
         `Image ${String.fromCharCode(64 + index)} ([IMAGE ${index}])`;
@@ -394,19 +729,19 @@ const WardrobeStudio = () => {
         costumeIndex: number;
         identityAnchorIndex?: number;
         brandingIndex?: number;
-        canonicalLrIndex?: number;
+        canonicalFbIndex?: number;
     }) => {
         const lines = [
-            `- ${imageRoleName(1)} is the selected subject / try-on target. Use it for current body proportions, pose/body continuity, source rendering style, and the final output subject.`
+            `- ${imageRoleName(1)} is the selected subject / person body source. Use Image A as the physical person being dressed: current body proportions, pose/body continuity, source rendering style, hairstyle, grooming, and final output subject.`
         ];
 
         lines.push(
-            `- ${imageRoleName(roles.costumeIndex)} is the wardrobe/costume source asset. Apply this wardrobe to the same person; do not copy identity from the wardrobe image.`
+            `- ${imageRoleName(roles.costumeIndex)} is the selected wardrobe / exact costume source. Apply this exact wardrobe to the same person; do not copy identity from the wardrobe image, do not redesign it, and do not reproduce the wardrobe source image as visible scene content.`
         );
 
         if (roles.identityAnchorIndex) {
             lines.push(
-                `- ${imageRoleName(roles.identityAnchorIndex)} is the Character Sheet Identity Anchor. Identity reference only: use it to preserve the same person's facial identity and likeness. Do not copy its layout, labels, sheet format, annotations, panels, typography, or view grid.`
+                `- ${imageRoleName(roles.identityAnchorIndex)} is the Character Sheet Identity Anchor. Identity and likeness authority only: use it to preserve the same person's face/head identity. Do not replace Image A's body/person source, and do not copy its layout, labels, sheet format, annotations, panels, typography, or view grid.`
             );
         }
 
@@ -414,9 +749,9 @@ const WardrobeStudio = () => {
             lines.push(`- ${imageRoleName(roles.brandingIndex)} is the branding/logo source asset only.`);
         }
 
-        if (roles.canonicalLrIndex) {
+        if (roles.canonicalFbIndex) {
             lines.push(
-                `- ${imageRoleName(roles.canonicalLrIndex)} is the generated Left/Right geometry continuity sheet. Use it for costume/headwear side geometry only; it must not outrank the Character Sheet or Selected Subject for identity.`
+                `- ${imageRoleName(roles.canonicalFbIndex)} is the generated Front/Back canonical turnaround anchor. For LR generation, use it as the primary body scale, head scale, silhouette, and costume-construction anchor; it must not replace Image A as the selected subject or Image B as the exact wardrobe authority.`
             );
         }
 
@@ -1237,6 +1572,9 @@ const WardrobeStudio = () => {
             dispatch({ type: 'ADD_LOG', payload: { message: "Costume Designer requires a prompt or reference image.", type: 'error' } });
             return;
         }
+        if (!(await ensureAuthenticatedForGeneration({ billingMode, featureLabel: 'Wardrobe Designer generation' }))) {
+            return;
+        }
 
         setDesignerMask(null);
         dispatch({ type: 'SET_PROCESSING', payload: true });
@@ -1495,6 +1833,9 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
             dispatch({ type: 'ADD_LOG', payload: { message: "API Key required for BYOK Virtual Try-On.", type: 'error' } });
             return;
         }
+        if (!(await ensureAuthenticatedForGeneration({ billingMode, featureLabel: 'Wardrobe Virtual Try-On' }))) {
+            return;
+        }
 
         dispatch({
             type: 'ADD_LOG',
@@ -1537,8 +1878,8 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
             if (currentPercent > 95) currentPercent = 95;
 
             let text = "Initiating Try-On Protocol";
-            if (currentPercent > 20) text = requestedTryOnMode === 'turnaround' ? "Processing Left/Right Sheet..." : "Matching Costume Structure...";
-            if (currentPercent > 45) text = requestedTryOnMode === 'turnaround' ? "Processing Front/Back Sheet..." : "Preserving Face Window...";
+            if (currentPercent > 20) text = requestedTryOnMode === 'turnaround' ? "Processing Front/Back Sheet..." : "Matching Costume Structure...";
+            if (currentPercent > 45) text = requestedTryOnMode === 'turnaround' ? "Processing Left/Right Sheet..." : "Preserving Face Window...";
             if (currentPercent > 75) text = "Finalizing Output...";
             if (currentPercent >= 95) text = "Finalizing Output... (Still working, please wait)";
 
@@ -1547,6 +1888,23 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
         try {
             const subjectStyle = selectedCharacter.profile?.style || "Matching Style";
+            const subjectStyleId = selectedCharacter.profile?.style || undefined;
+            const tryOnIdentityLock = selectedCharacter.identityLock
+                ? {
+                    ...selectedCharacter.identityLock,
+                    generatedSourceImageIndex: 1,
+                    generatedSourceRole: "selected subject image is the visual/body/pose source only; uploaded biometric identity remains authoritative for this character_id",
+                    appliesTo: "Wardrobe Studio virtual try-on generation, turnaround generation, refinement, preview, saved actor output, and export requests for this character"
+                }
+                : undefined;
+            const tryOnStyleContract = buildStyleCategoryContract(subjectStyleId, {
+                selectedStyleLabel: subjectStyle,
+                sourceImagePolicy: "Subject and character-sheet references control identity, body, hairstyle, and grooming only; source-photo realism must not override the active character render category.",
+                boardPresentationPolicy: "Wardrobe Studio output mode controls framing, turnaround panels, and fitting presentation only.",
+                lightingPolicy: "Fitting and relighting must be interpreted within the active character render category.",
+                appliesTo: "Wardrobe Studio virtual try-on, front render, side turnaround, front/back turnaround, saved actor preview, and recent thumbnail"
+            });
+            const tryOnStyleNegativePrompt = buildStyleNegativePrompt(subjectStyleId);
             const costumeName = selectedCostume.name;
             const costumeText = `${costumeName} ${tryOnNote || ''}`.toLowerCase();
 
@@ -1559,11 +1917,11 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
             const identityAnchorImageRole = identityAnchorImageIndex ? imageRoleName(identityAnchorImageIndex) : null;
             const costumeRef = {
                 url: selectedCostume.url,
-                label: `${costumeImageRole} - Costume Reference: wardrobe source only, not identity source.`
+                label: `${costumeImageRole} - Costume Reference: wardrobe source only, not identity source and not visible scene content.`
             };
             const identityAnchorRef = tryOnCharacterSheet && identityAnchorImageRole ? {
                 url: tryOnCharacterSheet,
-                label: `${identityAnchorImageRole} - Character Sheet Identity Anchor: identity reference only, not output format or layout.`
+                label: `${identityAnchorImageRole} - Character Sheet Identity Anchor: face/head identity reference only, not output format, layout, body source, or wardrobe source.`
             } : null;
 
             const isDesignRef = isDesignReferenceSelected(selectedCostume);
@@ -1594,7 +1952,10 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  - Do NOT increase or decrease the costume's coverage, openness, or enclosure beyond what the reference shows.
 
  COVERAGE & STRUCTURE PRESERVATION
- - Preserve the exact silhouette, coverage area, layering, attachment points, and fit behavior shown in the Costume Reference.
+ - Preserve the coverage area, layering, attachment points, intended fit behavior, and design identity shown in the Costume Reference.
+ ${isEnclosureCostume
+        ? '- For structured/enclosed costumes, preserve the external costume silhouette, bulk, enclosure, and structural geometry exactly.'
+        : '- For ordinary apparel, preserve garment coverage, construction, design identity, and intended fit behavior while adapting the outer silhouette to the selected subject body. Do not copy a flat product/mannequin outline as the final worn silhouette.'}
  - Preserve all structural elements: padding, bulk, armor plates, seams, closures, zippers, straps, buckles, and hardware.
  - Do NOT simplify, flatten, or streamline complex costume geometry.
  - Do NOT convert an enclosed or structured costume into a body-contoured reinterpretation.
@@ -1639,10 +2000,54 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  - Transfer the exact garment from the Costume Reference onto the subject.
  - Wardrobe must adapt to the same person; the person must not be replaced or redesigned to fit the wardrobe.
  - The costume may stretch or fit naturally to the person's body, but the designed structure must remain intact.
- - Preserve silhouette, proportions, coverage, padding, bulk, appendages, colors, materials, and visible construction details.
+ ${isEnclosureCostume
+        ? '- Preserve silhouette, proportions, coverage, padding, bulk, appendages, colors, materials, and visible construction details.'
+        : '- Preserve colors, materials, embroidery, placket, collar, cuff, hem, coverage, proportions, and visible construction details. Refit the garment silhouette around the selected subject instead of copying the product-photo outline.'}
  - Fit the garment naturally only insofar as needed to look physically worn — do NOT redesign.
  - Do NOT convert structured or enclosed costumes into ordinary clothing or body-contoured reinterpretations.
  - If the costume has a dedicated face window, align the same person's face inside it without changing the costume opening or changing facial identity.
+`;
+
+            const onBodyGarmentIntegrationBlock = isEnclosureCostume ? `
+ STRUCTURED COSTUME ON-BODY INTEGRATION
+ Preserve the structured/enclosed costume design while making it physically worn by the selected subject.
+ Add contact shadows, believable wearer volume, and material interaction where the costume touches the body.
+ Do not flatten structural costume pieces into a pasted overlay.
+` : `
+ APPAREL ON-BODY RECONSTRUCTION RULE
+ The Costume Reference is a garment design reference, not final pasted scene content.
+ Reconstruct the shirt/clothing as a real worn garment on the selected subject's body.
+ Preserve the design, embroidery, placket, collar, cuff, hem, color, material, and construction details, but do not copy the flat product/mannequin silhouette as the final body shape.
+ Reconstructing the garment on-body must not change the garment category, sleeve length, cuff visibility, collar shape, button/placket structure, embroidery layout, hem shape, or coverage shown in the Costume Reference.
+ The final shirt must wrap the neck, sit on the shoulders, follow the chest/ribcage volume, hang from the arms, and fall with gravity at the hem.
+ Buttons, placket, embroidery, fabric grain, and front panels must subtly follow torso curvature and fabric drape instead of appearing printed on a flat board.
+ Add believable contact shadows and occlusion at collar/neck, shoulder seams, underarms, sleeve folds, cuffs/wrists, side seams, and hem/waist.
+ For Relaxed Fit and Soft / Draped settings, show comfortable ease, soft folds, natural sleeve compression, gentle fabric pull from the shoulders/chest, and a hem that falls over the lower torso rather than a stiff pasted rectangle.
+ The subject remains a person wearing a garment; the garment must not turn the body into a product display mannequin.
+`;
+
+            const wardrobeDesignFidelityBlock = `
+ WARDROBE DESIGN IDENTITY LOCK
+ The selected wardrobe design must remain identical to the Costume Reference.
+ Preserve garment architecture exactly: garment category, sleeve length, cuff style, collar shape, neckline, placket, closure type, button count/spacing where visible, panel layout, seam placement, hem shape, pockets, trim, embroidery, logo/ornament placement, motif count/density, color, material, transparency/opacity, and coverage.
+ Refit only the worn drape, fabric tension, body contact, fold behavior, and silhouette response around the selected subject. Do not redesign the clothing.
+
+ SLEEVE / CUFF / COVERAGE LOCK
+ Sleeve length and cuff design are hard design features.
+ If the Costume Reference shows long sleeves ending at the wrists, the output must keep long sleeves ending at the wrists with the same cuffs.
+ If the Costume Reference shows short sleeves, sleeveless construction, rolled sleeves, gloves, or exposed forearms, preserve that exact coverage state.
+ Do not shorten, roll up, cut off, crop, remove, or reinterpret sleeves to satisfy body fit, framing, or composition.
+ Do not expose forearms, wrists, elbows, shoulders, chest, or neck areas that the selected wardrobe covers in the reference.
+
+ EMBROIDERY / TRIM / PLACKET LOCK
+ Preserve embroidery and trim as the same design, same side placement, same vertical run, same left/right symmetry or asymmetry, same relationship to the placket/collar/cuffs/hem, and same approximate scale.
+ The placket and buttons must remain centered and structurally aligned with the shirt front.
+ Design details may follow fabric curvature and folds, but they must not be deleted, moved to new garment zones, multiplied incorrectly, simplified away, or converted into generic decoration.
+
+ DESIGN-FIT PRIORITY RULE
+ Body-aware fitting, Garment Fit mode, Fabric Behavior mode, and Fitting Notes must improve how the same selected wardrobe is worn.
+ They must not change sleeve length, cuff visibility, collar design, placket shape, button structure, embroidery layout, garment category, color, material, or coverage.
+ If natural fit and exact design appear to conflict, preserve the selected wardrobe design and solve fit through drape, folds, ease, tension, and contact shadows.
 `;
 
             const accessoryFootwearComplianceBlock = `
@@ -1710,26 +2115,120 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
             const trueProfileBodyBlock = `
  TRUE SIDE PROFILE BODY CONTRACT (NON-NEGOTIABLE)
- - This is a technical full-body orthographic costume turnaround, not a portrait pose and not a fashion 3/4 pose.
- - Each panel must show the subject standing upright in exact 90-degree side profile from head to toe.
- - LEFT PANEL: show the subject's left side; nose, chest, knees, toes, and body centerline point directly toward the viewer's LEFT.
- - RIGHT PANEL: show the subject's right side; nose, chest, knees, toes, and body centerline point directly toward the viewer's RIGHT.
+ - This is a technical orthographic costume turnaround using the selected output framing, not a portrait pose and not a fashion 3/4 pose.
+ - Each panel must show the subject standing upright in exact 90-degree side profile within the selected crop.
+ - LEFT PANEL: show the subject's left side; nose, chest, knees/toes if visible, and body centerline point directly toward the viewer's LEFT.
+ - RIGHT PANEL: show the subject's right side; nose, chest, knees/toes if visible, and body centerline point directly toward the viewer's RIGHT.
  - Body-profile test: only one eye, one ear, one shoulder contour, one arm silhouette, and one side edge of the torso/armor should be visible per panel.
- - The torso and pelvis must be narrow side silhouettes. Front-facing chest plates, symmetrical shoulders, both arms equally visible, both knees equally visible, or front skirt/apron spread are invalid.
- - Feet must be side-on: toes point left in the left panel and right in the right panel. Do not show front-facing feet.
- - Helmet, hair, plume, headwear, shoulder armor, torso armor, skirt, sleeves, legwear, and footwear must rotate with the body as one rigid model.
+ - Visible torso and pelvis must be narrow side silhouettes. Front-facing chest plates, symmetrical shoulders, both arms equally visible, both knees equally visible, or front skirt/apron spread are invalid.
+ - If feet are visible, they must be side-on: toes point left in the left panel and right in the right panel. Do not show front-facing feet.
+ - Helmet, hair, plume, headwear, shoulder armor, torso armor, skirt, sleeves, visible legwear, and visible footwear must rotate with the body as one rigid model.
  - The head must stay naturally aligned with the torso. Do not twist the head toward camera to preserve face visibility.
- - Camera is level, centered at full body height, with no close-up crop. Preserve full body from top of head/headwear to soles of feet.
- - Forbidden substitutions: 3/4 view, front-facing body with side-looking head, head-only left/right study, bust/torso crop, over-the-shoulder pose, contrapposto turn, repeated front view, repeated back view.
+ - Camera is level and centered for the selected crop. Preserve the selected framing consistently in both side panels.
+ - Forbidden substitutions: 3/4 view, front-facing body with side-looking head, head-only left/right study, crop that ignores the selected framing, over-the-shoulder pose, contrapposto turn, repeated front view, repeated back view.
 `;
 
-            const effectiveTryOnNote = tryOnNote || "Transfer the garment exactly and preserve the visible design.";
+            const lowerBodyIntegrityBlock = `
+ LOWER BODY INTEGRITY LOCK
+ If hips, pelvis, legs, ankles, feet, or shoes are visible under the selected framing, they must remain a coherent human lower body.
+ Preserve a natural pelvis-to-thigh-to-knee-to-calf-to-ankle-to-foot chain with believable proportions, weight-bearing stance, and ground contact.
+ Pants must drape over two real legs, not a single fused tube, warped column, melted shape, or mannequin stand.
+ Shoes must be complete, paired, grounded, correctly scaled, and aligned with the same body orientation as the legs.
+ Do not generate fused legs, missing legs, extra legs, duplicated feet, mismatched shoe pairs, broken ankles, warped knees, floating shoes, collapsed calves, one-leg silhouettes, or pants that erase the body structure underneath.
+
+ SIDE TURNAROUND LOWER-BODY RULE
+ In left/right profile views, the near and far leg may overlap naturally, but the silhouette must still read as a real standing person with coherent hips, knees, ankles, and a complete pair of shoes.
+ The legs, pants, and shoes must rotate with the pelvis and torso into the same 90-degree side profile.
+ Do not allow one panel to have a normal lower body while the other panel has a malformed, fused, missing, or mismatched lower body.
+`;
+            const lrTurnaroundViewDefinitionBlock = buildTurnaroundViewDefinitionContract('LEFT_RIGHT');
+            const fbTurnaroundViewDefinitionBlock = buildTurnaroundViewDefinitionContract('FRONT_BACK');
+            const tryOnLrPoseCoherenceBlock = buildTurnaroundPoseCoherenceContract(
+                getTurnaroundPanelOrientations('LEFT_RIGHT')
+            );
+            const tryOnFbPoseCoherenceBlock = buildTurnaroundPoseCoherenceContract(
+                getTurnaroundPanelOrientations('FRONT_BACK')
+            );
+
+            const userFittingNotes = tryOnNote.trim();
+            const effectiveTryOnNote = userFittingNotes || "Transfer the garment exactly and preserve the visible design.";
             const resolvedLookSpec = buildResolvedLookSpec(selectedCostume, effectiveTryOnNote);
             const resolvedLookContractBlock = buildResolvedLookContractBlock(
                 resolvedLookSpec,
                 hasCharacterSheet,
                 requestedTryOnMode
             );
+            const bodyNoteGuidance = inferFittingNoteBodyGuidance(userFittingNotes);
+            const bodyFitProfile = inferBodyFitProfile(selectedCharacter, userFittingNotes, hasCharacterSheet);
+            const bodyAwareFittingBlock = buildBodyAwareFittingBlock(
+                bodyFitProfile,
+                bodyNoteGuidance,
+                userFittingNotes,
+                tryOnGarmentFit,
+                tryOnFabricBehavior,
+                hasCharacterSheet
+            );
+            const outputFramingBlock = buildOutputFramingBlock(LAUNCH_OUTPUT_FRAMING);
+            const turnaroundFramingDescription = describeTurnaroundFraming(LAUNCH_OUTPUT_FRAMING);
+            const tryOnNegativeConstraintsBlock = `
+ TRY-ON NEGATIVE CONSTRAINTS
+ Avoid pasted-on clothing, flat clothing overlay, perfect mannequin drape, generic torso template, fabric ignoring body structure, sleeves floating or collapsing unnaturally, hemline stiffness, unrealistic chest flattening, unrealistic female bust suppression or distortion, unrealistic male torso narrowing/widening, mismatched seam placement, and clothing that ignores posture.
+ When Torso framing is selected, also avoid cropped sleeves, missing cuffs, missing shirt hem, missing hips, awkward waist cutoff, floating torso crop, hands cut off unnaturally, and garment bottom cropped out.
+ Avoid invented stubble, invented beard shadow, invented goatee, invented mustache, aging caused by added facial hair, darker jawline texture that reads as beard growth, and any clean-shaven subject becoming not clean-shaven.
+ When fitting notes request muscular build, wide chest, broad shoulders, or similar upper-body direction, avoid narrow generic torso, flat chest, weak shoulder span, body shape unchanged despite fitting notes, and a straight hanging shirt with no upper-body structure underneath.
+ Avoid pasted shirt front, product-photo overlay, flat product silhouette, mannequin-shirt body, floating shoulder seams, collar not wrapping the neck, placket printed flat, embroidery printed on a board, missing underarm occlusion, missing cuff contact, missing hem weight, and fabric that ignores the selected Relaxed Fit / Soft Draped settings.
+ Avoid changed sleeve length, short sleeves when the reference is long-sleeved, missing cuffs, rolled sleeves unless shown, exposed forearms unless shown, changed collar, changed placket, changed button layout, changed embroidery placement, missing embroidery, changed hem, changed coverage, and redesigned garment category.
+ Avoid fused legs, one-leg lower body, melted pants column, mannequin-stand legs, broken knee anatomy, warped calves, missing ankles, floating shoes, duplicated shoes, mismatched shoes, lower body that does not align with the torso, and one turnaround panel having malformed legs while the other is normal.
+ Avoid ${buildPoseCoherenceNegativeTokens()}.
+`;
+            const wardrobeReferenceUsageBlock = `
+ WARDROBE REFERENCE USAGE RULE
+ Use the selected wardrobe/sketch/costume image only as a garment reference for fit, material, silhouette, trim, embroidery, and construction details.
+ Do not reproduce the wardrobe reference image itself inside the final try-on scene.
+ Do not generate floating garment panels, duplicate shirt cutouts, side product boards, or large cropped reference inserts unless a dedicated reference-board mode explicitly requests them.
+ Current mode is fittingMirror / standard turnaround only; no product-board or wardrobe-board mode is active.
+ For ordinary apparel references such as shirts, jackets, blouses, dresses, pants, and tops, preserve the design and construction details while rebuilding the garment as worn clothing on the selected subject. Do not preserve a flat product-photo silhouette if it conflicts with natural body fit.
+
+ DETAIL PRESERVATION RULE
+ Preserve garment details such as embroidery, trim, placket shape, collar shape, sleeve length, cuff style, coverage, button layout, hem shape, fit, and fabric behavior.
+ Preserve the clothing design itself, not the literal source image framing.
+`;
+            const frontTryOnCompositionBlock = `
+ FRONT TRY-ON COMPOSITION RULE
+ Render a single dressed subject in a clean fitting-mirror presentation.
+ Show only the subject wearing the selected wardrobe.
+ Do not add extra garment cutouts, duplicated costume panels, product cards, floating insets, or reference-image reproductions.
+`;
+            const turnaroundCompositionBlock = `
+ TURNAROUND COMPOSITION RULE
+ Render only the requested turnaround views of the dressed subject.
+ Do not insert large floating garment reference crops.
+ If garment detail insets are ever supported later, they must be explicitly requested by a separate board mode, not standard turnaround.
+`;
+            const tryOnCompositionNegativeConstraintsBlock = `
+ TRY-ON COMPOSITION NEGATIVE CONSTRAINTS
+ Avoid floating garment cutouts, duplicated wardrobe panels, reference board layout, product display inserts, side-by-side garment crops, clothing source image reproduction, extra white shirt panels beside the subject, and collage-like composition in fitting mirror mode.
+`;
+            const identityAnchorUsageRuleBlock = `
+ IDENTITY ANCHOR USAGE RULE
+ If a Character Sheet / Identity Anchor is loaded, use it only as hidden reference guidance for face likeness, head shape, body silhouette, wardrobe continuity, and turnaround consistency.
+ Do not reproduce the character sheet itself in the final try-on result.
+ Do not create a reference board, biometric sheet, multi-panel layout, labeled study sheet, or forensic layout unless a separate board mode explicitly requests it.
+ If characterSheetIdentityAnchor is provided, use it to preserve both identity and body silhouette consistency across turnaround outputs without changing the final presentation format.
+`;
+            const standardTryOnPresentationRuleBlock = `
+ STANDARD TRY-ON PRESENTATION RULE
+ Virtual Try-On Room outputs should default to a single polished image of the dressed subject.
+ The output should not become a reference sheet, contact sheet, identity board, or multi-panel study layout.
+ For standard try-on generation: one subject, one clean composition, one selected framing, one presentation image.
+ FRONT mode = one clean single-person image.
+ TURNAROUND mode = clean turnaround presentation of the dressed subject only.
+ Neither mode should become a biometric sheet or reference board.
+`;
+            const tryOnPresentationNegativeConstraintsBlock = `
+ TRY-ON PRESENTATION NEGATIVE CONSTRAINTS
+ Avoid reference sheet layout, biometric board layout, multi-panel study board, labeled forensic layout, front/side/up/down sheet composition, duplicate subject panels, contact sheet presentation, character design board formatting, and visible identity anchor reproduction.
+`;
 
             const sourceAppearanceContinuityBlock = `
  SOURCE APPEARANCE CONTINUITY LOCK (CRITICAL)
@@ -1743,29 +2242,61 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 `;
 
             const hairConsistencyBlock = `
+ GROOMING LOCK RULE
+ Preserve the exact grooming state of the selected subject/reference image.
+ Do not add, remove, or reinterpret facial hair unless explicitly requested.
+ Preserve clean-shaven state if clean-shaven, stubble only if stubble exists, mustache only if mustache exists, beard/goatee only if beard/goatee exists, facial hair density, facial hair color, gray distribution, trim length, and sideburn connection.
+ If the subject is clean-shaven, remain clean-shaven in all outputs.
+
+ HAIR CONSISTENCY RULE
+ The subject's hairstyle must remain exactly consistent with the selected subject/reference image.
+ Do not restyle, re-cut, re-shape, thicken, thin, curl, straighten, recolor, or otherwise reinterpret the hair.
+ Preserve hairline, part direction / part placement, hair length, hair volume, hair texture, curl / wave pattern, temple recession / hair recession if present, sideburn shape, hair color, gray distribution, grooming finish, and silhouette of the hair.
+ The subject must read as the same exact person with the same exact hairstyle in every framing and output mode.
+
+ FRAMING DOES NOT CHANGE GROOMING RULE
+ Output framing controls only crop and composition.
+ It must not change hairstyle, facial hair, grooming, age impression, or facial identity.
+ Bust, Torso, and Full Body must all depict the same exact subject with the same exact grooming package.
+
+ SOURCE HAIR AUTHORITY RULE
+ The selected subject image is the authority for hairstyle and grooming.
+ If a character sheet or identity anchor is loaded, it may reinforce identity, but it must not override the hairstyle from the selected subject unless the subject itself already reflects that hair.
+ If likeness and hair styling conflict, the selected subject/reference hairstyle wins.
+
+ FACIAL HAIR CONSISTENCY RULE
+ Facial hair must also remain consistent across all outputs.
+ Preserve beard / stubble presence or absence, mustache shape, goatee shape, sideburn connection, density, color, gray distribution, and trim length.
+ Do not add or remove facial hair unless explicitly requested.
+
+ FACIAL HAIR NEGATIVE CONSTRAINTS
+ Avoid invented stubble, invented beard shadow, invented goatee, invented mustache, aging caused by added facial hair, and darker jawline texture that reads as beard growth.
+
+ GROOMING NEGATIVE CONSTRAINTS
+ Avoid hairstyle drift, new haircut, different hair texture, fuller or flatter hair than the reference, different hairline, moved part, changed gray pattern, restyled curls/waves, different temple recession, altered sideburns, added or removed facial hair, and age changes caused by hair reinterpretation.
+
  HAIR STATE LOCK
- - Preserve the exact hairstyle state across all generated views.
- - If hair is worn down in the source or canonical sheet, it must remain down in all turnaround angles unless explicitly instructed otherwise.
- - Do NOT convert loose hair into a bun, ponytail, braid, pinned style, updo, or tied-back style unless explicitly shown in the source.
- - Preserve approximate hair length, fullness, parting, texture, and silhouette.
+ - If hair is worn down in the selected subject/reference image, it must remain down in all output modes unless explicitly requested otherwise.
+ - Do NOT convert loose hair into a bun, ponytail, braid, pinned style, updo, or tied-back style unless explicitly shown in the selected subject/reference image.
  - Hair continuity must coexist with all worn accessories and headwear.
- - If the costume covers or constrains hair (helmet, hood, headwrap), only the hair visible through costume openings should be shown.
+ - If the costume covers or constrains hair (helmet, hood, headwrap), only the hair visible through costume openings should be shown, and visible hair must still match the selected subject/reference image.
 `;
 
             const identityAnchorBlock = tryOnCharacterSheet ? `
  PRIMARY IDENTITY ANCHOR LOCK (CHARACTER SHEET)
- - ${identityAnchorImageRole} is an identity reference only. Use this to preserve the same person's facial identity and likeness.
+ - ${identityAnchorImageRole} is a face/head identity reference only. Use this to preserve the same person's facial identity and likeness.
  - Do not copy ${identityAnchorImageRole}'s layout, labels, sheet format, annotations, panels, typography, headshot grid, dividers, or callout text.
- - ${identityAnchorImageRole} is the highest identity authority for the person's face, head, skin tone, hairline/hairstyle, visible neck identity, and overall likeness in every generated view.
- - ${subjectImageRole} is the selected subject for body/proportion/source style continuity, but if it conflicts with ${identityAnchorImageRole}, the Character Sheet wins for identity.
+ - ${identityAnchorImageRole} is the highest identity authority for the person's face, head, skin tone, visible neck identity, and overall likeness in every generated view.
+ - ${subjectImageRole} remains the highest authority for hairstyle, hairline presentation, facial hair, and grooming package. Do not use the Character Sheet to restyle the selected subject's hair or grooming.
+ - ${subjectImageRole} is the selected subject for current body/proportion/source style continuity. If it conflicts with ${identityAnchorImageRole}, the Character Sheet wins for face/head identity only; the selected subject wins for body proportions, silhouette, hairstyle, facial hair, and grooming.
  - Treat the Character Sheet as a hard biometric identity reference, not style inspiration, not a loose mood reference, and not a target composition.
  - Preserve the exact same person shown in the identity anchor. Do not invent a new face, substitute a different person, or convert the subject into a generic fashion-model face.
- - Maintain facial identity, facial structure, skin tone, age range, ethnicity presentation, head shape, nose/eyes/lips/jaw relationships, hairstyle/hairline, braid/cornrow structure when visible and relevant, and overall likeness.
- - Build one consistent 3D head model from all visible face panels: skull shape, forehead, hairline, brow ridge, eye spacing and depth, eye shape, nose bridge, nose slope, nose tip, nose projection, nostrils, cheekbones, nasolabial folds, mouth width, lip shape, jaw angle, chin shape, ears, ear placement, neck, facial hair, skin marks, age, and asymmetry.
+ - Maintain facial identity, facial structure, skin tone, age range, ethnicity presentation, head shape, nose/eyes/lips/jaw relationships, and overall likeness. Maintain hairstyle, hairline presentation, facial hair, and grooming from the selected subject/reference image.
+ - Build one consistent 3D head model from all visible face panels: skull shape, forehead, hairline, brow ridge, eye spacing and depth, eye shape, nose bridge, nose slope, nose tip, nose projection, nostrils, cheekbones, nasolabial folds, mouth width, lip shape, jaw angle, chin shape, ears, ear placement, neck, skin marks, age, and asymmetry. Preserve facial hair and grooming from the selected subject/reference image only.
  - FRONT output must match the Character Sheet's front face. LEFT and RIGHT profile outputs must match the Character Sheet's side/profile facial geometry when visible.
  - If a side/profile face is not fully visible in the Character Sheet, infer it conservatively from the same skull, nose, jaw, chin, mouth, brow, and ear geometry. Do NOT beautify, idealize, or replace it.
  - Identity accuracy applies inside helmets, masks, and face openings: visible nose, mouth, chin, cheek, brow, eye, ear, jaw, and neck must match the Character Sheet exactly within the costume limits.
- - Do NOT average the Character Sheet with the Subject Reference, Costume Reference, generated LR/FB sheet, or a generic costume wearer. If references conflict, Character Sheet wins for face/head identity.
+ - Do NOT average the Character Sheet with the Subject Reference, Costume Reference, generated LR/FB sheet, or a generic costume wearer. If references conflict, Character Sheet wins for face/head identity, while the selected subject/reference image wins for body, hair, and grooming.
  - Apply the wardrobe to this same person. The wardrobe may change; the person must not change.
  - For turnaround or alternate views, render the same person consistently from the required angle.
  - Camera angle, body angle, lighting, and costume can change. Biometric face/head geometry cannot change.
@@ -1774,6 +2305,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  SUBJECT IDENTITY LOCK
  - ${subjectImageRole} is the primary identity reference.
  - Preserve the exact visible identity from the Subject Reference. Same person, no generic replacement, no facial substitution, no ethnicity drift, no age change, no beautification.
+ - Preserve the exact hairstyle, hairline presentation, facial hair, and grooming from the Subject Reference.
  - Camera angle, body angle, lighting, and costume can change. Face/head geometry should not be redesigned.
 `;
 
@@ -1806,19 +2338,47 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
             const identityPriorityBlock = tryOnCharacterSheet ? `
  ABSOLUTE IDENTITY PRIORITY ORDER (HARD)
- 1. ${identityAnchorImageRole} Character Sheet Identity Anchor: strongest identity authority only.
- 2. ${subjectImageRole} Selected Subject / try-on target: output subject, body/proportions, pose continuity, and source style.
+ 1. ${subjectImageRole} Selected Subject / try-on target: primary physical person, body/proportions, pose continuity, source style, hairstyle, facial hair, and grooming authority.
+ 2. ${identityAnchorImageRole} Character Sheet Identity Anchor: face/head identity and likeness reinforcement only.
  3. ${costumeImageRole} Costume Reference: wardrobe source only.
  4. Styling notes, lighting, and branding.
  Identity strength does not grant layout authority. Never copy the Character Sheet format into the output.
  Wardrobe must adapt to the same person. The person must not be replaced to fit the wardrobe.
  If any wardrobe/style instruction conflicts with identity, preserve identity first while maintaining physically plausible garment coverage.
+ If the Character Sheet and Selected Subject conflict on body, hairstyle, or grooming, preserve the Selected Subject body, hairstyle, and grooming while preserving Character Sheet face/head identity.
 ` : `
  ABSOLUTE IDENTITY PRIORITY ORDER
- 1. ${subjectImageRole} Selected Subject identity and likeness.
+ 1. ${subjectImageRole} Selected Subject identity, likeness, hairstyle, facial hair, and grooming.
  2. ${costumeImageRole} Costume Reference as wardrobe source only.
  3. Styling notes, lighting, and branding.
  Wardrobe must adapt to the selected subject. Do not replace the person with a different wearer.
+`;
+
+            const tryOnPriorityOrderBlock = `
+ TRY-ON PRIORITY ORDER
+ 1. Subject identity.
+ 2. Hair and facial-hair/grooming preservation.
+ 3. Exact selected wardrobe design preservation.
+ 4. Fitting Notes body directives.
+ 5. Garment Fit mode.
+ 6. Fabric Behavior mode.
+ 7. Wardrobe detail preservation.
+ 8. Full Body framing / crop.
+ 9. Background simplicity.
+ Framing, styling, crop, body notes, garment fit, and fabric behavior must never override the grooming lock or exact selected wardrobe design.
+ Fitting-note body directives must be honored by refitting the same wardrobe design, not by changing garment architecture or coverage.
+`;
+
+            const sourceFidelityRulesBlock = `
+ SOURCE FIDELITY RULES
+ - Use ${subjectImageRole} as the selected subject and physical person being dressed.
+ - ${identityAnchorImageRole ? `Use ${identityAnchorImageRole} only to reinforce face/head identity and likeness.` : 'No separate Character Sheet Identity Anchor is loaded; preserve identity from the selected subject.'}
+ - Use ${costumeImageRole} as the exact selected wardrobe authority.
+ - View mode is a camera/view instruction only. It must not override the selected subject, identity anchor, wardrobe source, body proportions, costume geometry, or style family.
+ - Do not replace the selected subject with a different actor.
+ - Do not redesign the selected wardrobe or create a new costume inspired by it; apply the selected wardrobe.
+ - Preserve the costume's silhouette, color palette, materials, panels, lights, boots, gloves, helmet/collar structure, accessories, and major design features.
+ - Preserve the subject's head/face identity consistently across every generated view.
 `;
 
             const identityAnchorFormatFirewall = tryOnCharacterSheet ? `
@@ -1842,18 +2402,34 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
  ${baseImageRoleBlock}
  ${identityPriorityBlock}
+ ${tryOnPriorityOrderBlock}
+ ${sourceFidelityRulesBlock}
  ${identityAnchorFormatFirewall}
  ${resolvedLookContractBlock}
+ ${identityAnchorUsageRuleBlock}
+ ${standardTryOnPresentationRuleBlock}
+ ${wardrobeReferenceUsageBlock}
+ ${wardrobeDesignFidelityBlock}
+ ${outputFramingBlock}
+ ${bodyAwareFittingBlock}
+ ${onBodyGarmentIntegrationBlock}
+ ${lowerBodyIntegrityBlock}
+ ${tryOnStyleContract}
 
  === PRIORITY 3: WARDROBE PHYSICAL STRUCTURE ===
 
  COSTUME (HARD TRANSFER AUTHORITY)
  - The Costume Reference (${costumeName}) is the absolute authority for the outfit.
- - Copy the costume exactly as shown.
- - Preserve the exact visible silhouette, enclosure, coverage, face-window placement, colors, textures, materials, and construction.
- - Do NOT reinterpret it into a more wearable, more fitted, more anatomical, or more revealing version.
+ - Copy the garment design exactly as shown.
+ ${isEnclosureCostume
+        ? '- Preserve the exact visible silhouette, enclosure, coverage, face-window placement, colors, textures, materials, and construction.'
+        : '- Preserve the shirt/clothing design, coverage, collar, cuffs, placket, embroidery, colors, textures, materials, and construction while refitting the garment as real clothing on the selected subject.'}
+ ${isEnclosureCostume
+        ? '- Do NOT reinterpret it into a more wearable, more fitted, more anatomical, or more revealing version.'
+        : '- Do NOT redesign the clothing details, but do reconstruct the garment around the subject body so it does not look like a flat product overlay.'}
  - IGNORE filename text if it conflicts with the image.
  ${designAssemblyBlock}
+ ${frontTryOnCompositionBlock}
 
  ${WEARABLE_FIDELITY_CONTRACT}
 
@@ -1882,6 +2458,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  - Use the named identity reference image(s) to preserve the exact facial identity and likeness of the person.
  - Same face, same person, no morphing, no age change.
  ${identityAnchorBlock}
+ ${hairConsistencyBlock}
  - CRITICAL: Identity must be preserved WITHIN the physical limits imposed by the costume.
  - If the costume covers, encloses, or restricts visibility of any body part, identity preservation must NOT cause
    the costume to open, remove, simplify, or expose areas the Costume Reference does not physically allow.
@@ -1891,18 +2468,28 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
  STYLE MATCH
  - The final rendering style should match the Subject Reference style: ${subjectStyle}.
+ - Source image controls identity. Character Render Style controls visual category. Wardrobe Studio fitting controls clothing only. Lighting adapts to the selected render style.
+ - Do not convert the character into a different visual category because of realistic lighting, costume detail, or source-photo realism.
+ ${tryOnStyleContract}
  - If the Subject Reference is a realistic photograph, render the fitted costume as realistic material with realistic texture and lighting.
  - Style instructions must not alter identity, face structure, skin tone, age, ethnicity presentation, hairline, or likeness.
 
  COMPOSITION
+ ${standardTryOnPresentationRuleBlock}
+ ${outputFramingBlock}
+ ${frontTryOnCompositionBlock}
  - Output exactly one clean front-facing virtual try-on image of the same person wearing the selected wardrobe.
- - Single subject only. Full body visible. No cropping head/feet.
+ - Single subject only. Use automatic Full Body framing.
  - Solid black studio background (#000000), no gradients, no shadows on background.
  - No character sheet layout, no reference sheet grid, no headshot panels, no labels, no callouts, no dividers, no annotation text.
 
  ${brandingInstruction}
 
  [FITTING NOTES]: ${effectiveTryOnNote}
+
+ ${tryOnNegativeConstraintsBlock}
+ ${tryOnCompositionNegativeConstraintsBlock}
+ ${tryOnPresentationNegativeConstraintsBlock}
 
  NEGATIVE CONSTRAINTS:
  character sheet, reference sheet layout, sheet grid, headshot panels, annotation labels, callouts, dividers, typography, FRONT VIEW label, LEFT PROFILE VIEW label, BACK VIEW label,
@@ -1918,6 +2505,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  extra limbs, duplicate arms, duplicate sleeves, duplicate glove forms, duplicate foot forms, extra costume appendages,
  altered costume colors, shifted palette, desaturated costume, brighter costume, darker costume, material reinterpretation,
  portrait beauty lighting on enclosed face, missing occlusion shadows, missing contact shadows,
+ ${tryOnStyleNegativePrompt ? `selected style category drift, ${tryOnStyleNegativePrompt},` : ''}
  flat cutout, bad photoshop, unnatural drape, floating clothes, modified design, text, watermark.`,
                     state.apiKey,
                     state.model,
@@ -1928,7 +2516,16 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                         thinkingLevel: state.enableImageThinking,
                         googleGrounding: state.enableGoogleGrounding,
                         strictMode: true,
-                        billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements
+                        billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
+                        entitlements: state.billingEntitlements,
+                        identityLock: tryOnIdentityLock,
+                        styleCategory: subjectStyleId ? {
+                            styleId: subjectStyleId,
+                            intent: {
+                                selectedStyleLabel: subjectStyle,
+                                appliesTo: "Wardrobe Studio front virtual try-on render"
+                            }
+                        } : undefined
                     }
                 );
 
@@ -1977,147 +2574,45 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  - Produce ONE square image (1:1) with TWO equal vertical panels (left/right).
  - Subtle center divider is allowed; no frames, no collage borders, no extra panels.
  - Same solid black studio background (#000000) and consistent studio lighting in both panels.
- - Full body visible in both panels (no cropping head/feet).
- - FOOTWEAR CONSISTENCY (CRITICAL): The subject must have complete, appropriate, matching footwear or foot coverings in both panels unless the concept is explicitly barefoot-appropriate.
+ - ${turnaroundFramingDescription}
+ - FOOTWEAR CONSISTENCY (CRITICAL): If feet/lower legs are visible under the selected framing, the subject must have complete, appropriate, matching footwear or foot coverings in both panels unless the concept is explicitly barefoot-appropriate.
+ - LOWER BODY CONSISTENCY (CRITICAL): If hips/legs/feet are visible, both panels must show coherent pelvis, thighs, knees, calves, ankles, and complete grounded shoes. No fused legs, missing legs, melted pants columns, or malformed lower-body silhouettes.
  - No text, no labels, no watermarks.
  - Do not include the Character Sheet's headshot grid, annotation labels, typography, callouts, title text, or reference sheet layout.
+ - Do not include wardrobe reference crops, product inserts, garment cutout panels, side-by-side source image reproductions, or any product-board composition.
  `;
-
-            const lrSheet = await GeminiService.generateImage(
-                `Professional virtual try-on TRUE SIDE PROFILE TURNAROUND SHEET.
-
- ${twoPanelFormat}
-
- ${baseImageRoleBlock}
- ${identityPriorityBlock}
- ${identityAnchorFormatFirewall}
- ${resolvedLookContractBlock}
-
- === PRIORITY 3: WARDROBE PHYSICAL STRUCTURE ===
-
- COSTUME (HARD TRANSFER AUTHORITY)
- - The Costume Reference (${costumeName}) is the absolute authority for the outfit.
- - Copy the costume exactly as shown while rotating the whole worn look into true side profiles.
- - Preserve the exact visible silhouette, enclosure, coverage, designed face-window placement, colors, textures, materials, construction, headwear, helmet, plume, crest, and accessories.
- - Do NOT reinterpret it into a more wearable, more fitted, more anatomical, or more revealing version.
- - IGNORE filename text if it conflicts with the image.
- ${designAssemblyBlock}
- ${sideViewLockBlock}
- ${trueProfileBodyBlock}
-
- ${WEARABLE_FIDELITY_CONTRACT}
-
- ${fittingBlock}
- ${headwearOrientationBlock}
- ${accessoryFootwearComplianceBlock}
-
- COLOR & MATERIAL LOCK
- - Preserve the exact costume colors from the Costume Reference.
- - Do NOT shift, mute, brighten, darken, replace, or reinterpret the costume colors.
- - Preserve the exact visible material finish and fabric appearance.
-
- SILHOUETTE & STRUCTURE (STRICT LOCK)
- - Preserve the exact outer silhouette and visible structure of the Costume Reference.
- - Preserve all enclosure logic, shell shape, padding, bulk, visible openings, and visible appendages exactly.
- - Do NOT simplify the costume into regular clothing.
- - Do NOT expose body parts unless the Costume Reference explicitly shows them.
-
- PANELS
- - LEFT PANEL: TRUE LEFT-SIDE FULL-BODY PROFILE (90 degrees). The subject's nose, chest, knees, and toes point to the viewer's LEFT.
- - RIGHT PANEL: TRUE RIGHT-SIDE FULL-BODY PROFILE (90 degrees). The subject's nose, chest, knees, and toes point to the viewer's RIGHT.
-
- PROFILE RULE
- - The entire body and costume must be rotated side-on: helmet, plume/crest, head, neck, shoulders, torso, pelvis, arms, skirt/waist layer, legs, and feet.
- - A head-only profile is invalid. A front-facing or 3/4 body with the head turned sideways is invalid.
- - Do NOT show broad frontal chest armor, both shoulder pads symmetrically, both arms equally, or front-facing feet.
-
- === PRIORITY 4: COSTUME-DRIVEN RELIGHTING ===
-
- ${COSTUME_RELIGHTING_CONTRACT}
-
- === IDENTITY ENFORCEMENT DURING SIDE TURNAROUND ===
-
- SUBJECT (HARD IDENTITY LOCK - COSTUME MAY ONLY LIMIT VISIBILITY)
- - Use the named identity reference image(s) to preserve the exact facial identity and likeness.
- - The LEFT and RIGHT panels must depict the SAME person.
- ${identityAnchorBlock}
- - CRITICAL: Identity must be preserved WITHIN the physical limits imposed by the costume.
- - Do NOT let body anatomy or costume pressure replace, genericize, beautify, age-shift, ethnicity-shift, or facially substitute the person.
- ${sourceAppearanceContinuityBlock}
- ${hairConsistencyBlock}
-
- ${brandingInstruction}
-
- [FITTING NOTES]: ${effectiveTryOnNote}
-
- NEGATIVE CONSTRAINTS (FORBIDDEN):
- character sheet, reference sheet layout, sheet grid, headshot panels, annotation labels, callouts, typography, copied identity-anchor layout, extra panels beyond the requested left/right views,
- opened costume that should be closed, removed headwear, exposed hair under helmet, widened face opening,
- duplicate clutch, duplicate purse, duplicate handbag, duplicate bag, duplicate case, duplicate briefcase, one clutch in both hands, one purse in both hands, duplicated handheld prop, unnecessary extra accessories,
- inappropriate bare feet, barefoot businesswear, barefoot formalwear, barefoot tailored outfit, barefoot uniform, barefoot armor, missing shoes, missing footwear, unfinished lower-body styling, inappropriate shoes, mismatched footwear between panels,
- exposed rear necklace when tucked in front, necklace across back of neck when front-tucked, physically impossible accessory visibility, hidden accessory becoming exposed between panels,
- generic male face, generic fashion model face, different person, identity drift, facial substitution, ethnicity drift, age drift, hairstyle substitution, face drift, beautified profile, wrong nose projection, wrong jawline, wrong chin, wrong brow, wrong eye spacing, wrong mouth shape, wrong ear placement,
- face placed in wrong opening, face placed in decorative cavity, face placed in non-face opening,
- redesigned face hole, widened face window, shrunken face window, moved face window, broken face-window border,
- extra limbs, duplicate arms, duplicate sleeves, duplicate gloves, extra costume appendages, invented openings, extra cutouts, exposed neck when not shown, exposed wrists when not shown, exposed ankles when not shown, exposed hands when not shown, exposed feet when not shown, anatomy contouring, body-hugging reinterpretation, bodysuit reinterpretation, costume redesign, mascot redesign,
- rotated helmet crest, flipped plume orientation, camera-facing crest on wrong view, narrow side plume when source crest is front-to-back, headwear orientation mismatch,
- missing worn accessory, removed accessory, dropped headwear, missing jewelry, removed jewelry, missing eyewear, removed eyewear, missing veil, removed veil, missing hood, removed hood, missing scarf, removed scarf, missing glove, removed glove, missing footwear, removed footwear, missing adornment, simplified adornment, omitted source appearance element, restyled hair, bun hairstyle, updo, tied-back hair, ponytail, braid, pinned hair, shorter hair, different hair volume, different hair silhouette,
- altered costume colors, shifted palette, desaturated costume, brighter costume, darker costume, material reinterpretation,
- portrait beauty lighting on enclosed face, missing occlusion shadows, missing contact shadows,
- flat cutout, bad photoshop, unnatural drape, floating clothes, modified design, text, watermark.`,
-                state.apiKey,
-                state.model,
-                baseImages,
-                {
-                    aspectRatio: '1:1',
-                    imageSize: state.imageResolution,
-                    thinkingLevel: state.enableImageThinking,
-                    googleGrounding: state.enableGoogleGrounding,
-                    strictMode: true,
-                    billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements
-                }
-            );
-
-            const canonicalLrImageIndex = baseImages.length + 1;
-            const canonicalLrImageRole = imageRoleName(canonicalLrImageIndex);
-            const fbImages: { url: string; label: string }[] = [
-                ...baseImages,
-                {
-                    url: lrSheet,
-                    label: `${canonicalLrImageRole} - Generated Left/Right Geometry Continuity Sheet: side costume/headwear geometry only, not identity authority.`
-                }
-            ];
-            const fbImageRoleBlock = buildTryOnReferenceRoleBlock({
-                costumeIndex: costumeImageIndex,
-                identityAnchorIndex: identityAnchorImageIndex,
-                brandingIndex: brandingImageIndex,
-                canonicalLrIndex: canonicalLrImageIndex
-            });
-
-            const brandingInstructionLR = brandingLogo ? `
- BRANDING & IDENTITY (LOCK)
- - Preserve the logo placement and appearance consistently with the Costume Reference and side-geometry anchor.
- ` : '';
 
             const fbSheet = await GeminiService.generateImage(
                 `Professional virtual try-on FRONT/BACK TURNAROUND SHEET of the SAME subject and SAME outfit.
 
  ${twoPanelFormat}
 
- ${fbImageRoleBlock}
+ ${baseImageRoleBlock}
  ${identityPriorityBlock}
+ ${tryOnPriorityOrderBlock}
+ ${sourceFidelityRulesBlock}
  ${identityAnchorFormatFirewall}
  ${resolvedLookContractBlock}
+ ${identityAnchorUsageRuleBlock}
+ ${standardTryOnPresentationRuleBlock}
+ ${wardrobeReferenceUsageBlock}
+ ${wardrobeDesignFidelityBlock}
+ ${outputFramingBlock}
+ ${bodyAwareFittingBlock}
+ ${onBodyGarmentIntegrationBlock}
+ ${lowerBodyIntegrityBlock}
+ ${fbTurnaroundViewDefinitionBlock}
+ ${tryOnFbPoseCoherenceBlock}
+ ${tryOnStyleContract}
 
  === PRIORITY 3: WARDROBE PHYSICAL STRUCTURE ===
 
  COSTUME & APPEARANCE CANON (ABSOLUTE LOCK)
- - ${canonicalLrImageRole} Canonical Left/Right Sheet is the 3D orientation anchor for headwear, plume/crest direction, side volume, footwear, and costume thickness.
- - The Costume Reference (${costumeName}) remains the authority for colors, materials, visible front details, and garment design.
- - Rotate the same established full-body costume geometry from ${canonicalLrImageRole} into true front and back views, while preserving identity from the Character Sheet/Selected Subject roles above.
- - Do NOT copy the side camera angle from ${canonicalLrImageRole}.
+ - Generate this FRONT/BACK sheet first as the canonical turnaround anchor for the try-on session.
+ - ${subjectImageRole} is the physical person/body source. ${identityAnchorImageRole ? `${identityAnchorImageRole} reinforces face/head identity.` : 'Preserve identity from the selected subject.'}
+ - The Costume Reference (${costumeName}) is the exact wardrobe authority for colors, materials, visible details, and garment design.
  - OUTPUT ANGLE OVERRIDE: this sheet is FRONT/BACK only, not side/profile views.
- - These front/back views must depict the same physical garment rotated in 3D space, not reinterpretations or redesigns.
+ - These front/back views must establish the same physical garment on the same person in 3D space, not reinterpretations or redesigns.
  - Preserve the same costume structure, same visible coverage, same accessories, same hairstyle state, same headwear, same worn adornments, and same footwear across all turnaround views.
  - Do NOT add, remove, restyle, simplify, or reinterpret any source-established appearance element.
  - If the source-established look contains multiple simultaneous elements, preserve all of them together.
@@ -2125,6 +2620,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  ${headwearOrientationBlock}
  ${fittingBlock}
  ${accessoryFootwearComplianceBlock}
+ ${turnaroundCompositionBlock}
 
  COLOR & MATERIAL LOCK
  - Preserve the exact costume colors established by the Costume Reference.
@@ -2132,16 +2628,22 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  - Preserve the exact visible material finish and fabric appearance.
 
  SILHOUETTE & STRUCTURE (STRICT LOCK)
- - FRONT/BACK OVERRIDE: preserve the exact volume, bulk, closure, and external silhouette while rotating into front and rear camera angles.
- - Front/back views must preserve the exact volume, bulk, closure, and external silhouette established by ${canonicalLrImageRole} and the Costume Reference.
- - Do NOT invent front/back-specific shaping that exposes more anatomy than the Costume Reference implies.
+ ${isEnclosureCostume
+        ? `- FRONT/BACK OVERRIDE: preserve the exact volume, bulk, closure, and external silhouette while rotating into front and rear camera angles.
+ - Front/back views must preserve the exact volume, bulk, closure, and external silhouette established by the selected subject and Costume Reference.
+ - Do NOT invent front/back-specific shaping that exposes more anatomy than the Costume Reference implies.`
+        : `- FRONT/BACK OVERRIDE: preserve the same garment design, construction details, coverage, material language, and trim while letting the worn silhouette adapt naturally to the subject's chest, shoulders, arms, waist, and posture.
+ - Front/back views must show the same physical shirt/clothing worn on the body, not a pasted flat product silhouette.
+ - Do NOT flatten the body, erase chest/shoulder volume, or make the shirt hang like a board to match the product reference.`}
 
  PANELS
+ ${outputFramingBlock}
+ ${turnaroundCompositionBlock}
  - LEFT PANEL: FRONT view, straight-on.
  - RIGHT PANEL: BACK view, straight-on.
 
  STRUCTURE RULE
- - The front and back panels must depict the same exact physical garment from ${canonicalLrImageRole} and the Costume Reference.
+ - The front and back panels must depict the same exact physical garment from the Costume Reference worn by the same selected subject.
  - Any enclosure or coverage shown in front must remain structurally consistent in back unless the reference explicitly shows otherwise.
  - Do NOT create a back opening or exposed head/neck zone unless explicitly visible in the Costume Reference.
 
@@ -2154,16 +2656,19 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  SUBJECT IDENTITY (HARD LOCK - COSTUME MAY ONLY LIMIT VISIBILITY)
  - The FRONT and BACK panels must depict the exact same person and same worn costume.
  - Preserve face identity and neutral upright posture.
- - ${canonicalLrImageRole} is for costume/headwear geometry continuity only. It must not override the Character Sheet or Selected Subject for face/head identity.
  ${identityAnchorBlock}
  - CRITICAL: Identity must be preserved WITHIN the physical limits imposed by the costume.
  - Do NOT let body anatomy or costume pressure replace, genericize, beautify, age-shift, ethnicity-shift, or facially substitute the person.
  ${sourceAppearanceContinuityBlock}
  ${hairConsistencyBlock}
 
- ${brandingInstructionLR}
+ ${brandingInstruction}
 
  [FITTING NOTES]: ${effectiveTryOnNote}
+
+ ${tryOnNegativeConstraintsBlock}
+ ${tryOnCompositionNegativeConstraintsBlock}
+ ${tryOnPresentationNegativeConstraintsBlock}
 
  NEGATIVE CONSTRAINTS (FORBIDDEN):
  character sheet, reference sheet layout, sheet grid, headshot panels, annotation labels, callouts, typography, copied identity-anchor layout, extra panels beyond the requested front/back views,
@@ -2181,17 +2686,216 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  missing worn accessory, removed accessory, dropped headwear, missing jewelry, removed jewelry, missing eyewear, removed eyewear, missing veil, removed veil, missing hood, removed hood, missing scarf, removed scarf, missing glove, removed glove, missing footwear, removed footwear, missing adornment, simplified adornment, omitted source appearance element, restyled hair, bun hairstyle, updo, tied-back hair, ponytail, braid, pinned hair, shorter hair, different hair volume, different hair silhouette,
  altered costume colors, shifted palette, desaturated costume, brighter costume, darker costume, material reinterpretation,
  portrait beauty lighting on enclosed face, missing occlusion shadows, missing contact shadows,
+ ${tryOnStyleNegativePrompt ? `selected style category drift, ${tryOnStyleNegativePrompt},` : ''}
  text, watermark.`,
                 state.apiKey,
                 state.model,
-                fbImages,
+                baseImages,
                 {
                     aspectRatio: '1:1',
                     imageSize: state.imageResolution,
                     thinkingLevel: state.enableImageThinking,
                     googleGrounding: state.enableGoogleGrounding,
                     strictMode: true,
-                    billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements
+                    billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
+                    entitlements: state.billingEntitlements,
+                    identityLock: tryOnIdentityLock,
+                    styleCategory: subjectStyleId ? {
+                        styleId: subjectStyleId,
+                        intent: {
+                            selectedStyleLabel: subjectStyle,
+                            appliesTo: "Wardrobe Studio front/back turnaround sheet"
+                        }
+                    } : undefined
+                }
+            );
+
+            const canonicalFbImageIndex = baseImages.length + 1;
+            const canonicalFbImageRole = imageRoleName(canonicalFbImageIndex);
+            const lrImages: { url: string; label: string }[] = [
+                ...baseImages,
+                {
+                    url: fbSheet,
+                    label: `${canonicalFbImageRole} - Generated Front/Back Canonical Turnaround Anchor: primary body scale, head scale, silhouette, and costume-construction anchor for LR side views.`
+                }
+            ];
+            const lrImageRoleBlock = buildTryOnReferenceRoleBlock({
+                costumeIndex: costumeImageIndex,
+                identityAnchorIndex: identityAnchorImageIndex,
+                brandingIndex: brandingImageIndex,
+                canonicalFbIndex: canonicalFbImageIndex
+            });
+
+            const canonicalTurnaroundFidelityBlock = `
+ CANONICAL TURNAROUND FIDELITY RULES
+ - ${canonicalFbImageRole} is the canonical source for proportions and costume construction in this LR pass.
+ - Use the front/back turnaround result as the body/costume proportion anchor, then rotate that already-established actor and suit into true side profiles.
+ - Preserve the same actor identity, head scale, neck scale, shoulder width, torso volume, limb proportions, and overall silhouette.
+ - Preserve the same costume geometry, panel layout, armor/suit structure, seam placement, lights, accessories, gloves, and boots.
+ - Do not reinterpret the character.
+ - Do not enlarge the head.
+ - Do not exaggerate the helmet/collar, torso depth, shoulder width, limb thickness, glove scale, boot scale, or costume bulk.
+ - Do not redesign the suit or alter body mass/proportions between turnaround modes.
+ - The left and right profiles must look like the same established character from the FB turnaround, only rotated to accurate side views.
+`;
+
+            const leftRightTurnaroundRulesBlock = `
+ STRICT LR OUTPUT FORMAT
+ - Create a single two-panel left/right profile turnaround image split by one vertical center divider.
+ - Exactly two full-body figures total.
+ - Exactly one figure per panel only.
+ - LEFT PANEL: one true left-side profile of the subject, facing screen-right toward the center divider.
+ - RIGHT PANEL: one true right-side profile of the same subject, facing screen-left toward the center divider.
+ - The two figures face toward each other across the divider.
+ - No additional figures, no duplicates, no extra views, no repeated examples, no comparison lineup.
+ - Do not create four figures.
+ - Do not duplicate the left profile.
+ - Do not duplicate the right profile.
+ - Do not make a multi-view sheet, reference sheet, or lineup.
+ - Preserve the exact same subject, exact same body proportions, exact same costume, exact same boots, gloves, lights, panels, helmet/collar, and accessories.
+ - Only the camera side changes.
+`;
+
+            const lrSheet = await GeminiService.generateImage(
+                `Professional virtual try-on TRUE LEFT/RIGHT SIDE PROFILE TURNAROUND SHEET of the SAME established subject and SAME established outfit.
+
+ ${twoPanelFormat}
+
+ ${lrImageRoleBlock}
+ ${identityPriorityBlock}
+ ${tryOnPriorityOrderBlock}
+ ${sourceFidelityRulesBlock}
+ ${canonicalTurnaroundFidelityBlock}
+ ${identityAnchorFormatFirewall}
+ ${resolvedLookContractBlock}
+ ${identityAnchorUsageRuleBlock}
+ ${standardTryOnPresentationRuleBlock}
+ ${wardrobeReferenceUsageBlock}
+ ${wardrobeDesignFidelityBlock}
+ ${outputFramingBlock}
+ ${bodyAwareFittingBlock}
+ ${onBodyGarmentIntegrationBlock}
+ ${lowerBodyIntegrityBlock}
+ ${lrTurnaroundViewDefinitionBlock}
+ ${tryOnLrPoseCoherenceBlock}
+ ${leftRightTurnaroundRulesBlock}
+ ${tryOnStyleContract}
+
+ === PRIORITY 3: WARDROBE PHYSICAL STRUCTURE ===
+
+ COSTUME (HARD TRANSFER AUTHORITY)
+ - ${canonicalFbImageRole} locks the established head scale, body proportions, silhouette, and worn costume construction for LR.
+ - The Costume Reference (${costumeName}) remains the absolute authority for the wardrobe design, colors, materials, panels, lights, boots, gloves, helmet/collar structure, and major details.
+ - Copy the same established garment from the FB turnaround and Costume Reference while rotating the whole worn look into true opposite-facing side profiles.
+ ${isEnclosureCostume
+        ? '- Preserve the exact visible silhouette, enclosure, coverage, designed face-window placement, colors, textures, materials, construction, headwear, helmet, plume, crest, and accessories.'
+        : '- Preserve the shirt/clothing design, coverage, collar, cuffs, placket, embroidery, colors, textures, materials, construction, and accessories while refitting the same established garment as real clothing on the selected subject from the side.'}
+ - Do NOT reinterpret it into a new suit, new actor, inflated side silhouette, enlarged head, or more generic version.
+ - IGNORE filename text if it conflicts with the image.
+ ${designAssemblyBlock}
+ ${sideViewLockBlock}
+ ${trueProfileBodyBlock}
+ ${turnaroundCompositionBlock}
+
+ ${WEARABLE_FIDELITY_CONTRACT}
+
+ ${fittingBlock}
+ ${headwearOrientationBlock}
+ ${accessoryFootwearComplianceBlock}
+
+ COLOR & MATERIAL LOCK
+ - Preserve the exact costume colors from the Costume Reference and canonical FB result.
+ - Do NOT shift, mute, brighten, darken, replace, or reinterpret the costume colors.
+ - Preserve the exact visible material finish and fabric appearance.
+
+ SILHOUETTE & STRUCTURE (STRICT LOCK)
+ - Preserve proportional parity with ${canonicalFbImageRole}: same head-to-body ratio, neck thickness, shoulder width, torso volume, arm scale, glove scale, leg width, boot scale, helmet/collar scale, and overall suit bulk.
+ ${isEnclosureCostume
+        ? `- Preserve the exact outer silhouette and visible structure of the Costume Reference and canonical FB result.
+ - Preserve all enclosure logic, shell shape, padding, bulk, visible openings, and visible appendages exactly.
+ - Do NOT simplify the costume into regular clothing.
+ - Do NOT expose body parts unless the Costume Reference explicitly shows them.`
+        : `- Preserve the same clothing design, construction, coverage, embroidery, collar, cuffs, placket, hem, colors, and material language from the Costume Reference and canonical FB result.
+ - Let the side silhouette respond to the established subject's chest, shoulders, arms, waist, and posture.
+ - Do NOT copy the flat product/mannequin silhouette as if it were the subject's body.
+ - Do NOT flatten or inflate the wearer into a new side-profile interpretation.`}
+
+ PANELS
+ ${outputFramingBlock}
+ ${turnaroundCompositionBlock}
+ - EXACTLY TWO FIGURES TOTAL: one subject on the left side of the divider and one subject on the right side of the divider.
+ - Do not place two figures in either panel.
+ - LEFT PANEL: TRUE LEFT-SIDE PROFILE (90 degrees) using the selected framing. The subject's nose, chest, knees/toes, and costume side silhouette face toward the center divider / screen-right.
+ - RIGHT PANEL: TRUE RIGHT-SIDE PROFILE (90 degrees) using the selected framing. The subject's nose, chest, knees/toes, and costume side silhouette face toward the center divider / screen-left.
+ - The two figures must face toward each other across the center divider, not away from each other and not in the same screen direction.
+
+ PROFILE RULE
+ - The entire established body and costume must be rotated side-on: helmet, plume/crest, head, neck, shoulders, torso, pelvis, arms, waist layer, legs, shoes, and accessories.
+ - A head-only profile is invalid. A front-facing or 3/4 body with the head turned sideways is invalid.
+ - Do NOT show broad frontal chest armor, both shoulder pads symmetrically, both arms equally, front-facing feet, or same-direction duplicated profiles.
+ - Side profiles must show a believable standing lower body: pelvis over legs, knees and ankles aligned, pants/armor shaped by two legs, and shoes grounded in the same side-facing direction.
+
+ === PRIORITY 4: COSTUME-DRIVEN RELIGHTING ===
+
+ ${COSTUME_RELIGHTING_CONTRACT}
+
+ === IDENTITY ENFORCEMENT DURING SIDE TURNAROUND ===
+
+ SUBJECT (HARD IDENTITY LOCK - COSTUME MAY ONLY LIMIT VISIBILITY)
+ - Use the named identity reference image(s), selected subject, and canonical FB result to preserve the exact same person.
+ - The LEFT and RIGHT panels must depict the SAME person and SAME suit from ${canonicalFbImageRole}.
+ ${identityAnchorBlock}
+ - CRITICAL: Identity must be preserved WITHIN the physical limits imposed by the costume.
+ - Do NOT let body anatomy, side-view camera angle, or costume pressure replace, genericize, beautify, age-shift, ethnicity-shift, or facially substitute the person.
+ ${sourceAppearanceContinuityBlock}
+ ${hairConsistencyBlock}
+
+ ${brandingInstruction}
+
+ [FITTING NOTES]: ${effectiveTryOnNote}
+
+ ${tryOnNegativeConstraintsBlock}
+ ${tryOnCompositionNegativeConstraintsBlock}
+ ${tryOnPresentationNegativeConstraintsBlock}
+
+ NEGATIVE CONSTRAINTS (FORBIDDEN):
+ character sheet, reference sheet layout, sheet grid, headshot panels, annotation labels, callouts, typography, copied identity-anchor layout, multi-view sheet, comparison lineup, repeated examples, extra panels beyond the requested left/right views,
+ opened costume that should be closed, removed headwear, exposed hair under helmet, widened face opening,
+ duplicate clutch, duplicate purse, duplicate handbag, duplicate bag, duplicate case, duplicate briefcase, one clutch in both hands, one purse in both hands, duplicated handheld prop, unnecessary extra accessories,
+ inappropriate bare feet, barefoot businesswear, barefoot formalwear, barefoot tailored outfit, barefoot uniform, barefoot armor, missing shoes, missing footwear, unfinished lower-body styling, inappropriate shoes, mismatched footwear between panels,
+ exposed rear necklace when tucked in front, necklace across back of neck when front-tucked, physically impossible accessory visibility, hidden accessory becoming exposed between panels,
+ generic male face, generic fashion model face, different person, identity drift, facial substitution, ethnicity drift, age drift, hairstyle substitution, face drift, beautified profile, wrong nose projection, wrong jawline, wrong chin, wrong brow, wrong eye spacing, wrong mouth shape, wrong ear placement,
+ face placed in wrong opening, face placed in decorative cavity, face placed in non-face opening,
+ redesigned face hole, widened face window, shrunken face window, moved face window, broken face-window border,
+ enlarged head, oversized head, head scale drift, neck scale drift, shoulder width drift, torso volume drift, inflated torso depth, oversized helmet, oversized collar, suit bulk drift, glove scale drift, boot scale drift, chest device placement drift, panel placement drift, costume proportion drift,
+ extra limbs, duplicate bodies, duplicate full-body figures, four figures, four-body output, multiple variants, multiple examples, duplicate arms, duplicate sleeves, duplicate gloves, extra costume appendages, invented openings, extra cutouts, exposed neck when not shown, exposed wrists when not shown, exposed ankles when not shown, exposed hands when not shown, exposed feet when not shown, anatomy contouring, body-hugging reinterpretation, bodysuit reinterpretation, costume redesign, alternate costume versions, mascot redesign,
+ two left profiles, two right profiles, both panels facing the same direction, both profiles facing screen-right, both profiles facing screen-left, profiles facing away from each other, duplicated same side profile, duplicate left profile, duplicate right profile, near-front side view, 3/4 side substitute, broad frontal torso in side view, front-facing feet in side view,
+ changed color placement, changed armor panels, changed glowing strips, changed boots, changed gloves, changed collar, changed backpack, changed body proportions,
+ rotated helmet crest, flipped plume orientation, camera-facing crest on wrong view, narrow side plume when source crest is front-to-back, headwear orientation mismatch,
+ missing worn accessory, removed accessory, dropped headwear, missing jewelry, removed jewelry, missing eyewear, removed eyewear, missing veil, removed veil, missing hood, removed hood, missing scarf, removed scarf, missing glove, removed glove, missing footwear, removed footwear, missing adornment, simplified adornment, omitted source appearance element, restyled hair, bun hairstyle, updo, tied-back hair, ponytail, braid, pinned hair, shorter hair, different hair volume, different hair silhouette,
+ altered costume colors, shifted palette, desaturated costume, brighter costume, darker costume, material reinterpretation,
+ portrait beauty lighting on enclosed face, missing occlusion shadows, missing contact shadows,
+ ${tryOnStyleNegativePrompt ? `selected style category drift, ${tryOnStyleNegativePrompt},` : ''}
+ flat cutout, bad photoshop, unnatural drape, floating clothes, modified design, text, watermark.`,
+                state.apiKey,
+                state.model,
+                lrImages,
+                {
+                    aspectRatio: '1:1',
+                    imageSize: state.imageResolution,
+                    thinkingLevel: state.enableImageThinking,
+                    googleGrounding: state.enableGoogleGrounding,
+                    strictMode: true,
+                    billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
+                    entitlements: state.billingEntitlements,
+                    identityLock: tryOnIdentityLock,
+                    styleCategory: subjectStyleId ? {
+                        styleId: subjectStyleId,
+                        intent: {
+                            selectedStyleLabel: subjectStyle,
+                            appliesTo: "Wardrobe Studio left/right turnaround sheet using canonical FB fidelity anchor"
+                        }
+                    } : undefined
                 }
             );
 
@@ -2310,6 +3014,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
             sourceUrl: finalUrl,
             tag,
             name: selectedCharacter ? `${selectedCharacter.name} (${label})` : `Fitted Character (${label})`,
+            identityLock: selectedCharacter?.identityLock,
             profile: {
                 identity: selectedCharacter?.profile?.identity || selectedCharacter?.name || "Unknown Identity",
                 wardrobe: selectedCostume?.prompt || "Selected Wardrobe",
@@ -2783,6 +3488,37 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                                 onChange={(e) => setTryOnNote(e.target.value)}
                                             />
                                         </div>
+
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <label className="block">
+                                                <span className="block text-[9px] font-black uppercase tracking-widest text-gray-500 mb-1">
+                                                    3. Garment Fit
+                                                </span>
+                                                <select
+                                                    value={tryOnGarmentFit}
+                                                    onChange={(e) => setTryOnGarmentFit(e.target.value as TryOnGarmentFit)}
+                                                    className="w-full bg-[#09090b] border border-[#27272a] px-2 py-2 rounded-lg text-[10px] text-gray-200 focus:border-yellow-500 focus:outline-none"
+                                                >
+                                                    {GARMENT_FIT_OPTIONS.map(option => (
+                                                        <option key={option.value} value={option.value}>{option.label}</option>
+                                                    ))}
+                                                </select>
+                                            </label>
+                                            <label className="block">
+                                                <span className="block text-[9px] font-black uppercase tracking-widest text-gray-500 mb-1">
+                                                    4. Fabric Behavior
+                                                </span>
+                                                <select
+                                                    value={tryOnFabricBehavior}
+                                                    onChange={(e) => setTryOnFabricBehavior(e.target.value as TryOnFabricBehavior)}
+                                                    className="w-full bg-[#09090b] border border-[#27272a] px-2 py-2 rounded-lg text-[10px] text-gray-200 focus:border-yellow-500 focus:outline-none"
+                                                >
+                                                    {FABRIC_BEHAVIOR_OPTIONS.map(option => (
+                                                        <option key={option.value} value={option.value}>{option.label}</option>
+                                                    ))}
+                                                </select>
+                                            </label>
+                                        </div>
                                     </div>
 
                                     <div className="mt-4 pt-3 border-t border-gray-800 flex-shrink-0">
@@ -2924,10 +3660,21 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                                             </div>
                                                         </div>
 
-                                                        <label className="shrink-0 text-[9px] font-bold text-gray-200 hover:text-white cursor-pointer bg-white/5 hover:bg-white/10 px-2.5 py-1 rounded-lg border border-white/10 transition-colors flex items-center gap-1.5">
-                                                            <Upload className="w-3.5 h-3.5" /> Upload
-                                                            <input type="file" className="hidden" accept="image/*" onClick={(e) => { (e.target as HTMLInputElement).value = ''; }} onChange={handleUploadTryOnCharacterSheet} />
-                                                        </label>
+                                                        <div className="shrink-0 flex items-center gap-1.5">
+                                                            <button
+                                                                type="button"
+                                                                onClick={handleUseSelectedSubjectAsAnchor}
+                                                                disabled={!selectedCharacter}
+                                                                className="text-[9px] font-bold text-gray-200 hover:text-white disabled:text-gray-500 disabled:cursor-not-allowed bg-white/5 hover:bg-white/10 disabled:hover:bg-white/5 px-2.5 py-1 rounded-lg border border-white/10 transition-colors flex items-center gap-1.5"
+                                                                title={selectedCharacter ? 'Use selected subject as identity anchor' : 'Select a subject first'}
+                                                            >
+                                                                <UserPlus className="w-3.5 h-3.5" /> Use Subject
+                                                            </button>
+                                                            <label className="text-[9px] font-bold text-gray-200 hover:text-white cursor-pointer bg-white/5 hover:bg-white/10 px-2.5 py-1 rounded-lg border border-white/10 transition-colors flex items-center gap-1.5">
+                                                                <Upload className="w-3.5 h-3.5" /> Upload
+                                                                <input type="file" className="hidden" accept="image/*" onClick={(e) => { (e.target as HTMLInputElement).value = ''; }} onChange={handleUploadTryOnCharacterSheet} />
+                                                            </label>
+                                                        </div>
                                                     </div>
 
                                                     <div className="bg-black/40 border border-white/10 rounded-lg p-2 flex items-center gap-3">
@@ -2941,15 +3688,20 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
                                                         <div className="min-w-0">
                                                             <div className="text-xs text-gray-200 font-semibold leading-tight">
-                                                                {tryOnCharacterSheet ? 'Loaded.' : 'None loaded.'}
+                                                                {tryOnCharacterSheetStatus}
                                                             </div>
                                                             {tryOnCharacterSheet && (
                                                                 <button
-                                                                    onClick={() => setTryOnCharacterSheet(null)}
+                                                                    onClick={clearTryOnCharacterSheet}
                                                                     className="mt-2 text-[9px] font-bold text-red-400 hover:text-red-300 uppercase tracking-widest"
                                                                 >
                                                                     Remove
                                                                 </button>
+                                                            )}
+                                                            {!selectedCharacter && !tryOnCharacterSheet && (
+                                                                <div className="mt-1 text-[9px] text-gray-500 font-bold">
+                                                                    Select a subject first.
+                                                                </div>
                                                             )}
                                                         </div>
                                                     </div>

@@ -17,6 +17,10 @@ import {
     normalizeImageGenerationModel,
     type ImageGenerationModel
 } from '../constants/generationModels';
+import {
+    createBiometricIdentityLock,
+    type BiometricIdentityLock
+} from '../../prompts/identityContracts';
 
 export const APP_SCHEMA_VERSION = 5; // bump when persisted state shape changes
 // --- SHARED TYPES ---
@@ -75,6 +79,7 @@ export interface CastMember {
     name: string;
     filename?: string;
     profile?: WhitelistProfile;
+    identityLock?: BiometricIdentityLock;
 }
 
 export interface HostedSession {
@@ -438,9 +443,38 @@ export type LiveStatusMessage = {
 
 export type PitchSheetHandoffAngle = 'center' | 'left' | 'right' | 'up' | 'down';
 
+export type NanoCastSessionDirectorControls = {
+    identityStrength: number;
+    stylization: number;
+    age: number;
+    outfit: string;
+    hairStyle: string;
+    lighting: string;
+    shotFraming: 'bust' | 'half_body' | 'full_body';
+    logoImage: string | null;
+    logoPlacement: string;
+};
+
+export type NanoCastSessionState = {
+    characterId: string;
+    biometricImages: Record<PitchSheetHandoffAngle, string | null>;
+    generatedCharacterUrl: string | null;
+    identityLock: BiometricIdentityLock | null;
+    selectedStyle: string | null;
+    selectedBody: string | null;
+    bodyScope: 'head' | 'torso' | 'full' | null;
+    identitySource: 'hybrid' | 'biometric' | 'generated';
+    heightIn: number;
+    weightLbs: number;
+    directorControls: NanoCastSessionDirectorControls;
+    updatedAt: number | null;
+};
+
 export type PendingPitchSheetHandoff = {
     source: 'nanocast_biometric_scan';
     createdAt: number;
+    characterId: string;
+    identityLock: BiometricIdentityLock;
     identityImages: Array<{
         angle: PitchSheetHandoffAngle;
         imageUrl: string;
@@ -586,6 +620,7 @@ export interface AppState {
     liveStatus: LiveStatusMessage | null;
     pendingPitchSheetHandoff: PendingPitchSheetHandoff | null;
     pendingRefSheetHandoff: PendingRefSheetHandoff | null;
+    nanoCastSession: NanoCastSessionState;
 }
 
 export interface WardrobeState {
@@ -604,6 +639,9 @@ export interface WardrobeState {
     selectedCostume: WardrobeItem | null;
     brandingLogo: string | null;
     logoPosition: string;
+    tryOnGarmentFit: 'slim' | 'tailored' | 'standard' | 'relaxed' | 'oversized';
+    tryOnFabricBehavior: 'structured_crisp' | 'balanced' | 'soft_draped';
+    tryOnOutputFraming: 'bust' | 'half_body' | 'full_body';
     // New persistent fields for Virtual Try-On
     tryOnOutputMode: 'front' | 'turnaround';
     tryOnViews: Record<'front' | 'back' | 'left' | 'right', string> | null;
@@ -639,6 +677,9 @@ const DEFAULT_WARDROBE_STATE: WardrobeState = {
     selectedCostume: null,
     brandingLogo: null,
     logoPosition: "Center Chest",
+    tryOnGarmentFit: 'standard',
+    tryOnFabricBehavior: 'balanced',
+    tryOnOutputFraming: 'full_body',
     tryOnOutputMode: 'front',
     tryOnViews: null,
     tryOnSheetFB: null,
@@ -766,6 +807,10 @@ export type Action =
     | { type: 'SET_HOSTED_SESSION'; payload: HostedSession | null }
     | { type: 'SET_HOSTED_CREDITS'; payload: number | null }
     | { type: 'SET_CREDIT_MODAL'; payload: boolean | Omit<InsufficientCreditModalState, 'openedAt'> | InsufficientCreditModalState }
+    | { type: 'SET_NANO_CAST_BIOMETRIC_IMAGE'; payload: { angle: PitchSheetHandoffAngle; imageUrl: string | null } }
+    | { type: 'SET_NANO_CAST_GENERATED_RESULT'; payload: string | null }
+    | { type: 'SET_NANO_CAST_SESSION_METADATA'; payload: Partial<Omit<NanoCastSessionState, 'biometricImages' | 'generatedCharacterUrl' | 'identityLock' | 'updatedAt'>> }
+    | { type: 'CLEAR_NANO_CAST_SESSION' }
     | { type: 'ADD_BACKGROUND_JOB'; payload: BackgroundJob }
     | { type: 'UPDATE_BACKGROUND_JOB'; payload: { id: string; updates: Partial<BackgroundJob> } }
     | { type: 'REMOVE_BACKGROUND_JOB'; payload: string }
@@ -807,6 +852,60 @@ const clampBiometricSoundVolume = (value: unknown): number => {
     if (!Number.isFinite(numeric)) return 70;
     return Math.min(100, Math.max(0, Math.round(numeric)));
 };
+
+const createNanoCastCharacterId = (): string => {
+    const randomId = globalThis.crypto?.randomUUID?.();
+    return `nanocast_${randomId || `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`}`;
+};
+
+const buildNanoCastSessionIdentityLock = (session: NanoCastSessionState): BiometricIdentityLock | null => {
+    const referenceViews = (Object.keys(session.biometricImages) as PitchSheetHandoffAngle[])
+        .filter(angle => Boolean(session.biometricImages[angle]));
+
+    if (referenceViews.length === 0) return null;
+
+    return createBiometricIdentityLock({
+        characterId: session.characterId,
+        referenceViews,
+        identityRangeText: referenceViews.length === 1
+            ? "[IMAGE 1]"
+            : `[IMAGE 1] to [IMAGE ${referenceViews.length}]`,
+        identityStrength: session.directorControls.identityStrength,
+        appliesTo: "NanoCast generation, regeneration, refinement, preview, validation, pitch-sheet handoff, reference-sheet generation, wardrobe/prop/staging handoffs, and export requests for this character",
+        faceDominant: true
+    });
+};
+
+const createDefaultNanoCastSession = (): NanoCastSessionState => ({
+    characterId: createNanoCastCharacterId(),
+    biometricImages: {
+        center: null,
+        left: null,
+        right: null,
+        up: null,
+        down: null
+    },
+    generatedCharacterUrl: null,
+    identityLock: null,
+    selectedStyle: null,
+    selectedBody: null,
+    bodyScope: null,
+    identitySource: 'hybrid',
+    heightIn: 70,
+    weightLbs: 170,
+    directorControls: {
+        identityStrength: 85,
+        stylization: 50,
+        age: 25,
+        outfit: "Black polo t-shirt",
+        hairStyle: "",
+        lighting: "studio_default",
+        shotFraming: "full_body",
+        logoImage: null,
+        logoPlacement: "Center Chest"
+    },
+    updatedAt: null
+});
 
 // --- UNDO / REDO HISTORY (paid-launch safety) ---
 export type HistorySnapshot = {
@@ -1020,7 +1119,10 @@ const initialWardrobeState: WardrobeState = {
     tryOnViews: null,
     tryOnSheetFB: null,
     tryOnSheetLR: null,
-    activeTryOnView: 'front'
+    activeTryOnView: 'front',
+    tryOnGarmentFit: loadedWardrobeState.tryOnGarmentFit ?? DEFAULT_WARDROBE_STATE.tryOnGarmentFit,
+    tryOnFabricBehavior: loadedWardrobeState.tryOnFabricBehavior ?? DEFAULT_WARDROBE_STATE.tryOnFabricBehavior,
+    tryOnOutputFraming: DEFAULT_WARDROBE_STATE.tryOnOutputFraming
 };
 
 export const initialState: AppState = {
@@ -1120,6 +1222,7 @@ export const initialState: AppState = {
     liveStatus: null,
     pendingPitchSheetHandoff: null,
     pendingRefSheetHandoff: null,
+    nanoCastSession: createDefaultNanoCastSession(),
 };
 
 // --- DATA SANITIZATION ---
@@ -1276,6 +1379,56 @@ export const reducer = (state: AppState, action: Action): AppState => {
             return { ...state, pendingRefSheetHandoff: action.payload };
         case 'CLEAR_PENDING_REF_SHEET_HANDOFF':
             return { ...state, pendingRefSheetHandoff: null };
+        case 'SET_NANO_CAST_BIOMETRIC_IMAGE': {
+            const session = state.nanoCastSession ?? createDefaultNanoCastSession();
+            const nextSession: NanoCastSessionState = {
+                ...session,
+                biometricImages: {
+                    ...session.biometricImages,
+                    [action.payload.angle]: action.payload.imageUrl
+                },
+                updatedAt: Date.now()
+            };
+            return {
+                ...state,
+                nanoCastSession: {
+                    ...nextSession,
+                    identityLock: buildNanoCastSessionIdentityLock(nextSession)
+                }
+            };
+        }
+        case 'SET_NANO_CAST_GENERATED_RESULT': {
+            const session = state.nanoCastSession ?? createDefaultNanoCastSession();
+            return {
+                ...state,
+                nanoCastSession: {
+                    ...session,
+                    generatedCharacterUrl: action.payload,
+                    updatedAt: Date.now()
+                }
+            };
+        }
+        case 'SET_NANO_CAST_SESSION_METADATA': {
+            const session = state.nanoCastSession ?? createDefaultNanoCastSession();
+            const nextSession: NanoCastSessionState = {
+                ...session,
+                ...action.payload,
+                directorControls: {
+                    ...session.directorControls,
+                    ...(action.payload.directorControls ?? {})
+                },
+                updatedAt: Date.now()
+            };
+            return {
+                ...state,
+                nanoCastSession: {
+                    ...nextSession,
+                    identityLock: buildNanoCastSessionIdentityLock(nextSession)
+                }
+            };
+        }
+        case 'CLEAR_NANO_CAST_SESSION':
+            return { ...state, nanoCastSession: createDefaultNanoCastSession() };
         case 'SET_API_KEY': {
             const nextKey = action.payload;
             return { 
@@ -1688,7 +1841,8 @@ export const reducer = (state: AppState, action: Action): AppState => {
                 inspectMask: null,
                 regionEdit: smartClone(DEFAULT_REGION_EDIT),
                 sessionName: null,
-                sessionFilePath: null
+                sessionFilePath: null,
+                nanoCastSession: createDefaultNanoCastSession()
             };
         }
         case 'SET_SESSION_INFO':
@@ -2283,6 +2437,7 @@ export type ActorIdentityReferenceSet = {
     wardrobeRefs: string[];
     biometricProfile?: string;
     identityPriority?: 'strict';
+    identityLock?: BiometricIdentityLock;
 };
 
 export type ShotsActorOption = {
@@ -2433,6 +2588,21 @@ export function getActorIdentityReferenceSetsForScene(state: AppState, sceneId: 
             }
 
             const profileSlot = slots.find(s => s.analysis && s.analysis.trim());
+            const identityReferenceViews = slots
+                .filter(s => s.url && !wardrobeRefs.includes(s.url))
+                .map(s => s.name?.trim() || s.target?.trim() || `reference_slot_${s.index}`);
+            const actorIdentityLock = actor?.identityLock ?? (
+                primaryFaceAnchor || angleFaceAnchors.length || supportIdentityRefs.length
+                    ? createBiometricIdentityLock({
+                        characterId: castId as string,
+                        referenceViews: identityReferenceViews,
+                        identityRangeText: `${actor?.name?.trim() || castId} uploaded actor reference stack`,
+                        identityStrength: 100,
+                        appliesTo: "staging generation, region replacement, multi-actor previews, validation, refinements, and export requests for this character",
+                        faceDominant: false
+                    })
+                    : undefined
+            );
 
             referenceSets.push({
                 actorId: castId as string,
@@ -2443,7 +2613,8 @@ export function getActorIdentityReferenceSetsForScene(state: AppState, sceneId: 
                 supportIdentityRefs,
                 wardrobeRefs,
                 biometricProfile: profileSlot?.analysis,
-                identityPriority: 'strict'
+                identityPriority: 'strict',
+                identityLock: actorIdentityLock
             });
         }
     }

@@ -8,6 +8,8 @@ import {
   type CharacterPitchSheetRenderStyle,
   type CharacterPitchSheetInput,
 } from '../../../prompts/characterPitchSheetPrompts';
+import { SHEET_STYLE_LOCK_NEGATIVE_TEXT, withSheetStyleLockContract } from '../../../prompts/sheetStyleLock';
+import { buildStyleCorrectionPrompt, buildStyleValidationPrompt } from '../../../prompts/styleContracts';
 
 const buildInput = (overrides: Partial<CharacterPitchSheetInput>): CharacterPitchSheetInput => ({
   ...defaultCharacterPitchSheetInput,
@@ -85,12 +87,25 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
     const styles: CharacterPitchSheetRenderStyle[] = [
       'biometric_realism',
       'cinematic_photoreal',
+      'exact_studio',
+      'photorealism',
+      'dslr_capture',
       'stylized_realism',
       'animated_feature',
+      'family_3d',
+      'pixar',
+      'claymation',
       'editorial_illustration',
       'concept_art',
+      'retro_cel',
+      'retro_anime',
+      'comic_book',
       'graphic_novel',
+      'graphic_noir',
       'anime_manga',
+      'cyberpunk_neon',
+      'cyberpunk',
+      'no_specific_style',
     ];
 
     for (const characterRenderStyle of styles) {
@@ -110,35 +125,142 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
       expect(prompt).toContain('SOURCE PANEL MODE HAS PRIORITY OVER STYLE');
       expect(prompt).toContain('STYLE-SAFE VISIBLE LABELING');
       expect(prompt).toContain('STYLE-CALLOUT RULE');
-      expect(prompt).toContain('Style may change rendering treatment, lighting, texture, color finish, line language, and surface language only.');
-      expect(prompt).toContain('Style must not change actor identity, face structure, skull geometry, age impression, body proportions, costume, footwear, accessories, props, or world/era.');
+      expect(prompt).toContain('Style affects rendering language only.');
+      expect(prompt).toContain('It must not change skull shape, face structure, hairline, eyes, brows, nose, mouth, jaw, facial asymmetry, age impression, body type, costume package, footwear, props, or world/era unless the user explicitly requests that.');
+      expect(prompt).toContain('Source images are the identity authority when supplied.');
+      expect(prompt).toContain('If style and likeness conflict, likeness wins.');
+      expect(prompt).toContain('Head studies must preserve the same exact subject, and turnaround figures must not use generic mannequin faces.');
+      expect(prompt).toContain('Source panel mode must not weaken identity; it only controls whether source references are visible, hidden, or costume matched.');
       expect(prompt).toContain('costume');
       expect(prompt).toContain('footwear');
       expect(prompt).toContain('props');
       expect(prompt).toContain('world/era');
+
+      if (characterRenderStyle.includes('_')) {
+        const promptWithoutInternalStyleLock = prompt.replace(/SHEET STYLE LOCK:[\s\S]*?AUTHORITATIVE IDENTITY CONTRACT:/, 'AUTHORITATIVE IDENTITY CONTRACT:');
+        expect(promptWithoutInternalStyleLock).not.toContain(characterRenderStyle);
+      }
     }
   });
 
-  it('keeps critical per-style drift guards in the active prompt', () => {
+  it('maps render styles to concise active prompt language', () => {
     expect(buildCharacterPitchSheetPrompt(buildInput({
       characterRenderStyle: 'cinematic_photoreal',
-    }))).toContain('Do not turn into a plain corporate reference sheet');
+    }))).toContain('Cinematic Photoreal: premium film-grade character board');
 
     expect(buildCharacterPitchSheetPrompt(buildInput({
-      characterRenderStyle: 'stylized_realism',
-    }))).toContain('do not bulk, widen, slim, exaggerate, genericize the face');
+      characterRenderStyle: 'exact_studio',
+    }))).toContain('Exact Studio realism: clean professional studio lighting, accurate actor likeness');
 
     expect(buildCharacterPitchSheetPrompt(buildInput({
-      characterRenderStyle: 'animated_feature',
-    }))).toContain('translate this actor; do not invent a new animated character');
+      characterRenderStyle: 'dslr_capture',
+    }))).toContain('DSLR capture look: real camera portraiture');
 
     expect(buildCharacterPitchSheetPrompt(buildInput({
-      characterRenderStyle: 'concept_art',
-    }))).toContain('polish, clarify, and resolve; do not redesign');
+      characterRenderStyle: 'family_3d',
+    }))).toContain('High-end family 3D animation style');
 
     expect(buildCharacterPitchSheetPrompt(buildInput({
-      characterRenderStyle: 'anime_manga',
-    }))).toContain("preserve this subject's identity; do not default to a generic anime face");
+      characterRenderStyle: 'retro_cel',
+    }))).toContain('Retro cel animation style');
+
+    expect(buildCharacterPitchSheetPrompt(buildInput({
+      characterRenderStyle: 'cyberpunk_neon',
+    }))).toContain('Cyberpunk neon style');
+
+    const noSpecificStylePrompt = buildCharacterPitchSheetPrompt(buildInput({
+      characterRenderStyle: 'no_specific_style',
+    }));
+
+    expect(noSpecificStylePrompt).toContain("No specific style override: follow the user's brief");
+    expect(noSpecificStylePrompt).toContain('Preserve the exact source subject while translating only the rendering style.');
+    expect(noSpecificStylePrompt).not.toContain('Active render style contract');
+    expect(noSpecificStylePrompt).not.toContain('no_specific_style');
+  });
+
+  it('adds one sheet-level style lock that every pitch-sheet panel inherits', () => {
+    const prompt = buildCharacterPitchSheetPrompt(buildInput({
+      characterRenderStyle: 'family_3d',
+      boardPresentationStyle: 'premium_film_board',
+    }));
+
+    expect(prompt).toContain('SHEET STYLE LOCK');
+    expect(prompt).toContain('"style_lock"');
+    expect(prompt).toContain('"style_family": "stylized_3D"');
+    expect(prompt).toContain('"allow_mixed_styles": false');
+    expect(prompt).toContain('hero full-body render: inherit style_family "stylized_3D" exactly.');
+    expect(prompt).toContain('front head: inherit style_family "stylized_3D" exactly.');
+    expect(prompt).toContain('3/4 head: inherit style_family "stylized_3D" exactly.');
+    expect(prompt).toContain('side profile head: inherit style_family "stylized_3D" exactly.');
+    expect(prompt).toContain('action pose / gesture study: inherit style_family "stylized_3D" exactly.');
+    expect(prompt).toContain('footwear and material detail insets: inherit style_family "stylized_3D" exactly.');
+    expect(prompt).toContain('annotations and callout presentation: inherit style_family "stylized_3D" exactly.');
+    expect(prompt).toContain(SHEET_STYLE_LOCK_NEGATIVE_TEXT);
+  });
+
+  it('teaches the style validator and retry prompt to reject mixed-style sheets', () => {
+    const prompt = buildCharacterPitchSheetPrompt(buildInput({
+      characterRenderStyle: 'family_3d',
+    }));
+    const validationPrompt = buildStyleValidationPrompt(prompt, 'family_3d', {
+      selectedStyleLabel: 'Family 3D Animation',
+    });
+    const correctionPrompt = buildStyleCorrectionPrompt(prompt, {
+      styleCoherent: false,
+      requiresRetry: true,
+      confidence: 0.9,
+      issueSummary: 'head studies drifted into flat illustration',
+      driftTraits: ['flat illustration head studies'],
+    }, 'family_3d', {
+      selectedStyleLabel: 'Family 3D Animation',
+    });
+
+    expect(validationPrompt).toContain('Also evaluate sheet-level style consistency');
+    expect(validationPrompt).toContain(SHEET_STYLE_LOCK_NEGATIVE_TEXT);
+    expect(correctionPrompt).toContain('SHEET STYLE LOCK CORRECTION PASS');
+    expect(correctionPrompt).toContain('Correct style only. Do not change character likeness, proportions, wardrobe, identity, pose, head angle, or callouts.');
+    expect(correctionPrompt).toContain(SHEET_STYLE_LOCK_NEGATIVE_TEXT);
+  });
+
+  it('can centrally add a sheet style lock to future character-sheet prompts', () => {
+    const prompt = withSheetStyleLockContract(
+      'Create a character reference sheet with hero render, turnaround panels, head studies, action pose, and footwear detail.',
+      'family_3d',
+      {
+        source: 'user_selected',
+        selectedStyleLabel: 'Family 3D Animation',
+      }
+    );
+
+    expect(prompt).toContain('SHEET STYLE LOCK');
+    expect(prompt).toContain('"style_family": "stylized_3D"');
+    expect(prompt).toContain('hero full-body render: inherit style_family "stylized_3D" exactly.');
+    expect(prompt).toContain('footwear detail inset: inherit style_family "stylized_3D" exactly.');
+    expect(prompt).toContain(SHEET_STYLE_LOCK_NEGATIVE_TEXT);
+  });
+
+  it('adds exact subject preservation language to app-library render style mappings', () => {
+    const appLibraryStyles: CharacterPitchSheetRenderStyle[] = [
+      'exact_studio',
+      'photorealism',
+      'dslr_capture',
+      'family_3d',
+      'pixar',
+      'claymation',
+      'retro_cel',
+      'retro_anime',
+      'comic_book',
+      'graphic_noir',
+      'cyberpunk_neon',
+      'cyberpunk',
+      'no_specific_style',
+    ];
+
+    for (const characterRenderStyle of appLibraryStyles) {
+      const prompt = buildCharacterPitchSheetPrompt(buildInput({ characterRenderStyle }));
+
+      expect(prompt).toContain('Preserve the exact source subject while translating only the rendering style.');
+    }
   });
 
   it('builds context-appropriate callouts for modern business, sci-fi, creature, and robot characters', () => {
@@ -286,9 +408,9 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
       build: 'broad shouldered',
     }));
 
-    expect(prompt).toContain('Biometric Realism: Realistic actor-based character design sheet.');
-    expect(prompt).toContain('Use face references for likeness.');
-    expect(prompt).toContain('No illustration or generic substitute casting.');
+    expect(prompt).toContain('Biometric Realism: realistic actor-based character design sheet');
+    expect(prompt).toContain('face-reference likeness');
+    expect(prompt).toContain('realistic skin, wardrobe, and materials');
     expect(prompt).not.toContain('BIOMETRIC REALISM CONTRACT');
     expect(prompt).not.toContain('REALISM MODE IDENTITY PRIORITY');
     expect(prompt).not.toContain('REALISM NEGATIVE CONSTRAINTS');
@@ -309,9 +431,8 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
       characterRenderStyle: 'cinematic_photoreal',
     }));
 
-    expect(prompt).toContain('Cinematic Photoreal: Premium film-grade character design board.');
-    expect(prompt).toContain('Realistic actor-based likeness, cinematic lighting, believable wardrobe, strong production presentation.');
-    expect(prompt).toContain('Do not turn into a plain corporate reference sheet.');
+    expect(prompt).toContain('Cinematic Photoreal: premium film-grade character board');
+    expect(prompt).toContain('realistic actor-based likeness, cinematic lighting, believable wardrobe, strong production presentation');
     expect(prompt).not.toContain('CINEMATIC PHOTOREAL CONTRACT');
     expect(prompt).not.toContain('REALISM MODE IDENTITY PRIORITY');
     expect(prompt).not.toContain('REALISM NEGATIVE CONSTRAINTS');

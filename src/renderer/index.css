@@ -82,6 +82,67 @@ button:focus-visible {
   outline: 4px auto -webkit-focus-ring-color;
 }
 
+.sign-in-required-modal button {
+  padding: 0;
+}
+
+.sign-in-required-close {
+  background-color: rgba(255, 255, 255, 0.06) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  color: #d4d4d8 !important;
+  box-shadow: none;
+}
+
+.sign-in-required-close:hover {
+  background-color: rgba(239, 68, 68, 0.16) !important;
+  border-color: rgba(248, 113, 113, 0.4) !important;
+  color: #fee2e2 !important;
+}
+
+.sign-in-required-close:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.5);
+}
+
+.sign-in-required-secondary {
+  background-color: rgba(255, 255, 255, 0.075) !important;
+  border: 1px solid rgba(255, 255, 255, 0.16) !important;
+  color: #f4f4f5 !important;
+  box-shadow: none;
+}
+
+.sign-in-required-secondary:hover {
+  background-color: rgba(255, 255, 255, 0.12) !important;
+  border-color: rgba(255, 255, 255, 0.28) !important;
+  color: #ffffff !important;
+}
+
+.sign-in-required-secondary:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.24);
+}
+
+.sign-in-required-primary {
+  background-color: #ffd400 !important;
+  border: 1px solid #ffe169 !important;
+  color: #090909 !important;
+  box-shadow: 0 0 28px rgba(234, 179, 8, 0.28);
+}
+
+.sign-in-required-primary:hover {
+  background-color: #ffe45c !important;
+  border-color: #fff0a3 !important;
+  color: #090909 !important;
+}
+
+.sign-in-required-primary:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px rgba(255, 228, 92, 0.92),
+    0 0 0 4px rgba(23, 23, 26, 0.95),
+    0 0 28px rgba(234, 179, 8, 0.28);
+}
+
 /* Cinematic Loading Animations */
 @keyframes spin-reverse {
   from {

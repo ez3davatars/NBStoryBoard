@@ -2,6 +2,7 @@ import type { Veo31Spec } from './types';
 import { buildNegatives } from './negatives';
 import { buildContinuityLockBlock } from '../utils/promptHelpers';
 import type { VeoFivePartDraft } from './veoFivePart';
+import { buildPoseCoherenceContract, buildPoseCoherenceNegativeTokens } from '../../prompts/poseCoherence';
 
 type PromptDraftOverrides = Partial<VeoFivePartDraft> & { concept?: string };
 
@@ -88,6 +89,15 @@ export function buildVeo31Prompt(spec: Veo31Spec, opts: VeoPromptOptions = {}): 
     motion.characterAction ? `- Character Action: ${safeJoin(motion.characterAction)}` : '',
   ].filter(Boolean).join('\n');
 
+  const poseCoherenceBlock = buildPoseCoherenceContract({
+    strictness: 'scene',
+    subjectScope: 'visible_body',
+    stanceType: 'anchor_preserved',
+    footingMode: 'directionally_aligned',
+    twistAllowed: false,
+    twistIntensity: 0
+  });
+
   const frame1Block = spec.frame1Description
     ? `FRAME 1 DESCRIPTION:\n${safeJoin(spec.frame1Description)}`
     : '';
@@ -119,6 +129,7 @@ export function buildVeo31Prompt(spec: Veo31Spec, opts: VeoPromptOptions = {}): 
   const fullPromptParts = [
     'VEO 3.1 DIRECTOR SPEC (STRICT):',
     continuityBlock,
+    poseCoherenceBlock,
     charBlock,
     envBlock,
     styleBlock,
@@ -131,7 +142,7 @@ export function buildVeo31Prompt(spec: Veo31Spec, opts: VeoPromptOptions = {}): 
   ].filter(Boolean);
 
   const fullPrompt = fullPromptParts.join('\n\n');
-  const negatives = buildNegatives(spec).join(', ');
+  const negatives = [...buildNegatives(spec), buildPoseCoherenceNegativeTokens()].join(', ');
 
   return {
     prompt: fullPrompt,

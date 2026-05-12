@@ -2,6 +2,7 @@ import type { VeoFivePartDraft, VeoAudioBlock } from '../promptEngine/veoFivePar
 import type { ActorIdentityReferenceSet } from '../context/AppContext';
 import { buildOrderedActorIdentityInputs, hasStrongFaceAnchor } from '../utils/identityReferenceHelpers';
 import { SupabaseAuth, supabase } from './SupabaseClient';
+import { assertAuthenticatedForGeneration } from './AuthGenerationGate';
 import {
   CREDIT_PRICING_VERSION,
   INSUFFICIENT_HOSTED_CREDITS_EVENT,
@@ -14,6 +15,38 @@ import {
   toHostedResolutionTier
 } from '../utils/billingProducts';
 import { normalizeImageGenerationModel } from '../constants/generationModels';
+import {
+  buildPoseCoherenceCorrectionPrompt,
+  buildPoseCoherenceValidationPrompt,
+  parsePoseCoherenceValidation,
+  shouldApplyPoseCoherence,
+  shouldValidatePoseCoherence,
+  withPoseCoherenceContract,
+  type PoseCoherenceIntent
+} from '../../prompts/poseCoherence';
+import {
+  buildHeadshotWardrobeCorrectionPrompt,
+  buildHeadshotWardrobeValidationPrompt,
+  parseHeadshotWardrobeValidation,
+  shouldApplyHeadshotWardrobeContinuity,
+  shouldValidateHeadshotWardrobeContinuity,
+  withHeadshotWardrobeContinuityContract,
+  type HeadshotWardrobeContinuityIntent
+} from '../../prompts/headshotWardrobeContinuity';
+import {
+  buildStyleCorrectionPrompt,
+  buildStyleValidationPrompt,
+  parseStyleValidation,
+  shouldApplyStyleCategoryContract,
+  shouldValidateStyleCategory,
+  withStyleCategoryContract,
+  type StyleCategoryIntent
+} from '../../prompts/styleContracts';
+import { withSheetStyleLockContract } from '../../prompts/sheetStyleLock';
+import {
+  withBiometricIdentityLockContract,
+  type BiometricIdentityLock
+} from '../../prompts/identityContracts';
 
 export type ExtractedStyle = {
   medium?: string;
@@ -49,6 +82,42 @@ type GenerationEntitlements = {
   hasHostedAccess?: boolean;
   hasByokAccess?: boolean;
   effectiveBillingMode?: string;
+};
+
+type PoseCoherenceGenerationOptions = {
+  poseCoherence?: boolean | {
+    enabled?: boolean;
+    validate?: boolean;
+    retry?: boolean;
+    intent?: PoseCoherenceIntent;
+  };
+  _poseCoherenceRetryAttempt?: number;
+};
+
+type HeadshotWardrobeGenerationOptions = {
+  headshotWardrobeContinuity?: boolean | {
+    enabled?: boolean;
+    validate?: boolean;
+    retry?: boolean;
+    intent?: HeadshotWardrobeContinuityIntent;
+  };
+  _headshotWardrobeRetryAttempt?: number;
+};
+
+type StyleCategoryGenerationOptions = {
+  styleCategory?: boolean | {
+    enabled?: boolean;
+    validate?: boolean;
+    retry?: boolean;
+    styleId?: string | null;
+    intent?: StyleCategoryIntent;
+  };
+  _styleCategoryRetryAttempt?: number;
+};
+
+type BiometricIdentityGenerationOptions = {
+  identityLock?: BiometricIdentityLock | BiometricIdentityLock[] | null;
+  identityLocks?: BiometricIdentityLock[];
 };
 
 type GeminiInlineData = {
@@ -101,7 +170,7 @@ type HostedInsufficientCreditsResponse = {
   currentCredits?: unknown;
 };
 
-type SharedGenerationOptions = {
+type SharedGenerationOptions = PoseCoherenceGenerationOptions & HeadshotWardrobeGenerationOptions & StyleCategoryGenerationOptions & BiometricIdentityGenerationOptions & {
   billingMode?: BillingMode;
   entitlements?: GenerationEntitlements;
   onJobAccepted?: (generationId: string, acceptedAt?: number) => void;
@@ -110,7 +179,27 @@ type SharedGenerationOptions = {
   creditRenderType?: HostedCreditRenderType;
   uiWaitWindowMs?: number;
   signal?: AbortSignal;
+  hostedQualityGateBilling?: 'skip' | 'paid';
 };
+
+type ImageGenerationOptions = SharedGenerationOptions & {
+  aspectRatio?: string;
+  thinkingLevel?: boolean | 'minimal' | 'low' | 'medium' | 'high';
+  googleGrounding?: boolean;
+  strictMode?: boolean;
+};
+
+const QUALITY_GATE_UI_WAIT_WINDOW_MS = 90000;
+
+const withQualityGateWaitWindow = <T extends SharedGenerationOptions>(options: T): T => ({
+  ...options,
+  imageSize: undefined,
+  creditRenderType: undefined,
+  uiWaitWindowMs: Math.min(options.uiWaitWindowMs ?? QUALITY_GATE_UI_WAIT_WINDOW_MS, QUALITY_GATE_UI_WAIT_WINDOW_MS)
+});
+
+const shouldSkipHostedQualityGate = (options: SharedGenerationOptions): boolean =>
+  options.billingMode === 'hosted' && options.hostedQualityGateBilling !== 'paid';
 
 type HostedSupabaseClient = {
   auth: {
@@ -122,9 +211,17 @@ type HostedSupabaseClient = {
         path: string,
         file: Blob,
         options: { contentType?: string; upsert?: boolean }
-      ) => Promise<{ error: { message: string } | null }>;
+      ) => Promise<{ error: HostedStorageUploadError | null }>;
     };
   };
+};
+
+type HostedStorageUploadError = {
+  message?: string;
+  status?: number | string;
+  statusCode?: number | string;
+  code?: number | string;
+  name?: string;
 };
 
 type ElectronApiWithWorkerStatus = {
@@ -143,6 +240,119 @@ type VeoFivePartDraftResponse = VeoFivePartDraft & {
 const getErrorMessage = (error: unknown): string => {
   if (error instanceof Error) return error.message;
   return String(error);
+};
+
+const HOSTED_REFERENCE_UPLOAD_PRIMARY_MAX_SIZE = 3072;
+const HOSTED_REFERENCE_UPLOAD_FALLBACK_MAX_SIZE = 2048;
+const HOSTED_REFERENCE_UPLOAD_MAX_ATTEMPTS = 2;
+const HOSTED_REFERENCE_UPLOAD_RETRY_BASE_MS = 850;
+const HOSTED_REFERENCE_UPLOAD_ATTEMPT_TIMEOUT_MS = 30000;
+
+class HostedReferenceUploadError extends Error {
+  transient: boolean;
+  originalError: HostedStorageUploadError;
+
+  constructor(message: string, transient: boolean, originalError: HostedStorageUploadError) {
+    super(message);
+    this.name = 'HostedReferenceUploadError';
+    this.transient = transient;
+    this.originalError = originalError;
+  }
+}
+
+const throwIfAborted = (signal?: AbortSignal) => {
+  if (signal?.aborted) throw new Error("AbortError: Canceled by user");
+};
+
+const waitForHostedReferenceUploadRetry = (attempt: number): Promise<void> => {
+  const jitter = Math.floor(Math.random() * 250);
+  const delayMs = HOSTED_REFERENCE_UPLOAD_RETRY_BASE_MS * Math.pow(2, Math.max(0, attempt - 1)) + jitter;
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+};
+
+const getHostedStorageErrorMessage = (error: HostedStorageUploadError): string =>
+  error.message || error.name || 'unknown storage upload error';
+
+const getHostedStorageStatus = (error: HostedStorageUploadError): number | null => {
+  const rawStatus = error.statusCode ?? error.status ?? error.code;
+  const parsed = typeof rawStatus === 'number' ? rawStatus : Number.parseInt(String(rawStatus ?? ''), 10);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const isTransientHostedStorageError = (error: HostedStorageUploadError): boolean => {
+  const status = getHostedStorageStatus(error);
+  if (status !== null && [408, 409, 425, 429, 500, 502, 503, 504].includes(status)) return true;
+
+  const message = getHostedStorageErrorMessage(error).toLowerCase();
+  return /\b(408|409|425|429|500|502|503|504)\b/.test(message)
+    || message.includes('timeout')
+    || message.includes('timed out')
+    || message.includes('gateway')
+    || message.includes('temporarily')
+    || message.includes('network')
+    || message.includes('failed to fetch');
+};
+
+const inlineImageDataToBlob = (inline: GeminiInlineData): Blob => {
+  const byteString = atob(inline.data);
+  const ab = new ArrayBuffer(byteString.length);
+  const ia = new Uint8Array(ab);
+  for (let k = 0; k < byteString.length; k++) {
+    ia[k] = byteString.charCodeAt(k);
+  }
+  return new Blob([ab], { type: inline.mimeType });
+};
+
+const runHostedReferenceUploadAttempt = (
+  client: HostedSupabaseClient,
+  storagePath: string,
+  blob: Blob,
+  mimeType: string
+): Promise<{ error: HostedStorageUploadError | null }> =>
+  Promise.race([
+    client.storage.from('reference_images').upload(storagePath, blob, {
+      contentType: mimeType,
+      upsert: true
+    }),
+    new Promise<{ error: HostedStorageUploadError }>((resolve) => {
+      setTimeout(() => {
+        resolve({
+          error: {
+            name: 'UploadTimeout',
+            statusCode: 408,
+            message: `storage upload attempt timed out after ${Math.round(HOSTED_REFERENCE_UPLOAD_ATTEMPT_TIMEOUT_MS / 1000)}s`
+          }
+        });
+      }, HOSTED_REFERENCE_UPLOAD_ATTEMPT_TIMEOUT_MS);
+    })
+  ]);
+
+const uploadHostedReferenceWithRetry = async (args: {
+  client: HostedSupabaseClient;
+  storagePath: string;
+  blob: Blob;
+  mimeType: string;
+  label: string;
+  signal?: AbortSignal;
+}): Promise<void> => {
+  const { client, storagePath, blob, mimeType, label, signal } = args;
+
+  for (let attempt = 1; attempt <= HOSTED_REFERENCE_UPLOAD_MAX_ATTEMPTS; attempt++) {
+    throwIfAborted(signal);
+    const { error } = await runHostedReferenceUploadAttempt(client, storagePath, blob, mimeType);
+
+    if (!error) return;
+
+    const transient = isTransientHostedStorageError(error);
+    const message = getHostedStorageErrorMessage(error);
+    if (!transient || attempt === HOSTED_REFERENCE_UPLOAD_MAX_ATTEMPTS) {
+      console.error("Storage bypass error:", error);
+      throw new HostedReferenceUploadError(`Failed to upload reference ${label}: ${message}`, transient, error);
+    }
+
+    console.warn(`[Storage Proxy Retry] Reference upload failed for ${label}: ${message}. Retrying ${attempt + 1}/${HOSTED_REFERENCE_UPLOAD_MAX_ATTEMPTS}...`);
+    await waitForHostedReferenceUploadRetry(attempt);
+  }
 };
 
 const extractInlineImageData = (result: GeminiGenerateContentResult): string | undefined =>
@@ -465,6 +675,8 @@ export const GeminiService = {
     options: HostedExecutionOptions = {},
     preflightMetadata?: HostedBillingMetadata
   ): Promise<string> {
+    await assertAuthenticatedForGeneration({ billingMode: 'hosted' });
+
     const electronApi = (window as Window & { electronAPI?: ElectronApiWithWorkerStatus }).electronAPI;
     if (electronApi && typeof electronApi.getWorkerStatus === 'function') {
         const workerState = await electronApi.getWorkerStatus();
@@ -621,19 +833,349 @@ export const GeminiService = {
     return data.imageUrl;
   },
 
+  async _validatePoseCoherenceAndRetry(args: {
+    imageUrl: string;
+    rawPrompt: string;
+    effectivePrompt: string;
+    apiKey: string;
+    model: string;
+    referenceImages: { url: string; label: string }[];
+    referenceLabels: string[];
+    options: ImageGenerationOptions;
+    intent?: PoseCoherenceIntent;
+  }): Promise<string> {
+    const { imageUrl, rawPrompt, effectivePrompt, apiKey, model, referenceImages, referenceLabels, options, intent } = args;
+    const poseOption = options.poseCoherence;
+    const poseEnabled = typeof poseOption === 'object' ? poseOption.enabled !== false : poseOption !== false;
+    const validateAllowed = typeof poseOption === 'object' ? poseOption.validate !== false : true;
+    const retryAllowed = typeof poseOption === 'object' ? poseOption.retry !== false : true;
+    const alreadyRetried = (options._poseCoherenceRetryAttempt ?? 0) > 0;
+
+    if (!poseEnabled || !validateAllowed || !shouldValidatePoseCoherence(effectivePrompt, referenceLabels)) {
+      return imageUrl;
+    }
+    if (shouldSkipHostedQualityGate(options)) {
+      console.info('[PoseCoherence] Skipping hosted quality gate to avoid additional credit charges.');
+      return imageUrl;
+    }
+
+    try {
+      const validationText = await GeminiService.analyzeImage(
+        buildPoseCoherenceValidationPrompt(intent, effectivePrompt),
+        apiKey,
+        model,
+        imageUrl,
+        { ...withQualityGateWaitWindow(options), expectedResponseType: 'text' }
+      );
+      const validation = parsePoseCoherenceValidation(validationText);
+      const shouldRetry =
+        retryAllowed &&
+        !alreadyRetried &&
+        validation.requiresRetry &&
+        (validation.poseCoherent === false || validation.headCoherent === false) &&
+        validation.confidence >= 0.55;
+
+      if (!shouldRetry) {
+        return imageUrl;
+      }
+
+      console.warn('[PoseCoherence] Generated image failed body-axis validation; retrying once.', validation);
+      const retryPrompt = buildPoseCoherenceCorrectionPrompt(rawPrompt, validation, intent);
+
+      return await GeminiService.generateImage(
+        retryPrompt,
+        apiKey,
+        model,
+        referenceImages,
+        {
+          ...options,
+          strictMode: true,
+          poseCoherence: {
+            enabled: true,
+            validate: false,
+            retry: false,
+            intent
+          },
+          _poseCoherenceRetryAttempt: (options._poseCoherenceRetryAttempt ?? 0) + 1
+        }
+      );
+    } catch (error) {
+      console.warn('[PoseCoherence] Validation skipped after quality-gate error.', error);
+      return imageUrl;
+    }
+  },
+
+  async _validatePoseCoherenceAndRetryCustom(args: {
+    imageUrl: string;
+    rawPrompt: string;
+    effectivePrompt: string;
+    apiKey: string;
+    model: string;
+    referenceLabels: string[];
+    options?: SharedGenerationOptions;
+    intent?: PoseCoherenceIntent;
+    retry: (retryPrompt: string, nextOptions: SharedGenerationOptions) => Promise<string>;
+  }): Promise<string> {
+    const { imageUrl, rawPrompt, effectivePrompt, apiKey, model, referenceLabels, retry, intent } = args;
+    const options = args.options ?? {};
+    const poseOption = options.poseCoherence;
+    const poseEnabled = typeof poseOption === 'object' ? poseOption.enabled !== false : poseOption !== false;
+    const validateAllowed = typeof poseOption === 'object' ? poseOption.validate !== false : true;
+    const retryAllowed = typeof poseOption === 'object' ? poseOption.retry !== false : true;
+    const alreadyRetried = (options._poseCoherenceRetryAttempt ?? 0) > 0;
+
+    if (!poseEnabled || !validateAllowed || !shouldValidatePoseCoherence(effectivePrompt, referenceLabels)) {
+      return imageUrl;
+    }
+    if (shouldSkipHostedQualityGate(options)) {
+      console.info('[PoseCoherence] Skipping hosted custom quality gate to avoid additional credit charges.');
+      return imageUrl;
+    }
+
+    try {
+      const validationText = await GeminiService.analyzeImage(
+        buildPoseCoherenceValidationPrompt(intent, effectivePrompt),
+        apiKey,
+        model,
+        imageUrl,
+        { ...withQualityGateWaitWindow(options), expectedResponseType: 'text' }
+      );
+      const validation = parsePoseCoherenceValidation(validationText);
+      const shouldRetry =
+        retryAllowed &&
+        !alreadyRetried &&
+        validation.requiresRetry &&
+        (validation.poseCoherent === false || validation.headCoherent === false) &&
+        validation.confidence >= 0.55;
+
+      if (!shouldRetry) {
+        return imageUrl;
+      }
+
+      console.warn('[PoseCoherence] Generated image failed custom body-axis validation; retrying once.', validation);
+      const retryPrompt = buildPoseCoherenceCorrectionPrompt(rawPrompt, validation, intent);
+      return await retry(retryPrompt, {
+        ...options,
+        poseCoherence: {
+          enabled: true,
+          validate: false,
+          retry: false,
+          intent
+        },
+        _poseCoherenceRetryAttempt: (options._poseCoherenceRetryAttempt ?? 0) + 1
+      });
+    } catch (error) {
+      console.warn('[PoseCoherence] Custom validation skipped after quality-gate error.', error);
+      return imageUrl;
+    }
+  },
+
+  async _validateHeadshotWardrobeContinuityAndRetry(args: {
+    imageUrl: string;
+    rawPrompt: string;
+    effectivePrompt: string;
+    apiKey: string;
+    model: string;
+    referenceImages: { url: string; label: string }[];
+    referenceLabels: string[];
+    options: ImageGenerationOptions;
+    intent?: HeadshotWardrobeContinuityIntent;
+  }): Promise<string> {
+    const { imageUrl, rawPrompt, effectivePrompt, apiKey, model, referenceImages, referenceLabels, options, intent } = args;
+    const headshotOption = options.headshotWardrobeContinuity;
+    const enabled = typeof headshotOption === 'object' ? headshotOption.enabled !== false : headshotOption !== false;
+    const validateAllowed = typeof headshotOption === 'object' ? headshotOption.validate !== false : true;
+    const retryAllowed = typeof headshotOption === 'object' ? headshotOption.retry !== false : true;
+    const alreadyRetried = (options._headshotWardrobeRetryAttempt ?? 0) > 0;
+
+    if (!enabled || !validateAllowed || !shouldValidateHeadshotWardrobeContinuity(effectivePrompt, referenceLabels)) {
+      return imageUrl;
+    }
+    if (shouldSkipHostedQualityGate(options)) {
+      console.info('[HeadshotWardrobeContinuity] Skipping hosted quality gate to avoid additional credit charges.');
+      return imageUrl;
+    }
+
+    try {
+      const validationText = await GeminiService.analyzeImage(
+        buildHeadshotWardrobeValidationPrompt(effectivePrompt, intent),
+        apiKey,
+        model,
+        imageUrl,
+        { ...withQualityGateWaitWindow(options), expectedResponseType: 'text' }
+      );
+      const validation = parseHeadshotWardrobeValidation(validationText);
+      const shouldRetry =
+        retryAllowed &&
+        !alreadyRetried &&
+        validation.requiresRetry &&
+        validation.wardrobeCoherent === false &&
+        validation.confidence >= 0.55;
+
+      if (!shouldRetry) {
+        return imageUrl;
+      }
+
+      console.warn('[HeadshotWardrobeContinuity] Generated image failed headshot clothing validation; retrying once.', validation);
+      const retryPrompt = buildHeadshotWardrobeCorrectionPrompt(rawPrompt, validation, intent);
+
+      return await GeminiService.generateImage(
+        retryPrompt,
+        apiKey,
+        model,
+        referenceImages,
+        {
+          ...options,
+          strictMode: true,
+          headshotWardrobeContinuity: {
+            enabled: true,
+            validate: false,
+            retry: false,
+            intent
+          },
+          _headshotWardrobeRetryAttempt: (options._headshotWardrobeRetryAttempt ?? 0) + 1
+        }
+      );
+    } catch (error) {
+      console.warn('[HeadshotWardrobeContinuity] Validation skipped after quality-gate error.', error);
+      return imageUrl;
+    }
+  },
+
+  async _validateStyleCategoryAndRetry(args: {
+    imageUrl: string;
+    rawPrompt: string;
+    effectivePrompt: string;
+    apiKey: string;
+    model: string;
+    referenceImages: { url: string; label: string }[];
+    referenceLabels: string[];
+    options: ImageGenerationOptions;
+    styleId?: string | null;
+    intent?: StyleCategoryIntent;
+  }): Promise<string> {
+    const { imageUrl, rawPrompt, effectivePrompt, apiKey, model, referenceImages, referenceLabels, options, styleId, intent } = args;
+    const styleOption = options.styleCategory;
+    const enabled = typeof styleOption === 'object' ? styleOption.enabled !== false : styleOption !== false;
+    const validateAllowed = typeof styleOption === 'object' ? styleOption.validate !== false : true;
+    const retryAllowed = typeof styleOption === 'object' ? styleOption.retry !== false : true;
+    const alreadyRetried = (options._styleCategoryRetryAttempt ?? 0) > 0;
+    const resolvedStyleId = typeof styleOption === 'object' ? styleOption.styleId ?? styleId : styleId;
+
+    if (!enabled || !validateAllowed || !shouldValidateStyleCategory(`${effectivePrompt}\n${referenceLabels.join('\n')}`, resolvedStyleId)) {
+      return imageUrl;
+    }
+    if (shouldSkipHostedQualityGate(options)) {
+      console.info('[StyleCategory] Skipping hosted quality gate to avoid additional credit charges.');
+      return imageUrl;
+    }
+
+    try {
+      const validationPrompt = buildStyleValidationPrompt(effectivePrompt, resolvedStyleId, intent);
+      if (!validationPrompt) return imageUrl;
+
+      const validationText = await GeminiService.analyzeImage(
+        validationPrompt,
+        apiKey,
+        model,
+        imageUrl,
+        { ...withQualityGateWaitWindow(options), expectedResponseType: 'text' }
+      );
+      const validation = parseStyleValidation(validationText);
+      const shouldRetry =
+        retryAllowed &&
+        !alreadyRetried &&
+        validation.requiresRetry &&
+        validation.styleCoherent === false &&
+        validation.confidence >= 0.55;
+
+      if (!shouldRetry) {
+        return imageUrl;
+      }
+
+      console.warn('[StyleCategory] Generated image failed selected style validation; retrying once.', validation);
+      const retryPrompt = buildStyleCorrectionPrompt(rawPrompt, validation, resolvedStyleId, intent);
+
+      return await GeminiService.generateImage(
+        retryPrompt,
+        apiKey,
+        model,
+        referenceImages,
+        {
+          ...options,
+          strictMode: true,
+          styleCategory: {
+            enabled: true,
+            validate: false,
+            retry: false,
+            styleId: resolvedStyleId,
+            intent
+          },
+          _styleCategoryRetryAttempt: (options._styleCategoryRetryAttempt ?? 0) + 1
+        }
+      );
+    } catch (error) {
+      console.warn('[StyleCategory] Validation skipped after quality-gate error.', error);
+      return imageUrl;
+    }
+  },
+
 
   async generateImage(
     prompt: string,
     apiKey: string,
     model: string,
     referenceImages: { url: string; label: string }[] = [],
-    options: { aspectRatio?: string, imageSize?: HostedImageSize, creditRenderType?: HostedCreditRenderType, thinkingLevel?: boolean | 'minimal' | 'low' | 'medium' | 'high', googleGrounding?: boolean, strictMode?: boolean, billingMode?: BillingMode, entitlements?: GenerationEntitlements, onJobAccepted?: (generationId: string, acceptedAt?: number) => void, uiWaitWindowMs?: number } = {}
+    options: ImageGenerationOptions = {}
   ): Promise<string> {
     const effectiveModel = normalizeImageGenerationModel(model);
     let hostedPreflightMetadata: HostedBillingMetadata | undefined;
+    const referenceLabels = referenceImages.map((ref) => ref.label).filter(Boolean);
+    const identityLockOption = options.identityLocks ?? options.identityLock;
+    const promptWithIdentityLock = withBiometricIdentityLockContract(prompt, identityLockOption);
+    const poseOption = options.poseCoherence;
+    const poseEnabled = typeof poseOption === 'object' ? poseOption.enabled !== false : poseOption !== false;
+    const poseIntent = typeof poseOption === 'object' ? poseOption.intent : undefined;
+    const promptWithPoseCoherence =
+      poseEnabled && shouldApplyPoseCoherence(promptWithIdentityLock, referenceLabels)
+        ? withPoseCoherenceContract(promptWithIdentityLock, poseIntent)
+        : promptWithIdentityLock;
+    const headshotWardrobeOption = options.headshotWardrobeContinuity;
+    const headshotWardrobeEnabled = typeof headshotWardrobeOption === 'object'
+      ? headshotWardrobeOption.enabled !== false
+      : headshotWardrobeOption !== false;
+    const headshotWardrobeIntent = typeof headshotWardrobeOption === 'object'
+      ? headshotWardrobeOption.intent
+      : undefined;
+    const promptWithGenerationContracts =
+      headshotWardrobeEnabled && shouldApplyHeadshotWardrobeContinuity(promptWithPoseCoherence, referenceLabels)
+        ? withHeadshotWardrobeContinuityContract(promptWithPoseCoherence, headshotWardrobeIntent)
+        : promptWithPoseCoherence;
+    const styleCategoryOption = options.styleCategory;
+    const styleCategoryEnabled = typeof styleCategoryOption === 'object'
+      ? styleCategoryOption.enabled !== false
+      : styleCategoryOption !== false;
+    const styleCategoryId = typeof styleCategoryOption === 'object' ? styleCategoryOption.styleId : undefined;
+    const styleCategoryIntent = typeof styleCategoryOption === 'object' ? styleCategoryOption.intent : undefined;
+    const promptWithStyleCategory =
+      styleCategoryEnabled && shouldApplyStyleCategoryContract(promptWithGenerationContracts, styleCategoryId)
+        ? withStyleCategoryContract(promptWithGenerationContracts, styleCategoryId, styleCategoryIntent)
+        : promptWithGenerationContracts;
+    const promptWithAllContracts = withSheetStyleLockContract(
+      promptWithStyleCategory,
+      styleCategoryId,
+      {
+        source: styleCategoryId ? 'user_selected' : 'auto_detected',
+        selectedStyleLabel: styleCategoryIntent?.selectedStyleLabel,
+        strictness: 'high'
+      }
+    );
 
     // --- API ACCESS LAYER ---
     // All features are available in both Hosted and BYOK. The only difference is API prerequisites.
+    if (options.billingMode === 'hosted') {
+      await assertAuthenticatedForGeneration({ billingMode: 'hosted' });
+    }
     if (options.billingMode === 'byok' && !apiKey) {
       throw new Error("API Key required for BYOK generation.");
     }
@@ -685,24 +1227,15 @@ export const GeminiService = {
         contentsParts.push({ text: `[IMAGE ${imgIndex}] ${ref.label}` });
 
         if (options.billingMode === 'hosted') {
-            console.log(`[GeminiService] Uploading normalized 3072px reference bypass: ${ref.label}`);
+            console.log(`[GeminiService] Uploading normalized ${HOSTED_REFERENCE_UPLOAD_PRIMARY_MAX_SIZE}px reference bypass: ${ref.label}`);
             
             // CRITICAL FIX: We MUST use _resolveImageData even before uploading to storage.
             // Why? Because it uses native DOM <canvas> to enforce sRGB color space, flatten transparent pngs to solid background,
-            // strictly apply EXIF rotation, and limit extreme resolutions to 3072px max.
+            // strictly apply EXIF rotation, and limit extreme resolutions before the hosted worker reads them.
             // If we upload the Raw Blob directly, Gemini API silently fails or ignores unoptimized/rotated alpha payloads,
             // resulting in complete identity hallucinations.
-            const inline = await GeminiService._resolveImageData(ref.url, 3072);
-            
-            // Decode the canvas-normalized base64 back into a binary blob for storage upload
-            // This prevents passing a multi-megabyte string into Edge Function networking.
-            const byteString = atob(inline.data);
-            const ab = new ArrayBuffer(byteString.length);
-            const ia = new Uint8Array(ab);
-            for (let k = 0; k < byteString.length; k++) {
-                ia[k] = byteString.charCodeAt(k);
-            }
-            const blob = new Blob([ab], { type: inline.mimeType });
+            let inline = await GeminiService._resolveImageData(ref.url, HOSTED_REFERENCE_UPLOAD_PRIMARY_MAX_SIZE);
+            let blob = inlineImageDataToBlob(inline);
             
             const fileExt = inline.mimeType.split('/')[1] || 'jpeg';
             const storagePath = `${host_uid}/${executionBatchId}/ref_${imgIndex}.${fileExt}`;
@@ -711,15 +1244,35 @@ export const GeminiService = {
             console.log(`- Authenticated UID: ${host_uid}`);
             console.log(`- Exact Target Path: ${storagePath}`);
             console.log(`- Valid Session Detected? ${host_uid !== 'anon'}`);
+            console.log(`- Normalized Upload Size: ${(blob.size / (1024 * 1024)).toFixed(2)} MB`);
             
-            const { error } = await host_supabase!.storage.from('reference_images').upload(storagePath, blob, { 
-                contentType: inline.mimeType, 
-                upsert: true 
-            });
-            
-            if (error) {
-                console.error("Storage bypass error:", error);
-                throw new Error(`Failed to upload reference: ${error.message}`);
+            try {
+                await uploadHostedReferenceWithRetry({
+                    client: host_supabase!,
+                    storagePath,
+                    blob,
+                    mimeType: inline.mimeType,
+                    label: ref.label,
+                    signal: options.signal
+                });
+            } catch (error) {
+                if (!(error instanceof HostedReferenceUploadError) || !error.transient) {
+                    throw error;
+                }
+
+                console.warn(`[Storage Proxy Retry] High-fidelity upload stayed unstable for ${ref.label}. Retrying with ${HOSTED_REFERENCE_UPLOAD_FALLBACK_MAX_SIZE}px normalized fallback...`);
+                inline = await GeminiService._resolveImageData(ref.url, HOSTED_REFERENCE_UPLOAD_FALLBACK_MAX_SIZE);
+                blob = inlineImageDataToBlob(inline);
+                console.log(`- Fallback Upload Size: ${(blob.size / (1024 * 1024)).toFixed(2)} MB`);
+
+                await uploadHostedReferenceWithRetry({
+                    client: host_supabase!,
+                    storagePath,
+                    blob,
+                    mimeType: inline.mimeType,
+                    label: `${ref.label} (${HOSTED_REFERENCE_UPLOAD_FALLBACK_MAX_SIZE}px fallback)`,
+                    signal: options.signal
+                });
             }
             
             contentsParts.push({
@@ -743,9 +1296,9 @@ export const GeminiService = {
       // --- Prompt normalization for Gemini 3.x image models ---
       // The Nano Banana 2 model is more sensitive to prompt structure; we normalize common legacy tokens
       // and move "avoid" constraints into a short bullet list near the top for stronger compliance.
-      const strictMode = options.strictMode ?? /SPATIAL PROTOCOL|NEGATIVE CONSTRAINTS|CRITICAL\s*-\s*DO NOT|NON-NEGOTIABLE/i.test(prompt);
+      const strictMode = options.strictMode ?? /SPATIAL PROTOCOL|NEGATIVE CONSTRAINTS|CRITICAL\s*-\s*DO NOT|NON-NEGOTIABLE|POSE COHERENCE CONTRACT|HEADSHOT WARDROBE CONTINUITY CONTRACT|STYLE CATEGORY CONTRACT|SHEET STYLE LOCK/i.test(promptWithAllContracts);
 
-      const sanitized = GeminiService._sanitizeImagePromptForGemini(prompt);
+      const sanitized = GeminiService._sanitizeImagePromptForGemini(promptWithAllContracts);
       let finalPrompt = sanitized.prompt;
 
       if (strictMode && sanitized.avoidBullets.length > 0) {
@@ -830,7 +1383,40 @@ export const GeminiService = {
         requestBody.generationConfig.thinkingConfig = thinkingConfig;
       }
       if (options.billingMode === 'hosted') {
-        return await GeminiService._executeHostedRequest(effectiveModel, requestBody, options, hostedPreflightMetadata);
+        const hostedImageUrl = await GeminiService._executeHostedRequest(effectiveModel, requestBody, options, hostedPreflightMetadata);
+        const poseCheckedUrl = await GeminiService._validatePoseCoherenceAndRetry({
+          imageUrl: hostedImageUrl,
+          rawPrompt: prompt,
+          effectivePrompt: promptWithAllContracts,
+          apiKey,
+          model,
+          referenceImages,
+          referenceLabels,
+          options,
+          intent: poseIntent
+        });
+        return await GeminiService._validateHeadshotWardrobeContinuityAndRetry({
+          imageUrl: poseCheckedUrl,
+          rawPrompt: prompt,
+          effectivePrompt: promptWithAllContracts,
+          apiKey,
+          model,
+          referenceImages,
+          referenceLabels,
+          options,
+          intent: headshotWardrobeIntent
+        }).then((headshotCheckedUrl) => GeminiService._validateStyleCategoryAndRetry({
+          imageUrl: headshotCheckedUrl,
+          rawPrompt: prompt,
+          effectivePrompt: promptWithAllContracts,
+          apiKey,
+          model,
+          referenceImages,
+          referenceLabels,
+          options,
+          styleId: styleCategoryId,
+          intent: styleCategoryIntent
+        }));
       }
       // ===============================================
 
@@ -878,7 +1464,40 @@ export const GeminiService = {
       const result = await response.json() as GeminiGenerateContentResult;
       const imgData = extractInlineImageData(result);
       if (!imgData) throw new Error("No image returned from Gemini.");
-      return `data:image/png;base64,${imgData}`;
+      const generatedImageUrl = `data:image/png;base64,${imgData}`;
+      const poseCheckedUrl = await GeminiService._validatePoseCoherenceAndRetry({
+        imageUrl: generatedImageUrl,
+        rawPrompt: prompt,
+        effectivePrompt: promptWithAllContracts,
+        apiKey,
+        model,
+        referenceImages,
+        referenceLabels,
+        options,
+        intent: poseIntent
+      });
+      return await GeminiService._validateHeadshotWardrobeContinuityAndRetry({
+        imageUrl: poseCheckedUrl,
+        rawPrompt: prompt,
+        effectivePrompt: promptWithAllContracts,
+        apiKey,
+        model,
+        referenceImages,
+        referenceLabels,
+        options,
+        intent: headshotWardrobeIntent
+      }).then((headshotCheckedUrl) => GeminiService._validateStyleCategoryAndRetry({
+        imageUrl: headshotCheckedUrl,
+        rawPrompt: prompt,
+        effectivePrompt: promptWithAllContracts,
+        apiKey,
+        model,
+        referenceImages,
+        referenceLabels,
+        options,
+        styleId: styleCategoryId,
+        intent: styleCategoryIntent
+      }));
   },
 
   // Vision/Text-only analysis from a single image (returns model text)
@@ -889,6 +1508,9 @@ export const GeminiService = {
     imageUrl: string,
     options: SharedGenerationOptions = {}
   ): Promise<string> {
+    if (options.billingMode === 'hosted') {
+      await assertAuthenticatedForGeneration({ billingMode: 'hosted' });
+    }
     if (!apiKey && options.billingMode !== 'hosted') throw new Error("No API Key provided.");
     const effectiveKey = options.billingMode === 'hosted' ? 'HOSTED_MODE' : (apiKey || '');
     // Force a vision-text model for analysis to avoid modality errors with generation models
@@ -945,6 +1567,9 @@ export const GeminiService = {
     frames: { url: string; label: string }[],
     options: SharedGenerationOptions = {}
   ): Promise<string> {
+    if (options.billingMode === 'hosted') {
+      await assertAuthenticatedForGeneration({ billingMode: 'hosted' });
+    }
     if (!apiKey && options.billingMode !== 'hosted') throw new Error("No API Key provided.");
     const effectiveKey = options.billingMode === 'hosted' ? 'HOSTED_MODE' : (apiKey || '');
     // Multi-frame reasoning requires a vision-capable text model
@@ -1115,6 +1740,9 @@ export const GeminiService = {
     referenceImages: { url: string; label: string }[] = [],
     options: { aspectRatio?: string, imageSize?: HostedImageSize, creditRenderType?: HostedCreditRenderType, billingMode?: BillingMode, entitlements?: GenerationEntitlements, expectedResponseType?: 'image', targetDimensions?: { width: number; height: number } } = {}
   ): Promise<string> {
+    if (options.billingMode === 'hosted') {
+      await assertAuthenticatedForGeneration({ billingMode: 'hosted' });
+    }
     if (!apiKey && options.billingMode !== 'hosted') throw new Error("No API Key provided.");
     const effectiveKey = options.billingMode === 'hosted' ? 'HOSTED_MODE' : (apiKey || '');
     const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
@@ -1570,6 +2198,9 @@ Return ONLY valid JSON without markdown formatting. Exact schema:
   },
 
   async generateText(prompt: string, apiKey: string, options: Pick<SharedGenerationOptions, 'billingMode' | 'entitlements'> = {}): Promise<string> {
+    if (options.billingMode === 'hosted') {
+      await assertAuthenticatedForGeneration({ billingMode: 'hosted' });
+    }
     if (!apiKey && options.billingMode !== 'hosted') throw new Error("No API Key provided.");
     const effectiveKey = options.billingMode === 'hosted' ? 'HOSTED_MODE' : (apiKey || '');
     const useModel = 'gemini-2.5-flash';
@@ -1701,6 +2332,7 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
     }>;
     actorIdentitySets?: ActorIdentityReferenceSet[];
     instructions: string;
+    poseCoherenceAttempt?: number;
   }): Promise<string> {
     const { apiKey, model, aspectRatio, imageSize, backgroundUrl, blueprintUrl, protectionMaskUrl, elements, actorIdentitySets, instructions } = args;
 
@@ -1712,9 +2344,17 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
 
     const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
     const contentsParts: GeminiPart[] = [];
+    const compositePrompt = shouldApplyPoseCoherence(instructions, elements.map((element) => element.label))
+      ? withPoseCoherenceContract(instructions, {
+        strictness: 'scene',
+        subjectScope: 'visible_body',
+        stanceType: 'anchor_preserved',
+        footingMode: 'anchor_preserved'
+      })
+      : instructions;
 
     // 1. Text Instructions
-    contentsParts.push({ text: instructions });
+    contentsParts.push({ text: compositePrompt });
 
     // 2. Base Background
     if (backgroundUrl) {
@@ -1822,7 +2462,43 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
     
     if (!imgData) throw new Error("No image returned from generation.");
     
-    return `data:image/png;base64,${imgData}`;
+    return await GeminiService._validatePoseCoherenceAndRetryCustom({
+      imageUrl: `data:image/png;base64,${imgData}`,
+      rawPrompt: instructions,
+      effectivePrompt: compositePrompt,
+      apiKey,
+      model,
+      referenceLabels: elements.map((element) => element.label),
+      intent: {
+        strictness: 'scene',
+        subjectScope: 'visible_body',
+        stanceType: 'anchor_preserved',
+        footingMode: 'anchor_preserved',
+        twistAllowed: false,
+        twistIntensity: 0
+      },
+      options: {
+        _poseCoherenceRetryAttempt: args.poseCoherenceAttempt ?? 0,
+        poseCoherence: {
+          enabled: true,
+          validate: true,
+          retry: true,
+          intent: {
+            strictness: 'scene',
+            subjectScope: 'visible_body',
+            stanceType: 'anchor_preserved',
+            footingMode: 'anchor_preserved',
+            twistAllowed: false,
+            twistIntensity: 0
+          }
+        }
+      },
+      retry: (retryPrompt) => GeminiService.generateCompositeFromLayout({
+        ...args,
+        instructions: retryPrompt,
+        poseCoherenceAttempt: (args.poseCoherenceAttempt ?? 0) + 1
+      })
+    });
   },
 
   /**
@@ -1842,6 +2518,20 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
     options?: SharedGenerationOptions;
   }): Promise<string> {
     const { anchorImageUrl, shotBlueprintUrl, actorIdentitySets = [], prompt, aspectRatio, apiKey, model, sceneTruth, presetId, hasSubjectStyleAnalysis } = args;
+    if (args.options?.billingMode === 'hosted') {
+      await assertAuthenticatedForGeneration({ billingMode: 'hosted' });
+    }
+    const shotPoseIntent: PoseCoherenceIntent = {
+      strictness: 'scene',
+      subjectScope: 'visible_body',
+      stanceType: 'anchor_preserved',
+      footingMode: 'anchor_preserved',
+      twistAllowed: false,
+      twistIntensity: 0
+    };
+    const shotPrompt = shouldApplyPoseCoherence(prompt, actorIdentitySets.map((set) => set.actorId))
+      ? withPoseCoherenceContract(prompt, shotPoseIntent)
+      : prompt;
     
     if (import.meta.env.DEV && sceneTruth) {
       console.log(`[GeminiService:generateShotPreview] Metadata Dump:`, {
@@ -1895,7 +2585,7 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
     }
     
     // Shot Prompt
-    parts.push({ text: prompt });
+    parts.push({ text: shotPrompt });
     
     const payload = {
       contents: [{ parts }],
@@ -1915,7 +2605,22 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
 
         const hostedArgs = { ...args.options };
         if (!hostedArgs.expectedResponseType) hostedArgs.expectedResponseType = 'image';
-        return await GeminiService._executeHostedRequest(model, payload, hostedArgs);
+        const hostedImageUrl = await GeminiService._executeHostedRequest(model, payload, hostedArgs);
+        return await GeminiService._validatePoseCoherenceAndRetryCustom({
+          imageUrl: hostedImageUrl,
+          rawPrompt: prompt,
+          effectivePrompt: shotPrompt,
+          apiKey,
+          model,
+          referenceLabels: actorIdentitySets.map((set) => set.actorId),
+          options: hostedArgs,
+          intent: shotPoseIntent,
+          retry: (retryPrompt, nextOptions) => GeminiService.generateShotPreview({
+            ...args,
+            prompt: retryPrompt,
+            options: nextOptions
+          })
+        });
     }
     
     const response = await fetch(`${baseUrl}?key=${apiKey}`, {
@@ -1936,7 +2641,21 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
     const data = extractInlineImageData(result);
     if (!data) throw new Error("No image data in shot preview response.");
     
-    return `data:image/png;base64,${data}`;
+    return await GeminiService._validatePoseCoherenceAndRetryCustom({
+      imageUrl: `data:image/png;base64,${data}`,
+      rawPrompt: prompt,
+      effectivePrompt: shotPrompt,
+      apiKey,
+      model,
+      referenceLabels: actorIdentitySets.map((set) => set.actorId),
+      options: args.options,
+      intent: shotPoseIntent,
+      retry: (retryPrompt, nextOptions) => GeminiService.generateShotPreview({
+        ...args,
+        prompt: retryPrompt,
+        options: nextOptions
+      })
+    });
   },
 
   /**
@@ -1955,6 +2674,20 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
     options?: SharedGenerationOptions;
   }): Promise<string> {
     const { sourceResultUrl, selectedShotPreviewUrl, actorIdentitySets = [], prompt, aspectRatio, apiKey, model, sceneTruth, presetId, options } = args;
+    if (options?.billingMode === 'hosted') {
+      await assertAuthenticatedForGeneration({ billingMode: 'hosted' });
+    }
+    const finalShotPoseIntent: PoseCoherenceIntent = {
+      strictness: 'scene',
+      subjectScope: 'visible_body',
+      stanceType: 'anchor_preserved',
+      footingMode: 'anchor_preserved',
+      twistAllowed: false,
+      twistIntensity: 0
+    };
+    const finalShotPrompt = shouldApplyPoseCoherence(prompt, actorIdentitySets.map((set) => set.actorId))
+      ? withPoseCoherenceContract(prompt, finalShotPoseIntent)
+      : prompt;
     
     if (import.meta.env.DEV && sceneTruth) {
       console.log(`[GeminiService:rerenderShotFinal] Metadata Dump:`, {
@@ -1999,7 +2732,7 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
     });
     
     // Shot Prompt
-    parts.push({ text: prompt });
+    parts.push({ text: finalShotPrompt });
     
     const payload = {
       contents: [{ parts }],
@@ -2016,7 +2749,22 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
     if (options?.billingMode === 'hosted') {
         const hostedArgs = { ...options };
         if (!hostedArgs.expectedResponseType) hostedArgs.expectedResponseType = 'image';
-        return await GeminiService._executeHostedRequest(model, payload, hostedArgs);
+        const hostedImageUrl = await GeminiService._executeHostedRequest(model, payload, hostedArgs);
+        return await GeminiService._validatePoseCoherenceAndRetryCustom({
+          imageUrl: hostedImageUrl,
+          rawPrompt: prompt,
+          effectivePrompt: finalShotPrompt,
+          apiKey,
+          model,
+          referenceLabels: actorIdentitySets.map((set) => set.actorId),
+          options: hostedArgs,
+          intent: finalShotPoseIntent,
+          retry: (retryPrompt, nextOptions) => GeminiService.rerenderShotFinal({
+            ...args,
+            prompt: retryPrompt,
+            options: nextOptions
+          })
+        });
     }
     
     const response = await fetch(`${baseUrl}?key=${apiKey}`, {
@@ -2037,7 +2785,21 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
     const data = extractInlineImageData(result);
     if (!data) throw new Error("No image data in shot final response.");
     
-    return `data:image/png;base64,${data}`;
+    return await GeminiService._validatePoseCoherenceAndRetryCustom({
+      imageUrl: `data:image/png;base64,${data}`,
+      rawPrompt: prompt,
+      effectivePrompt: finalShotPrompt,
+      apiKey,
+      model,
+      referenceLabels: actorIdentitySets.map((set) => set.actorId),
+      options,
+      intent: finalShotPoseIntent,
+      retry: (retryPrompt, nextOptions) => GeminiService.rerenderShotFinal({
+        ...args,
+        prompt: retryPrompt,
+        options: nextOptions
+      })
+    });
   }
 
 };

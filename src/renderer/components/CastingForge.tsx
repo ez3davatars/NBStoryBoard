@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
+import { ensureAuthenticatedForGeneration } from '../services/AuthGenerationGate';
 import HelpTooltip from './ui/HelpTooltip';
 import InlineHint from './ui/InlineHint';
 import ActorSaveModal from './ActorSaveModal';
@@ -30,6 +31,10 @@ import { useRecentGenerationsStore } from '../stores/useRecentGenerationsStore';
 import { RecentGenerationsCacheService } from '../services/RecentGenerationsCacheService';
 import RecentGenerationsStrip from './recent/RecentGenerationsStrip';
 import { createUniqueDownloadFilename } from '../utils/downloadFilenames';
+import { buildHeadshotWardrobeContinuityContract, buildHeadshotWardrobeNegativeTokens } from '../../prompts/headshotWardrobeContinuity';
+import { buildPoseCoherenceNegativeTokens, buildTurnaroundPoseCoherenceContract } from '../../prompts/poseCoherence';
+import { SHEET_STYLE_LOCK_NEGATIVE_TEXT, buildSheetStyleLockContract } from '../../prompts/sheetStyleLock';
+import { buildStyleCategoryContract, buildStyleNegativePrompt } from '../../prompts/styleContracts';
 
 import coverRealism from '../assets/cover-realism.png';
 import coverAnim from '../assets/cover-anim.png';
@@ -1123,15 +1128,33 @@ const CastingForge = () => {
   }, [selectedStyleId]);
 
   const handleGenerate = async () => {
+    const billingMode = state.billingEntitlements.effectiveBillingMode;
+    if (!(await ensureAuthenticatedForGeneration({ billingMode, featureLabel: 'Casting Forge generation' }))) {
+      return;
+    }
+
     // CHANGE: "Character design sheet" triggers text layouts. Use "Full body character portrait" instead.
     let effectivePrompt = state.lastCastedPrompt || "A full body character portrait";
     let styleDirectives = "";
     let negativePrompt = "";
+    let selectedStyleLabel = "";
+    let styleCategoryContract = "";
+    let styleCategoryNegativePrompt = "";
 
     // INJECT SELECTED STYLE into the prompt if defined
     if (selectedStyleId) {
       const folder = STUDIO_FOLDERS.find(f => f.id === selectedStyleId);
       if (folder) {
+        selectedStyleLabel = folder.label;
+        styleCategoryContract = buildStyleCategoryContract(selectedStyleId, {
+          selectedStyleLabel,
+          sourceImagePolicy: "Source/reference images control character identity only; source-photo realism must not override the selected Casting Forge render category.",
+          boardPresentationPolicy: "Casting Forge preview presentation controls only isolation, background, and asset framing.",
+          lightingPolicy: "Lighting must be interpreted within the selected Casting Forge character style.",
+          appliesTo: "Casting Forge portrait, generated full character, restyled subject reference, saved actor preview, and recent thumbnail"
+        });
+        styleCategoryNegativePrompt = buildStyleNegativePrompt(selectedStyleId);
+
         // e.g. "Realism studio style, Exact Likeness & Premium CG..."
         const baseStyle = `${folder.label} studio style, ${folder.description}`;
 
@@ -1254,6 +1277,9 @@ SUBJECT LOCK
 STYLE AUTHORITY
 - Apply this character description exactly: ${effectivePrompt}
 - Apply this style direction exactly: ${styleDirectives}
+- Source image controls identity. Character Render Style controls visual category. Lighting adapts to the selected render style.
+- The selected character render style is mandatory and must not be diluted by cinematic lighting or source-photo realism.
+${styleCategoryContract}
 - Keep the output as one clean isolated character on a solid black studio background (#000000), evenly lit, with no background shadows.
 
 COMPOSITION
@@ -1262,13 +1288,28 @@ COMPOSITION
 - No HUD, no labels, no overlays, no floating props.
 
 NEGATIVE CONSTRAINTS:
-text, labels, HUD, overlays, duplicate subjects, identity drift, extra limbs, fused fingers, wrong background, stylization drift${negativePrompt ? `, ${negativePrompt}` : ''}.`;
+text, labels, HUD, overlays, duplicate subjects, identity drift, extra limbs, fused fingers, wrong background, stylization drift${styleCategoryNegativePrompt ? `, ${styleCategoryNegativePrompt}` : ''}${negativePrompt ? `, ${negativePrompt}` : ''}.`;
         res = await GeminiService.generateImage(
           stylizePrompt,
           state.apiKey,
           state.model,
           [{ url: state.lastCastedImage, label: 'Subject Reference' }],
-          { imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, onJobAccepted }
+          {
+            imageSize: state.imageResolution,
+            thinkingLevel: state.enableImageThinking,
+            googleGrounding: false,
+            strictMode: true,
+            billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
+            entitlements: state.billingEntitlements,
+            onJobAccepted,
+            styleCategory: selectedStyleId ? {
+              styleId: selectedStyleId,
+              intent: {
+                selectedStyleLabel: selectedStyleLabel || selectedStyleId,
+                appliesTo: "Casting Forge restyled subject and saved character preview"
+              }
+            } : undefined
+          }
         ) as HostedGenerationResult;
       } else {
         const createPrompt = `Create a single character portrait.
@@ -1276,6 +1317,9 @@ text, labels, HUD, overlays, duplicate subjects, identity drift, extra limbs, fu
 SUBJECT DEFINITION
 - Generate this character exactly: ${effectivePrompt}
 - Apply this style direction exactly: ${styleDirectives}
+- Source image controls identity if present. Character Render Style controls visual category. Lighting adapts to the selected render style.
+- The selected character render style is mandatory and must not be diluted by cinematic lighting or realism drift.
+${styleCategoryContract}
 
 COMPOSITION
 - One subject only.
@@ -1283,13 +1327,28 @@ COMPOSITION
 - No text, no labels, no HUD, no overlays.
 
 NEGATIVE CONSTRAINTS:
-text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wrong background, stylization drift${negativePrompt ? `, ${negativePrompt}` : ''}.`;
+text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wrong background, stylization drift${styleCategoryNegativePrompt ? `, ${styleCategoryNegativePrompt}` : ''}${negativePrompt ? `, ${negativePrompt}` : ''}.`;
         res = await GeminiService.generateImage(
           createPrompt,
           state.apiKey,
           state.model,
           [],
-          { imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: false, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, onJobAccepted }
+          {
+            imageSize: state.imageResolution,
+            thinkingLevel: state.enableImageThinking,
+            googleGrounding: false,
+            strictMode: true,
+            billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
+            entitlements: state.billingEntitlements,
+            onJobAccepted,
+            styleCategory: selectedStyleId ? {
+              styleId: selectedStyleId,
+              intent: {
+                selectedStyleLabel: selectedStyleLabel || selectedStyleId,
+                appliesTo: "Casting Forge generated character and saved preview"
+              }
+            } : undefined
+          }
         ) as HostedGenerationResult;
       }
 
@@ -2203,6 +2262,9 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
 
     const billingMode = state.billingEntitlements.effectiveBillingMode;
     if (billingMode === "byok" && !state.apiKey) return;
+    if (!(await ensureAuthenticatedForGeneration({ billingMode, featureLabel: 'Casting Forge reference sheet' }))) {
+      return;
+    }
     dispatch({ type: 'SET_PROCESSING', payload: true });
     dispatch({ type: 'ADD_LOG', payload: { message: "Generating Character Reference Sheet...", type: 'info' } });
 
@@ -2248,6 +2310,51 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
       finalPrompt += REFERENCE_SHEET_UNIQUENESS_AUDIT;
       finalPrompt += REFERENCE_SHEET_DIRECTION_LABEL_CONTRACT;
       finalPrompt += REFERENCE_SHEET_PROFILE_PAIR_VISUAL_LOCK;
+      finalPrompt += buildHeadshotWardrobeContinuityContract({
+        identitySource: 'the uploaded/approved character reference image for face, head shape, skin tone, hairstyle, facial hair, and age impression only',
+        wardrobeAuthority: 'the fitted/generated character costume visible in the full-body panels and character reference render',
+        finalLookReference: 'the full-body front/profile/back views and approved fitted character image in this same reference sheet request',
+        appliesTo: 'all head close-ups, headshot profile slots, looking-up head slots, and facial-angle panels',
+        strictness: 'reference_sheet'
+      });
+      const refSheetStyleFolder = selectedStyleId ? STUDIO_FOLDERS.find(f => f.id === selectedStyleId) : null;
+      const refSheetStyleLabel = refSheetStyleFolder?.label || selectedStyleId || 'selected character render style';
+      const refSheetStyleContract = buildStyleCategoryContract(selectedStyleId, {
+        selectedStyleLabel: refSheetStyleLabel,
+        sourceImagePolicy: "Character reference image controls identity and approved costume only; source-photo realism must not override the selected reference-sheet render category.",
+        boardPresentationPolicy: "Reference sheet layout controls panel arrangement, labels, and technical presentation only.",
+        lightingPolicy: "Reference sheet lighting must stay inside the selected character render category.",
+        appliesTo: "Casting Forge full-body reference panels, headshot strip, saved actor preview, and recent thumbnail"
+      });
+      const refSheetStyleLockContract = buildSheetStyleLockContract(selectedStyleId, {
+        source: selectedStyleId ? 'user_selected' : 'reference_image',
+        selectedStyleLabel: refSheetStyleLabel,
+        referenceStyleDescription: 'the approved character reference image supplies the current visual finish; keep one rendering family across the reference sheet',
+        strictness: 'high',
+        appliesTo: [
+          'full-body front panel',
+          'full-body left profile panel',
+          'full-body right profile panel',
+          'full-body rear panel',
+          'front headshot panel',
+          'left profile headshot panel',
+          'right profile headshot panel',
+          'looking-up headshot panel',
+          'wardrobe, footwear, logo, and material callouts'
+        ]
+      });
+      const refSheetStyleNegativePrompt = buildStyleNegativePrompt(selectedStyleId);
+      if (refSheetStyleContract) {
+        finalPrompt += refSheetStyleContract;
+      }
+      finalPrompt += refSheetStyleLockContract;
+      finalPrompt += buildTurnaroundPoseCoherenceContract([
+        { label: 'full body FRONT slot', viewAngle: 'front', degrees: 0, bodyFacing: 'straight front-facing unified axis' },
+        { label: 'full body LEFT PROFILE slot', viewAngle: 'left_profile', degrees: 90, bodyFacing: 'true 90-degree side profile axis' },
+        { label: 'full body RIGHT PROFILE slot', viewAngle: 'right_profile', degrees: 270, bodyFacing: 'true opposite 90-degree side profile axis' },
+        { label: 'full body BACK/REAR slot', viewAngle: 'back', degrees: 180, bodyFacing: 'straight rear-facing unified axis' },
+        { label: 'headshot profile slots', viewAngle: 'custom', bodyFacing: 'head, neck, collar, and visible shoulders obey the labeled yaw' }
+      ]);
       if (refLayout === 'form_focus') {
         finalPrompt += REFERENCE_SHEET_FORM_ROW_CONTRACT;
       }
@@ -2268,7 +2375,7 @@ SPLIT LAYOUT FINAL PROFILE CHECK:
         finalPrompt += "\nTEXT EXCEPTION OVERRIDE: The base negative word 'text' does not apply to the requested professional callout labels. It still applies to unrelated captions, watermarks, random text, misspelled filler, signatures, UI text, and decorative typography.\n";
       }
 
-      finalPrompt += "\nSTRICT NEGATIVE ADDENDUM: double-head, two heads on one body, conjoined anatomy, fused torso, ghost body, mirrored twin body, duplicate neck, duplicate torso, extra body in slot, empty panel slot, panel overlap artifacts, extra headshot row, repeated headshot row, duplicate front head, duplicate profile tile, unlabeled headshot tile, 2x2 bottom grid in Form layout.\n";
+      finalPrompt += `\nSTRICT NEGATIVE ADDENDUM: double-head, two heads on one body, conjoined anatomy, fused torso, ghost body, mirrored twin body, duplicate neck, duplicate torso, extra body in slot, empty panel slot, panel overlap artifacts, extra headshot row, repeated headshot row, duplicate front head, duplicate profile tile, unlabeled headshot tile, 2x2 bottom grid in Form layout, selected style category drift, ${SHEET_STYLE_LOCK_NEGATIVE_TEXT}${refSheetStyleNegativePrompt ? `, ${refSheetStyleNegativePrompt}` : ''}, ${buildPoseCoherenceNegativeTokens()}, ${buildHeadshotWardrobeNegativeTokens()}.\n`;
 
       // BRANDING INJECTION
       const targetReferenceUrl = state.lastCastedImage;
@@ -2303,7 +2410,14 @@ SPLIT LAYOUT FINAL PROFILE CHECK:
             googleGrounding: false,
             strictMode: true,
             billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
-            entitlements: state.billingEntitlements
+            entitlements: state.billingEntitlements,
+            styleCategory: selectedStyleId ? {
+              styleId: selectedStyleId,
+              intent: {
+                selectedStyleLabel: refSheetStyleLabel,
+                appliesTo: "Casting Forge generated reference sheet panels and recent thumbnail"
+              }
+            } : undefined
           }
         );
 

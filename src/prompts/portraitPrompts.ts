@@ -1,6 +1,8 @@
 
 // --- PRESET DEFINITIONS ---
 
+import { withPoseCoherenceContract } from "./poseCoherence";
+
 export const LIGHTING_PRESETS = [
     // STUDIO FUNDAMENTALS
     { key: "studio_header", label: "── Studio Fundamentals ──", category: "Studio Fundamentals", description: "", prompt: "", disabled: true },
@@ -193,7 +195,7 @@ export function buildPortraitPrompt(dna: CharacterDNA): string {
                 ? "\n- SAFETY MUST-FOLLOW: This subject is under 18. Keep all clothing and expressions strictly age-appropriate and modest."
                 : "";
 
-            return `REFERENCE MODE VARIATION: [${variation.name}]
+            return withPoseCoherenceContract(`REFERENCE MODE VARIATION: [${variation.name}]
 
 Purpose:
 - Generate a high-fidelity variation of the reference subject while maintaining absolute identity lock.
@@ -208,7 +210,15 @@ Non-Negotiable Constraints:
 - Clothing: Plain black t-shirt only (unless preserving reference wardrobe).
 - No NEW accessories beyond the reference image. Do not remove existing eyewear/accessories.
 - Background: Neutral studio seamless background.
-- Output: ONE image only.${safetyLine}`;
+- Output: ONE image only.${safetyLine}`, {
+                viewAngle: 'front',
+                bodyFacing: 'front-facing chest-up portrait',
+                subjectScope: 'partial_body',
+                twistAllowed: false,
+                twistIntensity: 0,
+                stanceType: 'neutral_grounded',
+                footingMode: 'directionally_aligned'
+            });
         }
     }
 
@@ -541,5 +551,13 @@ ACCESSORY RULE:
         "NEGATIVE CONSTRAINTS: No watermarks, no text, no blur, no distorted eyes, no bad anatomy, no extra limbs, no fused fingers, no crop, no medical imagery, no surgery context. NO CROPPING THE HEAD. NO CROPPING THE HAIR. NO TOUCHING THE TOP EDGE OF THE FRAME."
     );
 
-    return parts.join("\n\n");
+    return withPoseCoherenceContract(parts.join("\n\n"), {
+        viewAngle: 'front',
+        bodyFacing: 'front-facing chest-up portrait',
+        subjectScope: 'partial_body',
+        twistAllowed: false,
+        twistIntensity: 0,
+        stanceType: 'neutral_grounded',
+        footingMode: 'directionally_aligned'
+    });
 }

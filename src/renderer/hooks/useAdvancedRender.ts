@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import type { AppState, Action, StageToken, WhitelistProfile } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
+import { ensureAuthenticatedForGeneration } from '../services/AuthGenerationGate';
 
 export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Action>) => {
     const [strictMode, setStrictMode] = useState(true);
@@ -40,6 +41,9 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
         }
         if (state.billingEntitlements.effectiveBillingMode === 'byok' && !state.apiKey) {
             dispatch({ type: 'ADD_LOG', payload: { message: "BYOK mode is selected. Add your API key in Settings to continue.", type: 'error' } });
+            return null;
+        }
+        if (!(await ensureAuthenticatedForGeneration({ billingMode: state.billingEntitlements.effectiveBillingMode, featureLabel: 'Staging DNA analysis' }))) {
             return null;
         }
 
@@ -128,6 +132,9 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
 
         if (!shouldRun) return overrides;
         if (state.billingEntitlements.effectiveBillingMode === 'byok' && !state.apiKey) return overrides;
+        if (!(await ensureAuthenticatedForGeneration({ billingMode: state.billingEntitlements.effectiveBillingMode, featureLabel: 'Staging token profile analysis' }))) {
+            return overrides;
+        }
 
         const missing = tokens.filter(t => !t.profile);
         if (missing.length === 0) return overrides;

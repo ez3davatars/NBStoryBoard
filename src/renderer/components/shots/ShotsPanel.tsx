@@ -4,6 +4,7 @@ import type { ActorIdentityReferenceSet, ShotsActorOption } from '../../context/
 import { SHOT_PRESETS, buildShotPresetIdsForPack } from '../../utils/shotsPresets';
 import { buildShotVariantPrompt, buildShotFinalRerenderPrompt } from '../../utils/promptHelpers';
 import { GeminiService } from '../../services/GeminiService';
+import { ensureAuthenticatedForGeneration } from '../../services/AuthGenerationGate';
 import { stripIdentityOverridingAnalysis, stripShotDirectiveContamination } from '../../utils/analysisSanitizers';
 import { LocalAssetService } from '../../services/LocalAssetService';
 import { hasStrongFaceAnchor } from '../../utils/identityReferenceHelpers';
@@ -339,6 +340,15 @@ Return JSON with:
 
   const handleGenerateShots = async () => {
     if (!effectiveResultImageUrl) return;
+    const billingMode = state.billingEntitlements.effectiveBillingMode;
+    if (billingMode === 'byok' && !apiKey) {
+      dispatch({ type: 'ADD_LOG', payload: { message: 'API Key required for BYOK SHOTS generation.', type: 'error' } });
+      return;
+    }
+    if (!(await ensureAuthenticatedForGeneration({ billingMode, featureLabel: 'SHOTS preview generation' }))) {
+      return;
+    }
+
     const enforcedLocks: ShotLocks = { ...locks, identity: true, background: true, lighting: true };
     if (
       locks.identity !== enforcedLocks.identity ||
@@ -691,6 +701,14 @@ Return JSON with:
 
     const selectedVariants = session.variants.filter(v => v.selected && (v.status === 'done' || v.status === 'error'));
     if (selectedVariants.length === 0) return;
+    const billingMode = state.billingEntitlements.effectiveBillingMode;
+    if (billingMode === 'byok' && !apiKey) {
+      dispatch({ type: 'ADD_LOG', payload: { message: 'API Key required for BYOK SHOTS final render.', type: 'error' } });
+      return;
+    }
+    if (!(await ensureAuthenticatedForGeneration({ billingMode, featureLabel: 'SHOTS final render' }))) {
+      return;
+    }
 
     abortControllerRef.current = new AbortController();
 
@@ -880,6 +898,14 @@ Return JSON with:
     if (!session || !effectiveResultImageUrl) return;
     const variant = session.variants.find(v => v.id === variantId);
     if (!variant) return;
+    const billingMode = state.billingEntitlements.effectiveBillingMode;
+    if (billingMode === 'byok' && !apiKey) {
+      dispatch({ type: 'ADD_LOG', payload: { message: 'API Key required for BYOK SHOTS regeneration.', type: 'error' } });
+      return;
+    }
+    if (!(await ensureAuthenticatedForGeneration({ billingMode, featureLabel: 'SHOTS regeneration' }))) {
+      return;
+    }
 
     onUpdateSession(sceneId, prev => {
       if (!prev) return prev;

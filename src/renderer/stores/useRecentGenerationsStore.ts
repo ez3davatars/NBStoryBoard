@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { RecentGenerationsCacheService } from '../services/RecentGenerationsCacheService';
 
 // --- TYPES ---
 
@@ -63,6 +64,18 @@ function saveManifest(generations: RecentGeneration[]) {
   } catch (e) {
     console.warn('[RecentGenerations] Failed to save manifest:', e);
   }
+}
+
+function deleteRecentGenerationCacheFile(
+  generation: RecentGeneration,
+  cacheDirPath: string | null
+) {
+  if (!cacheDirPath || !generation.localCachePath) return;
+
+  void RecentGenerationsCacheService.deleteFromCache(
+    generation.localCachePath,
+    cacheDirPath
+  );
 }
 
 // --- STORE ---
@@ -187,11 +200,7 @@ export const useRecentGenerationsStore = create<RecentGenerationsState>((set, ge
       for (let i = updatedStudioGens.length - 1; i >= 1; i--) {
         if (!updatedStudioGens[i].exported) {
           // Delete from disk silently
-          try {
-            window.electronAPI?.deleteFile?.(updatedStudioGens[i].localCachePath);
-          } catch {
-            // Best-effort cleanup
-          }
+          deleteRecentGenerationCacheFile(updatedStudioGens[i], state.cacheDirPath);
           updatedStudioGens = [
             ...updatedStudioGens.slice(0, i),
             ...updatedStudioGens.slice(i + 1),
@@ -203,11 +212,7 @@ export const useRecentGenerationsStore = create<RecentGenerationsState>((set, ge
       if (updatedStudioGens.length > MAX_PER_STUDIO) {
         const removed = updatedStudioGens.pop();
         if (removed) {
-          try {
-            window.electronAPI?.deleteFile?.(removed.localCachePath);
-          } catch {
-            // Best-effort
-          }
+          deleteRecentGenerationCacheFile(removed, state.cacheDirPath);
         }
       }
     }
@@ -248,15 +253,6 @@ export const useRecentGenerationsStore = create<RecentGenerationsState>((set, ge
     const state = get();
     const target = state.recentGenerations.find((g) => g.id === id);
 
-    // Delete from disk
-    if (target) {
-      try {
-        window.electronAPI?.deleteFile?.(target.localCachePath);
-      } catch {
-        // Best-effort
-      }
-    }
-
     const updated = state.recentGenerations.filter((g) => g.id !== id);
 
     // Clear active selection if it was the removed one
@@ -269,21 +265,16 @@ export const useRecentGenerationsStore = create<RecentGenerationsState>((set, ge
 
     set({ recentGenerations: updated, activeRecentGenerationIdByStudio: newActive });
     saveManifest(updated);
+
+    if (target) {
+      deleteRecentGenerationCacheFile(target, state.cacheDirPath);
+    }
   },
 
   clearRecentGenerationsForStudio: (studio) => {
     const state = get();
     const toRemove = state.recentGenerations.filter((g) => g.studio === studio);
     const remaining = state.recentGenerations.filter((g) => g.studio !== studio);
-
-    // Delete all from disk
-    for (const g of toRemove) {
-      try {
-        window.electronAPI?.deleteFile?.(g.localCachePath);
-      } catch {
-        // Best-effort
-      }
-    }
 
     set({
       recentGenerations: remaining,
@@ -293,22 +284,25 @@ export const useRecentGenerationsStore = create<RecentGenerationsState>((set, ge
       },
     });
     saveManifest(remaining);
+
+    for (const generation of toRemove) {
+      deleteRecentGenerationCacheFile(generation, state.cacheDirPath);
+    }
   },
 
   clearAllRecentGenerations: () => {
     const state = get();
-    for (const g of state.recentGenerations) {
-      try {
-        window.electronAPI?.deleteFile?.(g.localCachePath);
-      } catch {
-        // Best-effort
-      }
-    }
+    const toRemove = state.recentGenerations;
+
     set({
       recentGenerations: [],
       activeRecentGenerationIdByStudio: {},
     });
     saveManifest([]);
+
+    for (const generation of toRemove) {
+      deleteRecentGenerationCacheFile(generation, state.cacheDirPath);
+    }
   },
 
   getRecentGenerationsForStudio: (studio) => {

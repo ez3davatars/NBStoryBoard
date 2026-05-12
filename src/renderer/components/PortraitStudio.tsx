@@ -4,12 +4,13 @@ import { RefreshCw, Terminal, Activity, Wand2, Sparkles, X, Download, UserPlus, 
 // Remove GlassCard import
 import { Input } from "./ui/Input";
 import { Slider } from "./ui/Slider";
-import { Dropdown } from "./ui/Dropdown";
+import { Dropdown, type DropdownOption } from "./ui/Dropdown";
 import type { CharacterDNA } from "../../types/characterDNA";
 import { computeBMI, deriveBuildDescription } from "../../types/characterDNA";
 import { useAppContext } from "../context/AppContext";
 import type { CastMember, PendingPitchSheetHandoff, PendingRefSheetHandoff } from "../context/AppContext";
 import { GeminiService } from "../services/GeminiService";
+import { ensureAuthenticatedForGeneration } from "../services/AuthGenerationGate";
 import { NanobananaThinking } from "./ui/NanobananaThinking";
 import ConfirmDialog from "./ui/ConfirmDialog";
 import { useRecentGenerationsStore } from "../stores/useRecentGenerationsStore";
@@ -101,7 +102,7 @@ type PortraitStudioMode = "portrait" | "pitch_sheet";
 type PitchSheetAdvancedSectionKey = "face" | "performance" | "material" | "production";
 type CharacterPitchSheetTextField = Exclude<
     keyof CharacterPitchSheetInput,
-    "referenceImageUrl" | "referenceImages" | "identitySource" | "identityStrength" | "characterStyleReferenceUrl" | "sourcePanelMode" | "characterRenderStyle" | "boardPresentationStyle" | "heightIn" | "weightLbs" | "frameSize" | "musculature" | "buildInterpretation" | "physiquePriority" | "debugVisibleLabels"
+    "referenceImageUrl" | "referenceImages" | "identityLock" | "identitySource" | "identityStrength" | "characterStyleReferenceUrl" | "sourcePanelMode" | "characterRenderStyle" | "boardPresentationStyle" | "heightIn" | "weightLbs" | "frameSize" | "musculature" | "buildInterpretation" | "physiquePriority" | "debugVisibleLabels"
 >;
 
 const LIFE_STAGE_OPTIONS: Array<{ type: "option"; label: string; value: LifeStage }> = [
@@ -192,19 +193,39 @@ const SOURCE_PANEL_MODE_OPTIONS: Array<{
     { value: "hidden", label: "Hidden" }
 ];
 
-const CHARACTER_RENDER_STYLE_OPTIONS: Array<{
-    type: "option";
-    value: NonNullable<CharacterPitchSheetInput["characterRenderStyle"]>;
-    label: string;
-}> = [
+type CharacterRenderStyleOption =
+    | Extract<DropdownOption, { type: "group" }>
+    | (Extract<DropdownOption, { type: "option" }> & {
+        value: NonNullable<CharacterPitchSheetInput["characterRenderStyle"]>;
+    });
+
+const CHARACTER_RENDER_STYLE_OPTIONS: CharacterRenderStyleOption[] = [
+    { type: "group", label: "Realism" },
     { type: "option", value: "biometric_realism", label: "Biometric Realism" },
     { type: "option", value: "cinematic_photoreal", label: "Cinematic Photoreal" },
+    { type: "option", value: "exact_studio", label: "Exact Studio" },
+    { type: "option", value: "photorealism", label: "Photorealism" },
+    { type: "option", value: "dslr_capture", label: "DSLR Capture" },
+    { type: "group", label: "Stylized / Animation" },
     { type: "option", value: "stylized_realism", label: "Stylized Realism" },
     { type: "option", value: "animated_feature", label: "Animated Feature" },
+    { type: "option", value: "family_3d", label: "Family 3D" },
+    { type: "option", value: "pixar", label: "Pixar-style 3D" },
+    { type: "option", value: "claymation", label: "Claymation" },
+    { type: "group", label: "Illustration" },
     { type: "option", value: "editorial_illustration", label: "Editorial Illustration" },
     { type: "option", value: "concept_art", label: "Concept Art" },
+    { type: "option", value: "retro_cel", label: "Retro Cel" },
+    { type: "option", value: "retro_anime", label: "Retro Anime" },
+    { type: "option", value: "comic_book", label: "Comic Book" },
     { type: "option", value: "graphic_novel", label: "Graphic Novel" },
-    { type: "option", value: "anime_manga", label: "Anime / Manga" }
+    { type: "option", value: "graphic_noir", label: "Graphic Noir" },
+    { type: "option", value: "anime_manga", label: "Anime / Manga" },
+    { type: "group", label: "Sci-Fi" },
+    { type: "option", value: "cyberpunk_neon", label: "Cyberpunk Neon" },
+    { type: "option", value: "cyberpunk", label: "Cyberpunk" },
+    { type: "group", label: "Other" },
+    { type: "option", value: "no_specific_style", label: "No Specific Style" }
 ];
 
 const BOARD_PRESENTATION_STYLE_OPTIONS: Array<{
@@ -225,21 +246,6 @@ const isPortraitStudioMode = (value: unknown): value is PortraitStudioMode => {
 
 const safeFilenameSegment = (value: string): string => {
     return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "character";
-};
-
-const formatHeightFromCm = (heightCm: number): string => {
-    const totalInches = Math.round(heightCm / 2.54);
-    const feet = Math.floor(totalInches / 12);
-    const inches = totalInches % 12;
-
-    return `${feet}'${inches}"`;
-};
-
-const formatHeightFromInches = (totalInches: number): string => {
-    const feet = Math.floor(totalInches / 12);
-    const inches = totalInches % 12;
-
-    return `${feet}'${inches}"`;
 };
 
 const parsePitchSheetHeightToInches = (value: string): number | undefined => {
@@ -523,6 +529,7 @@ export default function PortraitStudio() {
                 sourceUrl: mat.sourceUrl,
                 tag: 'front',
                 filename: mat.filename,
+                identityLock: isPitchSheetMode ? pitchSheetInput.identityLock : undefined,
                 profile: {
                     identity: isPitchSheetMode ? pitchSheetSubjectName : dna.identity.ethnicity,
                     wardrobe: isPitchSheetMode ? pitchSheetInput.wardrobeDirection : '',
@@ -714,11 +721,6 @@ export default function PortraitStudio() {
                     ? "Actor Likeness Guide"
                     : "Profile Likeness Guide"
             }));
-            const height = typeof payload.heightIn === "number" ? formatHeightFromInches(payload.heightIn) : "";
-            const build = [
-                typeof payload.weightLbs === "number" ? `Approx ${payload.weightLbs} lb` : "",
-                height ? `${height} frame` : ""
-            ].filter(Boolean).join(", ");
             const styleText = payload.selectedStyle
                 ? `${payload.selectedStyle} cinematic actor-based character design`
                 : "Cinematic actor-based character design";
@@ -733,14 +735,15 @@ export default function PortraitStudio() {
                 ...prev,
                 referenceImageUrl: undefined,
                 referenceImages,
+                identityLock: payload.identityLock,
                 identitySource,
                 identityStrength: payload.identityStrength || 100,
                 characterStyleReferenceUrl: payload.mode === "scan_plus_character" ? payload.finalCharacterUrl || undefined : undefined,
-                visualAge: typeof payload.age === "number" ? `${payload.age} years` : prev.visualAge,
-                height: height || prev.height,
-                heightIn: typeof payload.heightIn === "number" ? payload.heightIn : prev.heightIn,
-                weightLbs: typeof payload.weightLbs === "number" ? payload.weightLbs : prev.weightLbs,
-                build: build || prev.build,
+                visualAge: "",
+                height: "",
+                heightIn: undefined,
+                weightLbs: undefined,
+                build: "",
                 designLanguage: styleText,
                 wardrobeDirection: removeNanoCastWardrobeDirectionAutofill(prev.wardrobeDirection, payload.outfit),
                 lightingMood: payload.mode === "scan_plus_character"
@@ -943,23 +946,45 @@ export default function PortraitStudio() {
 
         const safePitchSheetInput = sanitizeVisibleBoardLanguage(pitchSheetInput);
 
+        const hasGeneratedCharacterSource =
+            safePitchSheetInput.identitySource === "biometric_plus_character" &&
+            Boolean(safePitchSheetInput.characterStyleReferenceUrl);
+
         const originalIdentityAnchors = (safePitchSheetInput.referenceImages || []).map((ref, index) => ({
             url: ref.imageUrl,
-            // Original biometric images are permanent identity anchors for every pitch sheet generation.
-            // Generated boards or styled outputs must never replace these anchors as the identity source.
-            label: `Original Actor Likeness Anchor: ${getPitchSheetAngleLabel(ref.angle, index)}`
+            label: hasGeneratedCharacterSource
+                ? `Image ${String.fromCharCode(66 + index)} - Biometric Scan Identity Reference (${getPitchSheetAngleLabel(ref.angle, index)}): identity authority for face, skull, skin tone, age, hair state, facial hair, and marks only.`
+                : `Image ${String.fromCharCode(65 + index)} - Biometric Scan Identity Reference (${getPitchSheetAngleLabel(ref.angle, index)}): identity authority for face, skull, skin tone, age, hair state, facial hair, and marks.`
         }));
 
+        const primaryGeneratedCharacterSource = hasGeneratedCharacterSource && safePitchSheetInput.characterStyleReferenceUrl
+            ? [{
+                url: safePitchSheetInput.characterStyleReferenceUrl,
+                label: "Image A - Primary Generated Character Source / Current Approved Character Render: preserve this character's body, outfit, silhouette, proportions, render style, costume, and overall design."
+            }]
+            : [];
+
+        const portraitIdentityReference = safePitchSheetInput.referenceImageUrl
+            ? [{
+                url: safePitchSheetInput.referenceImageUrl,
+                label: hasGeneratedCharacterSource
+                    ? "Additional Portrait Identity Guide - secondary to Image A design and biometric identity anchors."
+                    : "Actor Likeness Guide"
+            }]
+            : [];
+
+        const looseStyleReference = !hasGeneratedCharacterSource && safePitchSheetInput.characterStyleReferenceUrl
+            ? [{
+                url: safePitchSheetInput.characterStyleReferenceUrl,
+                label: "Board Presentation Guide Only - Not Actor Likeness"
+            }]
+            : [];
+
         return [
+            ...primaryGeneratedCharacterSource,
             ...originalIdentityAnchors,
-            ...(safePitchSheetInput.referenceImageUrl
-                ? [{ url: safePitchSheetInput.referenceImageUrl, label: "Actor Likeness Guide" }]
-                : []),
-            ...(safePitchSheetInput.characterStyleReferenceUrl
-                // Style references can guide presentation, lighting, and costume continuity only.
-                // Style cannot override the actor identity locked by the original anchors above.
-                ? [{ url: safePitchSheetInput.characterStyleReferenceUrl, label: "Board Presentation Guide Only - Not Actor Likeness" }]
-                : [])
+            ...portraitIdentityReference,
+            ...looseStyleReference
         ];
     };
 
@@ -1083,6 +1108,9 @@ export default function PortraitStudio() {
             });
             return;
         }
+        if (!(await ensureAuthenticatedForGeneration({ billingMode, featureLabel: isPitchSheetMode ? "Portrait pitch sheet generation" : "Portrait generation" }))) {
+            return;
+        }
 
         setIsGenerating(true);
         dispatch({ type: "ADD_LOG", payload: { message: isPitchSheetMode ? "Generating Character Pitch Sheet..." : "Generating Portrait...", type: "info" } });
@@ -1106,14 +1134,19 @@ export default function PortraitStudio() {
                     ? (pitchSheetInput.referenceImages || []).filter(ref => Boolean(ref.imageUrl)).length
                     : 0;
                 console.info("[IdentityAnchor] biometricSources:", biometricSources);
-                console.info("[IdentityAnchor] generatedSheetUsedAsIdentity:", false);
-                console.info("[IdentityAnchor] generatedSheetUsedAsLayoutReference:", Boolean(pitchSheetInput.characterStyleReferenceUrl));
+                console.info("[IdentityAnchor] generatedCharacterSourcePrimary:", pitchSheetInput.identitySource === "biometric_plus_character" && Boolean(pitchSheetInput.characterStyleReferenceUrl));
                 console.info("[PromptPriority]", PROMPT_PRIORITY_ORDER_LABEL);
                 console.info("[IdentityAnchor] renderStyle:", pitchSheetCharacterRenderStyle, "boardStyle:", pitchSheetBoardPresentationStyle);
                 console.info("[IdentityAnchor] referenceSources:", referenceImages.map((ref, index) => ({
                     index: index + 1,
                     label: ref.label,
-                    sourceType: ref.label.includes("Presentation Guide") ? "layout_reference" : "identity_anchor"
+                    sourceType: ref.label.includes("Primary Generated Character Source")
+                        ? "primary_visual_design_source"
+                        : ref.label.includes("Biometric Scan Identity Reference")
+                            ? "biometric_identity_anchor"
+                            : ref.label.includes("Presentation Guide")
+                                ? "layout_reference"
+                                : "identity_anchor"
                 })));
             }
             const generationOptions = {
@@ -1123,6 +1156,10 @@ export default function PortraitStudio() {
                 billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
                 entitlements: state.billingEntitlements
             };
+            const pitchSheetStyleLabel =
+                CHARACTER_RENDER_STYLE_OPTIONS.find((option): option is Extract<CharacterRenderStyleOption, { type: "option" }> =>
+                    option.type === "option" && option.value === pitchSheetCharacterRenderStyle
+                )?.label || pitchSheetCharacterRenderStyle;
 
             const url = await GeminiService.generateImage(
                 compiledPrompt,
@@ -1130,7 +1167,23 @@ export default function PortraitStudio() {
                 state.model,
                 referenceImages,
                 mode === "pitch_sheet"
-                    ? { ...generationOptions, thinkingLevel: 'high', googleGrounding: false, strictMode: true }
+                    ? {
+                        ...generationOptions,
+                        thinkingLevel: 'high',
+                        googleGrounding: false,
+                        strictMode: true,
+                        identityLock: isBiometricPitchSheetSource(pitchSheetInput.identitySource)
+                            ? pitchSheetInput.identityLock
+                            : undefined,
+                        styleCategory: {
+                            enabled: pitchSheetCharacterRenderStyle !== "no_specific_style",
+                            styleId: pitchSheetCharacterRenderStyle,
+                            intent: {
+                                selectedStyleLabel: pitchSheetStyleLabel,
+                                appliesTo: "Portrait Studio character pitch sheet, hero portrait, full-body panels, headshot strip, and recent thumbnail"
+                            }
+                        }
+                    }
                     : generationOptions
             );
             
@@ -1238,15 +1291,16 @@ export default function PortraitStudio() {
                 ...prev,
                 referenceImageUrl: imageUrl,
                 referenceImages: undefined,
+                identityLock: undefined,
                 identitySource: "portrait_reference",
                 identityStrength: 100,
                 characterStyleReferenceUrl: undefined,
                 characterName: prev.characterName || `Portrait ${dna.identity.sex} ${dna.identity.age}`,
-                visualAge: `${dna.identity.age} years`,
-                height: formatHeightFromCm(dna.morphology.heightCm),
-                heightIn: Math.round(dna.morphology.heightCm / 2.54),
-                weightLbs: Math.round(dna.morphology.weightKg / 0.453592),
-                build: dna.morphology.buildDescription,
+                visualAge: "",
+                height: "",
+                heightIn: undefined,
+                weightLbs: undefined,
+                build: "",
                 designLanguage: `${dna.identity.ethnicity} cinematic realism, preserving the approved Portrait Studio identity`,
                 lightingMood: lightingLabel,
                 faceDetails: faceNotes,
@@ -1666,6 +1720,7 @@ export default function PortraitStudio() {
                                                 onClick={() => setPitchSheetInput(prev => ({
                                                     ...prev,
                                                     referenceImages: undefined,
+                                                    identityLock: undefined,
                                                     identitySource: prev.referenceImageUrl ? "portrait_reference" : "text_only",
                                                     characterStyleReferenceUrl: undefined
                                                 }))}
@@ -1686,10 +1741,16 @@ export default function PortraitStudio() {
                                         </div>
                                         {pitchSheetInput.characterStyleReferenceUrl && (
                                             <div className="flex items-center gap-3 rounded-xl bg-yellow-500/5 border border-yellow-500/10 p-3">
-                                                <img src={pitchSheetInput.characterStyleReferenceUrl} alt="Approved character style reference" className="w-16 h-16 rounded-lg object-cover border border-white/10 bg-black" />
+                                                <img src={pitchSheetInput.characterStyleReferenceUrl} alt="Approved generated character source" className="w-16 h-16 rounded-lg object-cover border border-white/10 bg-black" />
                                                 <div className="flex flex-col gap-1">
-                                                    <span className="text-[10px] font-black text-yellow-500 uppercase tracking-[0.2em]">Style / Character Reference</span>
-                                                    <span className="text-[10px] text-white/45 leading-relaxed">Biometric angles remain the identity authority; this image contributes wardrobe, lighting, and character-design direction.</span>
+                                                    <span className="text-[10px] font-black text-yellow-500 uppercase tracking-[0.2em]">
+                                                        {pitchSheetInput.identitySource === "biometric_plus_character" ? "Generated Character Source" : "Style / Character Reference"}
+                                                    </span>
+                                                    <span className="text-[10px] text-white/45 leading-relaxed">
+                                                        {pitchSheetInput.identitySource === "biometric_plus_character"
+                                                            ? "This generated character is the primary visual design for the pitch sheet; biometric angles preserve facial identity."
+                                                            : "Biometric angles remain the identity authority; this image contributes wardrobe, lighting, and character-design direction."}
+                                                    </span>
                                                 </div>
                                             </div>
                                         )}
@@ -2495,6 +2556,7 @@ export default function PortraitStudio() {
                                     sourceUrl: generatedImage,
                                     tag: 'front',
                                     name: activeLibraryName,
+                                    identityLock: isPitchSheetMode ? pitchSheetInput.identityLock : undefined,
                                     profile: {
                                         identity: isPitchSheetMode ? pitchSheetSubjectName : dna.identity.ethnicity,
                                         wardrobe: isPitchSheetMode ? pitchSheetInput.wardrobeDirection : '',

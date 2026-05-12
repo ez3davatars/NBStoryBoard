@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
+import { ensureAuthenticatedForGeneration } from '../services/AuthGenerationGate';
 import { nativeJoinPath, nativeListFiles, nativeWriteFile, isNativeParams } from '../utils/NativeFileAssets';
 import type { PropItem, CastMember } from '../context/AppContext';
 import ConfirmDialog from './ui/ConfirmDialog';
@@ -20,6 +21,7 @@ import { useRecentGenerationsStore } from '../stores/useRecentGenerationsStore';
 import { RecentGenerationsCacheService } from '../services/RecentGenerationsCacheService';
 import RecentGenerationsStrip from './recent/RecentGenerationsStrip';
 import { createUniqueDownloadFilename } from '../utils/downloadFilenames';
+import { buildStyleCategoryContract, buildStyleNegativePrompt } from '../../prompts/styleContracts';
 
 type PermissionAwareDirectoryHandle = FileSystemDirectoryHandle & {
     queryPermission?: (descriptor?: { mode?: 'read' | 'readwrite' }) => Promise<PermissionState>;
@@ -402,6 +404,9 @@ const PropAccessoryStudio = () => {
             });
             return;
         }
+        if (!(await ensureAuthenticatedForGeneration({ billingMode, featureLabel: 'Prop Designer generation' }))) {
+            return;
+        }
 
         dispatch({ type: 'SET_PROCESSING', payload: true });
 
@@ -509,10 +514,34 @@ extra objects, duplicate prop, altered proportions, floating parts, text, label,
 
 
 
-    const executeRefinement = async (fitClass: WearableClass, subjectUrl: string, propUrl: string, lockedPlacement: WearablePlacement, precompositeUrl: string) => {
+    const executeRefinement = async (
+        fitClass: WearableClass,
+        subjectUrl: string,
+        propUrl: string,
+        lockedPlacement: WearablePlacement,
+        precompositeUrl: string,
+        subjectStyleId?: string,
+        subjectStyleLabel = 'Subject Reference Style'
+    ) => {
         console.warn(`[DEBUG_PATH] executeRefinement called for ${fitClass}`);
         let finalUrl = precompositeUrl;
         let refinementAccepted = false;
+        const refinementStyleContract = buildStyleCategoryContract(subjectStyleId, {
+            selectedStyleLabel: subjectStyleLabel,
+            sourceImagePolicy: "Subject references control identity, body, pose, and placement only; source-photo realism must not override the active character render category.",
+            boardPresentationPolicy: "Prop Studio refinement controls wearable integration only.",
+            lightingPolicy: "Contact shadowing and material integration must stay inside the active character render category.",
+            appliesTo: "Prop Studio wearable refinement, applied character preview, saved actor preview, and recent thumbnail"
+        });
+        const propIdentityLock = selectedCharacter?.identityLock
+            ? {
+                ...selectedCharacter.identityLock,
+                generatedSourceImageIndex: 1,
+                generatedSourceRole: "selected subject image is the visual/body/pose source only; uploaded biometric identity remains authoritative for this character_id",
+                appliesTo: "Prop Studio generation, wearable refinement, preview, saved actor output, and export requests for this character"
+            }
+            : undefined;
+        const refinementStyleNegativePrompt = buildStyleNegativePrompt(subjectStyleId);
 
         dispatch({
             type: 'ADD_LOG',
@@ -541,6 +570,10 @@ ALLOWED CHANGES ONLY
 - Improve realism of blending and material response.
 - Clean compositing artifacts only.
 
+STYLE CATEGORY LOCK
+- Preserve the selected character render category from the subject. Do not let realistic contact shadowing or source-photo texture convert a stylized subject into realism.
+${refinementStyleContract}
+
 FORBIDDEN CHANGES
 - No enlargement.
 - No shrinkage.
@@ -557,7 +590,7 @@ OUTPUT GOAL
 - When uncertain, preserve IMAGE 3 rather than changing geometry.
 
 NEGATIVE CONSTRAINTS
-oversized wearable, resized wearable, moved wearable, floating wearable, theatrical overscaling, altered subject, changed pose, changed wardrobe, changed background, text, watermark.`;
+oversized wearable, resized wearable, moved wearable, floating wearable, theatrical overscaling, altered subject, changed pose, changed wardrobe, changed background, selected style category drift${refinementStyleNegativePrompt ? `, ${refinementStyleNegativePrompt}` : ''}, text, watermark.`;
 
         try {
             const refinedRes = await GeminiService.generateImage(
@@ -576,7 +609,15 @@ oversized wearable, resized wearable, moved wearable, floating wearable, theatri
                     googleGrounding: false,
                     strictMode: true,
                     billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
-                    entitlements: state.billingEntitlements
+                    entitlements: state.billingEntitlements,
+                    identityLock: propIdentityLock,
+                    styleCategory: subjectStyleId ? {
+                        styleId: subjectStyleId,
+                        intent: {
+                            selectedStyleLabel: subjectStyleLabel,
+                            appliesTo: "Prop Studio wearable refinement"
+                        }
+                    } : undefined
                 }
             );
 
@@ -622,6 +663,17 @@ oversized wearable, resized wearable, moved wearable, floating wearable, theatri
     const handleConfirmFit = async (placement: WearablePlacement, precompositeUrl: string, persistedOffsets: {x: number, y: number, scaleMultiplier: number}) => {
         console.warn(`[DEBUG_PATH] handleConfirmFit called`);
         if (!adjustmentState) return;
+        const billingMode = state.billingEntitlements.effectiveBillingMode;
+        if (billingMode === 'byok' && !state.apiKey) {
+            dispatch({
+                type: 'ADD_LOG',
+                payload: { message: 'API Key required for BYOK Prop Application.', type: 'error' }
+            });
+            return;
+        }
+        if (!(await ensureAuthenticatedForGeneration({ billingMode, featureLabel: 'Prop refinement generation' }))) {
+            return;
+        }
         const { fitClass, subjectUrl, propUrl } = adjustmentState;
         
         setAdjustmentState(null);
@@ -650,7 +702,9 @@ oversized wearable, resized wearable, moved wearable, floating wearable, theatri
                     payload: { message: 'Wearable integrated using direct locked composite (Refinement bypassed).', type: 'info' }
                 });
             } else {
-                await executeRefinement(fitClass, subjectUrl, propUrl, placement, precompositeUrl);
+                const subjectStyleId = selectedCharacter?.profile?.style || undefined;
+                const subjectStyleLabel = subjectStyleId ? subjectStyleId.replace(/_/g, ' ') : 'Subject Reference Style';
+                await executeRefinement(fitClass, subjectUrl, propUrl, placement, precompositeUrl, subjectStyleId, subjectStyleLabel);
             }
         } catch (error: unknown) {
             dispatch({ type: 'ADD_LOG', payload: { message: getErrorMessage(error), type: 'error' } });
@@ -678,6 +732,9 @@ oversized wearable, resized wearable, moved wearable, floating wearable, theatri
                 type: 'ADD_LOG',
                 payload: { message: 'API Key required for BYOK Prop Application.', type: 'error' }
             });
+            return;
+        }
+        if (!(await ensureAuthenticatedForGeneration({ billingMode, featureLabel: 'Prop Application generation' }))) {
             return;
         }
         
@@ -717,6 +774,24 @@ oversized wearable, resized wearable, moved wearable, floating wearable, theatri
             const fitClass = WearableAnchorEngine.inferClass(selectedProp?.name, selectedProp?.prompt, applyNote);
             const subtype = fitClass === 'headwear' ? WearableAnchorEngine.inferHeadwearSubtype(selectedProp?.name, selectedProp?.prompt, applyNote) : undefined;
             const subjectUrl = selectedCharacter.previewUrl || selectedCharacter.url;
+            const subjectStyleId = selectedCharacter.profile?.style || undefined;
+            const subjectStyleLabel = subjectStyleId ? subjectStyleId.replace(/_/g, ' ') : 'Subject Reference Style';
+            const appliedStyleContract = buildStyleCategoryContract(subjectStyleId, {
+                selectedStyleLabel: subjectStyleLabel,
+                sourceImagePolicy: "Subject references control identity, body, pose, and placement only; source-photo realism must not override the active character render category.",
+                boardPresentationPolicy: "Prop Studio application controls prop placement and integration only.",
+                lightingPolicy: "Prop lighting and perspective matching must be interpreted inside the active character render category.",
+                appliesTo: "Prop Studio applied character render, saved actor preview, and recent thumbnail"
+            });
+            const appliedIdentityLock = selectedCharacter.identityLock
+                ? {
+                    ...selectedCharacter.identityLock,
+                    generatedSourceImageIndex: 1,
+                    generatedSourceRole: "selected subject image is the visual/body/pose source only; uploaded biometric identity remains authoritative for this character_id",
+                    appliesTo: "Prop Studio generation, wearable refinement, preview, saved actor output, and export requests for this character"
+                }
+                : undefined;
+            const appliedStyleNegativePrompt = buildStyleNegativePrompt(subjectStyleId);
 
             console.warn(`[DEBUG_PATH] fitClass inferred: ${fitClass} for prop: ${selectedProp?.name}`);
 
@@ -775,7 +850,7 @@ oversized wearable, resized wearable, moved wearable, floating wearable, theatri
                     }
                 });
 
-                await executeRefinement(fitClass, subjectUrl, selectedProp.url, overlay.placement, overlay.precompositeUrl);
+                await executeRefinement(fitClass, subjectUrl, selectedProp.url, overlay.placement, overlay.precompositeUrl, subjectStyleId, subjectStyleLabel);
             } else {
                 const res = await GeminiService.generateImage(
                     `Create a single image.
@@ -801,8 +876,13 @@ INTEGRATION
 - The prop must look physically present, not composited.
 - Keep the solid black studio background (#000000).
 
+STYLE CATEGORY LOCK
+- Preserve the selected character render category from the subject. Prop integration changes the prop only, not the subject's style category.
+- Source image controls identity. Character Render Style controls visual category. Lighting adapts to the selected render style.
+${appliedStyleContract}
+
 NEGATIVE CONSTRAINTS:
-extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop colors, altered prop materials, prop redesign, extra straps, extra attachments, extra people, text, watermark.`,
+extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop colors, altered prop materials, prop redesign, extra straps, extra attachments, extra people, selected style category drift${appliedStyleNegativePrompt ? `, ${appliedStyleNegativePrompt}` : ''}, text, watermark.`,
                     state.apiKey,
                     state.model,
                     [
@@ -817,6 +897,14 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                         strictMode: true,
                         billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
                         entitlements: state.billingEntitlements,
+                        identityLock: appliedIdentityLock,
+                        styleCategory: subjectStyleId ? {
+                            styleId: subjectStyleId,
+                            intent: {
+                                selectedStyleLabel: subjectStyleLabel,
+                                appliesTo: "Prop Studio applied character render"
+                            }
+                        } : undefined,
                         onJobAccepted: (id, acceptedAt) => {
                             actualGenId = id;
                             actualAcceptedAt = acceptedAt || Date.now();
@@ -926,6 +1014,7 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
                     filename: mat.filename,
                     tag: 'front',
                     name,
+                    identityLock: selectedCharacter?.identityLock,
                     profile: {
                         identity: selectedCharacter?.profile?.identity || "Unknown",
                         wardrobe: selectedCharacter?.profile?.wardrobe || "",

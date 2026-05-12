@@ -1,4 +1,13 @@
-import { PROMPT_PRIORITY_ORDER_BLOCK, buildAuthoritativeIdentityContract } from "./identityContracts";
+import {
+    PROMPT_PRIORITY_ORDER_BLOCK,
+    buildAuthoritativeIdentityContract,
+    buildBiometricIdentityLockContract,
+    type BiometricIdentityLock
+} from "./identityContracts";
+import { buildHeadshotWardrobeContinuityContract, buildHeadshotWardrobeNegativeTokens } from "./headshotWardrobeContinuity";
+import { buildPoseCoherenceNegativeTokens, buildTurnaroundPoseCoherenceContract } from "./poseCoherence";
+import { SHEET_STYLE_LOCK_NEGATIVE_TEXT, buildSheetStyleLockContract } from "./sheetStyleLock";
+import { buildStyleCategoryContract, buildStyleNegativePrompt } from "./styleContracts";
 
 export type CharacterPitchSheetIdentitySource =
     | "text_only"
@@ -14,12 +23,25 @@ export type CharacterPitchSheetSourcePanelMode =
 export type CharacterPitchSheetRenderStyle =
     | "biometric_realism"
     | "cinematic_photoreal"
+    | "exact_studio"
+    | "photorealism"
+    | "dslr_capture"
     | "stylized_realism"
     | "animated_feature"
+    | "family_3d"
+    | "pixar"
+    | "claymation"
     | "editorial_illustration"
     | "concept_art"
+    | "retro_cel"
+    | "retro_anime"
+    | "comic_book"
     | "graphic_novel"
-    | "anime_manga";
+    | "graphic_noir"
+    | "anime_manga"
+    | "cyberpunk_neon"
+    | "cyberpunk"
+    | "no_specific_style";
 
 export type CharacterPitchSheetBoardPresentationStyle =
     | "premium_film_board"
@@ -66,6 +88,7 @@ export type CharacterPitchSheetInput = {
         imageUrl: string;
         label?: string;
     }>;
+    identityLock?: BiometricIdentityLock;
     identitySource?: CharacterPitchSheetIdentitySource;
     identityStrength?: number;
     characterStyleReferenceUrl?: string;
@@ -439,8 +462,14 @@ const describeCalloutContext = (input: CharacterPitchSheetInput): string => {
 
     if (hasAnyTerm(text, ["robot", "mech", "android", "droid", "automaton", "synthetic body", "machine"])) return "robot/mech";
     if (hasAnyTerm(text, ["creature", "animal", "beast", "dragon", "wolf", "fox", "lion", "fur", "horn", "scale", "claw", "paw"])) return "creature/animal";
-    if (hasAnyTerm(text, ["mascot", "plush", "character suit"]) || characterRenderStyle === "animated_feature" || characterRenderStyle === "anime_manga") return "stylized/animated";
-    if (hasAnyTerm(text, ["sci-fi", "science fiction", "cyberpunk", "futuristic", "space", "starship", "android", "interface", "tech jacket", "tactical"])) return "sci-fi/cyberpunk";
+    if (
+        hasAnyTerm(text, ["mascot", "plush", "character suit"]) ||
+        ["animated_feature", "family_3d", "pixar", "claymation", "retro_cel", "retro_anime", "anime_manga"].includes(characterRenderStyle)
+    ) return "stylized/animated";
+    if (
+        hasAnyTerm(text, ["sci-fi", "science fiction", "cyberpunk", "futuristic", "space", "starship", "android", "interface", "tech jacket", "tactical"]) ||
+        ["cyberpunk_neon", "cyberpunk"].includes(characterRenderStyle)
+    ) return "sci-fi/cyberpunk";
     if (hasAnyTerm(text, ["fantasy", "warrior", "knight", "mage", "ranger", "elf", "dwarf", "sword", "shield", "bracer", "forged"])) return "fantasy/adventure";
     if (hasAnyTerm(text, ["business", "corporate", "spokesperson", "office", "tailored", "suit", "blazer", "tie", "watch", "polished shoe"])) return "modern/business";
     if (hasAnyTerm(text, ["ancient", "historical", "period", "medieval", "roman", "greek", "egyptian", "israelite", "judean", "biblical", "victorian", "regency", "feudal"])) return "historical/period";
@@ -817,32 +846,27 @@ const buildBodyGuide = (input: CharacterPitchSheetInput): string => {
 };
 
 const CHARACTER_RENDER_STYLE_BLOCKS: Record<CharacterPitchSheetRenderStyle, string> = {
-    biometric_realism: `Biometric Realism: Realistic actor-based character design sheet. Use face references for likeness. Same subject across all panels. Realistic skin, wardrobe, and materials. No illustration or generic substitute casting.`,
-    cinematic_photoreal: `Cinematic Photoreal: Premium film-grade character design board. Realistic actor-based likeness, cinematic lighting, believable wardrobe, strong production presentation. Same subject across panels. Do not turn into a plain corporate reference sheet.`,
-    stylized_realism: `Active render style contract: stylized realism.
-- May change: controlled shape simplification, painterly surface language, color design, edge treatment, and realistic stylization level.
-- Must preserve: recognizable face anchors, facial proportions, body mass, shoulder/waist relationship, costume construction, footwear, accessories, props, and world/era.
-- Style risk guard: do not bulk, widen, slim, exaggerate, genericize the face, or convert the body into a default stylized template.`,
-    animated_feature: `Active render style contract: animated feature.
-- May change: animated surface finish, appealing line/shape language, simplified texture, family-feature lighting, and animation-ready material treatment.
-- Must preserve: this actor's identity translated into the style, recognizable face anchors, body proportions, costume, footwear, accessories, props, and world/era.
-- Style risk guard: translate this actor; do not invent a new animated character, mascot, archetype, or unrelated feature-film face.`,
-    editorial_illustration: `Active render style contract: editorial illustration.
-- May change: illustration texture, value hierarchy, refined color blocking, brush/print finish, and magazine-quality surface treatment.
-- Must preserve: actor identity, face structure, body proportions, costume, footwear, accessories, props, and world/era.
-- Style risk guard: do not simplify into a generic fashion illustration, replace the wardrobe, or prioritize graphic elegance over likeness continuity.`,
-    concept_art: `Active render style contract: concept art.
-- May change: polish level, production-design finish, material rendering clarity, atmosphere, and callout presentation.
-- Must preserve: actor identity, face structure, body proportions, established costume, footwear, accessories, props, and world/era.
-- Style risk guard: polish, clarify, and resolve; do not redesign, recast, change silhouette, add new gear, or upgrade the world into another genre.`,
-    graphic_novel: `Active render style contract: graphic novel.
-- May change: line weight, ink treatment, panel-ready shadows, halftone/print texture, contrast, and graphic surface language.
-- Must preserve: recognizable actor identity, face shape, body proportions, costume, footwear, accessories, props, and world/era.
-- Style risk guard: do not replace the face with a comic archetype, inflate anatomy, alter costume continuity, or add genre-inappropriate symbols.`,
-    anime_manga: `Active render style contract: anime/manga.
-- May change: anime/manga linework, eye rendering language, simplified planes, cel shading, screen-tone texture, and stylized surface finish.
-- Must preserve: recognizable identity anchors, face silhouette, key facial proportions, age impression, body proportions, costume, footwear, accessories, props, and world/era.
-- Style risk guard: preserve this subject's identity; do not default to a generic anime face, change ethnicity cues, reshape the body, or replace costume logic.`
+    biometric_realism: "Biometric Realism: realistic actor-based character design sheet, face-reference likeness, consistent subject across panels, realistic skin, wardrobe, and materials.",
+    cinematic_photoreal: "Cinematic Photoreal: premium film-grade character board, realistic actor-based likeness, cinematic lighting, believable wardrobe, strong production presentation.",
+    exact_studio: "Exact Studio realism: clean professional studio lighting, accurate actor likeness, realistic skin, realistic wardrobe materials, sharp portrait detail. Preserve the exact source subject while translating only the rendering style.",
+    photorealism: "Photorealistic rendering: natural camera realism, believable skin, realistic fabric, grounded lighting, no illustration. Preserve the exact source subject while translating only the rendering style.",
+    dslr_capture: "DSLR capture look: real camera portraiture, natural lens behavior, subtle depth of field, realistic skin texture, documentary-quality detail. Preserve the exact source subject while translating only the rendering style.",
+    stylized_realism: "Stylized Realism: grounded actor identity with controlled shape simplification, painterly surface finish, realistic materials, and cinematic character-board polish.",
+    animated_feature: "Animated Feature: appealing character-design translation, expressive face, animation-ready material treatment, soft cinematic lighting, polished feature-quality finish.",
+    family_3d: "High-end family 3D animation style: appealing stylized forms, soft geometry, warm lighting, readable expression, polished CG materials. Preserve the exact source subject while translating only the rendering style.",
+    pixar: "Modern premium 3D animated feature style: appealing proportions, expressive face, soft cinematic lighting, high-quality CG finish. Preserve the exact source subject while translating only the rendering style.",
+    claymation: "Claymation-inspired tactile style: handcrafted material feel, soft sculpted forms, subtle clay-like surface texture, physical stop-motion charm. Preserve the exact source subject while translating only the rendering style.",
+    editorial_illustration: "Editorial Illustration: refined illustrated portrait treatment, elegant value hierarchy, controlled color blocking, magazine-quality production finish.",
+    concept_art: "Concept Art: production-design polish, clear material rendering, cinematic atmosphere, resolved wardrobe details, art-department presentation.",
+    retro_cel: "Retro cel animation style: clean hand-drawn shapes, cel shading, limited painterly texture, classic animation-board feel. Preserve the exact source subject while translating only the rendering style.",
+    retro_anime: "Retro anime style: anime-inspired facial design, clean linework, stylized shading, cinematic illustrated presentation. Preserve the exact source subject while translating only the rendering style.",
+    comic_book: "Comic book style: bold shapes, inked detail, controlled shadows, graphic readability, production-art finish. Preserve the exact source subject while translating only the rendering style.",
+    graphic_novel: "Graphic Novel: panel-ready linework, controlled ink treatment, dramatic shadows, refined print texture, cinematic graphic presentation.",
+    graphic_noir: "Graphic noir style: dramatic contrast, noir-inspired shadows, strong silhouettes, restrained palette, graphic presentation. Preserve the exact source subject while translating only the rendering style.",
+    anime_manga: "Anime / Manga: anime-inspired linework, stylized facial rendering, clean cel shading, cinematic illustrated presentation, character-board clarity.",
+    cyberpunk_neon: "Cyberpunk neon style: futuristic wardrobe/material language, neon rim lighting, high-tech atmosphere, cinematic sci-fi color contrast. Preserve the exact source subject while translating only the rendering style.",
+    cyberpunk: "Cyberpunk style: futuristic urban styling, techwear influence, moody lighting, high-tech world language. Preserve the exact source subject while translating only the rendering style.",
+    no_specific_style: "No specific style override: follow the user's brief, world, wardrobe, and board presentation style without adding a strong preset look. Preserve the exact source subject while translating only the rendering style."
 };
 
 const BOARD_PRESENTATION_STYLE_BLOCKS: Record<CharacterPitchSheetBoardPresentationStyle, string> = {
@@ -888,26 +912,30 @@ export function buildCharacterPitchSheetPrompt(input: CharacterPitchSheetInput):
     const sourcePanelMode = visibleInput.sourcePanelMode || defaultCharacterPitchSheetInput.sourcePanelMode || "costume_matched";
     const characterRenderStyle = visibleInput.characterRenderStyle || defaultCharacterPitchSheetInput.characterRenderStyle || "biometric_realism";
     const boardPresentationStyle = visibleInput.boardPresentationStyle || defaultCharacterPitchSheetInput.boardPresentationStyle || "premium_film_board";
+    const characterRenderStyleLabel = CHARACTER_RENDER_STYLE_BLOCKS[characterRenderStyle].split(":")[0] || characterRenderStyle;
     const debugVisibleLabels = visibleInput.debugVisibleLabels === true;
     const pitchSheetCallouts = buildPitchSheetCallouts(visibleInput);
     const calloutPlan = formatCalloutPlan(pitchSheetCallouts);
     const visibleVocabularyRule = buildVisibleVocabularyRule(visibleInput, pitchSheetCallouts);
     const hasReferenceDrivenIdentity = Boolean(normalize(input.referenceImageUrl)) || isReferenceDrivenIdentitySource(input);
-    const hasCharacterStyleReference = input.identitySource === "biometric_plus_character" && Boolean(normalize(input.characterStyleReferenceUrl));
+    const hasGeneratedCharacterSource = input.identitySource === "biometric_plus_character" && Boolean(normalize(input.characterStyleReferenceUrl));
     const identityContract = isBiometricIdentitySource(input)
         ? buildAuthoritativeIdentityContract({
             sourceDescription: "the original multi-view biometric source image set",
-            identityRangeText: "the supplied center/front, left, right, up, and down identity anchors",
-            generatedLayoutReferenceText: hasCharacterStyleReference ? "the approved character/style image can guide presentation, lighting, costume continuity, and board feel only" : undefined
+            identityRangeText: hasGeneratedCharacterSource
+                ? "Images B-F / the supplied center/front, left, right, up, and down identity anchors"
+                : "the supplied center/front, left, right, up, and down identity anchors"
         })
         : hasReferenceDrivenIdentity
             ? buildAuthoritativeIdentityContract({
                 sourceDescription: "the uploaded portrait identity reference",
-                generatedLayoutReferenceText: hasCharacterStyleReference ? "the approved character/style image can guide presentation, lighting, costume continuity, and board feel only" : undefined
             })
             : buildAuthoritativeIdentityContract({
                 sourceDescription: "the character identity defined by the current text brief"
             });
+    const biometricIdentityLockContract = isBiometricIdentitySource(input) && input.identityLock
+        ? buildBiometricIdentityLockContract(input.identityLock)
+        : "";
     const identityRule = hasReferenceDrivenIdentity
         ? "Identity consistency: use supplied references as identity guidance, and keep the same subject across the hero portrait, head studies, turnaround figures, action pose, and expression study."
         : "Identity consistency: keep the same invented character identity across the hero portrait, head studies, turnaround figures, action pose, and expression study.";
@@ -920,8 +948,23 @@ export function buildCharacterPitchSheetPrompt(input: CharacterPitchSheetInput):
             : hasReferenceDrivenIdentity && sourcePanelMode === "hidden"
                 ? "Source panel mode: Hidden. Do not show source-photo panels; use references only to guide identity."
                 : "";
-    const styleReferenceRule = hasCharacterStyleReference
-        ? "Style reference: borrow approved wardrobe, lighting, and character-design language from the supplied character image while keeping the same subject identity."
+    const generatedCharacterSourceRule = hasGeneratedCharacterSource
+        ? `GENERATED CHARACTER SOURCE LOCK:
+- [IMAGE 1] / Image A is the generated character source image and the current approved character render.
+- The generated character source image is the primary visual design to convert into a pitch sheet.
+- Build the pitch sheet from this same generated character, not from scratch.
+- Preserve Image A's body, outfit, silhouette, costume package, material read, proportions, render style, footwear, accessories, pose attitude, grooming read, and overall character design.
+- Use Images B-F / the biometric scan images only to preserve identity accuracy: face, skull/head shape, skin tone, age impression, hair state, facial hair, visible marks, and facial proportions.
+- Do not create a new character design.
+- Do not reinterpret the body, face, age, outfit, style category, or proportions away from the generated character source.
+- The pitch sheet should present this same generated character consistently across hero portrait, head studies, turnaround views, action pose, expression study, and material/wardrobe detail panels.
+- If Image A and the biometric scans appear to conflict, preserve Image A's costume/body/design while using the biometric scans to correct facial identity only.
+- Do not ignore the generated character source, do not generate a generic character board from the biometric scan alone, and do not output the biometric scan collage.`
+        : "";
+    const styleReferenceRule = hasGeneratedCharacterSource
+        ? "Generated character source: Image A is not a mood board, layout guide, or optional style hint. It is the approved source character that this pitch sheet is about."
+        : input.characterStyleReferenceUrl
+            ? "Style reference: borrow approved wardrobe, lighting, and character-design language from the supplied character image while keeping the same subject identity."
         : "";
     const structuredBodySourceOfTruth = [
         `character name: ${characterName}`,
@@ -930,6 +973,60 @@ export function buildCharacterPitchSheetPrompt(input: CharacterPitchSheetInput):
         `height: ${height}`,
         `build/body: ${build}`
     ].join("; ");
+    const pitchSheetPoseCoherence = buildTurnaroundPoseCoherenceContract([
+        { label: "front full-body panel", viewAngle: "front", degrees: 0, bodyFacing: "straight front-facing unified axis" },
+        { label: "three-quarter full-body panel", viewAngle: "front_3_4_left", degrees: 45, bodyFacing: "one consistent three-quarter axis" },
+        { label: "side/profile full-body panel", viewAngle: "left_profile", degrees: 90, bodyFacing: "true side profile axis" },
+        { label: "back full-body panel", viewAngle: "back", degrees: 180, bodyFacing: "straight rear-facing unified axis" },
+        { label: "action pose / gesture study", viewAngle: "custom", bodyFacing: "single deliberate action-pose axis; no accidental upper/lower split" }
+    ]);
+    const headshotWardrobeContinuity = buildHeadshotWardrobeContinuityContract({
+        identitySource: hasReferenceDrivenIdentity
+            ? "uploaded portrait/biometric identity references for face, head, skin tone, hairstyle, facial hair, and age impression only"
+            : "the text-defined character identity",
+        wardrobeAuthority: hasGeneratedCharacterSource
+            ? `Image A / the generated character source image, especially the neckline, collar, shoulders, upper chest, outfit layers, materials, colors, footwear, accessories, and costume silhouette. Supplemental text wardrobe notes: ${wardrobe}`
+            : `the final character wardrobe/costume defined by this sheet: ${wardrobe}`,
+        finalLookReference: hasGeneratedCharacterSource
+            ? "Image A as the approved generated character source, then the hero portrait, full-body turnarounds, wardrobe breakdown, and controlled callout plan in this same board"
+            : "the hero portrait, full-body turnarounds, wardrobe breakdown, and controlled callout plan in this same board",
+        appliesTo: "head studies, reference portraits, profile heads, facial-angle panels, and the expressive close-up",
+        strictness: boardPresentationStyle === "forensic_reference_board" ? "forensic_board" : "reference_sheet"
+    });
+    const styleCategoryContract = buildStyleCategoryContract(characterRenderStyle, {
+        selectedStyleLabel: CHARACTER_RENDER_STYLE_BLOCKS[characterRenderStyle],
+        sourceImagePolicy: hasGeneratedCharacterSource
+            ? "Image A controls the current generated character design, costume, body, silhouette, proportions, and style translation. Images B-F control biometric identity only; source-photo realism must not leak into stylized render categories."
+            : "Source images control identity likeness only; source-photo realism must not leak into stylized render categories.",
+        boardPresentationPolicy: "Board Presentation Style controls layout, hierarchy, typography, labels, and production-board composition only.",
+        lightingPolicy: "Lighting mood must be interpreted inside the selected Character Render Style and must not convert the character category.",
+        appliesTo: "hero portrait, full-body turnarounds, head studies, action pose, expression study, prop/detail insets where the character appears, and board previews"
+    });
+    const sheetStyleLockContract = buildSheetStyleLockContract(characterRenderStyle, {
+        source: characterRenderStyle !== "no_specific_style"
+            ? "user_selected"
+            : hasReferenceDrivenIdentity
+                ? "reference_image"
+                : "default",
+        selectedStyleLabel: characterRenderStyleLabel,
+        referenceStyleDescription: hasGeneratedCharacterSource
+            ? "Image A supplies the current approved character render style; preserve it across the sheet."
+            : undefined,
+        strictness: "high",
+        appliesTo: [
+            "hero full-body render",
+            "front head",
+            "3/4 head",
+            "side profile head",
+            "expressive close-up",
+            "full-body turnaround views",
+            "rear view",
+            "action pose / gesture study",
+            "footwear and material detail insets",
+            "annotations and callout presentation"
+        ]
+    });
+    const styleNegativePrompt = buildStyleNegativePrompt(characterRenderStyle);
 
     return `Create a full cinematic production-grade CHARACTER PITCH SHEET for ${characterName}. The result must feel like a premium character design board for film development, not a generic model sheet.
 
@@ -937,21 +1034,33 @@ ${PROMPT_PRIORITY_ORDER_BLOCK}
 
 ${BOARD_PRESENTATION_STYLE_BLOCKS[boardPresentationStyle]}
 ${CHARACTER_RENDER_STYLE_BLOCKS[characterRenderStyle]}
+${styleCategoryContract}
+${sheetStyleLockContract}
 
+${biometricIdentityLockContract}
 ${identityContract}
 ${identityRule}
 ${sourcePanelRule}
+${generatedCharacterSourceRule}
 ${styleReferenceRule}
-Body consistency: keep the same proportions, body mass, shoulder width, waist relationship, limb thickness, and overall build across all full-body views. Body guide: ${build}.
+Body consistency: ${hasGeneratedCharacterSource ? "match Image A's body, outfit fit, proportions, body mass, shoulder width, waist relationship, limb thickness, stance attitude, and overall build unless explicit structured UI values override them." : "keep the same proportions, body mass, shoulder width, waist relationship, limb thickness, and overall build across all full-body views."} Body guide: ${build}.
+${pitchSheetPoseCoherence}
 
 STRUCTURED CHARACTER DATA SOURCE OF TRUTH:
 - Use the current structured UI values as the single source of truth for character name, codename, visual age, height, build, and body settings: ${structuredBodySourceOfTruth}.
 - Do not let stale older prompt fragments, previous generated board text, or older metadata conflict with these current structured values.
 
 UNIVERSAL STYLE CONSISTENCY CONTRACT:
-- Style may change rendering treatment, lighting, texture, color finish, line language, and surface language only.
-- Style must not change actor identity, face structure, skull geometry, age impression, body proportions, costume, footwear, accessories, props, or world/era.
+- Style affects rendering language only.
+- It must not change skull shape, face structure, hairline, eyes, brows, nose, mouth, jaw, facial asymmetry, age impression, body type, costume package, footwear, props, or world/era unless the user explicitly requests that.
+- Source images are the identity authority when supplied.
+- ${hasGeneratedCharacterSource ? "Generated character source Image A is the visual/design authority when supplied; biometric images remain identity authority only." : "If a generated character source is supplied, it is the visual/design authority while identity references remain likeness authority."}
+- If style and likeness conflict, likeness wins.
+- Head studies must preserve the same exact subject, and turnaround figures must not use generic mannequin faces.
+- Source panel mode must not weaken identity; it only controls whether source references are visible, hidden, or costume matched.
 - Treat the selected render style as an output treatment applied to the same character package, not as permission to redesign the character.
+- Source image controls identity. Character Render Style controls visual category. Board Presentation Style controls layout only. Lighting Mood must adapt to the selected render style.
+- Cinematic lighting, premium film-board language, and photo-grade presentation words must not dilute or override the selected Character Render Style.
 
 STYLE-PHYSIQUE RULE:
 - Keep the body guide locked across every render style: ${build}. Do not let stylization alter height impression, frame size, body mass, shoulder width, waist relationship, limb thickness, footwear scale, or costume fit.
@@ -965,8 +1074,14 @@ STYLE-SAFE VISIBLE LABELING:
 
 STYLE DRIFT NEGATIVE CONSTRAINTS:
 - No recasting, no beautifying into a different person, no generic photoreal model, no generic stylized face, no widened or bulked body, no new animated character, no costume redesign, no genre upgrade, no footwear changes, no accessory swaps, no prop replacements, no world/era drift.
+- ${hasGeneratedCharacterSource ? "Do not ignore Image A. Do not treat Image A as optional inspiration. Do not generate a generic board from the biometric scans alone. Do not change Image A's outfit, body type, proportions, style category, costume package, or character silhouette unless explicitly requested." : "Do not change body type or proportions unless explicitly requested. Do not over-infer body mass from face scans."}
+- ${SHEET_STYLE_LOCK_NEGATIVE_TEXT}
+- No selected-style category drift: ${styleNegativePrompt || "do not blur the selected render style with another category"}.
+- No ${buildPoseCoherenceNegativeTokens()}.
+- No ${buildHeadshotWardrobeNegativeTokens()}.
 
 ${HEADSHOT_BACKGROUND_ISOLATION_RULE}
+${headshotWardrobeContinuity}
 
 VISIBLE BOARD LANGUAGE RULE:
 - Internal workflow terms such as NanoCast, biometric scanner, identity lock, source image, reference image, prompt engine, generated image, or debug image labels must not appear as visible text on the final board.
@@ -1064,6 +1179,7 @@ HEAD STUDY INSTRUCTIONS:
 - Include rendered head studies: neutral front head, three-quarter head, side profile, and one expressive close-up.
 - Head studies must match the same character and costume/world styling.
 - Head-study panels must use the sheet's clean neutral/studio background only; never preserve source-photo rooms, doors, walls, windows, furniture, shelves, lighting fixtures, or other environment details.
+- Any visible neckline, collar, shoulder, lapel, upper chest, jewelry, armor, robe, tunic, jacket, uniform, or accessory detail in head studies must match the final character wardrobe shown in the hero portrait and turnarounds. Never keep the source-photo shirt/collar.
 
 CINEMATIC PORTRAIT INSTRUCTIONS:
 - Include one larger cinematic portrait of ${characterName} with ${lightingMood}.
