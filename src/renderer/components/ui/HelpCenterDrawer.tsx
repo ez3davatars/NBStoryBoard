@@ -37,6 +37,7 @@ export const HelpCenterDrawer: React.FC = () => {
                         "Hero Section (Center): Choose a visual language (Realism, Cartoon, Sci-Fi, etc.) and describe your character to quickly generate your first actor.",
                         "Upload Ref: Use the 'Upload Ref' button in the center module if you want to start from an existing image instead of pure text.",
                         "Actor Reference Sheets (Left Panel): Generate your character in multiple angles (Form, Face, Split) to lock down their design for future use.",
+                        "Callout labels: Add visible wardrobe, fabric, accessory, footwear, logo, and prop details before generating reference sheets.",
                         "Branding & Identity (Left Panel): Upload a logo file to automatically place graphics onto the character's clothing.",
                         "Slicing Tools: After generating, use the 'Slicer' canvas tools to crop out specific parts of the image and add them as Cast Asset tokens.",
                         "Cast Assets Manager: This holds your temporary generated previews. Unsaved previews expire from the cloud after 24 hours. When you click Add to Library, the full image is downloaded directly to your local drive and secured permanently!"
@@ -50,6 +51,7 @@ export const HelpCenterDrawer: React.FC = () => {
                         "Use 'Synthetic' to build a custom face mathematically.",
                         "Use 'Reference' to upload a real photo or previous AI generation.",
                         "Unlock selective traits (like Hair or Skin) to override portions of an uploaded photo.",
+                        "Character Pitch Sheet: Switch modes, fill identity/build/wardrobe/props/material fields, then generate a production-style board.",
                         "Click 'Clear Result' to durably reset your active workspace to a clean slate without returning ghosts.",
                         "Send to Casting when finished to permanently store them."
                     ]
@@ -65,7 +67,8 @@ export const HelpCenterDrawer: React.FC = () => {
                         "Use Identity Lock to control how aggressively the generated character holds the source bone structure and facial proportions.",
                         "In Style Synthesis, set wardrobe, grooming, hair style, and Branding & Identity details before generating the final character.",
                         "Export Character or Export to Library when you want to keep a result permanently; temporary previews are not the same as saved library assets.",
-                        "Generate a Character Reference Sheet when you need a multi-angle identity anchor for future staging, wardrobe, or shot work."
+                        "Generate a Character Reference Sheet when you need a multi-angle identity anchor for future staging, wardrobe, or shot work.",
+                        "Build Pitch Sheet From Scan or Scan + Character to hand biometric identity into Portrait's Character Pitch Sheet workflow."
                     ]
                 };
             case 'wardrobe':
@@ -98,6 +101,7 @@ export const HelpCenterDrawer: React.FC = () => {
                         "Drag actors and props from the left sidebars onto the canvas.",
                         "Click on any active token on the canvas to refine its scale and placement.",
                         "Direct your actors: Describe exactly what the character is doing inside 'Actor Intelligence' (e.g., 'sitting on the floor -> looking shocked').",
+                        "Height relationships: Put actors on the same floor plane, then write direct notes like 'Matt is taller than Erki' or add an arrow annotation as a guide.",
                         "Scene Director (Right Panel): Use this to explicitly define global rules for your Environment, Lighting, Camera, and Layout.",
                         "Reference Stack (Right Panel): Use this if you want the AI to place actors based on named references and directional notes rather than visual X/Y canvas coordinates.",
                         "Use the Bottom Toolbar to lock down your camera intent and draw manual path annotations if needed."
@@ -117,7 +121,8 @@ export const HelpCenterDrawer: React.FC = () => {
                         "PREREQUISITE: You must finalize your scene in the STAGE sub-tab and generate at least one composite image to act as your Scene Truth.",
                         "Switch to the SHOTS tab to begin multi-angle generation.",
                         "Select a Pack (e.g., Cinematic) and auto-populate the Directed Shot Plan.",
-                        "Click GENERATE to render low-res previews, then select favorites to RENDER 4K."
+                        "Click GENERATE to render low-res previews, then select favorites to RENDER 4K.",
+                        "Use Export All Packs from the shot list when you need manifests, compiled prompts, notes, references, and shot assets for handoff."
                     ]
                 };
             case 'region_edit':
@@ -242,6 +247,27 @@ export const HelpCenterDrawer: React.FC = () => {
                             </div>
 
                             <div className="bg-[#18181b] p-4 rounded-xl border border-white/5">
+                                <h4 className="font-bold text-white uppercase text-xs tracking-wider mb-3 flex items-center gap-2"><BookOpen className="w-3 h-3 text-yellow-500" /> Latest Feature Guides</h4>
+                                <div className="grid grid-cols-1 gap-2">
+                                    {[
+                                        { label: 'Pitch Sheet Preview', anchor: 'character-pitch-sheet-preview' },
+                                        { label: 'Callout Reference Sheets', anchor: 'generate-accurate-callout-reference-sheets' },
+                                        { label: 'Stage Height Notes', anchor: 'build-a-height-relationship-in-staging' },
+                                        { label: 'Shot Pack Export', anchor: 'export-shot-packs-for-handoff' },
+                                        { label: 'Reference Uploads', anchor: 'use-durable-reference-uploads' }
+                                    ].map(item => (
+                                        <button
+                                            key={item.anchor}
+                                            onClick={() => openGuide(item.anchor)}
+                                            className="w-full text-left px-3 py-2 rounded-lg bg-white/5 hover:bg-white/10 text-xs text-gray-300 hover:text-white transition-colors"
+                                        >
+                                            {item.label}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div className="bg-[#18181b] p-4 rounded-xl border border-white/5">
                                 <h4 className="font-bold text-white uppercase text-xs tracking-wider mb-3 flex items-center gap-2"><Play className="w-3 h-3 text-yellow-500" /> Quick Start Workflow</h4>
                                 <ol className="list-decimal list-inside space-y-2 text-sm text-gray-400">
                                     <li>Go to <strong className="text-gray-200">CAST</strong> and generate a character.</li>
@@ -280,6 +306,14 @@ export const HelpCenterDrawer: React.FC = () => {
                                 <div>
                                     <h4 className="text-gray-200 font-bold mb-0.5">Nano Cast from a photo</h4>
                                     <p className="text-xs text-gray-500">Open NANO CAST help for photo-based identity preservation.</p>
+                                </div>
+                            </button>
+
+                            <button onClick={() => handleGoalRoute('portrait', 'tab-portrait')} className="w-full flex items-start text-left gap-3 p-4 bg-[#18181b] hover:bg-[#202022] border border-white/5 hover:border-yellow-500/30 rounded-xl transition-all group">
+                                <div className="p-2 bg-cyan-500/10 text-cyan-400 rounded-lg group-hover:scale-110 transition-transform"><BookOpen className="w-5 h-5" /></div>
+                                <div>
+                                    <h4 className="text-gray-200 font-bold mb-0.5">Build a pitch sheet</h4>
+                                    <p className="text-xs text-gray-500">Create a production board with identity, wardrobe, props, materials, and callouts.</p>
                                 </div>
                             </button>
 
@@ -358,6 +392,9 @@ export const HelpCenterDrawer: React.FC = () => {
                                     { issue: "Actor Name looks generic on disk", fix: "The generic PNG name prevents file conflicts. The exact real name is safely stored in the JSON sidecar." },
                                     { issue: "Portrait Details Return After Clearing", fix: "Clearing should permanently erase a portrait from memory. If it returns visually, click the Clear button again to force it to lock durably." },
                                     { issue: "Prop Still Appearing After Removal", fix: "Ensure the selected prop slot appears visually empty. If a ghost prop persists, a fast refresh or workspace re-open will force the interface to acknowledge the clean slate." },
+                                    { issue: "Pitch Sheet Callouts Are Wrong", fix: "Add clearer visible garment, material, accessory, footwear, and prop notes before regenerating the sheet." },
+                                    { issue: "Stage Height Looks Wrong", fix: "Put actors on the same floor plane, write the height relationship plainly, and add an annotation guide if needed." },
+                                    { issue: "Shot Pack Export Missing Context", fix: "Save the shot, confirm notes, references, and annotations are current, then export the pack again." },
                                     { issue: "Staging feels inconsistent", fix: "Remember that STAGE is currently a preview-tier system. Focus on Scene Truth locks to fix background drifting between shots." },
                                     { issue: "Download or save issues", fix: "Confirm your 'Render Save Folder' is actively assigned and Connected in your settings." }
                                 ].map((item, i) => (

@@ -1,5 +1,5 @@
 # Cast Director Studio User Guide
-**Version 1.1.0**
+**Version 1.1.1**
 
 This guide covers the current application tabs, shared shell controls, and major panels in Cast Director Studio. Each feature group includes a step-by-step workflow instead of only a short description.
 
@@ -35,7 +35,7 @@ The app exposes these main workspaces:
 3. **PORTRAIT** - Build synthetic or reference-locked face DNA.
 4. **WARDROBE** - Design costumes, manage wardrobe assets, and run virtual try-on.
 5. **PROPS** - Generate prop assets and apply props to characters.
-6. **STAGING** - Build scenes with actors, props, references, director controls, depth, layers, and composite generation.
+6. **STAGING** - Build scenes with actors, props, references, director controls, stage layers, annotations, and composite generation.
 7. **SHOTS** - Generate multi-angle shot packs from a staged scene.
 8. **STORYBOARD [EXPERIMENTAL]** - Experimental Veo prompt, keyframe, timeline, and shot workflow.
 9. **REGION EDIT / POST-PRODUCTION** - Mask and fix localized areas of a result.
@@ -52,8 +52,10 @@ This guide includes detailed steps for:
 - NANO CAST phase workflow, biometric sheets, wardrobe handoff, and reference sheet export.
 - WARDROBE Designer and Try-On details, especially turnaround sheets and Character Sheet anchors.
 - PROPS Application Room and reference slot binding.
-- STAGING panels, depth assist, reference stacks, stage layers, annotations, advanced render, and prompt terminal.
+- STAGING panels, reference stacks, stage layers, annotations, height relationship guidance, advanced render, and prompt terminal.
 - SHOTS configuration, directed shot cards, semantic locks, auto-reroll, 4K render, and promotion to Stage.
+- Shot pack export for handoff, including compiled prompts, notes, references, and manifests.
+- Character Pitch Sheet Preview, source handoff, and callout-label accuracy guidance.
 - STORYBOARD prompt builder, keyframe engine, monitor, timeline, and scene-anchor routing.
 - REGION EDIT layer queue and protection mask behavior.
 
@@ -183,6 +185,15 @@ The image filename may stay generic while the JSON stores the real actor name, c
 3. Wait for the cards to reload.
 4. If a saved image still does not appear, confirm the save folder is connected and that the file exists on disk.
 
+### Use Durable Reference Uploads
+
+1. Connect a save folder before building scenes that depend on uploaded references.
+2. When you upload a reference into STAGING, Reference Stacks, or a related workflow, the app can keep a lighter display copy in memory while preserving the source file on disk.
+3. If the workflow saves reference files, look for a `References` folder inside your save folder.
+4. Keep the saved project folder together when moving a session to another machine.
+5. If a reference preview appears missing after reopening, reconnect the same save folder and reload or rescan the session.
+6. Re-upload the source image only if the original reference file is no longer available.
+
 ---
 
 ## 4. Work by Goal
@@ -207,6 +218,7 @@ The image filename may stay generic while the JSON stores the real actor name, c
 5. Generate the actor.
 6. Review identity quality.
 7. Export the actor or a reference sheet to the library.
+8. To load Nano Cast biometric data into a Character Pitch Sheet, use **Build Pitch Sheet From Scan** or **Build Pitch Sheet From Scan + Character** in NANO CAST; see [Build a Pitch Sheet From NANO CAST](#build-a-pitch-sheet-from-nano-cast).
 
 ### Refine a Face
 
@@ -262,6 +274,18 @@ The image filename may stay generic while the JSON stores the real actor name, c
 7. Select the previews you like.
 8. Click **Render 4K**.
 9. Download or promote selected shots.
+
+### Create a Character Pitch Sheet
+
+1. Open **PORTRAIT**.
+2. Switch to **Character Pitch Sheet** mode.
+3. Enter the character name, codename, age, height, build, design language, world or era, wardrobe, props, lighting, and performance notes.
+4. If you already built the character in NANO CAST, use **Build Pitch Sheet From Scan** or **Build Pitch Sheet From Scan + Character** from NANO CAST instead of retyping the identity.
+5. Use uploaded biometric or portrait references only as identity authority; use wardrobe and prop fields for costume, fabric, accessory, and object details.
+6. Include visible materials and props in the wardrobe/material fields so callout labels can target real visible objects.
+7. Click **Generate Character Pitch Sheet**.
+8. Review whether the sheet preserves the same identity, body guide, costume package, render style, and callout accuracy across panels.
+9. Save, export, or restore it from Recent Generations before clearing the workspace.
 
 ### Build a Veo Storyboard
 
@@ -339,6 +363,26 @@ The image filename may stay generic while the JSON stores the real actor name, c
 8. Click **Download** if you only need a local file.
 9. Click **Save Asset** to store it under the app's reference sheet workflow when available.
 10. Close the modal after confirming it is saved.
+
+### Generate Accurate Callout Reference Sheets
+
+1. Start from a saved or currently loaded actor with a clear full outfit.
+2. Open **Actor Reference Sheet**.
+3. Choose the layout that matches the job:
+   - **Form Focus** when body shape, costume silhouette, and footwear matter most.
+   - **Face Focus** when likeness and head details matter most.
+   - **Split Focus** when both likeness and outfit details need space.
+4. Enable callout labels when the option is available.
+5. In the actor prompt or notes, name visible garments, materials, footwear, accessories, props, logos, and construction details plainly.
+6. Avoid vague labels such as "detail" or "body"; describe the visible target instead, such as jacket collar, leather belt, boot sole, emblem, pouch, sleeve cuff, or prop case.
+7. Generate the sheet.
+8. Inspect callouts before saving:
+   - garment labels should point to garments.
+   - material labels should point to visible materials or swatches.
+   - prop labels should point only to the prop or prop inset.
+   - performance labels should point to pose, expression, gesture, or posture.
+9. Regenerate only if the sheet creates wrong targets, vague labels, missing footwear, mismatched style, or identity drift.
+10. Save the sheet once the labels and panels are useful for downstream staging, wardrobe, or review.
 
 ### Manage the Cast Assets List
 
@@ -452,6 +496,21 @@ The image filename may stay generic while the JSON stores the real actor name, c
 8. Review the sheet.
 9. Click **Export to Library** or **Download**.
 
+### Build a Pitch Sheet From NANO CAST
+
+1. Complete biometric acquisition or generate the character you want to document.
+2. In the Reference Sheet area, choose the pitch sheet handoff that matches your source:
+   - **Build Pitch Sheet From Scan** when the biometric scan should be the identity authority.
+   - **Build Pitch Sheet From Scan + Character** when the generated character image should carry wardrobe, style, body presentation, and costume design while the scan preserves identity.
+3. Wait for the handoff confirmation.
+4. Open **PORTRAIT** if it does not open automatically.
+5. Confirm **Character Pitch Sheet** mode is active.
+6. Review the imported identity, style, wardrobe, material, prop, and production fields.
+7. Add any missing visible garment, fabric, accessory, footwear, or prop details before generating.
+8. Click **Generate Character Pitch Sheet**.
+9. Inspect identity consistency first, then style consistency, then callout accuracy.
+10. Export or save the pitch sheet before clearing NANO CAST or PORTRAIT.
+
 ### Clear or Reset NANO CAST Work
 
 1. Save any actor, sheet, or wardrobe output you want to keep.
@@ -496,6 +555,36 @@ The image filename may stay generic while the JSON stores the real actor name, c
 7. Click **Generate DNA Portrait**.
 8. Compare the result against the reference.
 9. Save, send, or regenerate as needed.
+
+### Character Pitch Sheet Preview
+
+1. Open **PORTRAIT**.
+2. Switch from portrait generation to **Character Pitch Sheet** mode.
+3. Choose the identity source:
+   - text-only for an invented character.
+   - portrait reference for a single uploaded likeness.
+   - biometric multi-view when NANO CAST sent scan references.
+   - scan plus character when NANO CAST sent both biometric identity and a generated character source.
+4. Fill the structured fields carefully:
+   - character name and codename.
+   - visual age, height, and build.
+   - world or era.
+   - design language and render style.
+   - wardrobe direction.
+   - props and signature items.
+   - material/costume notes.
+   - performance direction.
+5. Use wardrobe and material fields to name visible costume features that should become useful callouts.
+6. Use the props field for real props only; do not put background ideas or hidden lore there.
+7. Choose a render style and board presentation style.
+8. Click **Generate Character Pitch Sheet**.
+9. Review the result in this order:
+   - identity and likeness.
+   - body guide and proportions.
+   - wardrobe and footwear continuity.
+   - single unified render style across every panel.
+   - callout labels pointing to the correct visible target.
+10. Use Recent Generations to restore the pitch sheet if you need to compare it, then export or save it before clearing the workspace.
 
 ### Use Presets
 
@@ -641,14 +730,14 @@ The image filename may stay generic while the JSON stores the real actor name, c
 1. Save the prop to the Prop Library.
 2. Open **STAGING**.
 3. Drag the prop into the stage or into a Reference Stack when supported.
-4. Set its scale, depth, and notes like any other stage token.
+4. Set its scale, placement, and notes like any other stage token.
 5. Include prop instructions in **Scene Director** or **Actor Intelligence** before generating a composite.
 
 ---
 
 ## 10. STAGING
 
-**Purpose:** Arrange actors, props, scene references, annotations, director instructions, depth, and final composites.
+**Purpose:** Arrange actors, props, scene references, annotations, director instructions, stage layers, and final composites.
 
 ### Create or Upload a Scene Background
 
@@ -714,22 +803,19 @@ The image filename may stay generic while the JSON stores the real actor name, c
    - seat
    - lean
    - float
-5. Adjust z-depth ordering.
-6. Adjust occlusion mode and depth bias.
-7. Add token notes or action notes.
-8. Use brightness, contrast, saturation, or blur controls if available.
-9. Remove the token from the scene only if you do not need it on the stage anymore.
+5. Add token notes or action notes.
+6. Use brightness, contrast, saturation, or blur controls if available.
+7. Remove the token from the scene only if you do not need it on the stage anymore.
 
 ### Use Actor Intelligence
 
 1. Add at least one actor to the stage.
 2. Open **Actor Intelligence**.
-3. Toggle **Depth Map** to view depth structure.
-4. Refresh depth if the background changed.
-5. Toggle **Ground Plane**, **Occupied Volumes**, **Depth Bands**, or **Actor HUD** for debugging.
-6. Click **Auto Analyze** to infer actor details when available.
-7. Enter pose, action, lighting, or DNA notes for the selected actor.
-8. Generate a composite and review whether the actor follows the notes.
+3. Select the actor you want to direct.
+4. Click **Auto Analyze** to infer actor details when available.
+5. Enter pose, action, gaze, expression, lighting, or DNA notes for the selected actor.
+6. Use direct language, such as "sitting on the floor and looking shocked" or "standing behind the desk with one hand on the chair."
+7. Generate a composite and review whether the actor follows the notes.
 
 ### Use Scene Director
 
@@ -768,10 +854,9 @@ The image filename may stay generic while the JSON stores the real actor name, c
 1. Open **Stage Layers**.
 2. Click a layer to select its stage item.
 3. Click the eye icon to show or hide the layer.
-4. Drag layer rows to reorder depth.
-5. Double-click the label to rename it.
-6. Use bring/send controls to move the selected item front/back.
-7. Use delete only to remove the selected item from the stage.
+4. Double-click the label to rename it.
+5. Use bring/send controls when available to organize the selected item visually.
+6. Use delete only to remove the selected item from the stage.
 
 ### Add and Edit Annotations
 
@@ -781,6 +866,20 @@ The image filename may stay generic while the JSON stores the real actor name, c
 4. Edit its text, role, relation, or target details when the annotation panel appears.
 5. Use annotations to mark placement, gaze, movement, protect zones, or edit regions.
 6. Keep annotations clear and specific so generation instructions stay readable.
+
+### Build a Height Relationship in STAGING
+
+1. Add the actors that need a clear height relationship.
+2. Place them on the same floor plane or surface in the stage preview.
+3. Use natural scale and placement first so the preview already suggests the intended relationship.
+4. In **Scene Director**, write the relationship plainly, such as "Matt is taller than Erki" or "both actors are the same visible height."
+5. If you need a visual guide, add an arrow or note annotation near the actor.
+6. Write the annotation text as a direct instruction, such as "Matt's height should reach the tip of the arrow."
+7. Keep the annotation as a guide, not a final scene object, unless you explicitly want it visible.
+8. Add any pose or grounding details in **Actor Intelligence** so the height request does not fight the action.
+9. Generate the composite.
+10. Review head top, eye line, shoulder line, torso length, leg length, and shared floor contact.
+11. If the relationship is wrong, tighten the note and regenerate rather than changing the character identity or wardrobe.
 
 ### Use Advanced Render Parameters
 
@@ -813,13 +912,12 @@ The image filename may stay generic while the JSON stores the real actor name, c
 9. Save or download the result.
 10. Use Region Edit if only a small area needs correction.
 
-### Save Stage Images and Depth Maps
+### Save Stage Images
 
 1. Use the bottom toolbar download controls.
 2. Click the image download control to capture the stage or final result.
-3. Click **Depth** to download the generated depth map.
-4. Confirm both files appear on disk.
-5. Keep the depth map when debugging occlusion or grounding.
+3. Confirm the file appears on disk.
+4. Save or export important results before clearing the stage.
 
 ### Use Undo, Redo, Copy, and Clear
 
@@ -902,6 +1000,26 @@ The image filename may stay generic while the JSON stores the real actor name, c
 4. Confirm selected cards show 4K-ready status.
 5. Download 4K from the card or inspect view.
 6. Use the stage promotion control if you want a shot variant to become the active Stage scene.
+
+### Export Shot Packs for Handoff
+
+1. Connect a save folder in **Settings** before exporting.
+2. Build a staged scene and create one or more shots from STAGING or SHOTS.
+3. Add shot names and notes so downstream collaborators understand the intent.
+4. Keep reference slots, actor choices, annotations, and directed shot card notes up to date before export.
+5. To export one active shot, use the shot pack export control when it is available.
+6. To export every shot, open the shot list and click **Export All Packs**.
+7. Wait for the export log to confirm the `ShotPacks` folder path.
+8. Each exported shot pack may include:
+   - manifest JSON.
+   - compiled prompt text.
+   - director settings.
+   - reference slot metadata.
+   - staged token data.
+   - annotations and notes.
+   - available preview, final, source, or blueprint images.
+9. Use the compiled prompt for audit, rerun, or handoff review.
+10. If an export looks incomplete, save the session, refresh the shot data, confirm the save folder is connected, and export again.
 
 ### Save or Reset a SHOTS Session
 
@@ -1134,10 +1252,13 @@ The image filename may stay generic while the JSON stores the real actor name, c
 | Wardrobe Try-On identity drifts | Use a saved actor with a strong reference image and upload a Character Sheet identity anchor. |
 | Turnaround has inconsistent sides | Regenerate with a clearer costume reference and Character Sheet anchor. |
 | Prop attaches to the wrong place | Add clearer placement notes, such as body part, side, scale, and orientation. |
-| Stage depth or occlusion looks wrong | Refresh depth, inspect Depth Map/Ground Plane/Occupied Volumes, then adjust token depth bias. |
+| Stage actor height relationship is wrong | Put both actors on the same floor plane, write the height relationship plainly, and add an annotation guide if needed. |
+| Pitch sheet callouts point to the wrong thing | Add clearer visible garment/material/prop notes, then regenerate the sheet. Omit unclear props rather than forcing vague labels. |
+| Reference preview missing after reopening | Reconnect the same save folder and reload the session; re-upload only if the saved reference file is gone. |
 | Replace Anchor Subjects swaps identities | Use Reference Stacks with clear target names and actor mapping. |
 | SHOTS Generate is disabled | Create or choose a result source first by generating a composite or setting an uploaded source. |
 | SHOTS actor shot fails preflight | Select the required actor in the Directed Shot Plan. |
+| Shot pack export is missing notes or references | Save the shot, confirm reference slots and annotations are current, then export the pack again. |
 | Storyboard tab missing | Enable Storyboard in Settings and save config. |
 | Storyboard monitor shows no plate | Select a shot or upload a Start/End plate. |
 | Region Edit changes too much | Use a tighter mask, enable Protect Anatomy, and make the instruction more local. |
