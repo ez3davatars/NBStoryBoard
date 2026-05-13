@@ -63,6 +63,8 @@ import { useSceneSpec } from "../../scene/useSceneSpec"
 
 // B. Scene Blocking Component
 
+const DEPTH_USER_CONTROLS_ENABLED = import.meta.env.DEV;
+
 const SceneCanvas = () => {
 
 
@@ -195,7 +197,7 @@ const SceneCanvas = () => {
 
 
 
-    // SPATIAL INTELLIGENCE: Auto-Generate Depth Map on Background Change
+    // SPATIAL INTELLIGENCE: Auto-generate advisory spatial hint map on background change.
     const lastBgRef = useRef<string | null>(state.backgroundUrl);
 
     const refreshSpatialData = useCallback(async () => {
@@ -204,8 +206,8 @@ const SceneCanvas = () => {
         dispatch({ type: 'SET_DEPTH_PROCESSING', payload: true });
 
         try {
-            // "Ghost" generation: Use Gemini to infer the depth map from the RGB image
-            const depthPrompt = "Generate a high-fidelity grayscale depth map of this scene. White represents near objects (foreground), Black represents far objects (background). The output must be a strict grayscale depth mask. Maintain exact aspect ratio and composition.";
+            // "Ghost" generation: use Gemini to infer an estimated spatial helper map from the RGB image.
+            const depthPrompt = "Generate an estimated grayscale spatial hint map for this scene. Lighter values suggest nearer foreground regions; darker values suggest farther background regions. The output should be a grayscale helper mask matching the source composition and aspect ratio.";
 
             const depthUrl = await GeminiService.generateImage(
                 depthPrompt,
@@ -241,7 +243,9 @@ const SceneCanvas = () => {
                 }
             }
         } catch (error) {
-            console.error("[Spatial Intelligence] Auto-Depth Failed:", error);
+            if (import.meta.env.DEV) {
+                console.warn("[Spatial Intelligence] Spatial hint generation failed:", error);
+            }
         } finally {
             dispatch({ type: 'SET_DEPTH_PROCESSING', payload: false });
         }
@@ -289,14 +293,16 @@ const SceneCanvas = () => {
             .then(depth => {
                 if (isMounted) setGroundDepth(depth);
             })
-            .catch(err => console.warn('Ground depth failed', err));
+            .catch(err => {
+                if (import.meta.env.DEV) console.warn('Ground hint failed', err);
+            });
 
         return () => { isMounted = false; };
     }, [state.depthMapUrl]);
 
     /**
-    * GROUNDING SYNCHRONIZATION (AUTHORITATIVE)
-    * Clamps actors to the floor plane to prevent clipping, while allowing natural depth.
+    * GROUNDING SYNCHRONIZATION (ADVISORY)
+    * Uses the estimated floor plane as a helper layer for placement and clipping reduction.
     */
     const lastGroundingKeyRef = useRef<string>('');
 
@@ -470,7 +476,9 @@ const SceneCanvas = () => {
                     }
                     return prev;
                 });
-            })().catch(err => console.warn('[occlusionMasks] generation failed', err));
+            })().catch(err => {
+                if (import.meta.env.DEV) console.warn('[occlusionMasks] helper generation failed', err);
+            });
         }, 100);
 
         return () => {
@@ -990,7 +998,7 @@ const SceneCanvas = () => {
                             finalMask = await subtractProtectionMask(finalMask, protMask);
                         }
                     } catch {
-                        console.warn("Graceful depth degrade failed");
+                        if (import.meta.env.DEV) console.warn("Graceful spatial hint degrade failed");
                     }
                 }
 
@@ -1857,7 +1865,7 @@ ${cameraMode === 'repositioned'
                 ? 'Produce a photoreal result from a distinctly new camera angle that preserves the original subject performance and overall scene identity.'
                 : 'Produce a photoreal, composition-locked result that preserves the anchor scene exactly while transferring only the identity from the CHARACTER_REFERENCE stack.'
             }${hasDepthMap ? `
-Use ANCHOR_SCENE_DEPTH_MAP as supporting evidence for occlusion, volume, and foreground/background ordering. Preserve those relationships.` : ''}
+Use ANCHOR_SCENE_DEPTH_MAP only as an advisory spatial hint for estimated helper occlusion, volume, and foreground/background ordering. Do not treat it as a precise 3D reconstruction.` : ''}
 
 MERGE STRATEGY: ${mergeStrategy || 'preserve-anchor-scene'}
 `;
@@ -1966,15 +1974,15 @@ MERGE STRATEGY: ${mergeStrategy || 'preserve-anchor-scene'}
 
     const downloadDepthMap = () => {
         if (!state.depthMapUrl) {
-            dispatch({ type: 'ADD_LOG', payload: { message: 'No depth map available to capture.', type: 'error' } });
+            dispatch({ type: 'ADD_LOG', payload: { message: 'No spatial hint map available to capture.', type: 'error' } });
             return;
         }
-        dispatch({ type: 'ADD_LOG', payload: { message: 'Capturing Scene Depth Map...', type: 'info' } });
+        dispatch({ type: 'ADD_LOG', payload: { message: 'Capturing scene spatial hint map...', type: 'info' } });
         const depthLink = document.createElement('a');
         depthLink.href = state.depthMapUrl;
-        depthLink.download = `NB_Scene_Depth_${Date.now()}.png`;
+        depthLink.download = `NB_Scene_SpatialHint_${Date.now()}.png`;
         depthLink.click();
-        dispatch({ type: 'ADD_LOG', payload: { message: 'Depth map captured successfully.', type: 'success' } });
+        dispatch({ type: 'ADD_LOG', payload: { message: 'Spatial hint map captured successfully.', type: 'success' } });
     };
 
     // --- INTERNAL UI HELPERS ---
@@ -2328,65 +2336,66 @@ MERGE STRATEGY: ${mergeStrategy || 'preserve-anchor-scene'}
                                     </div>
                                 </div>
 
-                                {/* SPATIAL & OCCLUSION */}
-                                <div className="space-y-4 pt-4 border-t border-white/5 pb-2">
-                                    <div className="flex items-center justify-between mb-1">
-                                        <div className="flex items-center gap-2">
-                                            <div className="w-2 h-2 rounded-full bg-purple-500 shadow-[0_0_8px_rgba(168,85,247,0.5)] animate-pulse"></div>
-                                            <span className="text-[10px] font-bold text-gray-300 uppercase tracking-widest">Spatial & Occlusion</span>
-                                            <span className="text-[8px] bg-yellow-500/10 text-yellow-600 px-1.5 py-0.5 rounded border border-yellow-500/20 font-bold">CUSTOM</span>
-                                        </div>
-                                    </div>
-
-                                    <div className="space-y-4 px-1">
-                                        <div>
-                                            <span className="text-[9px] text-gray-500 uppercase font-bold block mb-2">Occlusion Mode</span>
-                                            <div className="flex gap-1.5">
-                                                <button
-                                                    onClick={() => updateToken(selectedToken.id, { occlusionMode: 'auto' })}
-                                                    className={`flex-1 py-3 text-[10px] font-bold uppercase rounded border transition-all ${(selectedToken.occlusionMode || 'auto') === 'auto'
-                                                        ? 'bg-purple-600/20 border-purple-500 text-purple-400 shadow-[0_0_12px_rgba(168,85,247,0.2)]'
-                                                        : 'bg-[#18181b] border-white/5 text-gray-500 hover:text-gray-300'
-                                                        }`}
-                                                >
-                                                    AUTO (DEPTH)
-                                                </button>
-                                                <button
-                                                    onClick={() => updateToken(selectedToken.id, { occlusionMode: 'front' })}
-                                                    className={`flex-1 py-3 text-[10px] font-bold uppercase rounded border transition-all ${selectedToken.occlusionMode === 'front'
-                                                        ? 'bg-purple-600/20 border-purple-500 text-purple-400 shadow-[0_0_12px_rgba(168,85,247,0.2)]'
-                                                        : 'bg-[#18181b] border-white/5 text-gray-500 hover:text-gray-300'
-                                                        }`}
-                                                >
-                                                    FORCE FRONT
-                                                </button>
+                                {DEPTH_USER_CONTROLS_ENABLED && (
+                                    <div className="space-y-4 pt-4 border-t border-white/5 pb-2">
+                                        <div className="flex items-center justify-between mb-1">
+                                            <div className="flex items-center gap-2">
+                                                <div className="w-2 h-2 rounded-full bg-purple-500 shadow-[0_0_8px_rgba(168,85,247,0.5)] animate-pulse"></div>
+                                                <span className="text-[10px] font-bold text-gray-300 uppercase tracking-widest">Spatial Helper</span>
+                                                <span className="text-[8px] bg-yellow-500/10 text-yellow-600 px-1.5 py-0.5 rounded border border-yellow-500/20 font-bold">DEV</span>
                                             </div>
                                         </div>
 
-                                        <div className="space-y-2">
-                                            <div className="flex justify-between items-center">
-                                                <span className="text-[9px] text-gray-500 uppercase font-bold">Depth Bias</span>
-                                                <span className="text-[10px] text-purple-400 font-mono font-bold">{(selectedToken.occlusionBias ?? 0).toFixed(2)}</span>
+                                        <div className="space-y-4 px-1">
+                                            <div>
+                                                <span className="text-[9px] text-gray-500 uppercase font-bold block mb-2">Helper Occlusion</span>
+                                                <div className="flex gap-1.5">
+                                                    <button
+                                                        onClick={() => updateToken(selectedToken.id, { occlusionMode: 'auto' })}
+                                                        className={`flex-1 py-3 text-[10px] font-bold uppercase rounded border transition-all ${(selectedToken.occlusionMode || 'auto') === 'auto'
+                                                            ? 'bg-purple-600/20 border-purple-500 text-purple-400 shadow-[0_0_12px_rgba(168,85,247,0.2)]'
+                                                            : 'bg-[#18181b] border-white/5 text-gray-500 hover:text-gray-300'
+                                                            }`}
+                                                    >
+                                                        SPATIAL HINT
+                                                    </button>
+                                                    <button
+                                                        onClick={() => updateToken(selectedToken.id, { occlusionMode: 'front' })}
+                                                        className={`flex-1 py-3 text-[10px] font-bold uppercase rounded border transition-all ${selectedToken.occlusionMode === 'front'
+                                                            ? 'bg-purple-600/20 border-purple-500 text-purple-400 shadow-[0_0_12px_rgba(168,85,247,0.2)]'
+                                                            : 'bg-[#18181b] border-white/5 text-gray-500 hover:text-gray-300'
+                                                            }`}
+                                                    >
+                                                        FORCE FRONT
+                                                    </button>
+                                                </div>
                                             </div>
-                                            <input
-                                                type="range" min="-1" max="1" step="0.01"
-                                                value={selectedToken.occlusionBias ?? 0}
-                                                onChange={(e) => updateToken(selectedToken.id, { occlusionBias: parseFloat(e.target.value) })}
-                                                className="w-full h-1.5 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-purple-500 border-none"
-                                            />
-                                            <div className="flex items-center justify-between mt-1">
-                                                <span className="text-[8px] text-gray-600 uppercase font-bold">Pull Closer</span>
-                                                <button
-                                                    onClick={() => updateToken(selectedToken.id, { occlusionBias: 0 })}
-                                                    className="px-3 py-1 bg-[#18181b] border border-white/5 rounded text-[8px] text-gray-500 hover:text-white uppercase font-bold transition-colors"
-                                                >
-                                                    RESET
-                                                </button>
-                                                <span className="text-[8px] text-gray-600 uppercase font-bold">Push Back</span>
+
+                                            <div className="space-y-2">
+                                                <div className="flex justify-between items-center">
+                                                    <span className="text-[9px] text-gray-500 uppercase font-bold">Helper Bias</span>
+                                                    <span className="text-[10px] text-purple-400 font-mono font-bold">{(selectedToken.occlusionBias ?? 0).toFixed(2)}</span>
+                                                </div>
+                                                <input
+                                                    type="range" min="-1" max="1" step="0.01"
+                                                    value={selectedToken.occlusionBias ?? 0}
+                                                    onChange={(e) => updateToken(selectedToken.id, { occlusionBias: parseFloat(e.target.value) })}
+                                                    className="w-full h-1.5 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-purple-500 border-none"
+                                                />
+                                                <div className="flex items-center justify-between mt-1">
+                                                    <span className="text-[8px] text-gray-600 uppercase font-bold">Pull Closer</span>
+                                                    <button
+                                                        onClick={() => updateToken(selectedToken.id, { occlusionBias: 0 })}
+                                                        className="px-3 py-1 bg-[#18181b] border border-white/5 rounded text-[8px] text-gray-500 hover:text-white uppercase font-bold transition-colors"
+                                                    >
+                                                        RESET
+                                                    </button>
+                                                    <span className="text-[8px] text-gray-600 uppercase font-bold">Push Back</span>
+                                                </div>
                                             </div>
                                         </div>
                                     </div>
-                                </div>
+                                )}
                             </div>
                         ) : (
                             <div className="flex-grow flex flex-col items-center justify-center text-gray-700 gap-3 opacity-50 py-10">
@@ -2770,7 +2779,7 @@ MERGE STRATEGY: ${mergeStrategy || 'preserve-anchor-scene'}
                                     className="absolute inset-0 pointer-events-none"
                                     style={{ zIndex: 9999 }}
                                 >
-                                    {/* 1. Raw Depth Map Overlay */}
+                                    {/* 1. Raw spatial hint overlay */}
                                     {showDebugDepthMap && state.depthMapUrl && (
                                         <img
                                             src={state.depthMapUrl}
@@ -2786,7 +2795,7 @@ MERGE STRATEGY: ${mergeStrategy || 'preserve-anchor-scene'}
                                             style={{ bottom: `${(1 - (state.floorPlane.depth / 255)) * 100}%` }}
                                         >
                                             <span className="absolute right-2 -top-4 text-[8px] font-black text-cyan-400 uppercase">
-                                                Ground Baseline ({state.floorPlane.depth})
+                                                Ground Estimate ({state.floorPlane.depth})
                                             </span>
                                         </div>
                                     )}
@@ -2809,7 +2818,7 @@ MERGE STRATEGY: ${mergeStrategy || 'preserve-anchor-scene'}
                                         </div>
                                     ))}
 
-                                    {/* 4. Actor Depth Band Visualizer */}
+                                    {/* 4. Actor hint band visualizer */}
                                     {showDebugBands && state.tokens.map(token => {
                                         if (token.depth === undefined) return null;
                                         const dRaw = token.depth * 255;
@@ -3304,16 +3313,18 @@ MERGE STRATEGY: ${mergeStrategy || 'preserve-anchor-scene'}
                                 <MonitorPlay className="w-3 h-3" />
                                 Save Image
                             </button>
-                            <button
-                                onClick={downloadDepthMap}
-                                disabled={!state.depthMapUrl}
-                                className={`bg-black/80 hover:bg-black border border-white/10 text-purple-500 px-4 py-1.5 rounded-md flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-widest transition-all ${state.depthMapUrl ? 'hover:text-purple-400 active:scale-95' : 'opacity-50 cursor-not-allowed'
-                                    }`}
-                                title="Download generated Depth Map"
-                            >
-                                <MonitorPlay className="w-3 h-3" />
-                                Save Depth
-                            </button>
+                            {DEPTH_USER_CONTROLS_ENABLED && (
+                                <button
+                                    onClick={downloadDepthMap}
+                                    disabled={!state.depthMapUrl}
+                                    className={`bg-black/80 hover:bg-black border border-white/10 text-purple-500 px-4 py-1.5 rounded-md flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-widest transition-all ${state.depthMapUrl ? 'hover:text-purple-400 active:scale-95' : 'opacity-50 cursor-not-allowed'
+                                        }`}
+                                    title="Download spatial hint helper map"
+                                >
+                                    <MonitorPlay className="w-3 h-3" />
+                                    Save Hint
+                                </button>
+                            )}
                         </div>
 
                     </div>

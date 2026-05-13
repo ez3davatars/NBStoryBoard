@@ -214,6 +214,8 @@ ipcMain.handle('file:hash', async (_event, filePath: string) => {
   }
 });
 
+// Internal legacy depth helper generation path kept for compatibility.
+// The launch renderer flow uses advisory Gemini spatial hints instead of exposing this as a user feature.
 ipcMain.handle('depth:generate', async (_event, input: string) => {
   let inputPath = input;
   let isTemp = false;
@@ -233,7 +235,7 @@ ipcMain.handle('depth:generate', async (_event, input: string) => {
       inputPath = path.join(tempDir, `input_${Date.now()}.${ext}`);
       await fs.writeFile(inputPath, inputBuffer);
       isTemp = true;
-      console.log(`[IPC] Saved Data URL to temp path: ${inputPath}`);
+      if (is.dev) console.log(`[IPC] Saved Data URL to temp path: ${inputPath}`);
     } else {
       inputBuffer = await fs.readFile(inputPath);
     }
@@ -246,7 +248,7 @@ ipcMain.handle('depth:generate', async (_event, input: string) => {
     const outputPath = inputPath.replace(ext, `_depth.png`);
     const metaPath = inputPath.replace(ext, `_depth.json`);
 
-    // IPC AUTHORITY GATE: Check for Binding Violation
+    // IPC helper binding check for cached depth assets.
     try {
       const metaExists = await fs.access(metaPath).then(() => true).catch(() => false);
       if (metaExists) {
@@ -254,14 +256,14 @@ ipcMain.handle('depth:generate', async (_event, input: string) => {
         const meta = JSON.parse(metaRaw);
 
         if (meta.sourceHash !== sourceHash) {
-          console.warn(`[IPC] GEOMETRIC BINDING VIOLATION detected. Background changed. Invalidating depth map: ${outputPath}`);
+          if (is.dev) console.warn(`[IPC] Spatial helper binding changed. Invalidating cached depth map: ${outputPath}`);
           // Force regeneration by deleting old files
           await fs.chmod(outputPath, 0o666).catch(() => { });
           await fs.chmod(metaPath, 0o666).catch(() => { });
           await fs.unlink(outputPath).catch(() => { });
           await fs.unlink(metaPath).catch(() => { });
         } else {
-          console.log(`[IPC] Valid depth binding found for source: ${sourceHash}. Returning cached result.`);
+          if (is.dev) console.log(`[IPC] Valid spatial helper binding found for source: ${sourceHash}. Returning cached result.`);
           const outputBuffer = await fs.readFile(outputPath);
           const dataUrl = `data:image/png;base64,${outputBuffer.toString('base64')}`;
 
@@ -272,7 +274,7 @@ ipcMain.handle('depth:generate', async (_event, input: string) => {
         }
       }
     } catch (e) {
-      console.error("[IPC] Binding check failed, proceeding to full regeneration.", e);
+      if (is.dev) console.warn("[IPC] Spatial helper binding check failed, proceeding to regeneration.", e);
     }
 
     return new Promise((resolve, reject) => {
@@ -281,14 +283,14 @@ ipcMain.handle('depth:generate', async (_event, input: string) => {
         ? path.join(app.getAppPath(), 'scripts', 'depth_inference.py')
         : path.join(process.resourcesPath, 'scripts', 'depth_inference.py');
 
-      console.log(`[IPC] Triggering depth generation for: ${inputPath}`);
+      if (is.dev) console.log(`[IPC] Triggering depth helper generation for: ${inputPath}`);
 
       // Always prefer the active virtual environment Python
       const pythonPath = process.env.VIRTUAL_ENV
         ? path.join(process.env.VIRTUAL_ENV, 'Scripts', 'python.exe')
         : 'python';
 
-      console.log(`[IPC] Using Python interpreter: ${pythonPath}`);
+      if (is.dev) console.log(`[IPC] Using Python interpreter: ${pythonPath}`);
 
       const pythonProcess = spawn(pythonPath, [
         scriptPath,
@@ -312,7 +314,7 @@ ipcMain.handle('depth:generate', async (_event, input: string) => {
 
       pythonProcess.on('close', async (code) => {
         if (code === 0) {
-          console.log(`[IPC] Depth Generation Success: ${stdoutData}`);
+          if (is.dev) console.log(`[IPC] Depth helper generation success: ${stdoutData}`);
 
           try {
             const outputBuffer = await fs.readFile(outputPath);
@@ -331,7 +333,7 @@ ipcMain.handle('depth:generate', async (_event, input: string) => {
             // 3. Set files to Read-Only at OS level (0o444)
             await fs.chmod(outputPath, 0o444);
             await fs.chmod(metaPath, 0o444);
-            console.log(`[IPC] Depth Map & Metadata marked as READ-ONLY: ${outputPath}`);
+            if (is.dev) console.log(`[IPC] Depth helper map and metadata marked as read-only: ${outputPath}`);
 
             const dataUrl = `data:image/png;base64,${outputBuffer.toString('base64')}`;
 
@@ -350,8 +352,8 @@ ipcMain.handle('depth:generate', async (_event, input: string) => {
             reject(new Error(`Failed to process generated depth map: ${readErr}`));
           }
         } else {
-          console.error(`[IPC] Depth Generation Failed Code ${code}:`, errorData);
-          reject(new Error(`Depth generation failed (Code ${code}): ${errorData}`));
+          console.error(`[IPC] Depth helper generation failed code ${code}:`, errorData);
+          reject(new Error(`Depth helper generation failed (Code ${code}): ${errorData}`));
         }
       });
 
@@ -361,7 +363,7 @@ ipcMain.handle('depth:generate', async (_event, input: string) => {
       });
     });
   } catch (err: any) {
-    console.error("[IPC] Depth Generation Error:", err);
+    console.error("[IPC] Depth helper generation error:", err);
     throw err;
   }
 });

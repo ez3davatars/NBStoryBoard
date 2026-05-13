@@ -2,6 +2,7 @@
 const depthCanvasCache: Record<string, HTMLCanvasElement> = {};
 const depthDataCache: Record<string, Uint8Array> = {}; // Synchronous access cache (Legacy)
 const depthImageCache = new Map<string, ImageData>();
+const DEPTH_DEBUG_LOGS = import.meta.env.DEV;
 
 export function clearDepthCacheExcept(activeUrl?: string | null) {
     // Clear Canvas Cache
@@ -72,7 +73,7 @@ async function getCachedCanvas(url: string | null): Promise<HTMLCanvasElement | 
 }
 
 /**
- * AUTHORITATIVE DEPTH SERVICE
+ * ADVISORY DEPTH HELPER SERVICE
  * Refactored to a class to support strict runtime immutability guards.
  */
 class DepthServiceBase {
@@ -223,7 +224,7 @@ class DepthServiceBase {
         // @ts-ignore
         if (import.meta.env?.DEV) {
             if (ctx.filter !== 'none' || (ctx.getTransform && !ctx.getTransform().isIdentity)) {
-                throw new Error("DEPTH IMMUTABILITY VIOLATION: Attempted to sample depth through a modified or filtered context. Depth maps must be sampled as-is.");
+                throw new Error("DEPTH HELPER VIOLATION: Attempted to sample depth helper data through a modified or filtered context. Helper maps must be sampled as-is.");
             }
         }
 
@@ -274,7 +275,7 @@ class DepthServiceBase {
         // RENDERER GUARDRAIL: Immutability Check
         // @ts-ignore
         if (import.meta.env?.DEV && ctx.filter !== 'none') {
-            throw new Error("DEPTH IMMUTABILITY VIOLATION: Derived occlusion masks must not apply filters to authoritative depth data.");
+            throw new Error("DEPTH HELPER VIOLATION: Derived occlusion masks must not apply filters to depth helper data.");
         }
 
         // Draw depth map stretched to viewport
@@ -380,7 +381,9 @@ class DepthServiceBase {
             // Heuristic Fallback: Median
             values.sort((a, b) => a - b);
             resultDepth = values[Math.floor(values.length / 2)];
-            console.warn(`[DepthService] FLOOR DETECTION FALLBACK: Using heuristic floor depth (${resultDepth})`);
+            if (DEPTH_DEBUG_LOGS) {
+                console.warn(`[DepthService] Floor helper fallback: using heuristic floor estimate (${resultDepth})`);
+            }
         }
 
         return {
@@ -393,7 +396,7 @@ class DepthServiceBase {
     /**
      * Occupied volumes are conservative, derived representations of scene geometry.
      * Automatic detection is advisory.
-     * Manual volumes are authoritative and take precedence.
+     * Manual volumes take precedence.
      */
     /**
      * V1 OCCUPIED VOLUME DETECTION
@@ -509,7 +512,9 @@ class DepthServiceBase {
         }
 
         if (volumes.length === 0) {
-            console.log("[DepthService] NO OCCUPIED VOLUMES DETECTED");
+            if (DEPTH_DEBUG_LOGS) {
+                console.log("[DepthService] No occupied helper volumes detected");
+            }
         }
 
         return volumes;
@@ -527,7 +532,7 @@ try {
     console.error("CRITICAL: DepthService Immutability Guard Failed!", e);
     // @ts-ignore
     if (import.meta.env?.DEV) {
-        throw new Error("FATAL: DepthService could not be locked for immutability. This is required for architectural safety.");
+        throw new Error("FATAL: DepthService could not be frozen for immutability. This is required for architectural safety.");
     }
 }
 

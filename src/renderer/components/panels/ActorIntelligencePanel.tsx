@@ -28,6 +28,8 @@ interface ActorIntelligencePanelProps {
     onRefreshSpatialData: () => void;
 }
 
+const DEPTH_USER_CONTROLS_ENABLED = import.meta.env.DEV;
+
 export const ActorIntelligencePanel = ({
     state,
     dispatch,
@@ -51,6 +53,19 @@ export const ActorIntelligencePanel = ({
     onDrop,
     onRefreshSpatialData
 }: ActorIntelligencePanelProps) => {
+    const helperStatusLabel =
+        authorityStatus === 'AUTHORITATIVE' ? 'Helper' :
+            authorityStatus === 'DEGRADED' ? 'Advisory' :
+                'No Hint';
+    const helperStatusClass =
+        authorityStatus === 'AUTHORITATIVE' ? 'bg-blue-500/10 text-blue-400 border-blue-500/30' :
+            authorityStatus === 'DEGRADED' ? 'bg-amber-500/10 text-amber-400 border-amber-500/30' :
+                'bg-gray-500/10 text-gray-500 border-gray-500/20';
+    const helperHeaderColor =
+        authorityStatus === 'AUTHORITATIVE' ? 'text-blue-400' :
+            authorityStatus === 'DEGRADED' ? 'text-amber-400' :
+                'text-gray-500';
+
     return (
         <SidebarPanel
             id="actor_intel"
@@ -61,15 +76,10 @@ export const ActorIntelligencePanel = ({
             onDragStart={onDragStart}
             onDrop={onDrop}
             draggable={false}
-            headerColor={authorityStatus === 'AUTHORITATIVE' ? 'text-green-400' : authorityStatus === 'DEGRADED' ? 'text-amber-400' : 'text-red-500'}
+            headerColor={helperHeaderColor}
             rightElement={
-                <div className={`px-2 py-0.5 rounded-[4px] text-[8px] font-black tracking-tight uppercase border transition-colors ${authorityStatus === 'AUTHORITATIVE' ? 'bg-green-500/10 text-green-400 border-green-500/30' :
-                    authorityStatus === 'DEGRADED' ? 'bg-amber-500/10 text-amber-400 border-amber-500/30' :
-                        'bg-red-500/10 text-red-500 border-red-500/30'
-                    }`}>
-                    {authorityStatus === 'AUTHORITATIVE' ? 'Locked' :
-                        authorityStatus === 'DEGRADED' ? 'Limited' :
-                            'Unavailable'}
+                <div className={`px-2 py-0.5 rounded-[4px] text-[8px] font-black tracking-tight uppercase border transition-colors ${helperStatusClass}`}>
+                    {helperStatusLabel}
                 </div>
             }
         >
@@ -80,22 +90,22 @@ export const ActorIntelligencePanel = ({
                         Debug Overlays
                     </h5>
                     <div className="grid grid-cols-2 gap-2">
-                        {/* 1. Depth Map (with Loading State) & Refresh */}
+                        {/* 1. Spatial hint map (with loading state) & refresh */}
                         <div className="flex gap-1 items-center">
                             <button
                                 onClick={() => setShowDebugDepthMap(!showDebugDepthMap)}
                                 disabled={state.isDepthProcessing}
                                 className={`flex-1 px-2 py-2 text-[8px] font-bold rounded border transition-colors flex items-center justify-center gap-1 ${state.isDepthProcessing ? 'bg-blue-900/10 text-blue-300/50 border-blue-500/10 cursor-wait' : showDebugDepthMap ? 'bg-blue-500/20 text-blue-400 border-blue-500/50' : 'bg-black/20 text-gray-500 border-white/5'}`}
-                                title="Visualizes the projected high-fidelity depth map. Lighter values represent closer objects."
+                                title="Visualizes estimated foreground/background helper data. Lighter values suggest closer objects."
                             >
                                 {state.isDepthProcessing && <RefreshCcw className="w-2.5 h-2.5 animate-spin" />}
-                                {state.isDepthProcessing ? 'Generating...' : 'Depth Map'}
+                                {state.isDepthProcessing ? 'Generating...' : 'Spatial Hint'}
                             </button>
                             <button
                                 onClick={onRefreshSpatialData}
                                 disabled={state.isDepthProcessing}
                                 className="px-2 py-2 bg-blue-900/20 text-blue-400 border border-blue-500/30 rounded hover:bg-blue-800/50 disabled:opacity-50 disabled:cursor-not-allowed"
-                                title="Force Refresh: Regenerate Depth Map & Floor Plane"
+                                title="Force Refresh: Regenerate spatial helper map and floor estimate"
                             >
                                 <RefreshCcw className="w-3 h-3" />
                             </button>
@@ -105,7 +115,7 @@ export const ActorIntelligencePanel = ({
                         <button
                             onClick={() => setShowDebugFloor(!showDebugFloor)}
                             className={`px-2 py-2 text-[8px] font-bold rounded border transition-colors ${showDebugFloor ? 'bg-blue-500/20 text-blue-400 border-blue-500/50' : 'bg-black/20 text-gray-500 border-white/5'}`}
-                            title="Visualizes the detected ground plane (cyan line). This 'Grounding Baseline' triggers automatic foot placement for actors."
+                            title="Visualizes the estimated ground line used for advisory placement."
                         >
                             Floor Plane
                         </button>
@@ -114,7 +124,7 @@ export const ActorIntelligencePanel = ({
                         <button
                             onClick={() => setShowDebugVolumes(!showDebugVolumes)}
                             className={`px-2 py-2 text-[8px] font-bold rounded border transition-colors ${showDebugVolumes ? 'bg-blue-500/20 text-blue-400 border-blue-500/50' : 'bg-black/20 text-gray-500 border-white/5'}`}
-                            title="Visualizes occupied 3D volumes (amber boxes). These represent furniture or obstacles that actors can walk behind or in front of."
+                            title="Visualizes estimated occupied regions that can guide helper occlusion."
                         >
                             Volumes
                         </button>
@@ -123,16 +133,16 @@ export const ActorIntelligencePanel = ({
                         <button
                             onClick={() => setShowDebugBands(!showDebugBands)}
                             className={`px-2 py-2 text-[8px] font-bold rounded border transition-colors ${showDebugBands ? 'bg-blue-500/20 text-blue-400 border-blue-500/50' : 'bg-black/20 text-gray-500 border-white/5'}`}
-                            title="Visualizes the depth 'slice' assigned to each actor in the scene."
+                            title="Visualizes the estimated foreground/background band assigned to each actor."
                         >
-                            Depth Bands
+                            Hint Bands
                         </button>
 
                         {/* 5. HUD */}
                         <button
                             onClick={() => setShowDebugActorOverlay(!showDebugActorOverlay)}
                             className={`px-2 py-2 text-[8px] font-bold rounded border transition-colors col-span-2 ${showDebugActorOverlay ? 'bg-blue-500/20 text-blue-400 border-blue-500/50' : 'bg-black/20 text-gray-500 border-white/5'}`}
-                            title="Overlays raw spatial metrics (Z-Index, Depth Score) on top of each actor."
+                            title="Overlays raw helper metrics on top of each actor."
                         >
                             Actor HUD
                         </button>
@@ -182,79 +192,83 @@ export const ActorIntelligencePanel = ({
                                     placeholder="Pose, Action, Lighting DNA..."
                                 />
 
-                                {/* Grounding Control */}
-                                <div className="flex items-center justify-between gap-2 px-1">
-                                    <button
-                                        onClick={() => {
-                                            const nextGrounding = !token.groundingEnabled;
-                                            if (nextGrounding && state.floorPlane?.confidence === 'fallback' && !token.manualGroundingOverride) {
-                                                dispatch({ type: 'ADD_LOG', payload: { message: "GROUNDING BLOCKED: Low-confidence floor detection.", type: 'info' } });
-                                                return;
-                                            }
-
-                                            const audit: GroundingAudit | undefined = nextGrounding && state.floorPlane?.confidence === 'fallback' && token.manualGroundingOverride
-                                                ? { overriddenAt: Date.now(), confidenceAtTime: 'fallback' }
-                                                : token.groundingAudit;
-
-                                            dispatch({
-                                                type: 'UPDATE_TOKEN', payload: {
-                                                    id: token.id,
-                                                    groundingEnabled: nextGrounding,
-                                                    depth: nextGrounding && state.floorPlane ? (state.floorPlane.depth / 255) : token.depth,
-                                                    groundingAudit: audit
-                                                }
-                                            });
-                                        }}
-                                        className={`flex-1 flex items-center justify-center gap-1.5 py-1 px-2 rounded text-[9px] font-bold uppercase transition-all ${token.groundingEnabled ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-gray-800/50 text-gray-500 border border-gray-700/50 hover:bg-gray-800'}`}
-                                    >
-                                        <div className={`w-1.5 h-1.5 rounded-full ${token.groundingEnabled ? 'bg-emerald-400 -[0_0_4px_rgba(52,211,153,0.5)]' : 'bg-gray-600'}`} />
-                                        Grounding
-                                    </button>
-
-                                    <div className="flex-1 flex items-center gap-2 bg-black/40 px-2 py-1 rounded border border-white/5">
-                                        <input
-                                            type="checkbox"
-                                            id={`manual-${token.id}`}
-                                            checked={token.manualGroundingOverride || false}
-                                            onChange={(e) => {
-                                                const checked = e.target.checked;
-                                                const auditData = checked && state.floorPlane?.confidence === 'fallback'
-                                                    ? { overriddenAt: Date.now(), confidenceAtTime: 'fallback' as const }
-                                                    : undefined;
-
-                                                dispatch({
-                                                    type: 'UPDATE_TOKEN', payload: {
-                                                        id: token.id,
-                                                        manualGroundingOverride: checked,
-                                                        groundingAudit: auditData
-                                                    }
-                                                });
-                                            }}
-                                            className="w-3 h-3 rounded bg-zinc-800 border-zinc-700 text-yellow-500"
-                                        />
-                                        <label htmlFor={`manual-${token.id}`} className="text-[8px] font-bold text-gray-500 uppercase cursor-pointer select-none">Manual</label>
-                                    </div>
-                                </div>
-
-                                <div className="mt-2 pt-2 border-t border-white/5">
-                                    <div className="flex items-center justify-between mb-2">
-                                        <label className="text-[9px] font-bold text-gray-500 uppercase">Anchor Depth</label>
-                                        {token.spatialDescriptor && (
-                                            <div className="text-[7px] font-mono text-blue-400 uppercase font-black">{token.spatialDescriptor.depthLayer}</div>
-                                        )}
-                                    </div>
-                                    <div className="grid grid-cols-3 gap-1 mb-2">
-                                        {(['foreground', 'midground', 'background'] as const).map(layer => (
+                                {DEPTH_USER_CONTROLS_ENABLED && (
+                                    <>
+                                        {/* Internal grounding helper controls */}
+                                        <div className="flex items-center justify-between gap-2 px-1">
                                             <button
-                                                key={layer}
-                                                onClick={() => updateToken(token.id, { anchorLayer: layer })}
-                                                className={`py-1 rounded text-[9px] font-bold uppercase border transition-all ${token.anchorLayer === layer ? 'bg-blue-600 border-blue-400 text-white -[0_0_8px_rgba(37,99,235,0.3)]' : 'bg-black/40 border-white/5 text-gray-600 hover:text-gray-400 hover:border-white/10'}`}
+                                                onClick={() => {
+                                                    const nextGrounding = !token.groundingEnabled;
+                                                    if (nextGrounding && state.floorPlane?.confidence === 'fallback' && !token.manualGroundingOverride) {
+                                                        dispatch({ type: 'ADD_LOG', payload: { message: "Grounding helper needs a stronger floor estimate.", type: 'info' } });
+                                                        return;
+                                                    }
+
+                                                    const audit: GroundingAudit | undefined = nextGrounding && state.floorPlane?.confidence === 'fallback' && token.manualGroundingOverride
+                                                        ? { overriddenAt: Date.now(), confidenceAtTime: 'fallback' }
+                                                        : token.groundingAudit;
+
+                                                    dispatch({
+                                                        type: 'UPDATE_TOKEN', payload: {
+                                                            id: token.id,
+                                                            groundingEnabled: nextGrounding,
+                                                            depth: nextGrounding && state.floorPlane ? (state.floorPlane.depth / 255) : token.depth,
+                                                            groundingAudit: audit
+                                                        }
+                                                    });
+                                                }}
+                                                className={`flex-1 flex items-center justify-center gap-1.5 py-1 px-2 rounded text-[9px] font-bold uppercase transition-all ${token.groundingEnabled ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-gray-800/50 text-gray-500 border border-gray-700/50 hover:bg-gray-800'}`}
                                             >
-                                                {layer === 'foreground' ? 'Fore' : layer === 'midground' ? 'Mid' : 'Back'}
+                                                <div className={`w-1.5 h-1.5 rounded-full ${token.groundingEnabled ? 'bg-emerald-400 -[0_0_4px_rgba(52,211,153,0.5)]' : 'bg-gray-600'}`} />
+                                                Grounding Hint
                                             </button>
-                                        ))}
-                                    </div>
-                                </div>
+
+                                            <div className="flex-1 flex items-center gap-2 bg-black/40 px-2 py-1 rounded border border-white/5">
+                                                <input
+                                                    type="checkbox"
+                                                    id={`manual-${token.id}`}
+                                                    checked={token.manualGroundingOverride || false}
+                                                    onChange={(e) => {
+                                                        const checked = e.target.checked;
+                                                        const auditData = checked && state.floorPlane?.confidence === 'fallback'
+                                                            ? { overriddenAt: Date.now(), confidenceAtTime: 'fallback' as const }
+                                                            : undefined;
+
+                                                        dispatch({
+                                                            type: 'UPDATE_TOKEN', payload: {
+                                                                id: token.id,
+                                                                manualGroundingOverride: checked,
+                                                                groundingAudit: auditData
+                                                            }
+                                                        });
+                                                    }}
+                                                    className="w-3 h-3 rounded bg-zinc-800 border-zinc-700 text-yellow-500"
+                                                />
+                                                <label htmlFor={`manual-${token.id}`} className="text-[8px] font-bold text-gray-500 uppercase cursor-pointer select-none">Manual</label>
+                                            </div>
+                                        </div>
+
+                                        <div className="mt-2 pt-2 border-t border-white/5">
+                                            <div className="flex items-center justify-between mb-2">
+                                                <label className="text-[9px] font-bold text-gray-500 uppercase">Anchor Hint</label>
+                                                {token.spatialDescriptor && (
+                                                    <div className="text-[7px] font-mono text-blue-400 uppercase font-black">{token.spatialDescriptor.depthLayer}</div>
+                                                )}
+                                            </div>
+                                            <div className="grid grid-cols-3 gap-1 mb-2">
+                                                {(['foreground', 'midground', 'background'] as const).map(layer => (
+                                                    <button
+                                                        key={layer}
+                                                        onClick={() => updateToken(token.id, { anchorLayer: layer })}
+                                                        className={`py-1 rounded text-[9px] font-bold uppercase border transition-all ${token.anchorLayer === layer ? 'bg-blue-600 border-blue-400 text-white -[0_0_8px_rgba(37,99,235,0.3)]' : 'bg-black/40 border-white/5 text-gray-600 hover:text-gray-400 hover:border-white/10'}`}
+                                                    >
+                                                        {layer === 'foreground' ? 'Fore' : layer === 'midground' ? 'Mid' : 'Back'}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </>
+                                )}
                             </div>
                         </div>
                     ))

@@ -290,7 +290,7 @@ ipcMain.handle("depth:generate", async (_event, input) => {
       inputPath = path__namespace.join(tempDir, `input_${Date.now()}.${ext2}`);
       await fs__namespace.writeFile(inputPath, inputBuffer);
       isTemp = true;
-      console.log(`[IPC] Saved Data URL to temp path: ${inputPath}`);
+      if (is.dev) console.log(`[IPC] Saved Data URL to temp path: ${inputPath}`);
     } else {
       inputBuffer = await fs__namespace.readFile(inputPath);
     }
@@ -304,7 +304,7 @@ ipcMain.handle("depth:generate", async (_event, input) => {
         const metaRaw = await fs__namespace.readFile(metaPath, "utf-8");
         const meta = JSON.parse(metaRaw);
         if (meta.sourceHash !== sourceHash) {
-          console.warn(`[IPC] GEOMETRIC BINDING VIOLATION detected. Background changed. Invalidating depth map: ${outputPath}`);
+          if (is.dev) console.warn(`[IPC] Spatial helper binding changed. Invalidating cached depth map: ${outputPath}`);
           await fs__namespace.chmod(outputPath, 438).catch(() => {
           });
           await fs__namespace.chmod(metaPath, 438).catch(() => {
@@ -314,7 +314,7 @@ ipcMain.handle("depth:generate", async (_event, input) => {
           await fs__namespace.unlink(metaPath).catch(() => {
           });
         } else {
-          console.log(`[IPC] Valid depth binding found for source: ${sourceHash}. Returning cached result.`);
+          if (is.dev) console.log(`[IPC] Valid spatial helper binding found for source: ${sourceHash}. Returning cached result.`);
           const outputBuffer = await fs__namespace.readFile(outputPath);
           const dataUrl = `data:image/png;base64,${outputBuffer.toString("base64")}`;
           if (isTemp) await fs__namespace.unlink(inputPath).catch(() => {
@@ -323,13 +323,13 @@ ipcMain.handle("depth:generate", async (_event, input) => {
         }
       }
     } catch (e) {
-      console.error("[IPC] Binding check failed, proceeding to full regeneration.", e);
+      if (is.dev) console.warn("[IPC] Spatial helper binding check failed, proceeding to regeneration.", e);
     }
     return new Promise((resolve, reject) => {
       const scriptPath = is.dev ? path__namespace.join(app.getAppPath(), "scripts", "depth_inference.py") : path__namespace.join(process.resourcesPath, "scripts", "depth_inference.py");
-      console.log(`[IPC] Triggering depth generation for: ${inputPath}`);
+      if (is.dev) console.log(`[IPC] Triggering depth helper generation for: ${inputPath}`);
       const pythonPath = process.env.VIRTUAL_ENV ? path__namespace.join(process.env.VIRTUAL_ENV, "Scripts", "python.exe") : "python";
-      console.log(`[IPC] Using Python interpreter: ${pythonPath}`);
+      if (is.dev) console.log(`[IPC] Using Python interpreter: ${pythonPath}`);
       const pythonProcess = child_process.spawn(pythonPath, [
         scriptPath,
         "--input",
@@ -347,7 +347,7 @@ ipcMain.handle("depth:generate", async (_event, input) => {
       });
       pythonProcess.on("close", async (code) => {
         if (code === 0) {
-          console.log(`[IPC] Depth Generation Success: ${stdoutData}`);
+          if (is.dev) console.log(`[IPC] Depth helper generation success: ${stdoutData}`);
           try {
             const outputBuffer = await fs__namespace.readFile(outputPath);
             const depthHash = crypto__namespace.createHash("sha256").update(outputBuffer).digest("hex");
@@ -359,7 +359,7 @@ ipcMain.handle("depth:generate", async (_event, input) => {
             await fs__namespace.writeFile(metaPath, JSON.stringify(metadata, null, 2));
             await fs__namespace.chmod(outputPath, 292);
             await fs__namespace.chmod(metaPath, 292);
-            console.log(`[IPC] Depth Map & Metadata marked as READ-ONLY: ${outputPath}`);
+            if (is.dev) console.log(`[IPC] Depth helper map and metadata marked as read-only: ${outputPath}`);
             const dataUrl = `data:image/png;base64,${outputBuffer.toString("base64")}`;
             if (isTemp) {
               await fs__namespace.unlink(inputPath).catch(() => {
@@ -378,8 +378,8 @@ ipcMain.handle("depth:generate", async (_event, input) => {
             reject(new Error(`Failed to process generated depth map: ${readErr}`));
           }
         } else {
-          console.error(`[IPC] Depth Generation Failed Code ${code}:`, errorData);
-          reject(new Error(`Depth generation failed (Code ${code}): ${errorData}`));
+          console.error(`[IPC] Depth helper generation failed code ${code}:`, errorData);
+          reject(new Error(`Depth helper generation failed (Code ${code}): ${errorData}`));
         }
       });
       pythonProcess.on("error", (err) => {
@@ -388,7 +388,7 @@ ipcMain.handle("depth:generate", async (_event, input) => {
       });
     });
   } catch (err) {
-    console.error("[IPC] Depth Generation Error:", err);
+    console.error("[IPC] Depth helper generation error:", err);
     throw err;
   }
 });
