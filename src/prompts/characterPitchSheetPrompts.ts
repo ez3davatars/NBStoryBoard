@@ -73,7 +73,6 @@ export type PitchSheetCallout = {
         | "footwear"
         | "accessory"
         | "prop"
-        | "body"
         | "performance"
         | "construction";
     target: string;
@@ -403,6 +402,30 @@ const calloutText = (input: CharacterPitchSheetInput): string => {
     ].map(normalize).join(" ").toLowerCase();
 };
 
+const titleCaseCalloutLabel = (value: string): string => {
+    return normalize(value)
+        .replace(/\b[a-z]/g, character => character.toUpperCase())
+        .replace(/\s+\/\s+/g, " / ");
+};
+
+const splitCalloutItems = (value: string): string[] => {
+    return value
+        .split(/[,;\n]+|\s+\band\s+/i)
+        .map(normalize)
+        .filter(Boolean);
+};
+
+const isVagueCalloutLabel = (value: string): boolean => {
+    const label = normalize(value).toLowerCase();
+
+    return (
+        /^(construction|material|design|object|accessory|garment)\s+detail$/.test(label) ||
+        /^(material\s+read|object\s+read|design\s+read)$/.test(label) ||
+        /^(primary\s+garment|primary\s+material\s+swatch)$/.test(label) ||
+        /^detail$/.test(label)
+    );
+};
+
 const makeCallout = (
     label: string,
     category: PitchSheetCallout["category"],
@@ -423,6 +446,7 @@ const sanitizeCallout = (callout: PitchSheetCallout, input: CharacterPitchSheetI
     const visibleOnlyIf = callout.visibleOnlyIf ? sanitizeVisibleBoardText(callout.visibleOnlyIf, input) : undefined;
 
     if (!label || !target) return null;
+    if (isVagueCalloutLabel(label)) return null;
 
     return {
         label,
@@ -492,8 +516,8 @@ const buildGarmentCalloutCandidates = (input: CharacterPitchSheetInput): PitchSh
         );
     } else if (context === "creature/animal") {
         callouts.push(
-            makeCallout("Fur Pattern", "body", "visible fur pattern on body or head", { material: "fur", placementHint: "point to fur, not costume fabric", visibleOnlyIf: "fur is visibly present" }),
-            makeCallout("Horn / Scale Texture", "body", "visible horn, scale, or hide texture", { material: "horn, scale, or hide", placementHint: "point only to creature anatomy", visibleOnlyIf: "horns, scales, or textured hide are visible" })
+            makeCallout("Fur Pattern", "material", "visible fur pattern on body or head", { material: "fur", placementHint: "point to fur, not costume fabric", visibleOnlyIf: "fur is visibly present" }),
+            makeCallout("Horn / Scale Texture", "material", "visible horn, scale, or hide texture", { material: "horn, scale, or hide", placementHint: "point only to creature anatomy", visibleOnlyIf: "horns, scales, or textured hide are visible" })
         );
     } else if (context === "sci-fi/cyberpunk") {
         callouts.push(
@@ -512,7 +536,7 @@ const buildGarmentCalloutCandidates = (input: CharacterPitchSheetInput): PitchSh
         );
     } else if (context === "stylized/animated") {
         callouts.push(
-            makeCallout("Signature Silhouette", "body", "overall readable character silhouette", { placementHint: "point to the character outline or silhouette study" }),
+            makeCallout("Pose Silhouette", "performance", "visible pose silhouette, posture, or gesture study", { placementHint: "point to posture or body language, not costume material" }),
             makeCallout("Character Color Blocking", "material", "visible costume color zones", { material: "costume color/material areas", placementHint: "point to a clear color block or material swatch" })
         );
     } else if (context === "historical/period") {
@@ -522,12 +546,17 @@ const buildGarmentCalloutCandidates = (input: CharacterPitchSheetInput): PitchSh
         );
     } else {
         callouts.push(
-            makeCallout("Primary Garment", "garment", "visible main garment or outer layer", { placementHint: "point to the named garment, not a background area" }),
+            makeCallout("Main Costume Layer", "garment", "visible main garment or outer layer", { placementHint: "point to the main costume layer, not a background area", visibleOnlyIf: "the main garment is clearly visible" }),
             makeCallout("Layering System", "construction", "visible overlap between garment layers", { placementHint: "point to layered hems, collars, straps, or fasteners" })
         );
     }
 
-    if (hasAnyTerm(text, ["cloak", "cape", "mantle"])) {
+    if (hasAnyTerm(text, ["field jacket"])) {
+        callouts.unshift(makeCallout("Field Jacket", "garment", "visible field jacket body, collar, sleeve, or pocket flap", { material: "canvas, cotton, or weathered textile if visible", placementHint: "point to the field jacket body, collar, pocket flap, or sleeve" }));
+    } else if (!["modern/business", "sci-fi/cyberpunk"].includes(context) && hasAnyTerm(text, ["jacket", "coat", "parka"])) {
+        callouts.unshift(makeCallout("Outer Jacket Layer", "garment", "visible jacket, coat, or parka", { material: "outerwear textile", placementHint: "point to the jacket or coat body" }));
+    }
+    if (context !== "creature/animal" && hasAnyTerm(text, ["cloak", "cape", "mantle"])) {
         callouts.unshift(makeCallout("Cloak Layer", "garment", "visible cloak, cape, or mantle", { material: "outer textile", placementHint: "point to cloak fabric or hem" }));
     }
     if (hasAnyTerm(text, ["tunic"])) {
@@ -536,14 +565,14 @@ const buildGarmentCalloutCandidates = (input: CharacterPitchSheetInput): PitchSh
         callouts.unshift(makeCallout("Outer Garment Layer", "garment", "visible robe, cloak, or outer garment", { material: "fabric", placementHint: "point to the outer garment body" }));
     } else if (hasAnyTerm(text, ["dress", "gown"])) {
         callouts.unshift(makeCallout("Dress Silhouette", "garment", "visible dress or gown", { material: "fabric", placementHint: "point to the dress/gown body" }));
-    } else if (hasAnyTerm(text, ["shirt"])) {
-        callouts.unshift(makeCallout("Shirt Construction", "garment", "visible shirt body, collar, or sleeve", { material: "fabric", placementHint: "point to the shirt body" }));
+    } else if (context !== "modern/business" && hasAnyTerm(text, ["shirt"])) {
+        callouts.unshift(makeCallout("Shirt Collar", "garment", "visible shirt collar, placket, or sleeve", { material: "shirt fabric", placementHint: "point to the shirt collar, placket, or sleeve" }));
     }
     if (hasAnyTerm(text, ["armor", "armour", "breastplate", "plate", "pauldron"])) {
         callouts.unshift(makeCallout("Armor Panel", "garment", "visible armor plate or protective panel", { material: "metal, leather, or composite armor", placementHint: "point to the armor panel, not fabric underneath" }));
     }
     if (hasAnyTerm(text, ["emblem", "insignia", "crest", "logo"])) {
-        callouts.push(makeCallout("Emblem Detail", "accessory", "visible emblem, insignia, crest, or badge", { placementHint: "point to the emblem itself", visibleOnlyIf: "an emblem or insignia is visible" }));
+        callouts.push(makeCallout("Emblem / Insignia", "accessory", "visible emblem, insignia, crest, or badge", { placementHint: "point to the emblem itself", visibleOnlyIf: "an emblem or insignia is visible" }));
     }
 
     return callouts;
@@ -582,8 +611,8 @@ const buildMaterialCalloutCandidates = (input: CharacterPitchSheetInput): PitchS
         callouts.push(makeCallout("Hard-Surface Finish", "material", "visible robotic panel, joint, chassis, or finish swatch", { material: "metal/composite", placementHint: "point to hard-surface material" }));
     }
 
-    if (callouts.length === 0) {
-        callouts.push(makeCallout("Primary Material Swatch", "material", "clearest visible costume material or material swatch", { placementHint: "point only to a visible material that can be identified confidently" }));
+    if (callouts.length === 0 && hasAnyTerm(text, ["jacket", "coat", "cloak", "tunic", "robe", "shirt", "dress", "uniform", "pants", "trousers", "skirt", "garment", "costume"])) {
+        callouts.push(makeCallout("Main Costume Textile", "material", "clearest visible textile garment area or material swatch", { material: "visible textile", placementHint: "point only to visible textile or a textile swatch", visibleOnlyIf: "a textile garment area is clearly visible" }));
     }
 
     return callouts;
@@ -619,30 +648,68 @@ const buildAccessoryOrPropCalloutCandidates = (input: CharacterPitchSheetInput):
     const text = calloutText(input);
     const props = normalize(input.propsSignatureItems);
     const callouts: PitchSheetCallout[] = [];
-    const firstProp = props.split(/[,;\n]+/).map(part => sanitizeVisibleBoardText(part, input)).find(Boolean);
+    const propItems = splitCalloutItems(props)
+        .map(part => sanitizeVisibleBoardText(part, input))
+        .filter(Boolean);
 
-    if (firstProp) {
-        callouts.push(makeCallout(`${firstProp} Detail`, "prop", `visible ${firstProp} or dedicated prop inset`, { placementHint: "point only to the named prop or prop inset" }));
+    for (const propItem of propItems) {
+        const propCallout = buildPropCallout(propItem);
+        if (propCallout) callouts.push(propCallout);
     }
 
     if (hasAnyTerm(text, ["watch", "bracelet", "ring", "necklace", "earring", "glasses", "bag", "belt", "sash", "harness", "insignia", "badge", "jewelry", "jewellery"])) {
         if (hasAnyTerm(text, ["watch"])) {
-            callouts.push(makeCallout("Watch / Accessory Detail", "accessory", "visible watch or wrist accessory", { material: "metal, leather, or modern accessory material", placementHint: "point to the watch/accessory, not sleeve fabric" }));
+            callouts.push(makeCallout("Watch Case / Strap", "accessory", "visible watch case, watch strap, or wrist accessory", { material: "metal, leather, or modern accessory material", placementHint: "point to the watch or strap itself, not sleeve fabric" }));
         } else if (hasAnyTerm(text, ["belt", "sash", "harness", "strap"])) {
-            callouts.push(makeCallout("Belt / Strapwork", "accessory", "visible belt, sash, harness, or strapwork", { material: "leather, textile, or webbing", placementHint: "point to the belt/strap itself" }));
+            callouts.push(makeCallout(hasAnyTerm(text, ["harness"]) ? "Harness Straps" : "Belt Hardware", "accessory", "visible belt, sash, harness, buckle, or strapwork", { material: "leather, textile, webbing, or metal hardware", placementHint: "point to the belt, strap, buckle, or harness itself" }));
         } else {
-            callouts.push(makeCallout("Accessory Detail", "accessory", "visible jewelry, bag, eyewear, insignia, or accessory", { placementHint: "point only to the accessory" }));
+            callouts.push(makeCallout("Visible Accessory", "accessory", "visible jewelry, bag, eyewear, insignia, clasp, or pin", { placementHint: "point only to the accessory", visibleOnlyIf: "the accessory is clearly visible" }));
         }
     }
 
     if (describeCalloutContext(input) === "fantasy/adventure" && hasAnyTerm(text, ["sword", "dagger", "staff", "shield", "bow", "weapon"])) {
-        callouts.push(makeCallout("Weapon Grip Detail", "prop", "visible weapon grip, handle, shield grip, or prop inset", { material: "wood, leather, metal, or prop material", placementHint: "point to the grip or prop detail" }));
+        callouts.push(makeCallout("Weapon Grip", "prop", "visible weapon grip, handle, shield grip, or prop inset", { material: "wood, leather, metal, or prop material", placementHint: "point to the weapon grip, handle, shield grip, or prop inset" }));
     }
     if (describeCalloutContext(input) === "robot/mech" && hasAnyTerm(text, ["core", "chest", "power"])) {
-        callouts.push(makeCallout("Power Core / Chest Detail", "construction", "visible chest module, core, or central panel", { material: "metal/composite/glass", placementHint: "point only to the chest/core detail" }));
+        callouts.push(makeCallout("Power Core Module", "construction", "visible chest module, power core, or central panel", { material: "metal/composite/glass", placementHint: "point only to the chest/core module" }));
     }
 
     return callouts;
+};
+
+const buildPropCallout = (prop: string): PitchSheetCallout | null => {
+    const value = normalize(prop);
+    const lower = value.toLowerCase();
+    if (!value || /\b(no prop|none|n\/a)\b/.test(lower)) return null;
+
+    if (/\b(field\s+journal|journal)\b/.test(lower)) {
+        return makeCallout("Field Journal", "prop", "visible field journal, journal cover, pages, or dedicated prop inset", {
+            material: "paper, cloth, or leather cover if visible",
+            placementHint: "point only to the field journal or prop inset; never to face, body, clothing, or empty space",
+            visibleOnlyIf: "the journal is clearly visible"
+        });
+    }
+
+    if (/\btablet\b/.test(lower)) {
+        return makeCallout("Tablet Prop", "prop", "visible tablet, screen edge, carried tablet, or dedicated prop inset", {
+            material: "glass, metal, or polymer if visible",
+            placementHint: "point only to the tablet or tablet inset",
+            visibleOnlyIf: "the tablet is clearly visible"
+        });
+    }
+
+    if (/\bprojector\b/.test(lower)) {
+        return makeCallout(titleCaseCalloutLabel(value), "prop", `visible ${value}, projector housing, wrist mount, or dedicated prop inset`, {
+            material: "device material if visible",
+            placementHint: `point only to the ${value}, projector housing, wrist mount, or prop inset`,
+            visibleOnlyIf: `the ${value} is clearly visible`
+        });
+    }
+
+    return makeCallout(titleCaseCalloutLabel(value), "prop", `visible ${value} or dedicated prop inset`, {
+        placementHint: `point only to the ${value} or prop inset; never to face, body, clothing, or empty space`,
+        visibleOnlyIf: `the ${value} is clearly visible`
+    });
 };
 
 const buildPerformanceCalloutCandidate = (input: CharacterPitchSheetInput): PitchSheetCallout => {
@@ -660,14 +727,29 @@ const buildConstructionCalloutCandidate = (input: CharacterPitchSheetInput): Pit
     if (hasAnyTerm(text, ["joint", "robot", "mech", "android", "panel"])) {
         return makeCallout("Joint Assembly", "construction", "visible joint, hinge, panel seam, or mechanical assembly", { material: "metal/composite", placementHint: "point to the actual joint or panel seam" });
     }
+    if (hasAnyTerm(text, ["pocket", "flap"])) {
+        return makeCallout("Pocket Flap", "construction", "visible pocket flap, pocket seam, or closure flap", { placementHint: "point to the actual pocket flap or pocket seam" });
+    }
+    if (hasAnyTerm(text, ["sleeve", "cuff"])) {
+        return makeCallout("Sleeve Cuff", "construction", "visible sleeve cuff, cuff seam, or cuff closure", { placementHint: "point to the sleeve cuff itself" });
+    }
     if (hasAnyTerm(text, ["clasp", "buckle", "closure", "fastener", "button", "zipper", "lacing"])) {
-        return makeCallout("Closure Construction", "construction", "visible clasp, buckle, closure, button, zipper, lacing, or fastener", { placementHint: "point to the fastener itself" });
+        return makeCallout(hasAnyTerm(text, ["belt", "buckle"]) ? "Belt Hardware" : "Closure Hardware", "construction", "visible clasp, buckle, closure, button, zipper, lacing, or fastener", { placementHint: "point to the fastener itself", visibleOnlyIf: "the named fastener or closure is visible" });
     }
     if (hasAnyTerm(text, ["stitch", "seam", "tailored", "collar"])) {
-        return makeCallout("Seam / Stitching Detail", "construction", "visible seam, stitching, collar edge, or tailored construction", { placementHint: "point to seam or stitching detail" });
+        if (hasAnyTerm(text, ["jacket", "coat"])) {
+            return makeCallout("Jacket Seam Detail", "construction", "visible jacket seam, stitching, lapel edge, or tailored construction", { placementHint: "point to the jacket seam or stitching" });
+        }
+        if (hasAnyTerm(text, ["shirt", "collar"])) {
+            return makeCallout("Shirt Collar", "construction", "visible shirt collar, collar edge, or collar stand", { placementHint: "point to the shirt collar or collar stand" });
+        }
+        return makeCallout("Seam / Stitching", "construction", "visible seam, stitching, collar edge, or tailored construction", { placementHint: "point to seam or stitching" });
     }
 
-    return makeCallout("Construction Detail", "construction", "visible seam, fastener, strap, panel, joint, or garment structure", { placementHint: "point to a clear construction detail" });
+    return makeCallout("Layering System", "construction", "visible overlap between garment layers, hems, collars, straps, panels, or fasteners", {
+        placementHint: "point to a clear overlap between actual garment layers",
+        visibleOnlyIf: "a visible garment overlap, hem, collar, strap, panel, or fastener is present"
+    });
 };
 
 export function buildPitchSheetCallouts(input: CharacterPitchSheetInput): PitchSheetCallout[] {
@@ -679,7 +761,7 @@ export function buildPitchSheetCallouts(input: CharacterPitchSheetInput): PitchS
     const performance = buildPerformanceCalloutCandidate(input);
 
     const selected = [
-        ...garmentCandidates.slice(0, 3),
+        ...garmentCandidates.slice(0, 2),
         ...materialCandidates.slice(0, 2),
         footwear,
         ...(accessoryPropCandidates.length > 0 ? accessoryPropCandidates.slice(0, 1) : [construction]),
@@ -694,14 +776,14 @@ export function buildPitchSheetCallouts(input: CharacterPitchSheetInput): PitchS
 };
 
 const buildVisibleVocabularyRule = (input: CharacterPitchSheetInput, callouts: PitchSheetCallout[]): string => {
-    return `WORLD / ERA VISIBLE VOCABULARY:
-- Visible costume, material, prop, environment, and callout labels must match the selected world or era: ${valueOr(input.worldEra, "the character's world")}.
+    return `WORLD / ERA CALLOUT VOCABULARY RULE:
+- Callout labels must match the character's world, era, wardrobe, and props: ${valueOr(input.worldEra, "the character's world")}.
+- Modern characters should use modern garment/accessory language.
+- Historical characters should use period-appropriate material/garment language.
+- Sci-fi characters may use tech/armor/interface language only when the world supports it.
+- Fantasy characters may use fantasy-appropriate construction/material language.
+- Creature, robot, and mascot characters should use anatomy/material/construction labels appropriate to that type.
 - Do not import futuristic, medieval, modern, tactical, cybernetic, fantasy, religious, or technical vocabulary unless it fits the selected world/era or user-provided wardrobe/props.
-- If the user selects a historical world, keep callouts historically inspired.
-- If the user selects sci-fi, allow technology, armor, interface, and synthetic-material language only when those objects are part of the costume/props.
-- If the user selects modern, use modern garment, tailoring, footwear, and accessory language.
-- If the user selects fantasy, use fantasy-appropriate but still material-accurate garment, armor, prop, and construction language.
-- If the user selects creature, mascot, or robot, use anatomy, material, and construction labels appropriate to that character type.
 - Controlled callout vocabulary for this sheet: ${callouts.map(callout => callout.label).join("; ")}.`;
 };
 
@@ -1108,30 +1190,47 @@ VISIBLE BOARD LANGUAGE RULE:
 
 ${visibleVocabularyRule}
 
-CALLOUT ACCURACY RULE:
-- Use only callouts appropriate to this character's world, wardrobe, props, accessories, footwear, board presentation style, and render style.
-- Every callout arrow must point to the exact visible object or material named by the label.
-- Do not point callouts to empty space.
-- Do not label one material as another material.
-- Do not label fabric as leather, leather as metal, metal as fabric, skin as costume, or background as wardrobe.
+CALLOUT TARGET ACCURACY RULE:
+- Every callout arrow must point directly to the exact visible object, garment area, material, prop, or pose feature named in the label.
+- Do not point a callout to a nearby unrelated object.
+- Do not point a prop label to a face, body part, or garment.
+- Do not point a garment label to a prop.
+- Do not point a material label to empty background.
+- If the target object is not clearly visible, omit that callout instead of guessing.
 - Do not duplicate the same callout unless it points to a separate dedicated material swatch.
-- Do not invent random labels that are not supported by the visible costume/prop design.
-- If a material or object is not clearly visible, omit that callout instead of guessing.
+- Do not invent labels from nearby visual guesses, raw prompt text, file names, or reference labels.
 
 CALLOUT CATEGORY PLACEMENT RULE:
-- Garment callouts must point to the named garment.
-- Material callouts must point to the matching visible material or material swatch.
-- Footwear callouts must point only to footwear or a footwear inset.
-- Accessory callouts must point to jewelry, belts, bags, glasses, watches, insignia, or other visible accessories.
-- Prop callouts must point only to props or prop insets.
-- Performance callouts must point to expression, stance, gesture, or pose, not costume materials.
-- Construction callouts must point to seams, fasteners, stitching, closures, panels, joints, straps, or garment structure.
+- Garment labels must point to the named garment.
+- Material labels must point to the matching visible material or a material swatch.
+- Footwear labels must point only to footwear or a footwear inset.
+- Prop labels must point only to the actual prop or prop inset.
+- Accessory labels must point to visible accessories such as belt, pouch, watch, jewelry, glasses, bag, insignia, clasp, or pin.
+- Construction labels must point to seams, stitching, closures, pocket flaps, fasteners, buckles, straps, panels, joints, or garment structure.
+- Performance labels must point to pose, expression, gesture, posture, or body language--not costume materials.
 - Turnaround labels and material callouts must not be confused with each other.
+
+PROP CALLOUT RULE:
+- If a prop is included, its callout must point to the prop itself, not the character's face, body, clothing, or nearby empty space.
+- Match prop labels to the named visible prop or a dedicated prop inset.
+- Do not convert a prop into a construction or material label unless the visible target is specifically that prop's construction or material detail.
+- Do not label a face, profile, head, body, garment, or background area as a prop or prop construction detail.
+
+VISIBLE-ONLY CALLOUT RULE:
+- Only label visible objects or visible material features.
+- Do not label hidden construction, implied hardware, or unseen details.
+- If a garment has no visible zipper, do not label zipper construction.
+- If a prop is not clearly visible, do not label it.
+- If a material is ambiguous, use a broader label or omit it.
+
+CALLOUT OMISSION RULE:
+- If the model cannot place a callout accurately, it should omit that callout.
+- It is better to have 4 correct callouts than 8 inaccurate ones.
 
 CALLOUT COUNT RULE:
 - Use 5 to 7 total visible callouts by default.
 - Preferred distribution: 2 to 3 wardrobe/garment callouts, 1 to 2 material callouts, 1 footwear callout if footwear is visible, 1 accessory/prop callout if provided, and 1 performance/gesture callout if useful.
-- Use a restrained number of accurate callouts. Fewer accurate callouts are better than many incorrect callouts.
+- Use fewer accurate callouts rather than many uncertain callouts.
 
 STYLE-CALLOUT RULE:
 - The selected render style may affect line quality, shading, material rendering, and presentation finish, but it must not create inaccurate callout labels or mismatch callouts to the wrong object.
@@ -1153,9 +1252,11 @@ ${calloutPlan}
 
 VISIBLE CALLOUTS:
 - Use the controlled callout plan above as the preferred visible callout set.
+- Do not invent unlimited additional labels beyond the controlled plan.
 - Do not invent visible labels from raw prompt text, file/reference names, handoff text, image attachment names, internal identity terms, or render-style enum names.
 - Omit any planned callout whose target is not clearly visible in the generated board.
 - Keep visible labels specific and clean: no duplicate title/codename labels, no generic material-read labels, no standalone "Detail" labels, no malformed or duplicated label text.
+- If the object or material cannot be named confidently, omit the callout instead of using a vague replacement label.
 
 NEGATIVE VISIBLE TEXT CONSTRAINTS:
 - Do not write "NanoCast," "biometric scanner," "biometric closures," "biometric etching," "biometric clasp," "integrated circuitry," "circuitry," "scanner," "generated NanoCast character image," "source image," "reference image," "identity lock," "Image 1," "Image 2," "Image 3," or any internal technical/debug label anywhere on the visible board.

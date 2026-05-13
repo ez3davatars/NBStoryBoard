@@ -49,10 +49,13 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
 
     expect(prompt).toContain('VISIBLE BOARD LANGUAGE RULE');
     expect(prompt).toContain('NEGATIVE VISIBLE TEXT CONSTRAINTS');
-    expect(prompt).toContain('CALLOUT ACCURACY RULE');
+    expect(prompt).toContain('CALLOUT TARGET ACCURACY RULE');
     expect(prompt).toContain('CALLOUT CATEGORY PLACEMENT RULE');
+    expect(prompt).toContain('PROP CALLOUT RULE');
+    expect(prompt).toContain('VISIBLE-ONLY CALLOUT RULE');
+    expect(prompt).toContain('CALLOUT OMISSION RULE');
     expect(prompt).toContain('CALLOUT COUNT RULE');
-    expect(prompt).toContain('WORLD / ERA VISIBLE VOCABULARY');
+    expect(prompt).toContain('WORLD / ERA CALLOUT VOCABULARY RULE');
     expect(prompt).toContain('STYLE-CALLOUT RULE');
     expect(prompt).toContain('CONTROLLED CALLOUT PLAN');
     expect(prompt).toContain('Tunic Construction');
@@ -307,7 +310,7 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
           propsSignatureItems: 'tablet',
           characterRenderStyle: 'cinematic_photoreal',
         },
-        expectedLabels: ['Tailored Jacket', 'Shirt Collar Construction', 'Leather Grain', 'Polished Shoe Construction', 'tablet Detail'],
+        expectedLabels: ['Tailored Jacket', 'Shirt Collar Construction', 'Leather Grain', 'Polished Shoe Construction', 'Tablet Prop'],
         forbiddenLabels: /Sandal|Cloak|Tech Jacket|Power Core/i,
       },
       {
@@ -318,7 +321,7 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
           propsSignatureItems: 'wrist projector',
           characterRenderStyle: 'concept_art',
         },
-        expectedLabels: ['Reinforced Tech Jacket', 'Utility Harness', 'Synthetic Material Finish', 'Tactical Boot Construction', 'wrist projector Detail'],
+        expectedLabels: ['Reinforced Tech Jacket', 'Utility Harness', 'Synthetic Material Finish', 'Tactical Boot Construction', 'Wrist Projector'],
         forbiddenLabels: /Sandal|Tailored Jacket|Fur Pattern/i,
       },
       {
@@ -358,6 +361,7 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
       expect(callouts.length, testCase.name).toBeGreaterThanOrEqual(5);
       expect(callouts.length, testCase.name).toBeLessThanOrEqual(7);
       expect(labels.join(' '), testCase.name).not.toMatch(/NanoCast|biometric|source image|reference image|Image 1|Image 2|Image 3|prompt engine|generated image|debug/i);
+      expect(labels.join(' '), testCase.name).not.toMatch(/\b(Construction Detail|Material Read|Design Detail|Object Detail|Accessory Detail|Primary Garment|Primary Material Swatch)\b/i);
 
       if (testCase.forbiddenLabels) {
         expect(labels.join(' '), testCase.name).not.toMatch(testCase.forbiddenLabels);
@@ -369,7 +373,7 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
     const callouts = buildPitchSheetCallouts(buildInput({
       worldEra: 'modern adventure film',
       wardrobeDirection: 'Canvas field jacket, leather belt, metal buckle, hiking boots.',
-      propsSignatureItems: 'field journal, compass',
+      propsSignatureItems: 'field journal, folded map',
       performanceDirection: 'watchful stance with guarded hand gesture',
     }));
 
@@ -379,9 +383,35 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
     const performance = callouts.find(callout => callout.category === 'performance');
 
     expect(footwear?.target).toMatch(/boot|footwear/i);
+    expect(prop?.label).toBe('Field Journal');
     expect(prop?.target).toMatch(/field journal|prop inset/i);
+    expect(prop?.placementHint).toMatch(/never to face|body|clothing|empty space/i);
     expect(leather?.target).toMatch(/leather/i);
     expect(performance?.target).toMatch(/expression|stance|gesture|pose/i);
+  });
+
+  it('keeps controlled callout plans specific and omits vague fallback labels', () => {
+    const callouts = buildPitchSheetCallouts(buildInput({
+      worldEra: 'modern adventure film',
+      wardrobeDirection: 'Canvas field jacket with visible pocket flaps, layered shirt, rugged boots, leather map case.',
+      propsSignatureItems: 'map case',
+      materialCostumeNotes: 'Canvas weave, aged leather pouch, folded map case.',
+    }));
+    const prompt = buildCharacterPitchSheetPrompt(buildInput({
+      worldEra: 'modern adventure film',
+      wardrobeDirection: 'Canvas field jacket with visible pocket flaps, layered shirt, rugged boots, leather map case.',
+      propsSignatureItems: 'map case',
+      materialCostumeNotes: 'Canvas weave, aged leather pouch, folded map case.',
+    }));
+    const labels = callouts.map(callout => callout.label);
+
+    expect(labels).toContain('Field Jacket');
+    expect(labels).toContain('Map Case');
+    expect(labels.join(' ')).not.toMatch(/\b(Construction Detail|Material Read|Design Detail|Object Detail|Accessory Detail|Primary Garment|Primary Material Swatch)\b/i);
+    expect(prompt).toContain('Every callout arrow must point directly to the exact visible object');
+    expect(prompt).toContain('Do not point a prop label to a face, body part, or garment.');
+    expect(prompt).toContain('Do not label a face, profile, head, body, garment, or background area as a prop or prop construction detail.');
+    expect(prompt).toContain('It is better to have 4 correct callouts than 8 inaccurate ones.');
   });
 
   it('prevents uploaded source-photo backgrounds from appearing in head-study panels', () => {
