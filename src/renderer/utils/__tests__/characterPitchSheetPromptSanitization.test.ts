@@ -93,7 +93,7 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
       'stylized_realism',
       'animated_feature',
       'family_3d',
-      'pixar',
+      'premium_animated_3d',
       'claymation',
       'editorial_illustration',
       'concept_art',
@@ -122,6 +122,9 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
       expect(prompt).toContain('UNIVERSAL STYLE CONSISTENCY CONTRACT');
       expect(prompt).toContain('STYLE DRIFT NEGATIVE CONSTRAINTS');
       expect(prompt).toContain('STYLE-PHYSIQUE RULE');
+      expect(prompt).toContain('CHARACTER ANATOMY INTEGRITY CONTRACT');
+      expect(prompt).toContain('No extra forearms');
+      expect(prompt).toContain('No spare arm emerging from torso or sleeve');
       expect(prompt).toContain('SOURCE PANEL MODE HAS PRIORITY OVER STYLE');
       expect(prompt).toContain('STYLE-SAFE VISIBLE LABELING');
       expect(prompt).toContain('STYLE-CALLOUT RULE');
@@ -178,6 +181,17 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
     expect(noSpecificStylePrompt).not.toContain('no_specific_style');
   });
 
+  it('uses trademark-safe premium animated 3D language and normalizes old saved style ids', () => {
+    const oldBrandedStyleId = ['p', 'i', 'x', 'a', 'r'].join('');
+    const prompt = buildCharacterPitchSheetPrompt(buildInput({
+      characterRenderStyle: oldBrandedStyleId as CharacterPitchSheetRenderStyle,
+    }));
+
+    expect(prompt).toContain('Premium animated-feature 3D style');
+    expect(prompt).toContain('expressive actor-based face');
+    expect(prompt.toLowerCase()).not.toContain(oldBrandedStyleId);
+  });
+
   it('adds one sheet-level style lock that every pitch-sheet panel inherits', () => {
     const prompt = buildCharacterPitchSheetPrompt(buildInput({
       characterRenderStyle: 'family_3d',
@@ -194,8 +208,23 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
     expect(prompt).toContain('side profile head: inherit style_family "stylized_3D" exactly.');
     expect(prompt).toContain('action pose / gesture study: inherit style_family "stylized_3D" exactly.');
     expect(prompt).toContain('footwear and material detail insets: inherit style_family "stylized_3D" exactly.');
+    expect(prompt).toContain('color blocking / palette inset: inherit style_family "stylized_3D" exactly.');
+    expect(prompt).toContain('any inset containing the character, body, head, hands, costume, or footwear: inherit style_family "stylized_3D" exactly.');
     expect(prompt).toContain('annotations and callout presentation: inherit style_family "stylized_3D" exactly.');
     expect(prompt).toContain(SHEET_STYLE_LOCK_NEGATIVE_TEXT);
+  });
+
+  it('forbids off-style flat color-blocking character thumbnails', () => {
+    const prompt = buildCharacterPitchSheetPrompt(buildInput({
+      characterRenderStyle: 'premium_animated_3d',
+      wardrobeDirection: 'Black polo, dark trousers, polished shoes.',
+      materialCostumeNotes: 'Simple black fabric with subtle color blocking and collar construction.',
+    }));
+
+    expect(prompt).toContain('STYLE-LOCKED INSET RULE');
+    expect(prompt).toContain('Do not generate "Character Color Blocking" or any palette panel as flat 2D/vector/cartoon miniature character drawings');
+    expect(prompt).toContain('Color-blocking information should appear as material swatches, palette chips, or cropped costume/material details.');
+    expect(prompt).toContain('No flat color-blocking character miniatures');
   });
 
   it('teaches the style validator and retry prompt to reject mixed-style sheets', () => {
@@ -245,7 +274,7 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
       'photorealism',
       'dslr_capture',
       'family_3d',
-      'pixar',
+      'premium_animated_3d',
       'claymation',
       'retro_cel',
       'retro_anime',

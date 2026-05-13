@@ -25,6 +25,12 @@ import { RecentGenerationsCacheService } from '../services/RecentGenerationsCach
 import RecentGenerationsStrip from './recent/RecentGenerationsStrip';
 import { createUniqueDownloadFilename, createUniqueNumericLabel } from '../utils/downloadFilenames';
 import {
+    buildTryOnIdentityAnchorReferenceLabel,
+    buildTryOnLrFullBodyAxisLockBlock,
+    buildWardrobeTryOnSourceLockBlock,
+    type TryOnIdentityAnchorSource
+} from '../utils/wardrobeTryOnSourceLocks';
+import {
     buildPoseCoherenceNegativeTokens,
     buildTurnaroundPoseCoherenceContract,
     buildTurnaroundViewDefinitionContract,
@@ -112,7 +118,6 @@ type BodyNoteInterpretation = {
 type TryOnGarmentFit = WardrobeState['tryOnGarmentFit'];
 type TryOnFabricBehavior = WardrobeState['tryOnFabricBehavior'];
 type TryOnOutputFraming = WardrobeState['tryOnOutputFraming'];
-type TryOnIdentityAnchorSource = 'upload' | 'selected-subject';
 
 const LAUNCH_OUTPUT_FRAMING: TryOnOutputFraming = 'full_body';
 
@@ -1917,11 +1922,11 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
             const identityAnchorImageRole = identityAnchorImageIndex ? imageRoleName(identityAnchorImageIndex) : null;
             const costumeRef = {
                 url: selectedCostume.url,
-                label: `${costumeImageRole} - Costume Reference: wardrobe source only, not identity source and not visible scene content.`
+                label: `${costumeImageRole} - Exact Costume Reference / Wardrobe Identity Lock: wardrobe source only, not identity source and not visible scene content. Copy the visible costume design; same-category redesigns are forbidden.`
             };
             const identityAnchorRef = tryOnCharacterSheet && identityAnchorImageRole ? {
                 url: tryOnCharacterSheet,
-                label: `${identityAnchorImageRole} - Character Sheet Identity Anchor: face/head identity reference only, not output format, layout, body source, or wardrobe source.`
+                label: buildTryOnIdentityAnchorReferenceLabel(identityAnchorImageRole, tryOnCharacterSheetSource)
             } : null;
 
             const isDesignRef = isDesignReferenceSelected(selectedCostume);
@@ -2117,11 +2122,12 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  TRUE SIDE PROFILE BODY CONTRACT (NON-NEGOTIABLE)
  - This is a technical orthographic costume turnaround using the selected output framing, not a portrait pose and not a fashion 3/4 pose.
  - Each panel must show the subject standing upright in exact 90-degree side profile within the selected crop.
- - LEFT PANEL: show the subject's left side; nose, chest, knees/toes if visible, and body centerline point directly toward the viewer's LEFT.
- - RIGHT PANEL: show the subject's right side; nose, chest, knees/toes if visible, and body centerline point directly toward the viewer's RIGHT.
+ - LEFT PANEL: show one true side profile facing screen-right toward the center divider; nose, chest side plane, pelvis, knees/toes if visible, and body centerline all point screen-right.
+ - RIGHT PANEL: show the opposite true side profile facing screen-left toward the center divider; nose, chest side plane, pelvis, knees/toes if visible, and body centerline all point screen-left.
+ - Do not follow any opposite-facing interpretation for LR: the two LR bodies face toward each other across the divider.
  - Body-profile test: only one eye, one ear, one shoulder contour, one arm silhouette, and one side edge of the torso/armor should be visible per panel.
  - Visible torso and pelvis must be narrow side silhouettes. Front-facing chest plates, symmetrical shoulders, both arms equally visible, both knees equally visible, or front skirt/apron spread are invalid.
- - If feet are visible, they must be side-on: toes point left in the left panel and right in the right panel. Do not show front-facing feet.
+ - If feet are visible, they must be side-on: toes point screen-right in the left panel and screen-left in the right panel. Do not show front-facing feet.
  - Helmet, hair, plume, headwear, shoulder armor, torso armor, skirt, sleeves, visible legwear, and visible footwear must rotate with the body as one rigid model.
  - The head must stay naturally aligned with the torso. Do not twist the head toward camera to preserve face visibility.
  - Camera is level and centered for the selected crop. Preserve the selected framing consistently in both side panels.
@@ -2283,20 +2289,28 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 `;
 
             const identityAnchorBlock = tryOnCharacterSheet ? `
- PRIMARY IDENTITY ANCHOR LOCK (CHARACTER SHEET)
- - ${identityAnchorImageRole} is a face/head identity reference only. Use this to preserve the same person's facial identity and likeness.
- - Do not copy ${identityAnchorImageRole}'s layout, labels, sheet format, annotations, panels, typography, headshot grid, dividers, or callout text.
+ PRIMARY IDENTITY ANCHOR LOCK (${tryOnCharacterSheetSource === 'selected-subject' ? 'MANUAL SELECTED SUBJECT' : 'CHARACTER SHEET'})
+ - ${tryOnCharacterSheetSource === 'selected-subject'
+        ? `${identityAnchorImageRole} is the manually loaded selected-subject identity anchor. It reinforces the same active subject from ${subjectImageRole}: identity, hair, grooming, body silhouette, proportions, and source render style.`
+        : `${identityAnchorImageRole} is a face/head identity reference only. Use this to preserve the same person's facial identity and likeness.`}
+ - ${tryOnCharacterSheetSource === 'selected-subject'
+        ? `Do not treat ${identityAnchorImageRole} as a separate person, loose style reference, or optional hint. It is the same selected subject lock as ${subjectImageRole}.`
+        : `Do not copy ${identityAnchorImageRole}'s layout, labels, sheet format, annotations, panels, typography, headshot grid, dividers, or callout text.`}
  - ${identityAnchorImageRole} is the highest identity authority for the person's face, head, skin tone, visible neck identity, and overall likeness in every generated view.
- - ${subjectImageRole} remains the highest authority for hairstyle, hairline presentation, facial hair, and grooming package. Do not use the Character Sheet to restyle the selected subject's hair or grooming.
- - ${subjectImageRole} is the selected subject for current body/proportion/source style continuity. If it conflicts with ${identityAnchorImageRole}, the Character Sheet wins for face/head identity only; the selected subject wins for body proportions, silhouette, hairstyle, facial hair, and grooming.
- - Treat the Character Sheet as a hard biometric identity reference, not style inspiration, not a loose mood reference, and not a target composition.
+ - ${subjectImageRole} remains the highest authority for hairstyle, hairline presentation, facial hair, and grooming package. Do not use the identity anchor to restyle the selected subject's hair or grooming.
+ - ${subjectImageRole} is the selected subject for current body/proportion/source style continuity. If it conflicts with ${identityAnchorImageRole}, the identity anchor wins for face/head identity only; the selected subject wins for body proportions, silhouette, hairstyle, facial hair, and grooming.
+ - Treat the identity anchor as a hard biometric identity reference, not style inspiration, not a loose mood reference, and not a target composition.
  - Preserve the exact same person shown in the identity anchor. Do not invent a new face, substitute a different person, or convert the subject into a generic fashion-model face.
  - Maintain facial identity, facial structure, skin tone, age range, ethnicity presentation, head shape, nose/eyes/lips/jaw relationships, and overall likeness. Maintain hairstyle, hairline presentation, facial hair, and grooming from the selected subject/reference image.
  - Build one consistent 3D head model from all visible face panels: skull shape, forehead, hairline, brow ridge, eye spacing and depth, eye shape, nose bridge, nose slope, nose tip, nose projection, nostrils, cheekbones, nasolabial folds, mouth width, lip shape, jaw angle, chin shape, ears, ear placement, neck, skin marks, age, and asymmetry. Preserve facial hair and grooming from the selected subject/reference image only.
- - FRONT output must match the Character Sheet's front face. LEFT and RIGHT profile outputs must match the Character Sheet's side/profile facial geometry when visible.
- - If a side/profile face is not fully visible in the Character Sheet, infer it conservatively from the same skull, nose, jaw, chin, mouth, brow, and ear geometry. Do NOT beautify, idealize, or replace it.
- - Identity accuracy applies inside helmets, masks, and face openings: visible nose, mouth, chin, cheek, brow, eye, ear, jaw, and neck must match the Character Sheet exactly within the costume limits.
- - Do NOT average the Character Sheet with the Subject Reference, Costume Reference, generated LR/FB sheet, or a generic costume wearer. If references conflict, Character Sheet wins for face/head identity, while the selected subject/reference image wins for body, hair, and grooming.
+ - ${tryOnCharacterSheetSource === 'selected-subject'
+        ? `FRONT, BACK, LEFT, and RIGHT outputs must preserve the same visible subject from ${subjectImageRole} and ${identityAnchorImageRole}; infer unseen angles conservatively from that same person without changing hairstyle, face, head shape, body type, or source style.`
+        : `FRONT output must match the Character Sheet's front face. LEFT and RIGHT profile outputs must match the Character Sheet's side/profile facial geometry when visible.`}
+ - ${tryOnCharacterSheetSource === 'selected-subject'
+        ? `If the selected-subject anchor lacks a full side/profile view, rotate the same person conservatively. Do NOT invent a prettier profile, new hair, new face, or new body.`
+        : `If a side/profile face is not fully visible in the Character Sheet, infer it conservatively from the same skull, nose, jaw, chin, mouth, brow, and ear geometry. Do NOT beautify, idealize, or replace it.`}
+ - Identity accuracy applies inside helmets, masks, and face openings: visible nose, mouth, chin, cheek, brow, eye, ear, jaw, and neck must match the identity anchor exactly within the costume limits.
+ - Do NOT average the identity anchor with the Subject Reference, Costume Reference, generated LR/FB sheet, or a generic costume wearer. If references conflict, the identity anchor wins for face/head identity, while the selected subject/reference image wins for body, hair, and grooming.
  - Apply the wardrobe to this same person. The wardrobe may change; the person must not change.
  - For turnaround or alternate views, render the same person consistently from the required angle.
  - Camera angle, body angle, lighting, and costume can change. Biometric face/head geometry cannot change.
@@ -2381,6 +2395,22 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  - Preserve the subject's head/face identity consistently across every generated view.
 `;
 
+            const frontSourceImageLockBlock = buildWardrobeTryOnSourceLockBlock({
+                subjectImageRole,
+                costumeImageRole,
+                identityAnchorImageRole,
+                identityAnchorSource: tryOnCharacterSheetSource,
+                mode: 'front'
+            });
+
+            const turnaroundSourceImageLockBlock = buildWardrobeTryOnSourceLockBlock({
+                subjectImageRole,
+                costumeImageRole,
+                identityAnchorImageRole,
+                identityAnchorSource: tryOnCharacterSheetSource,
+                mode: 'turnaround'
+            });
+
             const identityAnchorFormatFirewall = tryOnCharacterSheet ? `
  CHARACTER SHEET FORMAT FIREWALL (NON-NEGOTIABLE)
  - ${identityAnchorImageRole} is for identity only. It is not the target output format.
@@ -2404,6 +2434,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  ${identityPriorityBlock}
  ${tryOnPriorityOrderBlock}
  ${sourceFidelityRulesBlock}
+ ${frontSourceImageLockBlock}
  ${identityAnchorFormatFirewall}
  ${resolvedLookContractBlock}
  ${identityAnchorUsageRuleBlock}
@@ -2591,6 +2622,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  ${identityPriorityBlock}
  ${tryOnPriorityOrderBlock}
  ${sourceFidelityRulesBlock}
+ ${turnaroundSourceImageLockBlock}
  ${identityAnchorFormatFirewall}
  ${resolvedLookContractBlock}
  ${identityAnchorUsageRuleBlock}
@@ -2699,6 +2731,22 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                     strictMode: true,
                     billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
                     entitlements: state.billingEntitlements,
+                    poseCoherence: {
+                        enabled: true,
+                        validate: true,
+                        retry: true,
+                        intent: {
+                            strictness: 'turnaround',
+                            subjectScope: 'full_body',
+                            panelOrientations: getTurnaroundPanelOrientations('FRONT_BACK'),
+                            twistAllowed: false,
+                            headTurnAllowed: false,
+                            profileStrictness: 'technical',
+                            angleTolerance: 'tight',
+                            stanceType: 'neutral_grounded',
+                            footingMode: 'directionally_aligned'
+                        }
+                    },
                     identityLock: tryOnIdentityLock,
                     styleCategory: subjectStyleId ? {
                         styleId: subjectStyleId,
@@ -2755,6 +2803,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  - Preserve the exact same subject, exact same body proportions, exact same costume, exact same boots, gloves, lights, panels, helmet/collar, and accessories.
  - Only the camera side changes.
 `;
+            const lrFullBodyAxisLockBlock = buildTryOnLrFullBodyAxisLockBlock();
 
             const lrSheet = await GeminiService.generateImage(
                 `Professional virtual try-on TRUE LEFT/RIGHT SIDE PROFILE TURNAROUND SHEET of the SAME established subject and SAME established outfit.
@@ -2765,6 +2814,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  ${identityPriorityBlock}
  ${tryOnPriorityOrderBlock}
  ${sourceFidelityRulesBlock}
+ ${turnaroundSourceImageLockBlock}
  ${canonicalTurnaroundFidelityBlock}
  ${identityAnchorFormatFirewall}
  ${resolvedLookContractBlock}
@@ -2779,6 +2829,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  ${lrTurnaroundViewDefinitionBlock}
  ${tryOnLrPoseCoherenceBlock}
  ${leftRightTurnaroundRulesBlock}
+ ${lrFullBodyAxisLockBlock}
  ${tryOnStyleContract}
 
  === PRIORITY 3: WARDROBE PHYSICAL STRUCTURE ===
@@ -2795,6 +2846,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  ${designAssemblyBlock}
  ${sideViewLockBlock}
  ${trueProfileBodyBlock}
+ ${lrFullBodyAxisLockBlock}
  ${turnaroundCompositionBlock}
 
  ${WEARABLE_FIDELITY_CONTRACT}
@@ -2869,7 +2921,7 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
  redesigned face hole, widened face window, shrunken face window, moved face window, broken face-window border,
  enlarged head, oversized head, head scale drift, neck scale drift, shoulder width drift, torso volume drift, inflated torso depth, oversized helmet, oversized collar, suit bulk drift, glove scale drift, boot scale drift, chest device placement drift, panel placement drift, costume proportion drift,
  extra limbs, duplicate bodies, duplicate full-body figures, four figures, four-body output, multiple variants, multiple examples, duplicate arms, duplicate sleeves, duplicate gloves, extra costume appendages, invented openings, extra cutouts, exposed neck when not shown, exposed wrists when not shown, exposed ankles when not shown, exposed hands when not shown, exposed feet when not shown, anatomy contouring, body-hugging reinterpretation, bodysuit reinterpretation, costume redesign, alternate costume versions, mascot redesign,
- two left profiles, two right profiles, both panels facing the same direction, both profiles facing screen-right, both profiles facing screen-left, profiles facing away from each other, duplicated same side profile, duplicate left profile, duplicate right profile, near-front side view, 3/4 side substitute, broad frontal torso in side view, front-facing feet in side view,
+ two left profiles, two right profiles, both panels facing the same direction, both profiles facing screen-right, both profiles facing screen-left, profiles facing away from each other, duplicated same side profile, duplicate left profile, duplicate right profile, near-front side view, 3/4 side substitute, 3/4 body in LR panel, profile head on front-facing body, side-turned head on front body, head-only profile turn, broad frontal torso in side view, front-facing chest plate in side view, symmetrical shoulder pads in side view, front-facing hip plates in side view, front-facing feet in side view,
  changed color placement, changed armor panels, changed glowing strips, changed boots, changed gloves, changed collar, changed backpack, changed body proportions,
  rotated helmet crest, flipped plume orientation, camera-facing crest on wrong view, narrow side plume when source crest is front-to-back, headwear orientation mismatch,
  missing worn accessory, removed accessory, dropped headwear, missing jewelry, removed jewelry, missing eyewear, removed eyewear, missing veil, removed veil, missing hood, removed hood, missing scarf, removed scarf, missing glove, removed glove, missing footwear, removed footwear, missing adornment, simplified adornment, omitted source appearance element, restyled hair, bun hairstyle, updo, tied-back hair, ponytail, braid, pinned hair, shorter hair, different hair volume, different hair silhouette,
@@ -2888,6 +2940,22 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                     strictMode: true,
                     billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
                     entitlements: state.billingEntitlements,
+                    poseCoherence: {
+                        enabled: true,
+                        validate: true,
+                        retry: true,
+                        intent: {
+                            strictness: 'side_view',
+                            subjectScope: 'full_body',
+                            panelOrientations: getTurnaroundPanelOrientations('LEFT_RIGHT'),
+                            twistAllowed: false,
+                            headTurnAllowed: false,
+                            profileStrictness: 'technical',
+                            angleTolerance: 'tight',
+                            stanceType: 'neutral_grounded',
+                            footingMode: 'directionally_aligned'
+                        }
+                    },
                     identityLock: tryOnIdentityLock,
                     styleCategory: subjectStyleId ? {
                         styleId: subjectStyleId,
@@ -2959,26 +3027,35 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
 
             dispatch({ type: 'ADD_LOG', payload: { message: "Turnaround complete (2 sheets generated: FB + LR).", type: 'success' } });
 
-            // --- RECENT GENERATIONS: Cache turnaround FB sheet silently ---
+            // --- RECENT GENERATIONS: Cache both turnaround sheets silently ---
             const recentStore = useRecentGenerationsStore.getState();
-            if (recentStore.cacheDirPath && safeFbSheet) {
-                RecentGenerationsCacheService.cacheGeneration({
-                    imageDataUrl: safeFbSheet,
-                    studio: 'wardrobe',
-                    cacheDirPath: recentStore.cacheDirPath,
-                }).then((cacheResult) => {
-                    if (cacheResult.success && cacheResult.localCachePath && cacheResult.displayUrl) {
-                        recentStore.addRecentGeneration({
-                            studio: 'wardrobe',
-                            localCachePath: cacheResult.localCachePath,
-                            displayUrl: cacheResult.displayUrl,
-                            createdAt: Date.now(),
-                            prompt: tryOnNote || 'Wardrobe turnaround',
-                            mode: (state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok') || 'byok',
-                        });
-                    }
-                }).catch((e) => {
-                    console.warn('[Wardrobe] Recent turnaround caching failed:', e);
+            if (recentStore.cacheDirPath) {
+                const turnaroundRecentSheets = [
+                    { imageDataUrl: safeFbSheet, prompt: tryOnNote ? `${tryOnNote} (FB turnaround)` : 'Wardrobe turnaround (FB)' },
+                    { imageDataUrl: safeLrSheet, prompt: tryOnNote ? `${tryOnNote} (LR turnaround)` : 'Wardrobe turnaround (LR)' }
+                ];
+
+                turnaroundRecentSheets.forEach((sheet, index) => {
+                    if (!sheet.imageDataUrl) return;
+
+                    RecentGenerationsCacheService.cacheGeneration({
+                        imageDataUrl: sheet.imageDataUrl,
+                        studio: 'wardrobe',
+                        cacheDirPath: recentStore.cacheDirPath!,
+                    }).then((cacheResult) => {
+                        if (cacheResult.success && cacheResult.localCachePath && cacheResult.displayUrl) {
+                            recentStore.addRecentGeneration({
+                                studio: 'wardrobe',
+                                localCachePath: cacheResult.localCachePath,
+                                displayUrl: cacheResult.displayUrl,
+                                createdAt: Date.now() + index,
+                                prompt: sheet.prompt,
+                                mode: (state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok') || 'byok',
+                            });
+                        }
+                    }).catch((e) => {
+                        console.warn(`[Wardrobe] Recent turnaround ${index === 0 ? 'FB' : 'LR'} caching failed:`, e);
+                    });
                 });
             }
         } catch (error: unknown) {

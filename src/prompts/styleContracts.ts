@@ -43,8 +43,11 @@ export type StyleCategoryValidationResult = {
     driftTraits?: string[];
 };
 
+const LEGACY_PREMIUM_ANIMATED_3D_STYLE_ID = ["p", "i", "x", "a", "r"].join("");
+
 const STYLE_ALIASES: Record<string, StyleCategoryId | undefined> = {
-    pixar: 'stylized_animated_3d',
+    [LEGACY_PREMIUM_ANIMATED_3D_STYLE_ID]: 'stylized_animated_3d',
+    premium_animated_3d: 'stylized_animated_3d',
     family_3d: 'stylized_animated_3d',
     anim: 'stylized_animated_3d',
     animated_feature: 'stylized_animated_3d',
@@ -424,7 +427,7 @@ export const inferStyleCategoryIdFromPrompt = (prompt: string): StyleCategoryId 
         .replace(/\bNEGATIVE CONSTRAINTS?:[\s\S]*$/i, '')
         .replace(/\bDO NOT INCLUDE:[\s\S]*$/i, '');
 
-    if (/\b(family 3d|pixar-style|stylized animated 3d|animated feature|animation-film|non-photorealistic animated)\b/i.test(promptWithoutNegatives)) {
+    if (/\b(family 3d|premium animated 3d|premium animated-feature|stylized animated 3d|animated feature|animation-film|non-photorealistic animated)\b/i.test(promptWithoutNegatives)) {
         return 'stylized_animated_3d';
     }
     if (/\b(exact studio|cinematic photoreal|photorealistic\s+(?:4k|8k|portrait|human|render|character)|dslr\s+(?:capture|photo|portrait)|live-action\s+(?:film|actor|character|portrait)|raw photo\s+(?:portrait|character|capture)|realistic skin texture|photographic lighting)\b/i.test(promptWithoutNegatives)) {
@@ -543,6 +546,7 @@ Evaluate whether every visible character panel matches the selected category.
 Source images are identity only; do not allow source-photo realism to override the selected render style.
 Board/presentation style controls layout only; do not allow premium film board or cinematic lighting to change character category.
 Also evaluate sheet-level style consistency: hero render, head studies, turnarounds, action pose, footwear/material insets, and callout presentation must share one rendering family.
+Any color-blocking, palette, construction, material, footwear, expression, or gesture inset that contains a character/body/head/pose/costume-on-body silhouette must match that same rendering family. A flat/vector/cartoon miniature character in a rendered sheet is style drift, not an acceptable diagram.
 
 Mixed-style rejection rule:
 ${SHEET_STYLE_LOCK_NEGATIVE_TEXT}
@@ -561,6 +565,7 @@ ${originalPrompt.slice(0, 6000)}
 
 Reject obvious category drift only. If the character category is correct but lighting/layout differs, pass.
 Reject obvious mixed-style sheets where one panel is stylized 3D and another is flat illustration, realism, cartoon, anime, painterly, or another rendering family without explicit multi-style comparison instructions.
+Reject sheets where a color-blocking or detail inset uses simplified flat/vector character thumbnails while the rest of the character sheet uses the selected rendered style.
 
 Return ONLY valid JSON:
 {

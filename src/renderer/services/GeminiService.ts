@@ -47,6 +47,10 @@ import {
   withBiometricIdentityLockContract,
   type BiometricIdentityLock
 } from '../../prompts/identityContracts';
+import {
+  shouldApplyCharacterAnatomyIntegrity,
+  withCharacterAnatomyIntegrityContract
+} from '../../prompts/characterAnatomyIntegrity';
 
 export type ExtractedStyle = {
   medium?: string;
@@ -1161,8 +1165,12 @@ export const GeminiService = {
       styleCategoryEnabled && shouldApplyStyleCategoryContract(promptWithGenerationContracts, styleCategoryId)
         ? withStyleCategoryContract(promptWithGenerationContracts, styleCategoryId, styleCategoryIntent)
         : promptWithGenerationContracts;
+    const promptWithAnatomyIntegrity =
+      shouldApplyCharacterAnatomyIntegrity(promptWithStyleCategory, referenceLabels)
+        ? withCharacterAnatomyIntegrityContract(promptWithStyleCategory)
+        : promptWithStyleCategory;
     const promptWithAllContracts = withSheetStyleLockContract(
-      promptWithStyleCategory,
+      promptWithAnatomyIntegrity,
       styleCategoryId,
       {
         source: styleCategoryId ? 'user_selected' : 'auto_detected',
@@ -1296,7 +1304,7 @@ export const GeminiService = {
       // --- Prompt normalization for Gemini 3.x image models ---
       // The Nano Banana 2 model is more sensitive to prompt structure; we normalize common legacy tokens
       // and move "avoid" constraints into a short bullet list near the top for stronger compliance.
-      const strictMode = options.strictMode ?? /SPATIAL PROTOCOL|NEGATIVE CONSTRAINTS|CRITICAL\s*-\s*DO NOT|NON-NEGOTIABLE|POSE COHERENCE CONTRACT|HEADSHOT WARDROBE CONTINUITY CONTRACT|STYLE CATEGORY CONTRACT|SHEET STYLE LOCK/i.test(promptWithAllContracts);
+      const strictMode = options.strictMode ?? /SPATIAL PROTOCOL|NEGATIVE CONSTRAINTS|CRITICAL\s*-\s*DO NOT|NON-NEGOTIABLE|POSE COHERENCE CONTRACT|HEADSHOT WARDROBE CONTINUITY CONTRACT|STYLE CATEGORY CONTRACT|SHEET STYLE LOCK|CHARACTER ANATOMY INTEGRITY CONTRACT/i.test(promptWithAllContracts);
 
       const sanitized = GeminiService._sanitizeImagePromptForGemini(promptWithAllContracts);
       let finalPrompt = sanitized.prompt;

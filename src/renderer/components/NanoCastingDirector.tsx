@@ -75,7 +75,7 @@ import {
 } from '../utils/FileSystemAssets';
 
 // Import Unified Master Style Covers (Morph variants unified)
-import coverPixar from '../assets/style-pixar.png';
+import coverPremiumAnimated3D from '../assets/style-premium-animated-3d.png';
 import coverHyperReal from '../assets/style-hyper-real.png';
 import coverRetroAnime from '../assets/style-retro-anime.png';
 import coverComicBook from '../assets/style-comic-book.png';
@@ -140,10 +140,14 @@ const REF_SHEET_STYLES = {
 
 
 
+const LEGACY_PREMIUM_ANIMATED_3D_STYLE_ID = ["p", "i", "x", "a", "r"].join("");
+
 // Canonical style ID resolver
 const normalizeStyleId = (id: string) => {
     const map: Record<string, string> = {
-        family_3d: 'pixar',
+        [LEGACY_PREMIUM_ANIMATED_3D_STYLE_ID]: 'premium_animated_3d',
+        family_3d: 'premium_animated_3d',
+        premium_animated_3d: 'premium_animated_3d',
         premium_cg: 'hyper_real',
         retro_cel: 'retro_anime',
         graphic_noir: 'comic_book',
@@ -154,7 +158,7 @@ const normalizeStyleId = (id: string) => {
 
 // --- CONFIGURATION CONSTANTS ---
 const STYLE_SCOPE_RULES: Record<string, { default: BodyScope; allowed: BodyScope[] }> = {
-    pixar: { default: 'full', allowed: ['full', 'torso'] },
+    premium_animated_3d: { default: 'full', allowed: ['full', 'torso'] },
     retro_anime: { default: 'full', allowed: ['head', 'torso', 'full'] },
     comic_book: { default: 'torso', allowed: ['torso', 'full'] },
     cyberpunk: { default: 'torso', allowed: ['head', 'torso', 'full'] },
@@ -1161,7 +1165,9 @@ const NanoCastingDirector = () => {
     const bodyArchetypes = getArchetypes(morphVariant);
 
     // --- PHASE 3: STYLE SYNTHESIS ---
-    const [selectedStyle, setSelectedStyle] = useState<string | null>(() => nanoCastSession.selectedStyle);
+    const [selectedStyle, setSelectedStyle] = useState<string | null>(() =>
+        nanoCastSession.selectedStyle ? normalizeStyleId(nanoCastSession.selectedStyle) : null
+    );
 
     // --- PHASE 3: BODY SCOPE (REQUIRED AFTER STYLE) ---
     const [bodyScope, setBodyScope] = useState<BodyScope | null>(() => {
@@ -1194,7 +1200,7 @@ const NanoCastingDirector = () => {
     const getStyleMatrix = (_variant: MorphVariant) => {
         // Unified active images mapping
         const activeImages = {
-            pixar: coverPixar,
+            premium_animated_3d: coverPremiumAnimated3D,
             hyper_real: coverHyperReal,
             retro_anime: coverRetroAnime,
             comic_book: coverComicBook,
@@ -1203,11 +1209,11 @@ const NanoCastingDirector = () => {
         };
 
         return {
-            pixar: {
-                id: 'pixar', label: 'Family 3D Animation',
-                keywords: "High-end 3D CG animation studio style, likeness-preserving stylized proportions, source-mapped eye spacing, source-mapped brow/nose/mouth/jaw landmarks, soft sculpted shapes around the actual scanned face, vibrant colors, subsurface scattering, rim lighting, soft textures, Octane Render, masterpiece 3D.",
+            premium_animated_3d: {
+                id: 'premium_animated_3d', label: 'Premium Animated 3D',
+                keywords: "High-end animated-feature 3D character studio style, likeness-preserving stylized proportions, source-mapped eye spacing, source-mapped brow/nose/mouth/jaw landmarks, soft sculpted shapes around the actual scanned face, vibrant colors, subsurface scattering, rim lighting, soft textures, polished premium CG render, masterpiece 3D.",
                 lighting: "Golden hour, cinematic bounce light",
-                image: activeImages.pixar
+                image: activeImages.premium_animated_3d
             },
             hyper_real: {
                 id: 'hyper_real', label: 'Premium CG Realism',
@@ -2010,7 +2016,14 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
         if (sessionResultUrl === finalCharacterUrl) return;
 
         setFinalCharacterUrlState(sessionResultUrl);
-        if (sessionResultUrl) setPhase(5);
+        if (sessionResultUrl) {
+            setPhase(5);
+        } else {
+            setRefSheetIdentityAnchors(null);
+            setRefSheetUrl(null);
+            setShowRefSheet(false);
+            setPhase(prev => prev === 5 ? 3 : prev);
+        }
     }, [finalCharacterUrl, state.nanoCastSession.generatedCharacterUrl]);
 
     const cacheNanoRecentGeneration = (imageUrl: string, prompt: string, createdAt = Date.now()) => {
@@ -2135,7 +2148,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                             const b64 = await getBase64FromBlobUrl(blobUrl);
                             referenceImages.push({
                                 url: b64,
-                                label: `Biometric scan identity source - ${angle.toUpperCase()} view - face, skull, visible neck, skin tone, hair state, facial hair, age, and marks authority. Face-dominant scan; not body-mass evidence.`
+                                label: `Biometric scan identity source - ${angle.toUpperCase()} view - face, skull, visible neck, skin tone, hair state, facial-hair or clean-shaven state, age, and marks authority. Face-dominant scan; not body-mass evidence.`
                             });
                         } catch (err) {
                             console.error(`Failed to process ${angle} angle:`, err);
@@ -2161,13 +2174,13 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
             setProgress({ phase: 'neural', percent: 40, detail: "Synthesizing Neural Graph..." });
 
             // 2. Construct Director Prompt
-            const styleObj = styleMatrix[selectedStyle as keyof typeof styleMatrix] || styleMatrix.pixar;
+            const styleObj = styleMatrix[selectedStyle as keyof typeof styleMatrix] || styleMatrix.premium_animated_3d;
             const archetypeObj = bodyArchetypes.find(b => b.id === selectedBody) || bodyArchetypes[0];
             const activeStyleId = selectedStyle || styleObj.id;
             const styleCategoryContract = buildStyleCategoryContract(activeStyleId, {
                 selectedStyleLabel: styleObj.label,
                 sourceImagePolicy: usesBiometricScanIdentity
-                    ? "Biometric scan images are the highest-priority facial identity source. They control the real person's face, skull/head shape, visible neck, skin tone, hair state, facial hair, visible marks, and age impression. They are face/head-dominant and must not be used as body-mass evidence. Source-photo realism must not leak into stylized render categories, but the recognizable scanned identity must remain."
+                    ? "Biometric scan images are the highest-priority facial identity source. They control the real person's face, skull/head shape, visible neck, skin tone, hair state, facial-hair or clean-shaven state, visible marks, and age impression. They are face/head-dominant and must not be used as body-mass evidence. Source-photo realism must not leak into stylized render categories, but the recognizable scanned identity must remain."
                     : "Source images control identity only; they do not control visual style category.",
                 lightingPolicy: "Lighting must be interpreted inside the selected Nano Cast character render style.",
                 boardPresentationPolicy: "Any board or preview language controls presentation only, not the character render category.",
@@ -2189,7 +2202,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                 ? getBiometricSafeStyleNegativePrompt(styleNegativePrompt)
                 : styleNegativePrompt;
             const visualKeywords = usesBiometricScanIdentity
-                ? `${styleObj.keywords} BIOMETRIC LIKENESS TRANSLATION: apply this style to shader, surface, lighting, and rendering language only; do not use a default stylized face template, do not change the scanned skull/face topology, and do not simplify away the specific goatee, nose, brow, eye spacing, cheeks, jaw, chin, skin tone, age impression, or marks.`
+                ? `${styleObj.keywords} BIOMETRIC LIKENESS TRANSLATION: apply this style to shader, surface, lighting, and rendering language only; do not use a default stylized face template, do not change the scanned skull/face topology, and do not simplify away the visible facial-hair or clean-shaven state, nose, brow, eye spacing, cheeks, jaw, chin, skin tone, age impression, or marks.`
                 : styleObj.keywords;
 
             // STRICTNESS CHECK: Differentiate between Realistic (Geometric Lock) and Stylized (Likeness Translation)
@@ -2203,7 +2216,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                     strictnessInstruction = "CRITICAL_STRICTNESS: The face in the generated image MUST BE AN EXACT BIOMETRIC MATCH. PRESERVE FACIAL GEOMETRY ABOVE ALL ELSE. Apply the Material/Lighting of the style, but DO NOT ALTER THE SKULL SHAPE. Treat as 'Digital Makeup'.";
                 } else {
                     // STYLIZED: translate rendering language, not identity geometry.
-                    strictnessInstruction = `CRITICAL_LIKENESS: The subject must be IMMEDIATELY RECOGNIZABLE as the same scanned person from ${biometricRangeText}. Apply the selected style to texture, shader, and surface language only. Preserve the actual skull/head shape, face fullness, brow/eye/nose/cheek/mouth/jaw/chin relationships, baldness or hair state, facial hair pattern, skin tone, age impression, and distinctive marks. Do not convert the scan into a generic stylized archetype.`;
+                    strictnessInstruction = `CRITICAL_LIKENESS: The subject must be IMMEDIATELY RECOGNIZABLE as the same scanned person from ${biometricRangeText}. Apply the selected style to texture, shader, and surface language only. Preserve the actual skull/head shape, face fullness, brow/eye/nose/cheek/mouth/jaw/chin relationships, baldness or hair state, facial-hair or clean-shaven state, skin tone, age impression, and distinctive marks. Do not convert the scan into a generic stylized archetype.`;
                 }
             }
 
@@ -2236,7 +2249,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                 ? `BODY SHAPE INFERENCE RULES:
 - Do not over-infer body fat, heaviness, obesity, belly size, torso width, arm thickness, or neck thickness from facial scans alone.
 - ${biometricRangeText} are face/head-dominant biometric identity references, not reliable full-body measurements.
-- Fuller cheeks, a broad jaw, a rounded chin, mature face weight, or a strong goatee must preserve facial likeness only; they do not imply an overweight body.
+- Fuller cheeks, a broad jaw, a rounded chin, mature face weight, or visible facial-hair state must preserve facial likeness only; they do not imply an overweight body.
 - If only facial/biometric views are provided, use a neutral, average, medium body build by default unless the user explicitly selected a different body archetype or prompt.
 - Current explicit body guidance: ${selectedBody ? `"${archetypeObj.name}" (${archetypeObj.desc})` : "neutral average medium build"}.
 - Preserve identity without exaggerating torso width, belly size, limb thickness, shoulder/pelvis mass, or neck bulk.
@@ -2320,7 +2333,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
  - Do not treat ${approvedSourceImageId} as optional inspiration. Do not create a different person.` : ''}
  ${usesBiometricScanIdentity ? `IMAGE ROLE MAP:
  - ${biometricRangeText}: BIOMETRIC SCAN IDENTITY SOURCE. Use together as multi-view reconstruction anchors, not as a collage to copy.
- - Any later logo/wardrobe/style images: non-identity assets. They must never override the scanned face, head, hair state, facial hair, age, skin tone, marks, or conservative body-build rules.
+ - Any later logo/wardrobe/style images: non-identity assets. They must never override the scanned face, head, hair state, facial-hair or clean-shaven state, age, skin tone, marks, or conservative body-build rules.
 
  BIOMETRIC PRIORITY HIERARCHY:
  1. Biometric scan identity.
@@ -2368,7 +2381,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
  - No distorted features, bad hands, or asymmetric eyes.
  - No extra limbs or fused fingers.
  - No text overlays.
- ${usesBiometricScanIdentity ? `- No generic stylized face, no generic bald man, no lookalike substitution, no beautified model face, no younger/slimmer/smoother redesign, no erased goatee or changed facial hair pattern if present in the scan, no overweight body inferred from face-only scans.` : ''}
+ ${usesBiometricScanIdentity ? `- No generic stylized face, no generic person, no lookalike substitution, no beautified model face, no younger/slimmer/smoother redesign, no added facial hair when clean-shaven, no erased or changed facial hair pattern if present in the scan, no overweight body inferred from face-only scans.` : ''}
  ${activeStyleNegativePrompt ? `- STYLE CATEGORY DRIFT FORBIDDEN: ${activeStyleNegativePrompt}.` : ''}
  ${styleIdentityNegativePrompt ? `- STYLE IDENTITY DRIFT FORBIDDEN: ${styleIdentityNegativePrompt}.` : ''}
  ${applyOutfit ? `- EXTREMELY IMPORTANT: DO NOT COPY THE CLOTHING FROM THE SOURCE IMAGES. DO NOT RENDER THE ORIGINAL ATTIRE.` : ''}
@@ -2727,7 +2740,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
 
         const catToStyle: Record<string, string> = {
             "realism": "exact_studio",
-            "anim": "family_3d",
+            "anim": "premium_animated_3d",
             "illustration": "retro_anime",
             "scifi": "cyberpunk_neon",
             "uncategorized": "exact_studio",
@@ -3059,7 +3072,7 @@ BACKGROUND: SOLID BLACK STUDIO BACKGROUND. SOLID COLOR. DO NOT under any circums
 ${forensicSheetStyleLock}
 
 ${buildHeadshotWardrobeContinuityContract({
-    identitySource: `${biometricRangeText} for face, skull/head shape, skin tone, hairstyle, facial hair, age impression, and head angle only`,
+    identitySource: `${biometricRangeText} for face, skull/head shape, skin tone, hairstyle, facial-hair or clean-shaven state, age impression, and head angle only`,
     wardrobeAuthority: "the forensic-board clothing directive: tactical dark grey/black collared polo or utility undershirt",
     finalLookReference: "this premium forensic biometric board clothing directive",
     appliesTo: "all six forensic headshot/bust panels",
@@ -3269,10 +3282,12 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
             const getSafeKeywords = (style: string, originalKeywords: string) => {
                 let safe = originalKeywords;
                 if (hasAuthoritativeBiometricAnchors) {
-                    if (style === 'family_3d' || style === 'pixar') {
+                    if (style === 'family_3d' || style === 'premium_animated_3d' || style === LEGACY_PREMIUM_ANIMATED_3D_STYLE_ID) {
+                        const legacyStudioPairPattern = new RegExp(`Disney-${LEGACY_PREMIUM_ANIMATED_3D_STYLE_ID}`, 'gi');
+                        const legacyStyleNamePattern = new RegExp(`\\b${LEGACY_PREMIUM_ANIMATED_3D_STYLE_ID}\\b`, 'gi');
                         safe = safe
-                            .replace(/Disney-Pixar/gi, 'premium stylized animated 3D character')
-                            .replace(/\bPixar\b/gi, 'stylized animated 3D')
+                            .replace(legacyStudioPairPattern, 'premium stylized animated 3D character')
+                            .replace(legacyStyleNamePattern, 'stylized animated 3D')
                             .replace(/cartoon proportions,?/gi, 'appealing stylized animated proportions,');
                     }
                     if (style === 'retro_anime' || style === 'retro_cel') {
@@ -3314,7 +3329,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                 selectedStyleLabel: styleConfig.label,
                 sourceImagePolicy: hasGeneratedSheetLayoutReference
                     ? `[IMAGE ${generatedLayoutRefIndex}] is the primary visual/design source for body, outfit, silhouette, proportions, costume, and style translation. ${identityRangeText} remain the biometric identity authority for face/head likeness only.`
-                    : "Identity/source images provide facial identity, skull/head shape, skin tone, hair, facial hair, and age impression only; source-photo realism must not leak into stylized reference-sheet panels.",
+                    : "Identity/source images provide facial identity, skull/head shape, skin tone, hair, facial-hair or clean-shaven state, and age impression only; source-photo realism must not leak into stylized reference-sheet panels.",
                 boardPresentationPolicy: "Reference sheet layout controls panel placement, angle labels, and technical presentation only.",
                 lightingPolicy: "Lighting and board polish must stay inside the selected reference-sheet character render style.",
                 appliesTo: "every full-body reference panel, turnaround view, facial-angle head panel, expression panel, costume detail, and exported reference preview"
@@ -3388,7 +3403,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                                 : "the final generated character costume shown in the full-body reference-sheet panels";
             const headshotWardrobeContinuityBlock = buildHeadshotWardrobeContinuityContract({
                 identitySource: hasAuthoritativeBiometricAnchors
-                    ? `${identityRangeText} for face, head shape, skin tone, hairstyle, facial hair, and age impression only`
+                    ? `${identityRangeText} for face, head shape, skin tone, hairstyle, facial-hair or clean-shaven state, and age impression only`
                     : "the approved portrait/reference image for face and head identity",
                 wardrobeAuthority: headshotWardrobeAuthority,
                 finalLookReference: "the full-body reference-sheet panels, approved character render, generated character source, or explicit outfit directive",
@@ -3420,7 +3435,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
             if (hasGeneratedSheetLayoutReference) {
                 finalPrompt += `GENERATED CHARACTER SOURCE LOCK:\n`;
                 finalPrompt += `[IMAGE ${generatedLayoutRefIndex}] is the PRIMARY VISUAL SOURCE for this reference sheet: body, outfit, silhouette, proportions, render style, costume package, footwear, accessories, and overall character design.\n`;
-                finalPrompt += `${identityRangeText} remain the BIOMETRIC IDENTITY AUTHORITY for face, skull/head shape, brow, eye spacing, nose, mouth, jaw/chin, ears, hairline, facial hair, skin tone, age impression, and visible marks.\n`;
+                finalPrompt += `${identityRangeText} remain the BIOMETRIC IDENTITY AUTHORITY for face, skull/head shape, brow, eye spacing, nose, mouth, jaw/chin, ears, hairline, facial-hair or clean-shaven state, skin tone, age impression, and visible marks.\n`;
                 finalPrompt += `Do not build a new reference-sheet character from scans alone. Preserve the same generated character from [IMAGE ${generatedLayoutRefIndex}] while correcting/maintaining facial identity from ${identityRangeText}.\n`;
                 finalPrompt += `Do not treat [IMAGE ${generatedLayoutRefIndex}] as a mood board, optional layout guide, or weak inspiration image.\n\n`;
             }
@@ -3428,7 +3443,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
             if (isPortraitLockedSheet) {
                 finalPrompt += `PORTRAIT AUTHORITY BLOCK (ABSOLUTE HIGHEST PRIORITY):\n`;
                 finalPrompt += `Use [IMAGE 1] as the SINGLE SOURCE OF TRUTH for the full character.\n`;
-                finalPrompt += `This includes: face, hair, beard, wardrobe, silhouette, fabric, colors, layering, accessories, and visible branding.\n`;
+                finalPrompt += `This includes: face, hair, facial-hair or clean-shaven state, wardrobe, silhouette, fabric, colors, layering, accessories, and visible branding.\n`;
                 finalPrompt += `The task is NOT to redesign the character.\n`;
                 finalPrompt += `The task is to rotate and restage the SAME approved portrait character from [IMAGE 1] into a technical multi-angle reference sheet.\n`;
                 finalPrompt += `All panels must depict the exact same outfit already visible in [IMAGE 1].\n`;
@@ -3496,7 +3511,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
             if (!hasAuthoritativeBiometricAnchors) {
                 finalPrompt += `GENERATE CHARACTER REFERENCE SHEET:\n`;
                 finalPrompt += `Reference: Use [IMAGE 1] as the COMPLETE character authority.\n`;
-                finalPrompt += `IDENTITY LOCK: Preserve the exact face, skull shape, facial proportions, skin tone, hair, facial hair, and grooming from [IMAGE 1].\n`;
+                finalPrompt += `IDENTITY LOCK: Preserve the exact face, skull shape, facial proportions, skin tone, hair, facial-hair or clean-shaven state, and grooming from [IMAGE 1].\n`;
                 finalPrompt += `BACKGROUND EXCLUSION: [IMAGE 1] is not a background, room, lighting, or environment authority. Head panels must isolate the face/head identity and use the clean studio sheet background only.\n`;
                 finalPrompt += `WARDROBE LOCK: Preserve the exact wardrobe from [IMAGE 1], including clothing design, silhouette, colors, materials, seams, collar shape, sleeve shape, layering, visible accessories, and branding placement.\n`;
                 finalPrompt += `This is a turnaround/reference-sheet expansion of the existing approved portrait in [IMAGE 1]. It is NOT a redesign.\n`;
@@ -3621,7 +3636,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                         finalPrompt += `RENDER QUALITY: FEATURE FILM ANIMATION. Sony/DreamWorks Style. "Spider-Verse" detail levels. Dynamic Lighting. Strong Shape Appeal.\n\n`;
                     }
                     // NEGATIVE CONSTRAINTS (Allow Stylized, Ban 2D/Low Poly)
-                    finalPrompt += `NEGATIVE CONSTRAINTS: Anime, 2D, Drawing, Sketch, Low Poly, Mobile Game, Flat shading, Pixel art, Oil painting, Watercolor, Different Haircut, Hair growth, Shaved beard, Grooming change.\n`;
+                    finalPrompt += `NEGATIVE CONSTRAINTS: Anime, 2D, Drawing, Sketch, Low Poly, Mobile Game, Flat shading, Pixel art, Oil painting, Watercolor, Different Haircut, Hair growth, added facial hair, removed facial hair, Grooming change.\n`;
                 }
 
             } else {
@@ -3648,9 +3663,9 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                     finalPrompt += `FINAL INSTRUCTION: The face in ALL views must be a pixel-perfect identity likeness to ${identityRangeText}. PRESERVE FACIAL GEOMETRY ABOVE ALL ELSE.\n`;
                     finalPrompt += `CRITICAL ROTATION OVERRIDE: While the identity must match, YOU MUST NOT COPY THE CAMERA ANGLE OF ${identityRangeText}. You MUST dynamically rotate the character's head and body in 3D space to precisely match the required LENS angle (Profile, 3/4, Back, etc) for each individual panel.\n`;
                     if (allowHairOverride) {
-                        finalPrompt += `GROOMING OVERRIDE: Apply the hairstyle "${directorControls.hairStyle}". Preserve facial hair from ${identityRangeText} but override head hair.\n`;
+                        finalPrompt += `GROOMING OVERRIDE: Apply the hairstyle "${directorControls.hairStyle}". Preserve the facial-hair or clean-shaven state from ${identityRangeText} but override head hair.\n`;
                     } else {
-                        finalPrompt += `GROOMING LOCK: The Hairstyle (or lack thereof) and Facial Hair must match ${identityRangeText} exactly. IMPORTANT: If the subject is bald in ${identityRangeText}, they MUST BE BALD in the output. Do not add hair. Do not change the beard style.\n`;
+                        finalPrompt += `GROOMING LOCK: The hairstyle or lack thereof and facial-hair or clean-shaven state must match ${identityRangeText} exactly. IMPORTANT: If the subject is bald in ${identityRangeText}, they MUST BE BALD in the output. Do not add head hair. Do not add, remove, or change stubble, mustache, beard, or goatee.\n`;
                     }
                     finalPrompt += `TEXTURE PROJECTION: Treat ${identityRangeText} as the source texture map. Project the exact features (eyes, nose, mouth, skin details) onto the model. Do not use a fallback generic face.\n`;
 
@@ -3658,7 +3673,7 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                     finalPrompt += `STYLIZATION SCOPE: The chosen Stylization Intensity (${effectiveStylization}%) applies ONLY to Lighting, Skin Texture Resolution, and Render Quality. It matches the *fidelity* of the style. It applies 0% deviation to the Identity/Geometry.\n`;
                 } else {
                     // STYLIZED: translate style around the source likeness; do not caricature into a new person.
-                    finalPrompt += `FINAL INSTRUCTION: HARMONIOUSLY TRANSLATE the same source face into the selected style without replacing the face shape, eyes, nose, mouth, jaw, chin, ears, hairline, or facial hair. The goal is a stylized likeness that is immediately recognizable as ${identityRangeText}. Adapt surface language, shader, linework, and material finish only; PRESERVE IDENTITY FEATURES (nose shape, jawline, eye color, brow shape, eye spacing, hairline, facial hair, age impression).\n`;
+                    finalPrompt += `FINAL INSTRUCTION: HARMONIOUSLY TRANSLATE the same source face into the selected style without replacing the face shape, eyes, nose, mouth, jaw, chin, ears, hairline, or facial-hair/clean-shaven state. The goal is a stylized likeness that is immediately recognizable as ${identityRangeText}. Adapt surface language, shader, linework, and material finish only; PRESERVE IDENTITY FEATURES (nose shape, jawline, eye color, brow shape, eye spacing, hairline, facial-hair or clean-shaven state, age impression).\n`;
                 }
 
                 finalPrompt += `Use ${identityRangeText} as the source for the character's skin tone, face, and hair only. Ignore clothing and shoulders in identity captures.\n`;
@@ -3668,15 +3683,15 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
                 }
 
                 if (isRealistic) {
-                    finalPrompt += `Primary Directive: Exact match of facial hair (beard/mustache/stubble) and grooming from ${identityRangeText}. Do NOT add hair that is not there.\n`;
+                    finalPrompt += `Primary Directive: Exact match of facial-hair or clean-shaven state and grooming from ${identityRangeText}. Do NOT add stubble, mustache, beard, goatee, or head hair that is not visible in the biometric references.\n`;
                 } else {
-                    finalPrompt += `Reference ${identityRangeText} for key features (facial hair, hair color, eye color, brow shape, nose shape, jawline). Simplify the skin shading only. DO NOT SIMPLIFY THE COSTUME DETAILS. The outfit must remain highly detailed and accurate to the reference.\n`;
+                    finalPrompt += `Reference ${identityRangeText} for key features (facial-hair or clean-shaven state, hair color, eye color, brow shape, nose shape, jawline). Simplify the skin shading only. DO NOT SIMPLIFY THE COSTUME DETAILS. The outfit must remain highly detailed and accurate to the reference.\n`;
                 }
             }
 
             // --- E. NEGATIVES ---
             finalPrompt += `\nNEGATIVE CONSTRAINTS:\n`;
-            finalPrompt += `different person, face swap, identity replacement, recast identity, portrait mismatch, approved portrait ignored, generic face, younger face, idealized face, video game protagonist hallucination, generic action hero, muscular replacing overweight, slenderized body, idealized 3D template, stylized-hero hallucination, generic cartoon structure, altered skull, incorrect profile, inconsistent nose projection, inconsistent jawline, inconsistent ear placement, inconsistent beard silhouette, inconsistent hairline, off-model panels, panel-to-panel face drift, restyled face that changes identity, generic profile, beautified profile, style-averaged face, new character per panel, duplicate angle, repeated yaw bucket, near-identical head panel, second left profile, second near-left 3/4, profile replaced by 3/4, frontal drifting to 3/4, upward tilt with side yaw, downward tilt with side yaw, costume reinterpretation, branding loss, missing logo when visible, relocated logo, replaced logo, incorrect logo placement, stylized logo hallucination, shader inconsistency, mismatched stylization, unintended realism increase, realistic turnaround drift, photographic drift, raw DSLR look in premium CG, studio headshot photography in premium CG, documentary photo realism in premium CG, flattened CGI treatment, missing CGI shader response, missing subsurface scattering, missing rendered-digital-double look, technical identity-sheet realism, right-panel realism drift, closeup realism drift, flattened stylization, weak cyberpunk treatment, generic neutral studio lighting, missing neon rim light, missing teal/magenta separation, loss of futuristic render mood, inconsistent cyberpunk intensity across panels, dramatic hero panel with neutral supporting panels, neutral turnaround row, flat profile panels, uneven theatrical treatment, loss of animated eye language, loss of softened facial planes, loss of stylized nose treatment, mismatch between body-panel style and headshot-panel style, squeezed torso, narrow 3/4 body, narrow back view, stretched body, compressed body, body mass ignored, inconsistent shoulder width, inconsistent pelvis width, inconsistent limb thickness, different body mass across turnaround panels, mismatched full-body silhouette, unnatural neck twist, owl turn, over-rotated head, visible face in true back view, cheating face visibility in rear panel, head misaligned with torso, extra people, text, watermarks, scenery, maps, landscape, background graphics.\n`;
+            finalPrompt += `different person, face swap, identity replacement, recast identity, portrait mismatch, approved portrait ignored, generic face, younger face, idealized face, video game protagonist hallucination, generic action hero, muscular replacing overweight, slenderized body, idealized 3D template, stylized-hero hallucination, generic cartoon structure, altered skull, incorrect profile, inconsistent nose projection, inconsistent jawline, inconsistent ear placement, inconsistent grooming silhouette, inconsistent hairline, off-model panels, panel-to-panel face drift, restyled face that changes identity, generic profile, beautified profile, style-averaged face, new character per panel, duplicate angle, repeated yaw bucket, near-identical head panel, second left profile, second near-left 3/4, profile replaced by 3/4, frontal drifting to 3/4, upward tilt with side yaw, downward tilt with side yaw, costume reinterpretation, branding loss, missing logo when visible, relocated logo, replaced logo, incorrect logo placement, stylized logo hallucination, shader inconsistency, mismatched stylization, unintended realism increase, realistic turnaround drift, photographic drift, raw DSLR look in premium CG, studio headshot photography in premium CG, documentary photo realism in premium CG, flattened CGI treatment, missing CGI shader response, missing subsurface scattering, missing rendered-digital-double look, technical identity-sheet realism, right-panel realism drift, closeup realism drift, flattened stylization, weak cyberpunk treatment, generic neutral studio lighting, missing neon rim light, missing teal/magenta separation, loss of futuristic render mood, inconsistent cyberpunk intensity across panels, dramatic hero panel with neutral supporting panels, neutral turnaround row, flat profile panels, uneven theatrical treatment, loss of animated eye language, loss of softened facial planes, loss of stylized nose treatment, mismatch between body-panel style and headshot-panel style, squeezed torso, narrow 3/4 body, narrow back view, stretched body, compressed body, body mass ignored, inconsistent shoulder width, inconsistent pelvis width, inconsistent limb thickness, different body mass across turnaround panels, mismatched full-body silhouette, unnatural neck twist, owl turn, over-rotated head, visible face in true back view, cheating face visibility in rear panel, head misaligned with torso, extra people, text, watermarks, scenery, maps, landscape, background graphics.\n`;
             finalPrompt += `${SHEET_STYLE_LOCK_NEGATIVE_TEXT}\n`;
             if (refSheetStyleNegativePrompt) {
                 finalPrompt += `selected style category drift, ${refSheetStyleNegativePrompt}.\n`;

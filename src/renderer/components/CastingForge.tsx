@@ -296,7 +296,7 @@ const REF_LAYOUT_OPTIONS: Array<{ id: RefSheetLayoutMode; label: string }> = [
 
 const STUDIO_FOLDERS = [
   { id: 'realism', label: 'Realism', description: "Photorealistic Portraiture & Raw Detail", image: libRealism, styles: ['exact_studio', 'photorealism', 'dslr_capture'] },
-  { id: 'anim', label: 'Stylized Cartoon', description: "Modern 3D Animation & Soft Lighting", image: libAnim, styles: ['family_3d', 'pixar', 'claymation'] },
+  { id: 'anim', label: 'Stylized Cartoon', description: "Modern 3D Animation & Soft Lighting", image: libAnim, styles: ['family_3d', 'premium_animated_3d', 'claymation'] },
   { id: 'illustration', label: 'Illustration', description: "Anime, Noir & Graphic", image: libIllustration, styles: ['retro_cel', 'graphic_noir', 'retro_anime', 'comic_book'] },
   { id: 'scifi', label: 'Sci-Fi', description: "Cyberpunk & High Tech", image: libScifi, styles: ['cyberpunk_neon', 'cyberpunk'] },
   { id: 'uncategorized', label: 'Unsorted', description: "No Specific Style", image: libUnsorted, styles: [] as string[] }

@@ -1381,12 +1381,17 @@ export const reducer = (state: AppState, action: Action): AppState => {
             return { ...state, pendingRefSheetHandoff: null };
         case 'SET_NANO_CAST_BIOMETRIC_IMAGE': {
             const session = state.nanoCastSession ?? createDefaultNanoCastSession();
+            const previousImageUrl = session.biometricImages[action.payload.angle];
+            const biometricSourceChanged = previousImageUrl !== action.payload.imageUrl;
+            const shouldClearGeneratedResult = biometricSourceChanged && Boolean(session.generatedCharacterUrl);
             const nextSession: NanoCastSessionState = {
                 ...session,
+                characterId: shouldClearGeneratedResult ? createNanoCastCharacterId() : session.characterId,
                 biometricImages: {
                     ...session.biometricImages,
                     [action.payload.angle]: action.payload.imageUrl
                 },
+                generatedCharacterUrl: shouldClearGeneratedResult ? null : session.generatedCharacterUrl,
                 updatedAt: Date.now()
             };
             return {

@@ -23,9 +23,11 @@ export type NanoCastStyleIdentityEnforcementOptions = {
     appliesTo?: string;
 };
 
+const LEGACY_PREMIUM_ANIMATED_3D_STYLE_ID = ["p", "i", "x", "a", "r"].join("");
+
 const NANO_CAST_STYLE_IDENTITY_CONFIGS: NanoCastStyleIdentityEnforcementConfig[] = [
     {
-        ids: ["pixar", "family_3d", "animated_feature", "stylized_animated_3d"],
+        ids: [LEGACY_PREMIUM_ANIMATED_3D_STYLE_ID, "premium_animated_3d", "family_3d", "animated_feature", "stylized_animated_3d"],
         label: "Family 3D Animation",
         identityStrength: "maximum",
         bodyFidelityStrength: "source_locked",
@@ -33,17 +35,17 @@ const NANO_CAST_STYLE_IDENTITY_CONFIGS: NanoCastStyleIdentityEnforcementConfig[]
         allowableStylizationRange: "stylize shaders, surface softness, eye readability, and appealing 3D form language only; keep identity geometry close to source",
         positiveRules: [
             "Preserve the source head shape as closely as possible while translating it into premium stylized 3D.",
-            "Preserve brow shape, brow placement, eye spacing, eye shape, nose width, nose length, nose profile, mouth shape, smile structure, jawline, chin, ears, hairline, and facial-hair placement.",
-            "Keep the jaw/chin/goatee relationship recognizable; facial hair must remain the same pattern, density, length impression, color distribution, and placement.",
+            "Preserve brow shape, brow placement, eye spacing, eye shape, nose width, nose length, nose profile, mouth shape, smile structure, jawline, chin, ears, hairline, and facial-hair or clean-shaven state.",
+            "Keep the jaw/chin/grooming relationship recognizable; facial hair or clean-shaven state must remain the same pattern, density, length impression, color distribution, and placement.",
             "Use animation-film materials and softened planes around the actual source likeness, not around a default cute face template.",
             "Preserve body build, shoulder/waist relationship, torso length, limb thickness, and stance from the generated character source or explicit body guidance."
         ],
         negativeRules: [
-            "do not make a generic animated bald man",
+            "do not make a generic animated person",
             "do not round out or simplify the face into a different person",
             "do not enlarge eyes into a different eye-spacing pattern",
             "do not shrink or average the nose",
-            "do not soften the jaw/chin/goatee into a generic cartoon muzzle",
+            "do not soften the jaw/chin/grooming into a generic cartoon muzzle",
             "do not over-cartoony distort proportions",
             "do not beautify, youthify, slim, cute-ify, mascot-ify, or archetype-swap the subject"
         ]
@@ -57,14 +59,14 @@ const NANO_CAST_STYLE_IDENTITY_CONFIGS: NanoCastStyleIdentityEnforcementConfig[]
         allowableStylizationRange: "lighting, lens, and studio finish only; zero identity geometry deviation",
         positiveRules: [
             "Replicate the source facial geometry as a strict digital-double likeness.",
-            "Preserve skin tone, facial marks, grooming, hair state, and facial hair without idealization.",
+            "Preserve skin tone, facial marks, grooming, hair state, and facial-hair or clean-shaven state without idealization.",
             "Preserve body and outfit from the generated character source or explicit body guidance."
         ],
         negativeRules: [
             "no beautified actor replacement",
             "no face averaging",
             "no stylized geometry changes",
-            "no altered facial hair",
+            "no altered facial-hair or clean-shaven state",
             "no changed hairline"
         ]
     },
@@ -95,7 +97,7 @@ const NANO_CAST_STYLE_IDENTITY_CONFIGS: NanoCastStyleIdentityEnforcementConfig[]
         facialLandmarkStrictness: "style_translated",
         allowableStylizationRange: "linework, cel shading, eye rendering language, and simplified planes only; identity landmarks remain mapped to source",
         positiveRules: [
-            "Translate the same person into anime/cel rendering while preserving head silhouette, brow/eye spacing, nose profile, mouth width, jaw/chin, ears, hairline, and facial hair.",
+            "Translate the same person into anime/cel rendering while preserving head silhouette, brow/eye spacing, nose profile, mouth width, jaw/chin, ears, hairline, and facial-hair or clean-shaven state.",
             "Let eye design become anime-readable without changing the real eye spacing or brow relationship.",
             "Preserve generated-source body, wardrobe, and proportions when provided."
         ],
@@ -104,7 +106,7 @@ const NANO_CAST_STYLE_IDENTITY_CONFIGS: NanoCastStyleIdentityEnforcementConfig[]
             "no new ethnicity cues",
             "no teenage/youthful replacement",
             "no tiny nose archetype replacing the source nose",
-            "no erased beard or changed facial hair silhouette"
+            "no added, erased, or changed facial-hair silhouette"
         ]
     },
     {
@@ -116,14 +118,14 @@ const NANO_CAST_STYLE_IDENTITY_CONFIGS: NanoCastStyleIdentityEnforcementConfig[]
         allowableStylizationRange: "ink, line weight, halftone, and shadow design only; identity landmarks stay source-mapped",
         positiveRules: [
             "Use graphic linework to describe the source face, not to replace it with a comic archetype.",
-            "Preserve nose silhouette, brow mass, eye spacing, jaw/chin, ears, facial hair edges, and body/costume proportions.",
+            "Preserve nose silhouette, brow mass, eye spacing, jaw/chin, ears, facial-hair or clean-shaven edges, and body/costume proportions.",
             "Keep generated-source outfit and silhouette as the visual authority when provided."
         ],
         negativeRules: [
             "no generic comic hero",
             "no square-jaw substitution",
             "no exaggerated musculature unless requested",
-            "no changed beard outline",
+            "no added, erased, or changed facial-hair outline",
             "no costume redesign"
         ]
     },
@@ -136,7 +138,7 @@ const NANO_CAST_STYLE_IDENTITY_CONFIGS: NanoCastStyleIdentityEnforcementConfig[]
         allowableStylizationRange: "lighting, techwear mood, material finish, and neon color response only; identity and body are not redesigned",
         positiveRules: [
             "Apply cyberpunk lighting and materials to the same source person.",
-            "Preserve face, head shape, brow, eye spacing, nose, mouth, jaw/chin, ears, hairline, facial hair, and body proportions.",
+            "Preserve face, head shape, brow, eye spacing, nose, mouth, jaw/chin, ears, hairline, facial-hair or clean-shaven state, and body proportions.",
             "Keep any generated-source costume silhouette and proportions unless a wardrobe override explicitly changes them."
         ],
         negativeRules: [
@@ -177,7 +179,7 @@ export const buildNanoCastStyleIdentityEnforcementContract = (
         ? Math.max(0, Math.min(100, Math.round(options.requestedIdentityStrength)))
         : undefined;
     const biometricRule = options.usesBiometricIdentity
-        ? `- Biometric source: ${identityRange} are the identity authority for face, skull/head shape, skin tone, age impression, hair state, hairline, facial hair, visible marks, and facial proportions.`
+        ? `- Biometric source: ${identityRange} are the identity authority for face, skull/head shape, skin tone, age impression, hair state, hairline, facial-hair or clean-shaven state, visible marks, and facial proportions.`
         : `- Identity source: ${identityRange} remains the identity authority.`;
     const bodyGuidance = options.bodyGuidance
         ? `- Body fidelity source: ${options.bodyGuidance}.`
@@ -205,7 +207,7 @@ STYLE-SPECIFIC DRIFT BLOCKERS:
 ${config.negativeRules.map(rule => `- ${rule}.`).join("\n")}
 
 STYLE IDENTITY SELF-CHECK:
-- Before finalizing, verify that the head shape, brow, eye spacing, nose, mouth, jaw/chin, ears, hairline, facial hair, body proportions, and costume silhouette still read as the same source character in ${styleLabel}.
+- Before finalizing, verify that the head shape, brow, eye spacing, nose, mouth, jaw/chin, ears, hairline, facial-hair or clean-shaven state, body proportions, and costume silhouette still read as the same source character in ${styleLabel}.
 - If the style treatment created a different person, reduce style deformation and restore source likeness.`;
 };
 

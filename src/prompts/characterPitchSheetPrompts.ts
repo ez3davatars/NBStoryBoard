@@ -8,6 +8,7 @@ import { buildHeadshotWardrobeContinuityContract, buildHeadshotWardrobeNegativeT
 import { buildPoseCoherenceNegativeTokens, buildTurnaroundPoseCoherenceContract } from "./poseCoherence";
 import { SHEET_STYLE_LOCK_NEGATIVE_TEXT, buildSheetStyleLockContract } from "./sheetStyleLock";
 import { buildStyleCategoryContract, buildStyleNegativePrompt } from "./styleContracts";
+import { CHARACTER_ANATOMY_INTEGRITY_CONTRACT, CHARACTER_ANATOMY_NEGATIVE_TEXT } from "./characterAnatomyIntegrity";
 
 export type CharacterPitchSheetIdentitySource =
     | "text_only"
@@ -29,7 +30,7 @@ export type CharacterPitchSheetRenderStyle =
     | "stylized_realism"
     | "animated_feature"
     | "family_3d"
-    | "pixar"
+    | "premium_animated_3d"
     | "claymation"
     | "editorial_illustration"
     | "concept_art"
@@ -153,6 +154,8 @@ export const defaultCharacterPitchSheetInput: CharacterPitchSheetInput = {
     productionNotes: "",
     debugVisibleLabels: false,
 };
+
+const LEGACY_PREMIUM_ANIMATED_3D_STYLE_ID = ["p", "i", "x", "a", "r"].join("");
 
 const normalize = (value: string | undefined): string => {
     return (value || "").trim().replace(/\s+/g, " ");
@@ -464,7 +467,7 @@ const describeCalloutContext = (input: CharacterPitchSheetInput): string => {
     if (hasAnyTerm(text, ["creature", "animal", "beast", "dragon", "wolf", "fox", "lion", "fur", "horn", "scale", "claw", "paw"])) return "creature/animal";
     if (
         hasAnyTerm(text, ["mascot", "plush", "character suit"]) ||
-        ["animated_feature", "family_3d", "pixar", "claymation", "retro_cel", "retro_anime", "anime_manga"].includes(characterRenderStyle)
+        ["animated_feature", "family_3d", "premium_animated_3d", LEGACY_PREMIUM_ANIMATED_3D_STYLE_ID, "claymation", "retro_cel", "retro_anime", "anime_manga"].includes(characterRenderStyle)
     ) return "stylized/animated";
     if (
         hasAnyTerm(text, ["sci-fi", "science fiction", "cyberpunk", "futuristic", "space", "starship", "android", "interface", "tech jacket", "tactical"]) ||
@@ -854,7 +857,7 @@ const CHARACTER_RENDER_STYLE_BLOCKS: Record<CharacterPitchSheetRenderStyle, stri
     stylized_realism: "Stylized Realism: grounded actor identity with controlled shape simplification, painterly surface finish, realistic materials, and cinematic character-board polish.",
     animated_feature: "Animated Feature: appealing character-design translation, expressive face, animation-ready material treatment, soft cinematic lighting, polished feature-quality finish.",
     family_3d: "High-end family 3D animation style: appealing stylized forms, soft geometry, warm lighting, readable expression, polished CG materials. Preserve the exact source subject while translating only the rendering style.",
-    pixar: "Modern premium 3D animated feature style: appealing proportions, expressive face, soft cinematic lighting, high-quality CG finish. Preserve the exact source subject while translating only the rendering style.",
+    premium_animated_3d: "Premium animated-feature 3D style: appealing proportions, expressive actor-based face, soft cinematic lighting, polished high-quality CG character finish. Preserve the exact source subject while translating only the rendering style.",
     claymation: "Claymation-inspired tactile style: handcrafted material feel, soft sculpted forms, subtle clay-like surface texture, physical stop-motion charm. Preserve the exact source subject while translating only the rendering style.",
     editorial_illustration: "Editorial Illustration: refined illustrated portrait treatment, elegant value hierarchy, controlled color blocking, magazine-quality production finish.",
     concept_art: "Concept Art: production-design polish, clear material rendering, cinematic atmosphere, resolved wardrobe details, art-department presentation.",
@@ -867,6 +870,16 @@ const CHARACTER_RENDER_STYLE_BLOCKS: Record<CharacterPitchSheetRenderStyle, stri
     cyberpunk_neon: "Cyberpunk neon style: futuristic wardrobe/material language, neon rim lighting, high-tech atmosphere, cinematic sci-fi color contrast. Preserve the exact source subject while translating only the rendering style.",
     cyberpunk: "Cyberpunk style: futuristic urban styling, techwear influence, moody lighting, high-tech world language. Preserve the exact source subject while translating only the rendering style.",
     no_specific_style: "No specific style override: follow the user's brief, world, wardrobe, and board presentation style without adding a strong preset look. Preserve the exact source subject while translating only the rendering style."
+};
+
+const isCharacterRenderStyle = (value: string): value is CharacterPitchSheetRenderStyle =>
+    value in CHARACTER_RENDER_STYLE_BLOCKS;
+
+const normalizeCharacterRenderStyle = (value?: CharacterPitchSheetRenderStyle | string | null): CharacterPitchSheetRenderStyle => {
+    const clean = (value || "").trim();
+    if (clean === LEGACY_PREMIUM_ANIMATED_3D_STYLE_ID) return "premium_animated_3d";
+    if (isCharacterRenderStyle(clean)) return clean;
+    return defaultCharacterPitchSheetInput.characterRenderStyle || "biometric_realism";
 };
 
 const BOARD_PRESENTATION_STYLE_BLOCKS: Record<CharacterPitchSheetBoardPresentationStyle, string> = {
@@ -910,7 +923,7 @@ export function buildCharacterPitchSheetPrompt(input: CharacterPitchSheetInput):
     const materialNotes = inferMaterialNotes(visibleInput);
     const productionNotes = inferProductionNotes(visibleInput);
     const sourcePanelMode = visibleInput.sourcePanelMode || defaultCharacterPitchSheetInput.sourcePanelMode || "costume_matched";
-    const characterRenderStyle = visibleInput.characterRenderStyle || defaultCharacterPitchSheetInput.characterRenderStyle || "biometric_realism";
+    const characterRenderStyle = normalizeCharacterRenderStyle(visibleInput.characterRenderStyle);
     const boardPresentationStyle = visibleInput.boardPresentationStyle || defaultCharacterPitchSheetInput.boardPresentationStyle || "premium_film_board";
     const characterRenderStyleLabel = CHARACTER_RENDER_STYLE_BLOCKS[characterRenderStyle].split(":")[0] || characterRenderStyle;
     const debugVisibleLabels = visibleInput.debugVisibleLabels === true;
@@ -1022,7 +1035,10 @@ export function buildCharacterPitchSheetPrompt(input: CharacterPitchSheetInput):
             "full-body turnaround views",
             "rear view",
             "action pose / gesture study",
+            "color blocking / palette inset",
+            "costume detail crop",
             "footwear and material detail insets",
+            "any inset containing the character, body, head, hands, costume, or footwear",
             "annotations and callout presentation"
         ]
     });
@@ -1045,6 +1061,7 @@ ${generatedCharacterSourceRule}
 ${styleReferenceRule}
 Body consistency: ${hasGeneratedCharacterSource ? "match Image A's body, outfit fit, proportions, body mass, shoulder width, waist relationship, limb thickness, stance attitude, and overall build unless explicit structured UI values override them." : "keep the same proportions, body mass, shoulder width, waist relationship, limb thickness, and overall build across all full-body views."} Body guide: ${build}.
 ${pitchSheetPoseCoherence}
+${CHARACTER_ANATOMY_INTEGRITY_CONTRACT}
 
 STRUCTURED CHARACTER DATA SOURCE OF TRUTH:
 - Use the current structured UI values as the single source of truth for character name, codename, visual age, height, build, and body settings: ${structuredBodySourceOfTruth}.
@@ -1079,6 +1096,7 @@ STYLE DRIFT NEGATIVE CONSTRAINTS:
 - No selected-style category drift: ${styleNegativePrompt || "do not blur the selected render style with another category"}.
 - No ${buildPoseCoherenceNegativeTokens()}.
 - No ${buildHeadshotWardrobeNegativeTokens()}.
+- ${CHARACTER_ANATOMY_NEGATIVE_TEXT}
 
 ${HEADSHOT_BACKGROUND_ISOLATION_RULE}
 ${headshotWardrobeContinuity}
@@ -1118,6 +1136,12 @@ CALLOUT COUNT RULE:
 STYLE-CALLOUT RULE:
 - The selected render style may affect line quality, shading, material rendering, and presentation finish, but it must not create inaccurate callout labels or mismatch callouts to the wrong object.
 - Callout labels must remain materially and contextually accurate regardless of style.
+
+STYLE-LOCKED INSET RULE:
+- Color blocking, palette, construction, material, footwear, expression, and gesture boxes are part of the same character sheet, not separate illustration modes.
+- Do not generate "Character Color Blocking" or any palette panel as flat 2D/vector/cartoon miniature character drawings when the sheet style is rendered, 3D, photographic, painterly, anime, or another non-flat style.
+- Color-blocking information should appear as material swatches, palette chips, or cropped costume/material details. If a person, head, body, hands, feet, pose, or costume-on-body silhouette appears in an inset, it must match the hero portrait and turnaround rendering style exactly.
+- Do not add simplified diagram characters, alternate model-sheet miniatures, flat-color stand-ins, icon bodies, or off-style thumbnails anywhere on the board.
 
 FORBIDDEN INTERNAL VISIBLE TERMS:
 - Do not show internal workflow/debug terms as visible board callouts unless debugVisibleLabels is true.

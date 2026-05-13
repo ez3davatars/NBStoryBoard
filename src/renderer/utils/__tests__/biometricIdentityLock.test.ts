@@ -3,9 +3,11 @@ import { describe, expect, it } from 'vitest';
 import {
   BIOMETRIC_IDENTITY_LOCK_NEGATIVE_TEXT,
   buildBiometricIdentityLockContract,
+  buildStrictBiometricIdentityContract,
   createBiometricIdentityLock,
   withBiometricIdentityLockContract,
 } from '../../../prompts/identityContracts';
+import { buildNanoCastStyleIdentityEnforcementContract } from '../../../prompts/nanoCastStyleIdentityEnforcement';
 
 const buildLock = (characterId: string, identityRangeText = '[IMAGE 1] to [IMAGE 5]') =>
   createBiometricIdentityLock({
@@ -97,5 +99,27 @@ describe('biometric identity lock contract', () => {
     expect(prompt).toContain('"character_id": "char-generated-secondary"');
     expect(prompt).toContain('Generated source image [IMAGE 1] is secondary to identity_lock');
     expect(prompt).toContain('Images B-D / [IMAGE 2] to [IMAGE 4]');
+  });
+
+  it('does not hardcode a facial-hair style into biometric identity prompts', () => {
+    const strictContract = buildStrictBiometricIdentityContract({
+      identityRangeText: '[IMAGE 1] to [IMAGE 5]',
+      identityStrength: 100,
+      selectedStyleLabel: 'Family 3D Animation',
+      mode: 'biometric',
+      faceDominant: true,
+    });
+    const styleContract = buildNanoCastStyleIdentityEnforcementContract('family_3d', {
+      identityRangeText: '[IMAGE 1] to [IMAGE 5]',
+      requestedIdentityStrength: 100,
+      selectedStyleLabel: 'Family 3D Animation',
+      usesBiometricIdentity: true,
+    });
+    const combined = `${strictContract}\n${styleContract}`.toLowerCase();
+
+    expect(combined).toContain('clean-shaven');
+    expect(combined).not.toContain('salt-and-pepper goatee');
+    expect(combined).not.toContain('jaw/chin/goatee');
+    expect(combined).not.toContain('generic animated bald man');
   });
 });

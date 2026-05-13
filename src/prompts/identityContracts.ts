@@ -220,7 +220,7 @@ export const buildStrictBiometricIdentityContract = ({
 - Preserve the subject's recognizable facial structure, skull shape, head shape, brow structure, eye spacing, nose bridge/tip shape, cheek volume, mouth proportions, jaw/chin structure, skin tone, age impression, and visible facial marks.
 - Preserve facial topology: the source person's brow-to-eye relationship, eye spacing, nose projection, cheek volume, mouth width, jaw mass, chin shape, and facial asymmetries must survive stylization.
 - Preserve the bald head or hair state shown in the biometric scan.
-- Preserve visible facial hair patterns, including salt-and-pepper goatee shape, density, length, color distribution, and placement if present.
+- Preserve the visible facial-hair state exactly: if facial hair is present, keep its shape, density, length, color distribution, and placement; if the subject is clean-shaven, do not add stubble, mustache, beard, or goatee.
 - Preserve mature facial features and fuller/broader face structure when shown by the scan, but do not translate facial fullness into overweight body mass.
 - Stylization may simplify texture/rendering, but it must not erase recognizable identity, shrink the broad mature face, soften the jaw/chin into a generic cartoon face, or average the nose/eyes/brow into a style template.
 - Do not make the subject younger, slimmer, smoother, more symmetrical, or more conventionally attractive unless explicitly requested.
@@ -228,5 +228,5 @@ export const buildStrictBiometricIdentityContract = ({
 - The final result must be immediately recognizable as the scanned subject in the selected style.
 ${highLock ? "- HIGH LOCK ENFORCEMENT: facial geometry and distinctive identity traits outrank style preset proportions, body archetype defaults, outfit prompts, hair prompts, and branding assets." : "- Identity likeness outranks style preset proportions, outfit prompts, hair prompts, and branding assets."}
 - When style defaults conflict with biometric facial topology, preserve biometric topology and express style through materials, shader, lighting, proportions around the existing likeness, and non-photoreal surface treatment.
-- Treat scan clothing and background as non-authoritative; use face-dominant scans only for identity, head, face, visible neck, skin, hair state, facial hair, age impression, and marks.`;
+- Treat scan clothing and background as non-authoritative; use face-dominant scans only for identity, head, face, visible neck, skin, hair state, facial-hair or clean-shaven state, age impression, and marks.`;
 };

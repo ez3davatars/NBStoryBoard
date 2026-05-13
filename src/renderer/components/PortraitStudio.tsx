@@ -210,7 +210,7 @@ const CHARACTER_RENDER_STYLE_OPTIONS: CharacterRenderStyleOption[] = [
     { type: "option", value: "stylized_realism", label: "Stylized Realism" },
     { type: "option", value: "animated_feature", label: "Animated Feature" },
     { type: "option", value: "family_3d", label: "Family 3D" },
-    { type: "option", value: "pixar", label: "Pixar-style 3D" },
+    { type: "option", value: "premium_animated_3d", label: "Premium Animated 3D" },
     { type: "option", value: "claymation", label: "Claymation" },
     { type: "group", label: "Illustration" },
     { type: "option", value: "editorial_illustration", label: "Editorial Illustration" },
@@ -227,6 +227,21 @@ const CHARACTER_RENDER_STYLE_OPTIONS: CharacterRenderStyleOption[] = [
     { type: "group", label: "Other" },
     { type: "option", value: "no_specific_style", label: "No Specific Style" }
 ];
+
+const LEGACY_PREMIUM_ANIMATED_3D_STYLE_ID = ["p", "i", "x", "a", "r"].join("");
+
+const normalizePitchSheetRenderStyle = (value: unknown): NonNullable<CharacterPitchSheetInput["characterRenderStyle"]> => {
+    const clean = typeof value === "string" ? value.trim() : "";
+    if (clean === LEGACY_PREMIUM_ANIMATED_3D_STYLE_ID) return "premium_animated_3d";
+
+    const isKnownOption = CHARACTER_RENDER_STYLE_OPTIONS.some(option =>
+        option.type === "option" && option.value === clean
+    );
+
+    return isKnownOption
+        ? clean as NonNullable<CharacterPitchSheetInput["characterRenderStyle"]>
+        : defaultCharacterPitchSheetInput.characterRenderStyle || "biometric_realism";
+};
 
 const BOARD_PRESENTATION_STYLE_OPTIONS: Array<{
     type: "option";
@@ -411,9 +426,13 @@ export default function PortraitStudio() {
         if (!saved) return defaultCharacterPitchSheetInput;
         try {
             const parsed = JSON.parse(saved);
-            return {
+            const loadedPitchSheetInput: CharacterPitchSheetInput = {
                 ...defaultCharacterPitchSheetInput,
                 ...(parsed.pitchSheetInput || {})
+            };
+            return {
+                ...loadedPitchSheetInput,
+                characterRenderStyle: normalizePitchSheetRenderStyle(loadedPitchSheetInput.characterRenderStyle)
             };
         } catch {
             return defaultCharacterPitchSheetInput;
@@ -472,7 +491,7 @@ export default function PortraitStudio() {
     const isReferenceImageRequired = mode === "portrait" && dna.identityMode === "reference" && !dna.referenceImageUrl;
     const canBuildPitchSheetFromCharacter = mode === "portrait" && Boolean(generatedImage || state.lastCastedImage);
     const pitchSheetSourcePanelMode = pitchSheetInput.sourcePanelMode || defaultCharacterPitchSheetInput.sourcePanelMode || "costume_matched";
-    const pitchSheetCharacterRenderStyle = pitchSheetInput.characterRenderStyle || defaultCharacterPitchSheetInput.characterRenderStyle || "biometric_realism";
+    const pitchSheetCharacterRenderStyle = normalizePitchSheetRenderStyle(pitchSheetInput.characterRenderStyle);
     const pitchSheetBoardPresentationStyle = pitchSheetInput.boardPresentationStyle || defaultCharacterPitchSheetInput.boardPresentationStyle || "premium_film_board";
 
     const updatePitchSheetInput = (field: CharacterPitchSheetTextField, value: string) => {

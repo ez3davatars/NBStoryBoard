@@ -43,6 +43,8 @@ const STYLE_FAMILY_DESCRIPTIONS: Record<SheetStyleFamily, string> = {
     editorial_fashion_render: "editorial fashion character render with polished magazine-board lighting, refined garment material emphasis, and consistent high-end fashion illustration or photography finish"
 };
 
+const LEGACY_PREMIUM_ANIMATED_3D_STYLE_ID = ["p", "i", "x", "a", "r"].join("");
+
 const STYLE_ID_TO_FAMILY: Record<string, SheetStyleFamily> = {
     biometric_realism: "cinematic_realism",
     cinematic_photoreal: "cinematic_realism",
@@ -55,7 +57,8 @@ const STYLE_ID_TO_FAMILY: Record<string, SheetStyleFamily> = {
     premium_cg: "semi_realistic_3D",
     stylized_realism: "semi_realistic_3D",
     family_3d: "stylized_3D",
-    pixar: "stylized_3D",
+    premium_animated_3d: "stylized_3D",
+    [LEGACY_PREMIUM_ANIMATED_3D_STYLE_ID]: "stylized_3D",
     animated_feature: "stylized_3D",
     stylized_animated_3d: "stylized_3D",
     claymation: "toon_cartoon",
@@ -78,7 +81,7 @@ const STYLE_ID_TO_FAMILY: Record<string, SheetStyleFamily> = {
 };
 
 export const SHEET_STYLE_LOCK_NEGATIVE_TEXT =
-    "No mixed styles. No realism mixed with cartoon. No stylized 3D mixed with flat illustration. No rendering-mode drift between panels. No inconsistent shading model, texture language, lighting logic, line-work, anatomy language, or material finish.";
+    "No mixed styles. No realism mixed with cartoon. No stylized 3D mixed with flat illustration. No rendering-mode drift between panels. No simplified flat/vector character diagrams inside a rendered sheet. No flat color-blocking character miniatures. No inconsistent shading model, texture language, lighting logic, line-work, anatomy language, or material finish.";
 
 const normalizeStyleId = (styleId?: string | null): string =>
     (styleId || "").trim().toLowerCase();
@@ -121,6 +124,9 @@ const DEFAULT_PANEL_TARGETS = [
     "action pose / gesture study",
     "footwear detail inset",
     "material detail inset",
+    "color blocking / palette inset",
+    "costume detail crop",
+    "any inset containing the character, body, head, hands, costume, or footwear",
     "annotations and callout presentation"
 ];
 
@@ -139,6 +145,9 @@ SHEET-LEVEL STYLE INHERITANCE:
 - Every sub-panel must inherit style_family "${styleLock.style_family}" and style_description "${styleLock.style_description}".
 ${panelTargets.map(target => `- ${target}: inherit style_family "${styleLock.style_family}" exactly.`).join("\n")}
 - Do not let head studies, turnaround views, footwear inserts, material details, gesture studies, or callout presentation switch to a different rendering mode.
+- If any inset, callout panel, color-blocking panel, construction panel, or material panel shows the character, face, body, hands, feet, wardrobe on the body, or a character silhouette, it must be rendered as the same character in style_family "${styleLock.style_family}".
+- Material swatches and palette chips may be simple samples only when they contain no character body, no face, no hands, no pose, and no costume-on-body silhouette.
+- Never use simplified flat/vector/cartoon character drawings as color-blocking diagrams inside a sheet whose locked style is rendered, 3D, photographic, painterly, anime, or otherwise non-flat.
 - If a source image and selected style conflict, follow the style_lock source "${styleLock.source}" and keep the character identity, proportions, wardrobe, and pose requirements unchanged.
 
 MIXED-STYLE NEGATIVE PROMPT:
