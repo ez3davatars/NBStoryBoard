@@ -96,7 +96,7 @@ export const HelpCenterDrawer: React.FC = () => {
                         "STAGE is a preview feature. Use it heavily for concepting, scene planning, and selective direction.",
                         "For the strongest results: Always use clearly saved actors, cleanly isolated props, and very specific direction.",
                         "Drag actors and props from the left sidebars onto the canvas.",
-                        "Click on any active token on the canvas to refine its Z-Depth order, Scale, and explicit Occlusion.",
+                        "Click on any active token on the canvas to refine its scale and placement.",
                         "Direct your actors: Describe exactly what the character is doing inside 'Actor Intelligence' (e.g., 'sitting on the floor -> looking shocked').",
                         "Scene Director (Right Panel): Use this to explicitly define global rules for your Environment, Lighting, Camera, and Layout.",
                         "Reference Stack (Right Panel): Use this if you want the AI to place actors based on named references and directional notes rather than visual X/Y canvas coordinates.",

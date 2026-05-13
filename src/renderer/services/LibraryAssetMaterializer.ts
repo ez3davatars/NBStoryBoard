@@ -1,5 +1,71 @@
 import { resolveDisplayUrl } from '../utils/assetUrlResolver';
 
+const MAX_REFERENCE_DISPLAY_SIZE = 2048;
+const REFERENCE_JPEG_QUALITY = 0.9;
+
+const imageExtensionFromMime = (mimeType: string | undefined, fallbackName?: string): string => {
+    const cleanMime = (mimeType || '').toLowerCase();
+    if (cleanMime.includes('jpeg') || cleanMime.includes('jpg')) return 'jpg';
+    if (cleanMime.includes('webp')) return 'webp';
+    if (cleanMime.includes('png')) return 'png';
+
+    const extension = fallbackName?.split('.').pop()?.toLowerCase();
+    if (extension && /^[a-z0-9]{2,5}$/.test(extension)) return extension;
+
+    return 'png';
+};
+
+const blobToDataUrl = (blob: Blob): Promise<string> => {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.onerror = () => reject(new Error('Failed to read image blob'));
+        reader.readAsDataURL(blob);
+    });
+};
+
+const optimizeReferenceDisplayUrl = async (
+    blob: Blob,
+    options: { maxSize?: number; quality?: number } = {}
+): Promise<string> => {
+    const maxSize = options.maxSize ?? MAX_REFERENCE_DISPLAY_SIZE;
+    const quality = options.quality ?? REFERENCE_JPEG_QUALITY;
+
+    try {
+        const sourceUrl = URL.createObjectURL(blob);
+        try {
+            const image = new Image();
+            image.decoding = 'async';
+            await new Promise<void>((resolve, reject) => {
+                image.onload = () => resolve();
+                image.onerror = () => reject(new Error('Failed to decode reference image'));
+                image.src = sourceUrl;
+            });
+
+            const ratio = Math.min(1, maxSize / Math.max(image.naturalWidth || 1, image.naturalHeight || 1));
+            const width = Math.max(1, Math.round((image.naturalWidth || 1) * ratio));
+            const height = Math.max(1, Math.round((image.naturalHeight || 1) * ratio));
+
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) throw new Error('Canvas context unavailable');
+
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(0, 0, width, height);
+            ctx.drawImage(image, 0, 0, width, height);
+
+            return canvas.toDataURL('image/jpeg', quality);
+        } finally {
+            URL.revokeObjectURL(sourceUrl);
+        }
+    } catch (error) {
+        console.warn('[LibraryAssetMaterializer] Reference display optimization failed; using original data URL:', error);
+        return blobToDataUrl(blob);
+    }
+};
+
 export const LibraryAssetMaterializer = {
     async materializeCastAsset(args: {
         sourceUrl: string;
@@ -86,12 +152,8 @@ export const LibraryAssetMaterializer = {
             const success = await window.electronAPI.writeFile(finalPath, new Uint8Array(buffer));
             if (!success) throw new Error('Failed to write file to disk');
 
-            // Generate resilient Base64 Data URL for immediate session memory display
-            const displayUrl = await new Promise<string>((resolve) => {
-                const reader = new FileReader();
-                reader.onloadend = () => resolve(reader.result as string);
-                reader.readAsDataURL(blob);
-            });
+            // Keep React state light; the original file is already materialized on disk.
+            const displayUrl = await optimizeReferenceDisplayUrl(blob);
 
             return {
                 localPath: finalPath,
@@ -104,6 +166,54 @@ export const LibraryAssetMaterializer = {
                 localPath: undefined,
                 url: args.sourceUrl,
                 sourceUrl: args.sourceUrl
+            };
+        }
+    },
+
+    async materializeReferenceFile(args: {
+        file: File;
+        saveDirectoryPath: string | null;
+        slotIndex: number;
+    }) {
+        const displayUrlPromise = optimizeReferenceDisplayUrl(args.file);
+
+        if (!args.saveDirectoryPath || !window.electronAPI) {
+            const displayUrl = await displayUrlPromise;
+            return {
+                localPath: undefined,
+                url: displayUrl,
+                sourceUrl: displayUrl
+            };
+        }
+
+        try {
+            const timestamp = Date.now();
+            const relativeFolder = 'References';
+            const extension = imageExtensionFromMime(args.file.type, args.file.name);
+            const filename = `reference_slot_${args.slotIndex}_${timestamp}.${extension}`;
+
+            const folderPath = await window.electronAPI.joinPath(args.saveDirectoryPath, relativeFolder);
+            await window.electronAPI.createDir(folderPath);
+            const finalPath = await window.electronAPI.joinPath(folderPath, filename);
+
+            const buffer = await args.file.arrayBuffer();
+            const success = await window.electronAPI.writeFile(finalPath, new Uint8Array(buffer));
+            if (!success) throw new Error('Failed to write file to disk');
+
+            const displayUrl = await displayUrlPromise;
+
+            return {
+                localPath: finalPath,
+                url: displayUrl,
+                sourceUrl: displayUrl
+            };
+        } catch (error) {
+            console.warn('[LibraryAssetMaterializer] Failed to materialize reference file:', error);
+            const displayUrl = await displayUrlPromise;
+            return {
+                localPath: undefined,
+                url: displayUrl,
+                sourceUrl: displayUrl
             };
         }
     },

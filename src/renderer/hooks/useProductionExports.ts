@@ -293,7 +293,7 @@ export const useProductionExports = (state: AppState, dispatch: Dispatch<Action>
                 const folderName = `SHOT-${String(i + 1).padStart(2, '0')}-${shotName}`;
                 const shotDir = await batchDir.getDirectoryHandle(folderName, { create: true });
 
-                const promptForShot = compileV3DirectorPrompt(shot.director, shot.referenceSlots, shot.tokens);
+                const promptForShot = compileV3DirectorPrompt(shot.director, shot.referenceSlots, shot.tokens, shot.notes || '', shot.annotations);
 
                 const pack = {
                     app: 'NBStoryBoard',
