@@ -124,8 +124,106 @@ type StrictPromptDNA = {
   camera?: string;
 };
 
-export const compileV3DirectorPrompt = (director: DirectorSettings, slots: ReferenceSlot[], tokens: StageToken[] = [], bgPrompt: string = ''): string => {
+const HEIGHT_RELATIONSHIP_PATTERNS = [
+  /\btaller than\b/i,
+  /\bshorter than\b/i,
+  /\bsame height\b/i,
+  /\bheight should reach\b/i,
+  /\bmake\s+[^.\n,;:]+?\s+taller\b/i,
+  /\bmake\s+[^.\n,;:]+?\s+shorter\b/i,
+  /\bheight\b[^.\n]*\b(?:arrow|tip|line|reach|taller|shorter)\b/i
+];
+
+const textHasHeightRelationshipIntent = (text?: string | null): boolean => {
+  if (!text || !text.trim()) return false;
+  return HEIGHT_RELATIONSHIP_PATTERNS.some((pattern) => pattern.test(text));
+};
+
+const normalizeHeightInstructionText = (text: string): string => (
+  text
+    .replace(/\s+/g, ' ')
+    .replace(/"/g, "'")
+    .trim()
+    .slice(0, 280)
+);
+
+const getAnnotationInstructionText = (annotation: StageAnnotation): string => (
+  [annotation.label, annotation.text]
+    .map((value) => (value || '').trim())
+    .filter(Boolean)
+    .join(': ')
+);
+
+export const HEIGHT_RELATIONSHIP_LOCK_PROMPT_TEXT = `HEIGHT RELATIONSHIP LOCK:
+Detected height instruction: "<detected height wording>".
+Apply the detected height instruction as a relational body-scale constraint between the named staged actors.
+The target actor must be visibly taller/shorter than the reference actor.
+If the request says same height, keep the actors approximately the same visible height.
+If the request says a height should reach an arrow tip/line, treat that arrow as an approximate height guide for the named actor.
+Adjust full-body proportions naturally, not just head size.
+Keep both actors on the same floor plane.
+Preserve identity, face, wardrobe, pose, props/tools, lighting, and scene.
+Do not use perspective trickery.
+Ensure eye line, shoulder line, head top, torso length, and leg length support the requested height relationship.`;
+
+export const HEIGHT_ANNOTATION_ARROW_GUIDE_PROMPT_TEXT = `The arrow is an annotation guide for intended height, not an object in the final scene. Do not render the arrow unless explicitly requested.`;
+
+export const buildHeightRelationshipLockBlock = (input: {
+  director?: Pick<DirectorSettings, 'subject' | 'environment'>;
+  notes?: string;
+  bgPrompt?: string;
+  tokens?: StageToken[];
+  annotations?: StageAnnotation[];
+}): string => {
+  const annotations = input.annotations || [];
+  const tokens = input.tokens || [];
+  const textSources = [
+    input.notes,
+    input.bgPrompt,
+    input.director?.subject,
+    input.director?.environment,
+    ...tokens.flatMap((token) => [token.tag, token.actionNote, token.intelligence, token.notes]),
+    ...annotations.map(getAnnotationInstructionText)
+  ]
+    .map((value) => (value || '').trim())
+    .filter(Boolean);
+
+  const detectedInstructions = Array.from(
+    new Set(
+      textSources
+        .filter(textHasHeightRelationshipIntent)
+        .map(normalizeHeightInstructionText)
+    )
+  );
+
+  if (detectedInstructions.length === 0) return '';
+
+  const hasArrowGuide =
+    annotations.some((annotation) => annotation.type === 'arrow' && annotation.visible !== false) ||
+    detectedInstructions.some((text) => /\b(?:arrow|tip|line)\b/i.test(text));
+
+  const detectedText = detectedInstructions.slice(0, 3).join(' / ');
+  const block = HEIGHT_RELATIONSHIP_LOCK_PROMPT_TEXT.replace('<detected height wording>', () => detectedText);
+
+  return hasArrowGuide
+    ? `${block}\n${HEIGHT_ANNOTATION_ARROW_GUIDE_PROMPT_TEXT}`
+    : block;
+};
+
+export const compileV3DirectorPrompt = (
+  director: DirectorSettings,
+  slots: ReferenceSlot[],
+  tokens: StageToken[] = [],
+  bgPrompt: string = '',
+  annotations: StageAnnotation[] = []
+): string => {
   const activeRefs = getActiveReferenceSlots(slots);
+  const heightRelationshipBlock = buildHeightRelationshipLockBlock({
+    director,
+    bgPrompt,
+    tokens,
+    annotations
+  });
 
   const segments: string[] = [];
   const hasVisibleHumanSubject =
@@ -315,6 +413,7 @@ export const compileV3DirectorPrompt = (director: DirectorSettings, slots: Refer
   if (mergedNotes) main += `Scene Notes/Subject: ${mergedNotes}. `;
   if (director.environment.trim()) main += `Environment: ${director.environment.trim()}. `;
   if (main.trim()) segments.push(main.trim());
+  if (heightRelationshipBlock) segments.push(heightRelationshipBlock);
 
   // 4) Knowledge injection
   if (director.knowledge.trim()) {
@@ -487,6 +586,12 @@ export const buildStrictPrompt = (
     // Director Canvas Semantic Handoff
     const intents = buildHumanPlacementIntents(tokens, annotations);
     const intentBlock = intents.length > 0 ? formatPlacementIntents(intents) : "";
+    const heightRelationshipBlock = buildHeightRelationshipLockBlock({
+        director,
+        notes,
+        tokens,
+        annotations
+    });
 
     const refStackActive = getActiveReferenceSlots(referenceSlots);
     const refStackBlock = refStackActive.length > 0
@@ -547,6 +652,7 @@ export const buildStrictPrompt = (
         "",
         dnaBlock ? `### ANCHOR DNA:\n${dnaBlock}\n` : "",
         notes ? `### DIRECTOR NOTES (EXPLICIT USER REQUEST - MANDATORY LOCATION/SCENE):\n${notes}\n` : "",
+        heightRelationshipBlock ? `### HEIGHT RELATIONSHIP INSTRUCTIONS\n${heightRelationshipBlock}\n` : "",
         "",
         "### REGION COMPOSITION PLAN (FOLLOW EXACTLY):",
         intentBlock ? `${intentBlock}\n\n` : "",
@@ -616,6 +722,12 @@ export const buildLoosePrompt = (
     // Director Canvas Semantic Handoff
     const intents = buildHumanPlacementIntents(tokens, annotations);
     const intentBlock = intents.length > 0 ? formatPlacementIntents(intents) : "";
+    const heightRelationshipBlock = buildHeightRelationshipLockBlock({
+        director,
+        bgPrompt,
+        tokens,
+        annotations
+    });
 
     let p = "";
     if (tech.length > 0) p += `(Master Style: ${tech.join(', ')})\n\n`;
@@ -629,6 +741,7 @@ export const buildLoosePrompt = (
         if (director.textStyle.trim()) t += ` in style of ${director.textStyle.trim()}`;
         p += `(Text Layer: ${t}). `;
     }
+    if (heightRelationshipBlock) p += `\n\n### HEIGHT RELATIONSHIP INSTRUCTIONS\n${heightRelationshipBlock}\n\n`;
 
     if (refStackBlock) p += `${refStackBlock}\n\n`;
     p += "Cinematic composition. ";
@@ -798,7 +911,8 @@ export const buildStrictAnchorReplacementPrompt = (p: {
     hasDepthMap: boolean,
     activeRefs: ReferenceSlot[],
     actorIdentitySets?: ActorIdentityReferenceSet[],
-    tokens?: StageToken[]
+    tokens?: StageToken[],
+    annotations?: StageAnnotation[]
 }): string => {
     const strictIdentitySets = (p.actorIdentitySets && p.actorIdentitySets.length > 0)
         ? p.actorIdentitySets
@@ -846,12 +960,22 @@ CRITICAL DIRECTIVES:
 10. GAZE/HEAD POSE LOCK (REPLACE MODE): Match each target subject's head orientation and eye gaze from CLEAN_BG_PLATE at that location. Do NOT default to camera-facing portrait orientation unless the anchor subject is camera-facing.
 11. LIGHTING LOCK (REPLACE MODE): Match local scene lighting from CLEAN_BG_PLATE at region boundaries (key/fill direction, shadow softness, color temperature). Do NOT import lighting style from identity references.`;
 
+    const heightRelationshipBlock = buildHeightRelationshipLockBlock({
+        notes: p.bgPrompt,
+        tokens: p.tokens || [],
+        annotations: p.annotations || []
+    });
+
+    if (heightRelationshipBlock) {
+        prompt += `\n\n### HEIGHT RELATIONSHIP INSTRUCTIONS\n${heightRelationshipBlock}`;
+    }
+
     if (p.sceneLock) {
         prompt += `\n4. SCENE LOCK ACTIVE: ${SCENE_LOCK_NEGATIVE_TOKENS}`;
     }
 
     if (p.hasDepthMap) {
-        prompt += `\n5. DEPTH MAP ACTIVE: Perfectly preserve the 3D spatial relationships and occlusion defined by the depth map.`;
+        prompt += `\n5. SPATIAL HINT AVAILABLE: Use the staged layout as an estimated visual composition helper for actor layering and occlusion. Do not treat it as precise or authoritative geometry.`;
     }
 
     if (p.replaceAnchorSubjects) {

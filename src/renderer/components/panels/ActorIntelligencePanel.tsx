@@ -52,8 +52,11 @@ export const ActorIntelligencePanel = ({
     onRefreshSpatialData,
     style
 }: ActorIntelligencePanelProps) => {
+    const showInternalDepthControls = import.meta.env.DEV;
     const isDepthOff = !state.depthMapUrl && !state.isDepthProcessing;
-    const headerColor = isDepthOff
+    const headerColor = !showInternalDepthControls
+        ? 'text-purple-400'
+        : isDepthOff
         ? 'text-gray-500'
         : authorityStatus === 'AUTHORITATIVE'
             ? 'text-green-400'
@@ -90,14 +93,14 @@ export const ActorIntelligencePanel = ({
             onDrop={onDrop}
             style={style}
             headerColor={headerColor}
-            rightElement={
+            rightElement={showInternalDepthControls ? (
                 <div className={`px-2 py-0.5 rounded-[4px] text-[8px] font-black tracking-tight uppercase border transition-colors ${statusClass}`}>
                     {statusLabel}
                 </div>
-            }
+            ) : undefined}
         >
             {/* TECHNICAL DEBUG (DEV ONLY) */}
-            {import.meta.env.DEV && (
+            {showInternalDepthControls && (
                 <div className="mb-4 p-2 bg-[#1c1c1f] rounded-lg border border-[#27272a] space-y-2">
                     <h5 className="text-[11px] font-black text-blue-400/80 uppercase tracking-tighter mb-1">
                         Debug Overlays
@@ -115,53 +118,53 @@ export const ActorIntelligencePanel = ({
                                 }}
                                 disabled={state.isDepthProcessing || (!state.depthMapUrl && !state.backgroundUrl)}
                                 className={`flex-1 px-3 py-1.5 text-[11px] font-bold rounded border transition-colors flex items-center justify-center gap-1 ${state.isDepthProcessing ? 'bg-blue-900/10 text-blue-300/50 border-blue-500/10 cursor-wait' : showDebugDepthMap ? 'bg-blue-500/20 text-blue-400 border-blue-500/50' : 'bg-black/20 text-gray-400 border-white/10 hover:bg-[#27272a]'}`}
-                                title={state.depthMapUrl ? "Visualizes the projected high-fidelity depth map. Lighter values represent closer objects." : "Generate an optional depth map for grounding and occlusion helpers."}
+                                title={state.depthMapUrl ? "Visualizes the internal estimated spatial hint." : "Generate an internal estimated spatial hint for staging helpers."}
                             >
                                 {state.isDepthProcessing && <RefreshCcw className="w-3 h-3 animate-spin" />}
-                                {state.isDepthProcessing ? 'Generating...' : state.depthMapUrl ? 'Depth Map' : 'Generate Depth'}
+                                {state.isDepthProcessing ? 'Generating...' : state.depthMapUrl ? 'Spatial Hint' : 'Generate Hint'}
                             </button>
                             <button
                                 onClick={onRefreshSpatialData}
                                 disabled={state.isDepthProcessing || !state.backgroundUrl}
                                 className="px-2 py-2 bg-blue-900/20 text-blue-400 border border-blue-500/30 rounded hover:bg-blue-800/50 disabled:opacity-50 disabled:cursor-not-allowed"
-                                title="Generate or regenerate Depth Map & Floor Plane"
+                                title="Generate or regenerate internal spatial hint"
                             >
                                 <RefreshCcw className="w-3 h-3" />
                             </button>
                         </div>
 
-                        {/* 2. Floor Plane */}
+                        {/* 2. Advisory Grounding */}
                         <button
                             onClick={() => setShowDebugFloor(!showDebugFloor)}
                             className={`px-3 py-1.5 text-[11px] font-bold rounded border transition-colors ${showDebugFloor ? 'bg-blue-500/20 text-blue-400 border-blue-500/50' : 'bg-black/20 text-gray-400 border-white/10 hover:bg-[#27272a]'}`}
-                            title="Visualizes the detected ground plane (cyan line). This 'Grounding Baseline' triggers automatic foot placement for actors."
+                            title="Visualizes the internal estimated grounding line."
                         >
-                            Floor Plane
+                            Ground Hint
                         </button>
 
-                        {/* 3. Volumes */}
+                        {/* 3. Layout Volumes */}
                         <button
                             onClick={() => setShowDebugVolumes(!showDebugVolumes)}
                             className={`px-3 py-1.5 text-[11px] font-bold rounded border transition-colors ${showDebugVolumes ? 'bg-blue-500/20 text-blue-400 border-blue-500/50' : 'bg-black/20 text-gray-400 border-white/10 hover:bg-[#27272a]'}`}
-                            title="Visualizes occupied 3D volumes (amber boxes). These represent furniture or obstacles that actors can walk behind or in front of."
+                            title="Visualizes internal estimated layout volumes."
                         >
-                            Volumes
+                            Layout Volumes
                         </button>
 
-                        {/* 4. Bands */}
+                        {/* 4. Hint Bands */}
                         <button
                             onClick={() => setShowDebugBands(!showDebugBands)}
                             className={`px-3 py-1.5 text-[11px] font-bold rounded border transition-colors ${showDebugBands ? 'bg-blue-500/20 text-blue-400 border-blue-500/50' : 'bg-black/20 text-gray-400 border-white/10 hover:bg-[#27272a]'}`}
-                            title="Visualizes the depth 'slice' assigned to each actor in the scene."
+                            title="Visualizes the internal staging hint band assigned to each actor."
                         >
-                            Depth Bands
+                            Hint Bands
                         </button>
 
                         {/* 5. HUD */}
                         <button
                             onClick={() => setShowDebugActorOverlay(!showDebugActorOverlay)}
                             className={`px-3 py-1.5 text-[11px] font-bold rounded border transition-colors col-span-2 ${showDebugActorOverlay ? 'bg-blue-500/20 text-blue-400 border-blue-500/50' : 'bg-black/20 text-gray-400 border-white/10 hover:bg-[#27272a]'}`}
-                            title="Overlays raw spatial metrics (Z-Index, Depth Score) on top of each actor."
+                            title="Overlays raw internal spatial metrics on top of each actor."
                         >
                             Actor HUD
                         </button>
@@ -215,7 +218,8 @@ export const ActorIntelligencePanel = ({
                                     placeholder="Pose, Action, Lighting DNA..."
                                 />
 
-                                {/* Grounding Control */}
+                                {/* Internal advisory grounding control */}
+                                {showInternalDepthControls && (
                                 <div className="flex items-center justify-between gap-2 px-1">
                                     <button
                                         onClick={() => {
@@ -241,7 +245,7 @@ export const ActorIntelligencePanel = ({
                                         className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 px-3 rounded text-[11px] font-bold uppercase transition-all ${token.groundingEnabled ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-gray-800/50 text-gray-400 border border-gray-700/50 hover:bg-gray-800'}`}
                                     >
                                         <div className={`w-2 h-2 rounded-full ${token.groundingEnabled ? 'bg-emerald-400 -[0_0_4px_rgba(52,211,153,0.5)]' : 'bg-gray-600'}`} />
-                                        Grounding
+                                        Ground Hint
                                     </button>
 
                                     <div className="flex-1 flex items-center gap-2 bg-black/40 px-2 py-1 rounded border border-white/5">
@@ -268,6 +272,7 @@ export const ActorIntelligencePanel = ({
                                         <label htmlFor={`manual-${token.id}`} className="text-[10px] font-bold text-gray-500 uppercase cursor-pointer select-none">Manual</label>
                                     </div>
                                 </div>
+                                )}
 
 
                             </div>

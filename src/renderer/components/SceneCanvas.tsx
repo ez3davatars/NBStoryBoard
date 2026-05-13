@@ -128,6 +128,22 @@ const getErrorMessage = (error: unknown): string => {
     return String(error);
 };
 
+const formatStageGenerationError = (error: unknown): string => {
+    const rawMessage = getErrorMessage(error);
+    const isHostedProviderError =
+        /Hosted Execution Error\s+\[PROVIDER_ERROR\]/i.test(rawMessage) ||
+        /Google API Failed\s*\(5\d\d\)/i.test(rawMessage) ||
+        /\bINTERNAL\b|Internal error encountered/i.test(rawMessage);
+
+    if (!isHostedProviderError) return rawMessage;
+
+    return [
+        'Hosted provider returned a temporary internal error.',
+        'Your stage, reference stack, and prompt are still intact.',
+        'Retry Generate; if it repeats, reduce active refs/resolution or switch to BYOK for this render.'
+    ].join(' ');
+};
+
 type GeneratedImageResponse =
     | string
     | {
@@ -364,15 +380,21 @@ const SceneCanvas = () => {
 
     const downloadDepthMap = () => {
         if (!state.depthMapUrl) {
-            dispatch({ type: 'ADD_LOG', payload: { message: 'No depth map available to capture.', type: 'error' } });
+            if (import.meta.env.DEV) {
+                dispatch({ type: 'ADD_LOG', payload: { message: 'No internal spatial hint available to capture.', type: 'error' } });
+            }
             return;
         }
-        dispatch({ type: 'ADD_LOG', payload: { message: 'Capturing Scene Depth Map...', type: 'info' } });
+        if (import.meta.env.DEV) {
+            dispatch({ type: 'ADD_LOG', payload: { message: 'Capturing internal spatial hint...', type: 'info' } });
+        }
         const depthLink = document.createElement('a');
         depthLink.href = state.depthMapUrl;
-        depthLink.download = createUniqueDownloadFilename('NB_Scene_Depth.png');
+        depthLink.download = createUniqueDownloadFilename('NB_Internal_Spatial_Hint.png');
         depthLink.click();
-        dispatch({ type: 'ADD_LOG', payload: { message: 'Depth map captured successfully.', type: 'success' } });
+        if (import.meta.env.DEV) {
+            dispatch({ type: 'ADD_LOG', payload: { message: 'Internal spatial hint captured successfully.', type: 'success' } });
+        }
     };
 
     const ensureStagingAiAccess = useCallback(async (featureLabel: string): Promise<boolean> => {
@@ -519,6 +541,7 @@ const SceneCanvas = () => {
     const [showDebugVolumes, setShowDebugVolumes] = useState(false);
     const [showDebugBands, setShowDebugBands] = useState(false);
     const [showDebugActorOverlay, setShowDebugActorOverlay] = useState(false);
+    const showInternalDepthControls = import.meta.env.DEV;
 
     // SPATIAL INTELLIGENCE AUTHORITY DERIVATION
     const authorityStatus = useMemo<SpatialAuthorityStatus>(() => {
@@ -615,12 +638,12 @@ const SceneCanvas = () => {
         if (sourcePreservationPromptBlock) {
             return [
                 sourcePreservationPromptBlock,
-                compileV3DirectorPrompt(state.director, state.referenceSlots, state.tokens, bgPrompt)
+                compileV3DirectorPrompt(state.director, state.referenceSlots, state.tokens, bgPrompt, state.annotations)
             ].join('\n\n');
         }
         const forceStrictReplace = state.director.replaceAnchorSubjects;
         if (!strictMode && !forceStrictReplace) {
-            return compileV3DirectorPrompt(state.director, state.referenceSlots, state.tokens, bgPrompt);
+            return compileV3DirectorPrompt(state.director, state.referenceSlots, state.tokens, bgPrompt, state.annotations);
         }
         return buildStrictAnchorReplacementPrompt({
             bgPrompt: bgPrompt || state.director.subject,
@@ -631,9 +654,10 @@ const SceneCanvas = () => {
             hasDepthMap: !!state.depthMapUrl,
             activeRefs: activeReferences,
             actorIdentitySets: promptIdentitySets,
-            tokens: state.tokens
+            tokens: state.tokens,
+            annotations: state.annotations
         });
-    }, [sourcePreservationPromptBlock, strictMode, bgPrompt, state.director, state.depthMapUrl, state.referenceSlots, activeReferences, promptIdentitySets, state.tokens]);
+    }, [sourcePreservationPromptBlock, strictMode, bgPrompt, state.director, state.depthMapUrl, state.referenceSlots, activeReferences, promptIdentitySets, state.tokens, state.annotations]);
 
 
     const [dragItem, setDragItem] = useState<{ id: string, type: 'token' | 'annotation', startX: number, startY: number, initialX: number, initialY: number } | null>(null);
@@ -703,19 +727,23 @@ const SceneCanvas = () => {
 
     const refreshSpatialData = useCallback(async () => {
         if (!state.backgroundUrl) {
-            dispatch({ type: 'ADD_LOG', payload: { message: 'Add or generate a stage background before building a depth map.', type: 'info' } });
+            if (import.meta.env.DEV) {
+                dispatch({ type: 'ADD_LOG', payload: { message: 'Add or generate a stage background before building a spatial hint.', type: 'info' } });
+            }
             return;
         }
         if (state.isDepthProcessing) return;
-        if (!(await ensureStagingAiAccess('Depth Map'))) return;
+        if (!(await ensureStagingAiAccess('Spatial Hint'))) return;
 
         dispatch({ type: 'SET_DEPTH_PROCESSING', payload: true });
         dispatch({ type: 'SET_DEPTH_MAP', payload: null });
-        dispatch({ type: 'ADD_LOG', payload: { message: 'Generating optional depth map...', type: 'info' } });
+        if (import.meta.env.DEV) {
+            dispatch({ type: 'ADD_LOG', payload: { message: 'Generating optional spatial hint...', type: 'info' } });
+        }
 
         try {
-            // "Ghost" generation: Use Gemini to infer the depth map from the RGB image
-            const depthPrompt = "Generate a high-fidelity grayscale depth map of this scene. White represents near objects (foreground), Black represents far objects (background). The output must be a strict grayscale depth mask. Maintain exact aspect ratio and composition.";
+            // Internal launch-gated helper: ask Gemini for an estimated spatial hint, not authoritative geometry.
+            const depthPrompt = "Generate an estimated grayscale spatial hint mask for this scene. White roughly represents nearer foreground structures, and black roughly represents farther background areas. The output should be grayscale and maintain the exact aspect ratio and composition.";
 
             const res = await GeminiService.generateImage(
                 depthPrompt,
@@ -753,11 +781,15 @@ const SceneCanvas = () => {
                     dispatch({ type: 'SET_OCCUPIED_VOLUMES', payload: volumes });
                 }
 
-                dispatch({ type: 'ADD_LOG', payload: { message: 'Depth map ready.', type: 'success' } });
+                if (import.meta.env.DEV) {
+                    dispatch({ type: 'ADD_LOG', payload: { message: 'Spatial hint ready.', type: 'success' } });
+                }
             }
         } catch (error) {
-            console.error("[Spatial Intelligence] Depth Map Failed:", error);
-            dispatch({ type: 'ADD_LOG', payload: { message: 'Depth map generation failed. Staging can continue without depth.', type: 'error' } });
+            if (import.meta.env.DEV) {
+                console.error("[Spatial Intelligence] Spatial hint failed:", error);
+                dispatch({ type: 'ADD_LOG', payload: { message: 'Spatial hint generation failed. Staging can continue without it.', type: 'error' } });
+            }
         } finally {
             dispatch({ type: 'SET_DEPTH_PROCESSING', payload: false });
         }
@@ -1824,7 +1856,8 @@ Output: environment plate only.
                             hasDepthMap: !!state.depthMapUrl,
                             activeRefs: [passReference],
                             actorIdentitySets: passIdentitySet ? [passIdentitySet] : undefined,
-                            tokens: [pass.regionEntry.token]
+                            tokens: [pass.regionEntry.token],
+                            annotations: state.annotations
                         });
 
                         const passRefs = [
@@ -2206,12 +2239,13 @@ Output: environment plate only.
             }
         } catch (e: unknown) {
             const hostedError = e as HostedTimeoutError;
-            const errorMessage = getErrorMessage(e);
+            const errorMessage = formatStageGenerationError(e);
             const isTimeout = hostedError.name === 'TimeoutError' || errorMessage.includes('Pending');
             if (isTimeout && hostedError.generationId) {
                 dispatch({ type: 'UPDATE_BACKGROUND_JOB', payload: { id: hostedError.generationId, updates: { status: 'pending_background' } } });
                 dispatch({ type: 'ADD_LOG', payload: { message: "Job shifted to background due to long queue.", type: 'info' } });
             } else {
+                console.warn('[StageGeneration] Generation failed:', e);
                 dispatch({ type: 'ADD_LOG', payload: { message: errorMessage, type: 'error' } });
                 setViewMode('stage');
             }
@@ -3173,9 +3207,8 @@ Output: environment plate only.
 
     const handleRefSlotFile = async (index: number, file: File) => {
         try {
-            const tempUrl = await fileToDataUrl(file);
-            const mat = await LibraryAssetMaterializer.materializeReferenceAsset({
-                sourceUrl: tempUrl,
+            const mat = await LibraryAssetMaterializer.materializeReferenceFile({
+                file,
                 saveDirectoryPath: state.saveDirectoryPath,
                 slotIndex: index
             });
@@ -3217,7 +3250,13 @@ Output: environment plate only.
                 if (cast && cast.url) {
                     console.log('[handleRefSlotDrop] Calling setSlotFromUrl for ID:', cast.id);
                     // Use full-quality cast URL for identity fidelity; preview thumbnails are too weak for strict matching.
-                    await setSlotFromUrl(index, cast.url || cast.previewUrl || '', cast.name || cast.tag, cast.id, cast.localPath, cast.sourceUrl || cast.url);
+                    const sourceUrl = cast.url || cast.previewUrl || '';
+                    const mat = await LibraryAssetMaterializer.materializeReferenceAsset({
+                        sourceUrl,
+                        saveDirectoryPath: state.saveDirectoryPath,
+                        slotIndex: index
+                    });
+                    await setSlotFromUrl(index, mat.url, cast.name || cast.tag, cast.id, mat.localPath || cast.localPath, cast.sourceUrl || mat.sourceUrl);
                 } else {
                     console.error('[handleRefSlotDrop] Cast or cast.url missing!', cast);
                 }
@@ -3276,8 +3315,8 @@ Output: environment plate only.
     // V3 Prompt Terminal output (pure string, copy-ready)
     // V3 Prompt Terminal output (pure string, copy-ready)
     const v3DirectorPrompt = useMemo(() => {
-        return compileV3DirectorPrompt(state.director, state.referenceSlots, state.tokens);
-    }, [state.director, state.referenceSlots, state.tokens]);
+        return compileV3DirectorPrompt(state.director, state.referenceSlots, state.tokens, '', state.annotations);
+    }, [state.director, state.referenceSlots, state.tokens, state.annotations]);
 
     const handleCopyDirectorPrompt = async () => {
         const text = v3DirectorPrompt || '';
@@ -3904,7 +3943,7 @@ Output: environment plate only.
 
 
     const renderCommandHeader = () => {
-        const warnings = collectDepthAssistWarnings();
+        const warnings = showInternalDepthControls ? collectDepthAssistWarnings() : [];
         const topWarnings = warnings.filter((w) => w.severity === 'high' || w.severity === 'medium').slice(0, 2);
         const hasDepth = !!state.depthMapUrl && !state.isDepthProcessing;
 
@@ -3976,13 +4015,15 @@ Output: environment plate only.
                     Preview
                 </span>
 
-                <div
-                    className="flex items-center gap-1 px-1.5 py-0.5 bg-black/40 border border-white/5 rounded whitespace-nowrap"
-                    title={topWarnings.map((w) => w.message).join(' | ')}
-                >
-                    <span className="text-[8px] lg:text-[9px] font-bold text-gray-500 tracking-wider uppercase">Depth:</span>
-                    <span className={`text-[8px] lg:text-[9px] font-bold uppercase tracking-wider ${depthStatusColor}`}>{depthStatusText}</span>
-                </div>
+                {showInternalDepthControls && (
+                    <div
+                        className="flex items-center gap-1 px-1.5 py-0.5 bg-black/40 border border-white/5 rounded whitespace-nowrap"
+                        title={topWarnings.map((w) => w.message).join(' | ')}
+                    >
+                        <span className="text-[8px] lg:text-[9px] font-bold text-gray-500 tracking-wider uppercase">Spatial:</span>
+                        <span className={`text-[8px] lg:text-[9px] font-bold uppercase tracking-wider ${depthStatusColor}`}>{depthStatusText}</span>
+                    </div>
+                )}
 
                 <div
                     className="flex items-center gap-1 px-1.5 py-0.5 bg-black/40 border border-white/5 rounded whitespace-nowrap"
@@ -4068,9 +4109,11 @@ Output: environment plate only.
                             </div>
                         )}
 
-                        <span className="text-[8.5px] lg:text-[9.5px] text-cyan-400 font-mono font-bold tracking-widest drop-shadow-[0_0_5px_rgba(34,211,238,0.4)] whitespace-nowrap shrink-0 overflow-hidden text-ellipsis ml-auto pl-4">
-                            VB: {Math.round(viewportBox.w)}x{Math.round(viewportBox.h)} @ {Math.round(viewportBox.x)},{Math.round(viewportBox.y)} | Img: {state.backgroundUrl ? 'YES' : 'NO'} | Depth: {state.depthMapUrl ? 'YES' : 'NO'}
-                        </span>
+                        {showInternalDepthControls && (
+                            <span className="text-[8.5px] lg:text-[9.5px] text-cyan-400 font-mono font-bold tracking-widest drop-shadow-[0_0_5px_rgba(34,211,238,0.4)] whitespace-nowrap shrink-0 overflow-hidden text-ellipsis ml-auto pl-4">
+                                VB: {Math.round(viewportBox.w)}x{Math.round(viewportBox.h)} @ {Math.round(viewportBox.x)},{Math.round(viewportBox.y)} | Img: {state.backgroundUrl ? 'YES' : 'NO'} | Spatial: {state.depthMapUrl ? 'ON' : 'OFF'}
+                            </span>
+                        )}
                     </div>
                 </div>
             );
@@ -4113,9 +4156,11 @@ Output: environment plate only.
                         </div>
                     )}
 
-                    <span className="text-[8.5px] lg:text-[9.5px] text-cyan-400 font-mono font-bold tracking-widest drop-shadow-[0_0_5px_rgba(34,211,238,0.4)] whitespace-nowrap shrink-0 overflow-hidden text-ellipsis ml-auto pl-4">
-                        VB: {Math.round(viewportBox.w)}x{Math.round(viewportBox.h)} @ {Math.round(viewportBox.x)},{Math.round(viewportBox.y)} | Img: {state.backgroundUrl ? 'YES' : 'NO'} | Depth: {state.depthMapUrl ? 'YES' : 'NO'}
-                    </span>
+                    {showInternalDepthControls && (
+                        <span className="text-[8.5px] lg:text-[9.5px] text-cyan-400 font-mono font-bold tracking-widest drop-shadow-[0_0_5px_rgba(34,211,238,0.4)] whitespace-nowrap shrink-0 overflow-hidden text-ellipsis ml-auto pl-4">
+                            VB: {Math.round(viewportBox.w)}x{Math.round(viewportBox.h)} @ {Math.round(viewportBox.x)},{Math.round(viewportBox.y)} | Img: {state.backgroundUrl ? 'YES' : 'NO'} | Spatial: {state.depthMapUrl ? 'ON' : 'OFF'}
+                        </span>
+                    )}
                 </div>
             </div>
         );
@@ -4275,23 +4320,25 @@ Output: environment plate only.
                         <Download className="w-3 h-3" />
                         <span className="hidden sm:inline">Image</span>
                     </button>
-                    <button
-                        onClick={() => {
-                            if (state.depthMapUrl) {
-                                downloadDepthMap();
-                            } else {
-                                refreshSpatialData();
-                            }
-                        }}
-                        disabled={state.isDepthProcessing || (!state.depthMapUrl && !state.backgroundUrl)}
-                        className={`bg-black/80 hover:bg-black border border-white/10 text-purple-500 px-1 py-1 rounded-md flex items-center gap-1 text-[6.5px] font-bold uppercase transition-all whitespace-nowrap shrink-0 ${
-                            !state.isDepthProcessing && (state.depthMapUrl || state.backgroundUrl) ? 'hover:text-purple-400 active:scale-95' : 'opacity-50 cursor-not-allowed'
-                        }`}
-                        title={state.depthMapUrl ? "Download generated Depth Map" : "Generate optional Depth Map"}
-                    >
-                        {state.isDepthProcessing ? <RefreshCcw className="w-3 h-3 animate-spin" /> : state.depthMapUrl ? <Download className="w-3 h-3" /> : <RefreshCcw className="w-3 h-3" />}
-                        <span className="hidden sm:inline">{state.isDepthProcessing ? 'Depth...' : 'Depth'}</span>
-                    </button>
+                    {showInternalDepthControls && (
+                        <button
+                            onClick={() => {
+                                if (state.depthMapUrl) {
+                                    downloadDepthMap();
+                                } else {
+                                    refreshSpatialData();
+                                }
+                            }}
+                            disabled={state.isDepthProcessing || (!state.depthMapUrl && !state.backgroundUrl)}
+                            className={`bg-black/80 hover:bg-black border border-white/10 text-purple-500 px-1 py-1 rounded-md flex items-center gap-1 text-[6.5px] font-bold uppercase transition-all whitespace-nowrap shrink-0 ${
+                                !state.isDepthProcessing && (state.depthMapUrl || state.backgroundUrl) ? 'hover:text-purple-400 active:scale-95' : 'opacity-50 cursor-not-allowed'
+                            }`}
+                            title={state.depthMapUrl ? "Download internal spatial hint" : "Generate internal spatial hint"}
+                        >
+                            {state.isDepthProcessing ? <RefreshCcw className="w-3 h-3 animate-spin" /> : state.depthMapUrl ? <Download className="w-3 h-3" /> : <RefreshCcw className="w-3 h-3" />}
+                            <span className="hidden sm:inline">{state.isDepthProcessing ? 'Hint...' : 'Hint'}</span>
+                        </button>
+                    )}
                 </>
             );
         };
@@ -4634,66 +4681,68 @@ Output: environment plate only.
                                 </div>
 
                                 {/* SPATIAL & OCCLUSION */}
-                                <div className="space-y-4 pt-4 border-t border-white/5 pb-2">
-                                    <div className="flex items-center justify-between mb-1">
-                                        <div className="flex items-center gap-2">
-                                            <div className="w-2 h-2 rounded-full bg-purple-500 shadow-[0_0_8px_rgba(168,85,247,0.5)] animate-pulse"></div>
-                                            <span className="text-[10px] font-bold text-gray-300 uppercase tracking-widest">Spatial & Occlusion</span>
-                                            <span className="text-[8px] bg-yellow-500/10 text-yellow-600 px-1.5 py-0.5 rounded border border-yellow-500/20 font-bold">CUSTOM</span>
-                                        </div>
-                                    </div>
-
-                                    <div className="space-y-4 px-1">
-                                        <div>
-                                            <span className="text-[9px] text-gray-300 uppercase font-bold block mb-2">Occlusion Mode</span>
-                                            <div className="flex gap-1.5">
-                                                <button
-                                                    onClick={() => updateToken(selectedToken.id, { occlusionMode: 'auto' })}
-                                                    className={`group !p-0 flex-1 h-9 flex items-center justify-center font-bold uppercase rounded border transition-all ${(selectedToken.occlusionMode || 'auto') === 'auto'
-                                                        ? 'bg-purple-600/20 border-purple-500 text-purple-400 shadow-[0_0_12px_rgba(168,85,247,0.2)]'
-                                                        : 'bg-[#27272a] border-white/30 text-gray-200 hover:text-white hover:bg-[#3f3f46]'
-                                                        }`}
-                                                    style={{ fontSize: '10.5px' }}
-                                                >
-                                                    AUTO (DEPTH)
-                                                </button>
-                                                <button
-                                                    onClick={() => updateToken(selectedToken.id, { occlusionMode: 'front' })}
-                                                    className={`group !p-0 flex-1 h-9 flex items-center justify-center font-bold uppercase rounded border transition-all ${selectedToken.occlusionMode === 'front'
-                                                        ? 'bg-purple-600/20 border-purple-500 text-purple-400 shadow-[0_0_12px_rgba(168,85,247,0.2)]'
-                                                        : 'bg-[#27272a] border-white/30 text-gray-200 hover:text-white hover:bg-[#3f3f46]'
-                                                        }`}
-                                                    style={{ fontSize: '10.5px' }}
-                                                >
-                                                    FORCE FRONT
-                                                </button>
+                                {showInternalDepthControls && (
+                                    <div className="space-y-4 pt-4 border-t border-white/5 pb-2">
+                                        <div className="flex items-center justify-between mb-1">
+                                            <div className="flex items-center gap-2">
+                                                <div className="w-2 h-2 rounded-full bg-purple-500 shadow-[0_0_8px_rgba(168,85,247,0.5)] animate-pulse"></div>
+                                                <span className="text-[10px] font-bold text-gray-300 uppercase tracking-widest">Spatial Hint & Occlusion</span>
+                                                <span className="text-[8px] bg-yellow-500/10 text-yellow-600 px-1.5 py-0.5 rounded border border-yellow-500/20 font-bold">INTERNAL</span>
                                             </div>
                                         </div>
 
-                                        <div className="space-y-2">
-                                            <div className="flex justify-between items-center">
-                                                <span className="text-[9px] text-gray-300 uppercase font-bold">Depth Bias</span>
-                                                <span className="text-[10px] text-purple-400 font-mono font-bold">{(selectedToken.occlusionBias ?? 0).toFixed(2)}</span>
+                                        <div className="space-y-4 px-1">
+                                            <div>
+                                                <span className="text-[9px] text-gray-300 uppercase font-bold block mb-2">Occlusion Mode</span>
+                                                <div className="flex gap-1.5">
+                                                    <button
+                                                        onClick={() => updateToken(selectedToken.id, { occlusionMode: 'auto' })}
+                                                        className={`group !p-0 flex-1 h-9 flex items-center justify-center font-bold uppercase rounded border transition-all ${(selectedToken.occlusionMode || 'auto') === 'auto'
+                                                            ? 'bg-purple-600/20 border-purple-500 text-purple-400 shadow-[0_0_12px_rgba(168,85,247,0.2)]'
+                                                            : 'bg-[#27272a] border-white/30 text-gray-200 hover:text-white hover:bg-[#3f3f46]'
+                                                            }`}
+                                                        style={{ fontSize: '10.5px' }}
+                                                    >
+                                                        AUTO HINT
+                                                    </button>
+                                                    <button
+                                                        onClick={() => updateToken(selectedToken.id, { occlusionMode: 'front' })}
+                                                        className={`group !p-0 flex-1 h-9 flex items-center justify-center font-bold uppercase rounded border transition-all ${selectedToken.occlusionMode === 'front'
+                                                            ? 'bg-purple-600/20 border-purple-500 text-purple-400 shadow-[0_0_12px_rgba(168,85,247,0.2)]'
+                                                            : 'bg-[#27272a] border-white/30 text-gray-200 hover:text-white hover:bg-[#3f3f46]'
+                                                            }`}
+                                                        style={{ fontSize: '10.5px' }}
+                                                    >
+                                                        FORCE FRONT
+                                                    </button>
+                                                </div>
                                             </div>
-                                            <input
-                                                type="range" min="-1" max="1" step="0.01"
-                                                value={selectedToken.occlusionBias ?? 0}
-                                                onChange={(e) => updateToken(selectedToken.id, { occlusionBias: parseFloat(e.target.value) })}
-                                                className="w-full h-1.5 bg-[#27272a] rounded-lg appearance-none cursor-pointer accent-purple-500 border border-white/10"
-                                            />
-                                            <div className="flex items-center justify-between mt-1">
-                                                <span className="text-[8px] text-gray-300 uppercase font-bold">Pull Closer</span>
-                                                <button
-                                                    onClick={() => updateToken(selectedToken.id, { occlusionBias: 0 })}
-                                                    className="w-16 h-8 !p-0 flex items-center justify-center bg-[#27272a] border border-white/30 rounded text-[9px] text-gray-100 hover:text-white hover:bg-[#3f3f46] uppercase font-bold transition-colors shadow-sm"
-                                                >
-                                                    RESET
-                                                </button>
-                                                <span className="text-[8px] text-gray-300 uppercase font-bold">Push Back</span>
+
+                                            <div className="space-y-2">
+                                                <div className="flex justify-between items-center">
+                                                    <span className="text-[9px] text-gray-300 uppercase font-bold">Hint Bias</span>
+                                                    <span className="text-[10px] text-purple-400 font-mono font-bold">{(selectedToken.occlusionBias ?? 0).toFixed(2)}</span>
+                                                </div>
+                                                <input
+                                                    type="range" min="-1" max="1" step="0.01"
+                                                    value={selectedToken.occlusionBias ?? 0}
+                                                    onChange={(e) => updateToken(selectedToken.id, { occlusionBias: parseFloat(e.target.value) })}
+                                                    className="w-full h-1.5 bg-[#27272a] rounded-lg appearance-none cursor-pointer accent-purple-500 border border-white/10"
+                                                />
+                                                <div className="flex items-center justify-between mt-1">
+                                                    <span className="text-[8px] text-gray-300 uppercase font-bold">Pull Closer</span>
+                                                    <button
+                                                        onClick={() => updateToken(selectedToken.id, { occlusionBias: 0 })}
+                                                        className="w-16 h-8 !p-0 flex items-center justify-center bg-[#27272a] border border-white/30 rounded text-[9px] text-gray-100 hover:text-white hover:bg-[#3f3f46] uppercase font-bold transition-colors shadow-sm"
+                                                    >
+                                                        RESET
+                                                    </button>
+                                                    <span className="text-[8px] text-gray-300 uppercase font-bold">Push Back</span>
+                                                </div>
                                             </div>
                                         </div>
                                     </div>
-                                </div>
+                                )}
                             </div>
                         ) : null}
                     </SidebarPanel>

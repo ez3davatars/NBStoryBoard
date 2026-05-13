@@ -1,6 +1,7 @@
 import os
 import sys
 
+# Legacy/internal depth path; not active for launch.
 # --- Ensure Depth-Anything-V2 is importable ---
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 DEPTH_ANYTHING_DIR = os.path.join(PROJECT_ROOT, "Depth-Anything-V2")
