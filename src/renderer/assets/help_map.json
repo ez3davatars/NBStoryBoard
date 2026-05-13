@@ -95,10 +95,6 @@
                 "type": "tooltip",
                 "text": "Creates a standalone prop asset."
             },
-            "removeBackgroundProp": {
-                "type": "tooltip",
-                "text": "Isolates the prop for staging."
-            },
             "savePropButton": {
                 "type": "inline",
                 "text": "Saved props are available in the Stage."
