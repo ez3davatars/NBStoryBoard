@@ -134,7 +134,7 @@ export const useProductionExports = (state: AppState, dispatch: Dispatch<Action>
             const schemaStored = await StorageService.load<number>('nano_schema_version', 0);
 
             const diag = {
-                app: 'NBStoryBoard',
+                app: 'Cast Director Studio',
                 createdAt: new Date().toISOString(),
                 appSchemaVersion: APP_SCHEMA_VERSION,
                 schemaLocalStorage: schemaLocal,
@@ -176,7 +176,7 @@ export const useProductionExports = (state: AppState, dispatch: Dispatch<Action>
             const shotDir = await root.getDirectoryHandle(folderName, { create: true });
 
             const pack = {
-                app: 'NBStoryBoard',
+                app: 'Cast Director Studio',
                 exportedAt: new Date().toISOString(),
                 shot: {
                     id: activeShot.id,
@@ -280,7 +280,7 @@ export const useProductionExports = (state: AppState, dispatch: Dispatch<Action>
             const batchDir = await root.getDirectoryHandle(batchName, { create: true });
 
             const manifest: BatchManifest = {
-                app: 'NBStoryBoard',
+                app: 'Cast Director Studio',
                 exportedAt: new Date().toISOString(),
                 batch: batchName,
                 shotCount: shots.length,
@@ -296,7 +296,7 @@ export const useProductionExports = (state: AppState, dispatch: Dispatch<Action>
                 const promptForShot = compileV3DirectorPrompt(shot.director, shot.referenceSlots, shot.tokens, shot.notes || '', shot.annotations);
 
                 const pack = {
-                    app: 'NBStoryBoard',
+                    app: 'Cast Director Studio',
                     exportedAt: new Date().toISOString(),
                     shot: {
                         id: shot.id,

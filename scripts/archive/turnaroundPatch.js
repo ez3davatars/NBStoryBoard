@@ -1,5 +1,5 @@
 const fs = require('fs');
-const filePath = 'd:\\\\NanobananaProStudio\\\\NBStoryBoard\\\\src\\\\renderer\\\\components\\\\NanoCastingDirector.tsx';
+const filePath = 'c:\\\\Users\\\\clone\\\\Desktop\\\\Cast Director Studio\\\\src\\\\renderer\\\\components\\\\NanoCastingDirector.tsx';
 let str = fs.readFileSync(filePath, 'utf-8');
 
 const reps = [

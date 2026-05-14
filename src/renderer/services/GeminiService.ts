@@ -611,14 +611,14 @@ export const GeminiService = {
     if (!level) return undefined;
     const lv = String(level).trim().toLowerCase();
 
-    // Nano Banana 2 (Gemini 3.1 Flash Image Preview)
+    // Gemini 3.1 Flash Image Preview
     if (model === "gemini-3.1-flash-image-preview") {
       // Default thinkingLevel is `minimal`; only set config when explicitly requesting High.
       if (lv === "high") return { thinkingLevel: "High" };
       return undefined;
     }
 
-    // Nano Banana Pro (Gemini 3 Pro Image Preview) – keep conservative defaults until we confirm full enum support.
+    // Gemini 3 Pro Image Preview - keep conservative defaults until we confirm full enum support.
     if (model === "gemini-3-pro-image-preview") {
       if (lv === "high") return { thinkingLevel: "High" };
       return undefined;
@@ -1302,7 +1302,7 @@ export const GeminiService = {
 
       // Inject prompt last for better "instruction following" on the visual context
       // --- Prompt normalization for Gemini 3.x image models ---
-      // The Nano Banana 2 model is more sensitive to prompt structure; we normalize common legacy tokens
+      // Gemini image models are sensitive to prompt structure; normalize common legacy tokens.
       // and move "avoid" constraints into a short bullet list near the top for stronger compliance.
       const strictMode = options.strictMode ?? /SPATIAL PROTOCOL|NEGATIVE CONSTRAINTS|CRITICAL\s*-\s*DO NOT|NON-NEGOTIABLE|POSE COHERENCE CONTRACT|HEADSHOT WARDROBE CONTINUITY CONTRACT|STYLE CATEGORY CONTRACT|SHEET STYLE LOCK|CHARACTER ANATOMY INTEGRITY CONTRACT/i.test(promptWithAllContracts);
 

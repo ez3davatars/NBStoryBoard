@@ -52,7 +52,7 @@ import {
 
 // --- 1. TYPES & INTERFACES ---
 
-import { NanobananaThinking } from './components/ui/NanobananaThinking';
+import { CastDirectorThinking } from './components/ui/CastDirectorThinking';
 
 type PermissionAwareDirectoryHandle = FileSystemDirectoryHandle & {
   queryPermission?: (descriptor: { mode: 'read' | 'readwrite' }) => Promise<PermissionState>;
@@ -695,7 +695,7 @@ const App = () => {
   }, [dispatch]);
 
   useEffect(() => {
-    console.log('[NBStoryBoard] VITE_APP_ENV =', import.meta.env.VITE_APP_ENV ?? '(undefined)');
+    console.log('[CastDirectorStudio] VITE_APP_ENV =', import.meta.env.VITE_APP_ENV ?? '(undefined)');
   }, []);
 
   // --- RECENT GENERATIONS: Init store & cleanup on startup ---
@@ -1551,7 +1551,7 @@ const App = () => {
 
                 <div className="mt-0.5 flex justify-end min-w-0 overflow-hidden">
                   <span className="shrink-0 whitespace-nowrap text-[8px] sm:text-[9px] font-bold uppercase tracking-[0.2em] text-zinc-600">
-                    powered by <span className="text-zinc-500">Nanobanana 2</span>
+                    powered by <span className="text-zinc-500">Cast Director Studio</span>
                   </span>
                 </div>
               </div>
@@ -1774,7 +1774,7 @@ const App = () => {
           </main>
 
           {/* Cinematic Loading Overlay */}
-          {state.isProcessing && <NanobananaThinking />}
+          {state.isProcessing && <CastDirectorThinking />}
 
           <AppCloseDialog
             isOpen={showAppCloseDialog}

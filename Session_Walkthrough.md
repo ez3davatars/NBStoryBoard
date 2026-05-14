@@ -7,8 +7,8 @@
 * **Updated Prompt Generation Output Color Constraints**: Adjusted the `GeminiService` text prompts for the Virtual Try-On generation (specifically the turnaround/2-sheet mode) to strictly request a `#000000` (black) background instead of white. The frontend code already had the correct constraint for the "Front Only" view but Turnarounds were using white previously.
 
 ### Modified Files
-`render_diffs(d:\NanobananaProStudio\NBStoryBoard\src\renderer\context\AppContext.tsx)`
-`render_diffs(d:\NanobananaProStudio\NBStoryBoard\src\renderer\components\WardrobeStudio.tsx)`
+`render_diffs(c:\Users\clone\Desktop\Cast Director Studio\src\renderer\context\AppContext.tsx)`
+`render_diffs(c:\Users\clone\Desktop\Cast Director Studio\src\renderer\components\WardrobeStudio.tsx)`
 
 ## Verification
 1. I triggered an application build to catch any typing or syntactic errors and it passed successfully.
@@ -41,7 +41,7 @@ Whenever a user added a Shot or scrubbed the Timeline, the application's global 
 * `smartClone()` still traverses the history tree identically, but whenever it encounters an image data URI over 500 characters long, it strictly **passes by reference** instead of deep-cloning. 
 * This elegantly fixes the "JavaScript heap out of memory" crash. You can now load, duplicate, and modify as many massive 4K shots as you want without using a single extra drop of RAM!
 
-`render_diffs(d:\NanobananaProStudio\NBStoryBoard\src\renderer\context\AppContext.tsx)`
+`render_diffs(c:\Users\clone\Desktop\Cast Director Studio\src\renderer\context\AppContext.tsx)`
 
 ### Production: Scene Resolution Loss Fixed
 The user noticed that rendering a final scene in the Production Console resulted in an image where text elements or crisp textures were noticeably blurred compared to exactly how it looked on the Stage.
@@ -51,7 +51,7 @@ The user noticed that rendering a final scene in the Production Console resulted
 * By default, high-impact `ANCHOR_GUIDE` generation anchors are now allowed to pass at a massive **3072px**, converting safely into highly-compressed JPEGs. Smaller background tasks (like `analyzeMultiFrame` and `analyzeImage`) explicitly request a lightweight **1024px** crop to maintain their blazing sub-second speeds.
 * This will immediately result in significantly sharper generations when rendering your Stage.
 
-`render_diffs(d:\NanobananaProStudio\NBStoryBoard\src\renderer\services\GeminiService.ts)`
+`render_diffs(c:\Users\clone\Desktop\Cast Director Studio\src\renderer\services\GeminiService.ts)`
 
 ### Staging: Loading Shots "UI Freeze" Fix
 The user reported that clicking a shot in the Staging "Shot List" panel would sometimes revert the screen to an old layout and permanently freeze the entire application—you could hover over buttons but clicks would do nothing.
@@ -61,7 +61,7 @@ The user reported that clicking a shot in the Staging "Shot List" panel would so
 * We thoroughly fortified the global `AppContext.tsx` reducer so that any legacy shots or missing arrays structurally default to `|| []` during the smart cloning process. 
 * Loading older shots will now work flawlessly without crashing!
 
-`render_diffs(d:\NanobananaProStudio\NBStoryBoard\src\renderer\context\AppContext.tsx)`
+`render_diffs(c:\Users\clone\Desktop\Cast Director Studio\src\renderer\context\AppContext.tsx)`
 
 ### Hard Crash / Impossible to Close Fix
 - **Issue**: Switching shots in the `ShotListPanel.tsx` would permanently freeze the React fiber tree. The OS titlebar close button would still work, but the application's internally rendered close buttons became completely unresponsive.

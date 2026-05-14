@@ -11,7 +11,7 @@ import { useAppContext } from "../context/AppContext";
 import type { CastMember, PendingPitchSheetHandoff, PendingRefSheetHandoff } from "../context/AppContext";
 import { GeminiService } from "../services/GeminiService";
 import { ensureAuthenticatedForGeneration } from "../services/AuthGenerationGate";
-import { NanobananaThinking } from "./ui/NanobananaThinking";
+import { CastDirectorThinking } from "./ui/CastDirectorThinking";
 import ConfirmDialog from "./ui/ConfirmDialog";
 import { useRecentGenerationsStore } from "../stores/useRecentGenerationsStore";
 import { RecentGenerationsCacheService } from "../services/RecentGenerationsCacheService";
@@ -1392,7 +1392,7 @@ export default function PortraitStudio() {
  `}</style>
 
             {/* GLOBAL LOADING OVERLAY */}
-            {isGenerating && <NanobananaThinking progress={progress} />}
+            {isGenerating && <CastDirectorThinking progress={progress} />}
 
             {/* LEFT PANEL: CONTROLS */}
             <div className="flex-1 flex flex-col gap-8 overflow-y-auto pr-4 pb-32 scrollbar-none">

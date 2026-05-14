@@ -78,7 +78,7 @@ import React from 'react';
 // UI Components
 import ConfirmDialog from './ui/ConfirmDialog';
 import { DebouncedHueSlider } from './ui/DebouncedHueSlider';
-import { NanobananaThinking } from './ui/NanobananaThinking';
+import { CastDirectorThinking } from './ui/CastDirectorThinking';
 
 // Panels
 import { ShotListPanel } from './panels/ShotListPanel';
@@ -4366,7 +4366,7 @@ Output: environment plate only.
     return (
         <>
             <div className={`flex flex-col h-full overflow-hidden`}>
-                {state.isProcessing && <NanobananaThinking />}
+                {state.isProcessing && <CastDirectorThinking />}
 
             <div className="flex h-full gap-4 p-4 overflow-hidden select-none">
                 {/* 1. LEFT SIDEBAR: ACTIVE ACTOR INTELLIGENCE & PROPERTIES */}

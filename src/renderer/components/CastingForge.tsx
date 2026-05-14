@@ -3670,7 +3670,7 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
                 </div>
                 <button
                   onClick={() => dispatch({ type: 'SET_VIEW', payload: 'settings' })}
-                  className="px-4 py-2 bg-yellow-500 hover:bg-yellow-400 text-black font-bold text-xs rounded-lg transition-colors"
+                  className="shrink-0 px-4 py-2 rounded-lg bg-gradient-to-r from-sky-500 via-blue-500 to-violet-500 text-white font-black text-xs uppercase tracking-wider border border-white/25 shadow-[0_0_24px_rgba(59,130,246,0.45)] hover:from-sky-400 hover:via-blue-400 hover:to-violet-400 hover:shadow-[0_0_32px_rgba(59,130,246,0.65)] focus:outline-none focus:ring-2 focus:ring-sky-300/80 transition-all active:scale-95"
                 >
                   Configure
                 </button>

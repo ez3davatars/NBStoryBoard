@@ -1,7 +1,6 @@
 import React from 'react';
 import { useAppContext } from '../../context/AppContext';
 import {
-    Target,
     UserCircle,
     UserPlus,
     Shirt,
@@ -9,6 +8,7 @@ import {
     ImagePlus,
     Lightbulb
 } from 'lucide-react';
+import studioLogo from '../../assets/logo-z.png';
 
 export const WelcomeModal: React.FC = () => {
     const { state, dispatch } = useAppContext();
@@ -35,74 +35,165 @@ export const WelcomeModal: React.FC = () => {
         dispatch({ type: 'TOGGLE_HELP', payload: true });
     };
 
+    const goalCards: Array<{
+        title: string;
+        description: string;
+        route: typeof state.view;
+        sectionOverride?: string;
+        icon: React.ElementType;
+        iconClassName: string;
+        titleClassName: string;
+        hoverClassName: string;
+        focusClassName: string;
+        lightClassName: string;
+        wide?: boolean;
+    }> = [
+        {
+            title: 'Create a character',
+            description: 'Generate a fresh identity from scratch.',
+            route: 'casting',
+            icon: UserPlus,
+            iconClassName: 'bg-blue-500/15 text-blue-300 border-blue-300/20 shadow-[0_0_24px_rgba(59,130,246,0.18)]',
+            titleClassName: 'group-hover:text-blue-200',
+            hoverClassName: 'hover:border-blue-300/45 hover:shadow-[0_18px_48px_rgba(59,130,246,0.18)]',
+            focusClassName: 'focus-visible:ring-blue-300/55',
+            lightClassName: 'bg-[radial-gradient(ellipse_at_top_right,rgba(59,130,246,0.22),transparent_58%)]',
+        },
+        {
+            title: 'Build from a photo',
+            description: 'Preserve real-world identity from a source image.',
+            route: 'nano_cast',
+            icon: UserCircle,
+            iconClassName: 'bg-emerald-500/15 text-emerald-300 border-emerald-300/20 shadow-[0_0_24px_rgba(16,185,129,0.16)]',
+            titleClassName: 'group-hover:text-emerald-200',
+            hoverClassName: 'hover:border-emerald-300/45 hover:shadow-[0_18px_48px_rgba(16,185,129,0.16)]',
+            focusClassName: 'focus-visible:ring-emerald-300/55',
+            lightClassName: 'bg-[radial-gradient(ellipse_at_top_right,rgba(16,185,129,0.2),transparent_58%)]',
+        },
+        {
+            title: 'Style a character',
+            description: 'Design costumes, looks, and wardrobe variations.',
+            route: 'wardrobe',
+            icon: Shirt,
+            iconClassName: 'bg-fuchsia-500/15 text-fuchsia-300 border-fuchsia-300/20 shadow-[0_0_24px_rgba(217,70,239,0.16)]',
+            titleClassName: 'group-hover:text-fuchsia-200',
+            hoverClassName: 'hover:border-fuchsia-300/45 hover:shadow-[0_18px_48px_rgba(217,70,239,0.15)]',
+            focusClassName: 'focus-visible:ring-fuchsia-300/55',
+            lightClassName: 'bg-[radial-gradient(ellipse_at_top_right,rgba(217,70,239,0.2),transparent_58%)]',
+        },
+        {
+            title: 'Stage a scene',
+            description: 'Arrange characters, props, and cinematic composition.',
+            route: 'staging',
+            icon: Clapperboard,
+            iconClassName: 'bg-red-500/15 text-red-300 border-red-300/20 shadow-[0_0_24px_rgba(248,113,113,0.14)]',
+            titleClassName: 'group-hover:text-red-200',
+            hoverClassName: 'hover:border-red-300/45 hover:shadow-[0_18px_48px_rgba(248,113,113,0.14)]',
+            focusClassName: 'focus-visible:ring-red-300/55',
+            lightClassName: 'bg-[radial-gradient(ellipse_at_top_right,rgba(248,113,113,0.2),transparent_58%)]',
+        },
+        {
+            title: 'Fix part of an image',
+            description: 'Retouch local details with region masks.',
+            route: 'staging',
+            sectionOverride: 'tab-staging',
+            icon: ImagePlus,
+            iconClassName: 'bg-teal-500/15 text-teal-300 border-teal-300/20 shadow-[0_0_24px_rgba(45,212,191,0.15)]',
+            titleClassName: 'group-hover:text-teal-200',
+            hoverClassName: 'hover:border-teal-300/45 hover:shadow-[0_18px_48px_rgba(45,212,191,0.14)]',
+            focusClassName: 'focus-visible:ring-teal-300/55',
+            lightClassName: 'bg-[radial-gradient(ellipse_at_top_right,rgba(45,212,191,0.2),transparent_58%)]',
+        },
+        {
+            title: 'Generate multi-angle shots',
+            description: 'Lock the setup and render consistent camera views.',
+            route: 'staging',
+            sectionOverride: 'tab-shots',
+            icon: Clapperboard,
+            iconClassName: 'bg-yellow-400/15 text-yellow-300 border-yellow-200/25 shadow-[0_0_28px_rgba(250,204,21,0.18)]',
+            titleClassName: 'group-hover:text-yellow-100',
+            hoverClassName: 'hover:border-yellow-200/55 hover:shadow-[0_20px_58px_rgba(250,204,21,0.18)]',
+            focusClassName: 'focus-visible:ring-yellow-200/60',
+            lightClassName: 'bg-[radial-gradient(ellipse_at_top_right,rgba(250,204,21,0.24),transparent_58%)]',
+            wide: true,
+        },
+    ];
+
     return (
-        <div className="fixed inset-0 z-[5000] flex items-center justify-center p-4 sm:p-8 bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
-            <div className="bg-[#18181b] border border-[#27272a] rounded-2xl w-full max-w-2xl shadow-2xl p-8 animate-in zoom-in-95 duration-500">
-                <div className="text-center mb-10">
-                    <div className="w-16 h-16 bg-yellow-500/10 border border-yellow-500/20 text-yellow-500 rounded-full flex items-center justify-center mx-auto mb-4">
-                        <Target className="w-8 h-8" />
+        <div className="fixed inset-0 z-[5000] flex items-center justify-center overflow-y-auto bg-[#030305]/90 p-3 text-white backdrop-blur-xl animate-in fade-in duration-300 sm:p-6">
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(250,204,21,0.18),transparent_44%),linear-gradient(145deg,rgba(10,11,18,0.96),rgba(0,0,0,0.9)_52%,rgba(23,18,8,0.92))]" />
+            <div className="pointer-events-none absolute inset-0 opacity-[0.08] bg-[linear-gradient(90deg,rgba(255,255,255,0.55)_1px,transparent_1px),linear-gradient(180deg,rgba(255,255,255,0.5)_1px,transparent_1px)] bg-[size:42px_42px]" />
+
+            <div className="relative w-full max-w-4xl overflow-hidden rounded-[28px] border border-white/10 bg-[linear-gradient(145deg,rgba(28,28,33,0.9),rgba(8,8,12,0.96)_48%,rgba(26,21,10,0.92))] shadow-[0_32px_120px_rgba(0,0,0,0.7),0_0_70px_rgba(250,204,21,0.08)] ring-1 ring-yellow-200/10 animate-in zoom-in-95 duration-500">
+                <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(255,217,64,0.13),transparent_42%),radial-gradient(ellipse_at_bottom_left,rgba(59,130,246,0.11),transparent_38%)]" />
+                <div className="pointer-events-none absolute inset-x-10 top-0 h-px bg-gradient-to-r from-transparent via-yellow-200/60 to-transparent" />
+                <div className="relative max-h-[92vh] overflow-y-auto px-5 py-6 sm:px-8 sm:py-8 lg:px-10 lg:py-9">
+                    <div className="mb-8 text-center">
+                        <div className="relative mx-auto mb-5 flex h-28 w-28 items-center justify-center sm:h-32 sm:w-32">
+                            <div className="absolute inset-0 rounded-full bg-yellow-300/10 blur-2xl" />
+                            <div className="absolute inset-3 rounded-full border border-yellow-200/20 bg-black/35 shadow-[inset_0_1px_0_rgba(255,255,255,0.12),0_0_45px_rgba(250,204,21,0.18)]" />
+                            <img
+                                src={studioLogo}
+                                alt="Cast Director Studio logo"
+                                className="relative h-24 w-24 object-contain drop-shadow-[0_18px_30px_rgba(0,0,0,0.55)] sm:h-28 sm:w-28"
+                                draggable={false}
+                            />
+                        </div>
+                        <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-yellow-200/20 bg-yellow-300/10 px-3 py-1 text-[10px] font-black uppercase text-yellow-200/90 shadow-[0_0_24px_rgba(250,204,21,0.1)]">
+                            <span className="h-1.5 w-1.5 rounded-full bg-yellow-300 shadow-[0_0_12px_rgba(250,204,21,0.9)]" />
+                            Cinematic AI Production Suite
+                        </div>
+                        <h2 className="mx-auto max-w-3xl text-3xl font-black leading-tight sm:text-4xl">
+                            <span className="block text-gray-100">Welcome to</span>
+                            <span className="block bg-gradient-to-r from-yellow-200 via-yellow-400 to-amber-500 bg-clip-text text-transparent">Cast Director Studio</span>
+                        </h2>
+                        <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-zinc-400 sm:text-base">
+                            Choose the fastest path into your production workflow.
+                        </p>
                     </div>
-                    <h2 className="text-3xl font-black text-white uppercase tracking-tight mb-2">Welcome to Cast Director Studio</h2>
-                    <p className="text-gray-400">What would you like to do today?</p>
-                </div>
-                
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-10">
-                    <button onClick={() => handleGoalRoute('casting')} className="flex items-start text-left gap-4 p-5 bg-[#09090b] hover:bg-[#121214] border border-[#27272a] hover:border-blue-500/50 rounded-xl transition-all group">
-                        <div className="p-2.5 bg-blue-500/10 text-blue-400 rounded-lg group-hover:scale-110 transition-transform"><UserPlus className="w-6 h-6" /></div>
-                        <div>
-                            <h4 className="text-gray-200 font-bold mb-1 group-hover:text-blue-400 transition-colors">Create a character</h4>
-                            <p className="text-xs text-gray-500">Generate a fresh identity from scratch.</p>
-                        </div>
-                    </button>
-                    
-                    <button onClick={() => handleGoalRoute('nano_cast')} className="flex items-start text-left gap-4 p-5 bg-[#09090b] hover:bg-[#121214] border border-[#27272a] hover:border-emerald-500/50 rounded-xl transition-all group">
-                        <div className="p-2.5 bg-emerald-500/10 text-emerald-400 rounded-lg group-hover:scale-110 transition-transform"><UserCircle className="w-6 h-6" /></div>
-                        <div>
-                            <h4 className="text-gray-200 font-bold mb-1 group-hover:text-emerald-400 transition-colors">Build from a photo</h4>
-                            <p className="text-xs text-gray-500">Preserve exact real-world identity.</p>
-                        </div>
-                    </button>
 
-                    <button onClick={() => handleGoalRoute('wardrobe')} className="flex items-start text-left gap-4 p-5 bg-[#09090b] hover:bg-[#121214] border border-[#27272a] hover:border-purple-500/50 rounded-xl transition-all group">
-                        <div className="p-2.5 bg-purple-500/10 text-purple-400 rounded-lg group-hover:scale-110 transition-transform"><Shirt className="w-6 h-6" /></div>
-                        <div>
-                            <h4 className="text-gray-200 font-bold mb-1 group-hover:text-purple-400 transition-colors">Style a character</h4>
-                            <p className="text-xs text-gray-500">Design costumes and try them on.</p>
-                        </div>
-                    </button>
+                    <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        {goalCards.map((card) => {
+                            const Icon = card.icon;
 
-                    <button onClick={() => handleGoalRoute('staging')} className="flex items-start text-left gap-4 p-5 bg-[#09090b] hover:bg-[#121214] border border-[#27272a] hover:border-red-500/50 rounded-xl transition-all group">
-                        <div className="p-2.5 bg-red-400/10 text-red-400 rounded-lg group-hover:scale-110 transition-transform"><Clapperboard className="w-6 h-6" /></div>
-                        <div>
-                            <h4 className="text-gray-200 font-bold mb-1 group-hover:text-red-400 transition-colors">Stage a scene</h4>
-                            <p className="text-xs text-gray-500">Arrange characters and compose lighting.</p>
-                        </div>
-                    </button>
+                            return (
+                                <button
+                                    key={card.title}
+                                    onClick={() => handleGoalRoute(card.route, card.sectionOverride)}
+                                    className={`group relative flex min-h-[112px] items-start gap-4 overflow-hidden rounded-2xl border border-white/10 bg-[linear-gradient(135deg,rgba(255,255,255,0.075),rgba(255,255,255,0.018)_48%,rgba(0,0,0,0.34))] p-5 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_12px_34px_rgba(0,0,0,0.28)] transition-all duration-300 hover:-translate-y-1 hover:bg-white/[0.055] focus-visible:outline-none focus-visible:ring-2 ${card.hoverClassName} ${card.focusClassName} ${card.wide ? 'sm:col-span-2' : ''}`}
+                                >
+                                    <span className={`pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-500 group-hover:opacity-100 ${card.lightClassName}`} />
+                                    <span className="pointer-events-none absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-white/25 to-transparent opacity-0 transition-opacity duration-500 group-hover:opacity-100" />
+                                    <span className={`relative flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border ${card.iconClassName} transition-transform duration-300 group-hover:scale-105`}>
+                                        <Icon className="h-6 w-6" />
+                                    </span>
+                                    <span className="relative min-w-0 pt-0.5">
+                                        <span className={`mb-1.5 block text-[15px] font-black leading-snug text-zinc-100 transition-colors ${card.titleClassName}`}>
+                                            {card.title}
+                                        </span>
+                                        <span className="block text-xs leading-5 text-zinc-500 transition-colors group-hover:text-zinc-300">
+                                            {card.description}
+                                        </span>
+                                    </span>
+                                </button>
+                            );
+                        })}
+                    </div>
 
-                    <button onClick={() => handleGoalRoute('staging', 'tab-staging')} className="flex items-start text-left gap-4 p-5 bg-[#09090b] hover:bg-[#121214] border border-[#27272a] hover:border-teal-500/50 rounded-xl transition-all group">
-                        <div className="p-2.5 bg-teal-500/10 text-teal-400 rounded-lg group-hover:scale-110 transition-transform"><ImagePlus className="w-6 h-6" /></div>
-                        <div>
-                            <h4 className="text-gray-200 font-bold mb-1 group-hover:text-teal-400 transition-colors">Fix part of an image</h4>
-                            <p className="text-xs text-gray-500">Use Region Edit masks to retouch local mistakes.</p>
-                        </div>
-                    </button>
-
-                    <button onClick={() => handleGoalRoute('staging', 'tab-shots')} className="flex items-start text-left gap-4 p-5 bg-[#09090b] hover:bg-[#121214] border border-[#27272a] hover:border-yellow-500/50 rounded-xl transition-all group sm:col-span-2">
-                        <div className="p-2.5 bg-yellow-500/10 text-yellow-500 rounded-lg group-hover:scale-110 transition-transform"><Clapperboard className="w-6 h-6" /></div>
-                        <div>
-                            <h4 className="text-gray-200 font-bold mb-1 group-hover:text-yellow-400 transition-colors">Generate multi-angle shots</h4>
-                            <p className="text-xs text-gray-500">Lock your layout and render different camera views for consistent storytelling.</p>
-                        </div>
-                    </button>
-                </div>
-                
-                <div className="flex items-center justify-between border-t border-white/5 pt-6 mt-6">
-                    <button onClick={handleSkip} className="text-sm font-bold text-gray-500 hover:text-white transition-colors">
-                        Skip
-                    </button>
-                    <button onClick={openHelpCenter} className="flex items-center gap-2 text-sm font-bold text-yellow-500 hover:text-yellow-400 transition-colors bg-yellow-500/10 hover:bg-yellow-500/20 px-4 py-2 rounded-lg border border-yellow-500/20">
-                        <Lightbulb className="w-4 h-4" /> Open Help Center
-                    </button>
+                    <div className="flex flex-col gap-3 border-t border-white/10 pt-5 sm:flex-row sm:items-center sm:justify-between">
+                        <button
+                            onClick={handleSkip}
+                            className="rounded-xl border border-white/5 bg-white/[0.03] px-4 py-2 text-sm font-bold text-zinc-500 transition-all hover:border-white/15 hover:bg-white/[0.06] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/20"
+                        >
+                            Skip
+                        </button>
+                        <button
+                            onClick={openHelpCenter}
+                            className="flex items-center justify-center gap-2 rounded-xl border border-yellow-200/25 bg-yellow-300/10 px-5 py-2.5 text-sm font-black text-yellow-200 shadow-[0_0_24px_rgba(250,204,21,0.1)] transition-all hover:-translate-y-0.5 hover:border-yellow-200/45 hover:bg-yellow-300/15 hover:text-yellow-100 hover:shadow-[0_0_34px_rgba(250,204,21,0.16)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-yellow-200/50"
+                        >
+                            <Lightbulb className="h-4 w-4" /> Open Help Center
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>

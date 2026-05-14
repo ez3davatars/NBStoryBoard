@@ -1,5 +1,6 @@
-appId: com.nanobanana.studio
-productName: NANO BANANA CAST DIRECTOR STUDIO
+appId: com.castdirector.studio
+productName: Cast Director Studio
+publish: null
 directories:
   output: out/dist/${version}
   buildResources: build
@@ -16,7 +17,7 @@ win:
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
-  shortcutName: Nano Banana Studio
+  shortcutName: Cast Director Studio
   createDesktopShortcut: true
   installerIcon: build/EZ256.ico
   uninstallerIcon: build/EZ256.ico

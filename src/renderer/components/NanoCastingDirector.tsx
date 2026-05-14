@@ -2401,7 +2401,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
 
             // UPDATE APP CONTEXT
             dispatch({ type: 'SET_LAST_CASTED_PROMPT', payload: prompt });
-            addLog("TRANSMITTING TO NANO BANANA 2 CLUSTER...");
+            addLog("TRANSMITTING TO CAST DIRECTOR STUDIO RENDER ENGINE...");
 
             // 3. Call Gemini
             setProgress({ phase: 'synthesis', percent: 5, detail: "Generative Matrix Active..." });
@@ -5088,7 +5088,7 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                         </div>
                                         <div className="flex justify-between text-[9px] uppercase tracking-widest text-white/50">
                                             <span>Sim-Date: {new Date().toLocaleDateString()}</span>
-                                            <span>Nanobanana 2</span>
+                                            <span>Cast Director Studio</span>
                                         </div>
                                     </div>
                                 </div>

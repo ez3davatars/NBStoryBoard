@@ -6,7 +6,7 @@ interface ProgressData {
  text?: string;
 }
 
-export const NanobananaThinking = ({ progress: localProgress }: { progress?: ProgressData | null }) => {
+export const CastDirectorThinking = ({ progress: localProgress }: { progress?: ProgressData | null }) => {
  const { state } = useAppContext();
  const progress = localProgress || state.globalProgress;
 
@@ -22,10 +22,10 @@ export const NanobananaThinking = ({ progress: localProgress }: { progress?: Pro
  {/* Inner Reverse Spinner */}
  <div className="absolute w-44 h-44 border-[3px] border-transparent border-l-blue-500 border-r-blue-500 rounded-full animate-spin-reverse -[0_0_30px_rgba(59,130,246,0.3)]"></div>
 
- {/* Central Core (Banana) */}
+ {/* Central Core */}
  <div className="absolute flex flex-col items-center">
- <div className="text-[72px] animate-bounce-slow -[0_0_20px_rgba(234,179,8,0.8)] filter brightness-110 grayscale-0">
- 🍌
+ <div className="text-[38px] font-black tracking-[-0.08em] text-yellow-400 animate-bounce-slow -[0_0_20px_rgba(234,179,8,0.8)] filter brightness-110">
+ CD
  </div>
  </div>
 
@@ -34,7 +34,7 @@ export const NanobananaThinking = ({ progress: localProgress }: { progress?: Pro
         <div className="flex items-center justify-center gap-3 w-full">
           <span className="h-[1px] flex-1 bg-gradient-to-r from-transparent to-yellow-500/50"></span>
           <p className="text-yellow-500 font-black tracking-[0.3em] uppercase text-[12px] animate-pulse whitespace-nowrap drop-shadow-md">
-            {progress ? `${('phase' in progress ? progress.phase : 'PROCESSING') || 'PROCESSING'} - ${Math.round(progress.percent)}%` : 'Nanobanana is thinking'}
+            {progress ? `${('phase' in progress ? progress.phase : 'PROCESSING') || 'PROCESSING'} - ${Math.round(progress.percent)}%` : 'Cast Director Studio is thinking'}
           </p>
           <span className="h-[1px] flex-1 bg-gradient-to-l from-transparent to-yellow-500/50"></span>
         </div>
