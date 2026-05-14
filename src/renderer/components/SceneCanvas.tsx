@@ -65,6 +65,11 @@ import {
     buildStagingSourcePreservationPromptBlock,
     resolveStagingIntent
 } from '../utils/stagingSourceIntent';
+import {
+    resolveArrowEndpoints,
+    shouldAttachSpatialControlOverlay
+} from '../utils/stagingSpatialDirectives';
+import { formatHostedGenerationThrownError } from '../utils/hostedGenerationErrors';
 import { sanitizeStyleForStrictIdentity } from '../utils/analysisSanitizers';
 import { LibraryAssetMaterializer } from '../services/LibraryAssetMaterializer';
 import { useProductionExports } from '../hooks/useProductionExports';
@@ -129,11 +134,12 @@ const getErrorMessage = (error: unknown): string => {
 };
 
 const formatStageGenerationError = (error: unknown): string => {
-    const rawMessage = getErrorMessage(error);
+    const rawMessage = formatHostedGenerationThrownError(error);
     const isHostedProviderError =
         /Hosted Execution Error\s+\[PROVIDER_ERROR\]/i.test(rawMessage) ||
+        /Hosted Generation Error\s+\[PROVIDER_ERROR\]/i.test(rawMessage) ||
         /Google API Failed\s*\(5\d\d\)/i.test(rawMessage) ||
-        /\bINTERNAL\b|Internal error encountered/i.test(rawMessage);
+        /Internal error encountered/i.test(rawMessage);
 
     if (!isHostedProviderError) return rawMessage;
 
@@ -569,6 +575,10 @@ const SceneCanvas = () => {
     const [extractedStyle, setExtractedStyle] = useState<ExtractedStyle | null>(null);
     const [sceneIntent, setSceneIntent] = useState<SceneIntent | null>(null);
     const [previousBackgroundUrl, setPreviousBackgroundUrl] = useState<string | null>(null);
+    const AUTO_STYLE_ANALYSIS_WAIT_MS = 60000;
+    const AUTO_STYLE_ENVIRONMENT_WAIT_MS = state.billingEntitlements.effectiveBillingMode === 'hosted'
+        ? (state.imageResolution === '4K' ? 180000 : 120000)
+        : 90000;
     
     const colorPickerRef = useRef<HTMLInputElement>(null);
     const [lastCustomColor, setLastCustomColor] = useState('#ffffff');
@@ -638,12 +648,12 @@ const SceneCanvas = () => {
         if (sourcePreservationPromptBlock) {
             return [
                 sourcePreservationPromptBlock,
-                compileV3DirectorPrompt(state.director, state.referenceSlots, state.tokens, bgPrompt, state.annotations)
+                compileV3DirectorPrompt(state.director, state.referenceSlots, state.tokens, bgPrompt, state.annotations, viewportBox)
             ].join('\n\n');
         }
         const forceStrictReplace = state.director.replaceAnchorSubjects;
         if (!strictMode && !forceStrictReplace) {
-            return compileV3DirectorPrompt(state.director, state.referenceSlots, state.tokens, bgPrompt, state.annotations);
+            return compileV3DirectorPrompt(state.director, state.referenceSlots, state.tokens, bgPrompt, state.annotations, viewportBox);
         }
         return buildStrictAnchorReplacementPrompt({
             bgPrompt: bgPrompt || state.director.subject,
@@ -655,9 +665,10 @@ const SceneCanvas = () => {
             activeRefs: activeReferences,
             actorIdentitySets: promptIdentitySets,
             tokens: state.tokens,
-            annotations: state.annotations
+            annotations: state.annotations,
+            spatialFrame: viewportBox
         });
-    }, [sourcePreservationPromptBlock, strictMode, bgPrompt, state.director, state.depthMapUrl, state.referenceSlots, activeReferences, promptIdentitySets, state.tokens, state.annotations]);
+    }, [sourcePreservationPromptBlock, strictMode, bgPrompt, state.director, state.depthMapUrl, state.referenceSlots, activeReferences, promptIdentitySets, state.tokens, state.annotations, viewportBox]);
 
 
     const [dragItem, setDragItem] = useState<{ id: string, type: 'token' | 'annotation', startX: number, startY: number, initialX: number, initialY: number } | null>(null);
@@ -803,77 +814,128 @@ const SceneCanvas = () => {
 
         // StageTokens are actors if they have a sourceImage or cutoutUrl in this context
         const activeToken = state.tokens.find((t: StageToken) => t.id === state.selection);
-        if (!activeToken) return;
+        if (!activeToken) {
+            dispatch({ type: 'ADD_LOG', payload: { message: 'Select an actor on stage before running Auto-Style Environment.', type: 'error' } });
+            return;
+        }
         
         // Prefer original sourceImage for best aesthetic analysis, fallback to cutout
         // Note: activeToken properties depend on the exact definition of StageToken in AppContext.
         const tokenWithLegacyFields = activeToken as StageToken & { sourceImage?: string; label?: string };
         const analysisUrl = tokenWithLegacyFields.sourceImageUrl || tokenWithLegacyFields.sourceImage || activeToken.cutoutUrl || activeToken.url;
-        if (!analysisUrl) return;
+        if (!analysisUrl) {
+            dispatch({ type: 'ADD_LOG', payload: { message: 'Selected actor has no analyzable image for Auto-Style Environment.', type: 'error' } });
+            return;
+        }
 
         setIsAnalyzingStyle(true);
+        dispatch({ type: 'SET_PROCESSING', payload: true });
+        dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: 5, text: 'Auto-Style: preparing character analysis...' } });
         const tokenLabel = tokenWithLegacyFields.label || activeToken.tag || 'Actor';
         dispatch({ type: 'ADD_LOG', payload: { message: `Analyzing aesthetic style for ${tokenLabel}...`, type: 'info' } });
+        const abortController = new AbortController();
+        const startedAt = Date.now();
+        let currentPercent = 5;
+        let progressPhase = 'analysis' as 'analysis' | 'intent' | 'prompt' | 'render' | 'finalize';
+        const progressCopy = {
+            analysis: 'Auto-Style: extracting character aesthetic...',
+            intent: 'Auto-Style: parsing scene intent...',
+            prompt: 'Auto-Style: compiling environment prompt...',
+            render: 'Auto-Style: rendering style-matched environment...',
+            finalize: 'Auto-Style: applying environment plate...'
+        };
+        const progressInterval = window.setInterval(() => {
+            const ceiling = progressPhase === 'render' ? 94 : progressPhase === 'finalize' ? 98 : 72;
+            const increment = progressPhase === 'render' ? 0.55 : 1.5;
+            currentPercent = Math.min(ceiling, currentPercent + increment);
+            const elapsedSec = Math.floor((Date.now() - startedAt) / 1000);
+            dispatch({
+                type: 'SET_GLOBAL_PROGRESS',
+                payload: {
+                    percent: currentPercent,
+                    text: `${progressCopy[progressPhase]} (${elapsedSec}s)`
+                }
+            });
+        }, 1000);
+
+        let timeoutId: ReturnType<typeof setTimeout> | null = null;
         
         try {
-            const style = await GeminiService.analyzeCharacterStyle(
-                analysisUrl, 
-                state.apiKey,
-                state.model,
-                {
+            const operationPromise = (async () => {
+                const sharedHostedOptions = {
                     billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
-                    entitlements: state.billingEntitlements
-                }
-            );
-            
-            setExtractedStyle(style);
-            dispatch({ type: 'ADD_LOG', payload: { message: `Style extracted: ${style.styleSummary}`, type: 'success' } });
+                    entitlements: state.billingEntitlements,
+                    signal: abortController.signal
+                };
 
-            // Phase 3: Automated Environment Plate Generation
-            const hasUserScenePrompt = !!bgPrompt.trim();
-
-            let intent: SceneIntent | null = null;
-            if (hasUserScenePrompt) {
-                dispatch({ type: 'ADD_LOG', payload: { message: `Parsing scene intent...`, type: 'info' } });
-                intent = await GeminiService.analyzeSceneIntent(
-                    bgPrompt,
+                const style = await GeminiService.analyzeCharacterStyle(
+                    analysisUrl,
                     state.apiKey,
                     state.model,
                     {
-                        billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
-                        entitlements: state.billingEntitlements
+                        ...sharedHostedOptions,
+                        uiWaitWindowMs: AUTO_STYLE_ANALYSIS_WAIT_MS
                     }
                 );
-                setSceneIntent(intent);
-            } else {
-                intent = {
-                    summary: 'Clean cinematic environment matched to the extracted character style',
-                    mood: style?.mood || 'calm',
-                    recommendedCamera: state.director.camera || 'Default / Auto',
-                    recommendedLighting: state.director.lighting || 'Default / Auto'
-                } as SceneIntent;
-            }
+                if (abortController.signal.aborted) return;
+                currentPercent = Math.max(currentPercent, 25);
+                dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text: 'Auto-Style: character aesthetic extracted.' } });
+                
+                setExtractedStyle(style);
+                dispatch({ type: 'ADD_LOG', payload: { message: `Style extracted: ${style.styleSummary}`, type: 'success' } });
 
-            dispatch({ type: 'ADD_LOG', payload: { message: `Generating style-matched environment plate...`, type: 'info' } });
-            
-            // --- PHASE 4: Automated Inference for Scene Settings ---
-            const inferredCamera = (!state.director.camera || state.director.camera === 'Default / Auto') ? intent.recommendedCamera : state.director.camera;
-            const inferredLighting = (!state.director.lighting || state.director.lighting === 'Default / Auto') ? intent.recommendedLighting : state.director.lighting;
+                // Phase 3: Automated Environment Plate Generation
+                const hasUserScenePrompt = !!bgPrompt.trim();
 
-            if (inferredCamera && inferredCamera !== state.director.camera) {
-                 dispatch({ type: 'SET_DIRECTOR', payload: { camera: inferredCamera } });
-                 dispatch({ type: 'ADD_LOG', payload: { message: `Auto-inferred Camera: ${inferredCamera}`, type: 'success' } });
-            }
-            if (inferredLighting && inferredLighting !== state.director.lighting) {
-                 dispatch({ type: 'SET_DIRECTOR', payload: { lighting: inferredLighting } });
-                dispatch({ type: 'ADD_LOG', payload: { message: `Auto-inferred Lighting: ${inferredLighting}`, type: 'success' } });
-            }
+                let intent: SceneIntent | null = null;
+                if (hasUserScenePrompt) {
+                    progressPhase = 'intent';
+                    currentPercent = Math.max(currentPercent, 35);
+                    dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text: 'Auto-Style: parsing scene intent...' } });
+                    dispatch({ type: 'ADD_LOG', payload: { message: `Parsing scene intent...`, type: 'info' } });
+                    intent = await GeminiService.analyzeSceneIntent(
+                        bgPrompt,
+                        state.apiKey,
+                        state.model,
+                        {
+                            ...sharedHostedOptions,
+                            uiWaitWindowMs: AUTO_STYLE_ANALYSIS_WAIT_MS
+                        }
+                    );
+                    if (abortController.signal.aborted) return;
+                    setSceneIntent(intent);
+                } else {
+                    intent = {
+                        summary: 'Clean cinematic environment matched to the extracted character style',
+                        mood: style?.mood || 'calm',
+                        recommendedCamera: state.director.camera || 'Default / Auto',
+                        recommendedLighting: state.director.lighting || 'Default / Auto'
+                    } as SceneIntent;
+                }
 
-            let envPrompt = "";
-            if (hasUserScenePrompt) {
-                envPrompt = buildEnvironmentOnlyPrompt(intent, style, inferredCamera || state.director.camera, state.tokens, state.annotations);
-            } else {
-                envPrompt = `
+                progressPhase = 'prompt';
+                currentPercent = Math.max(currentPercent, 48);
+                dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text: 'Auto-Style: compiling environment prompt...' } });
+                dispatch({ type: 'ADD_LOG', payload: { message: `Generating style-matched environment plate...`, type: 'info' } });
+                
+                // --- PHASE 4: Automated Inference for Scene Settings ---
+                const inferredCamera = (!state.director.camera || state.director.camera === 'Default / Auto') ? intent.recommendedCamera : state.director.camera;
+                const inferredLighting = (!state.director.lighting || state.director.lighting === 'Default / Auto') ? intent.recommendedLighting : state.director.lighting;
+
+                if (inferredCamera && inferredCamera !== state.director.camera) {
+                    dispatch({ type: 'SET_DIRECTOR', payload: { camera: inferredCamera } });
+                    dispatch({ type: 'ADD_LOG', payload: { message: `Auto-inferred Camera: ${inferredCamera}`, type: 'success' } });
+                }
+                if (inferredLighting && inferredLighting !== state.director.lighting) {
+                    dispatch({ type: 'SET_DIRECTOR', payload: { lighting: inferredLighting } });
+                    dispatch({ type: 'ADD_LOG', payload: { message: `Auto-inferred Lighting: ${inferredLighting}`, type: 'success' } });
+                }
+
+                let envPrompt = "";
+                if (hasUserScenePrompt) {
+                    envPrompt = buildEnvironmentOnlyPrompt(intent, style, inferredCamera || state.director.camera, state.tokens, state.annotations);
+                } else {
+                    envPrompt = `
 Create a clean environment plate only.
 
 ERA / WORLD CONSISTENCY (HIGH PRIORITY):
@@ -897,32 +959,68 @@ Color palette: ${style.palette || 'balanced cinematic tones'}
 
 Output: environment plate only.
 `;
-            }
+                }
 
-            dispatch({ type: 'SET_PROCESSING', payload: true });
+                progressPhase = 'render';
+                currentPercent = Math.max(currentPercent, 62);
+                dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text: 'Auto-Style: rendering style-matched environment...' } });
 
-            const res = await GeminiService.generateImage(
-                envPrompt,
-                state.apiKey!,
-                state.model,
-                [], 
-                { aspectRatio: state.director.aspectRatio || '16:9', imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements }
-            );
+                const res = await GeminiService.generateImage(
+                    envPrompt,
+                    state.apiKey!,
+                    state.model,
+                    [],
+                    {
+                        aspectRatio: state.director.aspectRatio || '16:9',
+                        imageSize: state.imageResolution,
+                        thinkingLevel: state.enableImageThinking,
+                        googleGrounding: state.enableGoogleGrounding,
+                        strictMode: true,
+                        billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
+                        entitlements: state.billingEntitlements,
+                        uiWaitWindowMs: AUTO_STYLE_ENVIRONMENT_WAIT_MS,
+                        signal: abortController.signal
+                    }
+                );
+                if (abortController.signal.aborted) return;
 
-            const img = await normalizeGeneratedImageUrl(res);
+                progressPhase = 'finalize';
+                currentPercent = 96;
+                dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text: 'Auto-Style: applying environment plate...' } });
 
-            setPreviousBackgroundUrl(state.backgroundUrl || null);
-            dispatch({ type: 'SET_BG', payload: img });
-            dispatch({ type: 'ADD_LOG', payload: { message: `Environment plate generated successfully.`, type: 'success' } });
+                const img = await normalizeGeneratedImageUrl(res);
+                if (abortController.signal.aborted) return;
 
-            // Auto-composite pass explicitly removed per user request. 
-            // The environment plate will stay pure until user manually triggers composite.
+                setPreviousBackgroundUrl(state.backgroundUrl || null);
+                dispatch({ type: 'SET_BG', payload: img });
+                currentPercent = 100;
+                dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: 100, text: 'Auto-Style: environment plate generated.' } });
+                dispatch({ type: 'ADD_LOG', payload: { message: `Environment plate generated successfully.`, type: 'success' } });
+
+                // Auto-composite pass explicitly removed per user request. 
+                // The environment plate will stay pure until user manually triggers composite.
+            })();
+
+            operationPromise.catch(() => undefined);
+
+            const hardTimeoutMs = AUTO_STYLE_ANALYSIS_WAIT_MS + AUTO_STYLE_ENVIRONMENT_WAIT_MS + 15000;
+            const timeoutPromise = new Promise<never>((_, reject) => {
+                timeoutId = setTimeout(() => {
+                    abortController.abort();
+                    reject(new Error(`Auto-Style Environment timed out after ${Math.round(hardTimeoutMs / 1000)} seconds. Please try again or lower the output resolution.`));
+                }, hardTimeoutMs);
+            });
+
+            await Promise.race([operationPromise, timeoutPromise]);
 
         } catch (err: unknown) {
             console.error("Style Extract / BG Gen Error", err);
             dispatch({ type: 'ADD_LOG', payload: { message: getErrorMessage(err), type: 'error' } });
         } finally {
+            if (timeoutId) window.clearTimeout(timeoutId);
+            window.clearInterval(progressInterval);
             setIsAnalyzingStyle(false);
+            dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
             dispatch({ type: 'SET_PROCESSING', payload: false });
         }
     };
@@ -1603,6 +1701,156 @@ Output: environment plate only.
         return canvas.toDataURL('image/png');
     };
 
+    const buildSpatialControlOverlay = async (
+        regionPlan: ReturnType<typeof buildRegionPlan>
+    ): Promise<string | null> => {
+        if (!shouldAttachSpatialControlOverlay({ referenceSlots: state.referenceSlots, annotations: state.annotations })) {
+            return null;
+        }
+
+        const vw = Math.max(1, toFiniteNumber(viewportBox.w, 960));
+        const vh = Math.max(1, toFiniteNumber(viewportBox.h, 540));
+        const canvas = document.createElement('canvas');
+        const W = 1920;
+        const H = 1080;
+        canvas.width = W;
+        canvas.height = H;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return null;
+
+        const sx = W / vw;
+        const sy = H / vh;
+        const px = (x: number) => x * sx;
+        const py = (y: number) => y * sy;
+
+        ctx.fillStyle = '#050505';
+        ctx.fillRect(0, 0, W, H);
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.035)';
+        for (let i = 1; i < 4; i++) {
+            ctx.fillRect((W / 4) * i, 0, 1, H);
+            ctx.fillRect(0, (H / 4) * i, W, 1);
+        }
+
+        ctx.font = '700 26px Arial, sans-serif';
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText('CONTROL_OVERLAY - SPATIAL BLUEPRINT ONLY - DO NOT RENDER MARKS', 34, 48);
+
+        const drawLabel = (text: string, x: number, y: number, color: string) => {
+            ctx.save();
+            ctx.font = '700 22px Arial, sans-serif';
+            const metrics = ctx.measureText(text);
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.72)';
+            ctx.fillRect(x - 8, y - 25, metrics.width + 16, 32);
+            ctx.fillStyle = color;
+            ctx.fillText(text, x, y);
+            ctx.restore();
+        };
+
+        const drawArrowHead = (from: { x: number; y: number }, to: { x: number; y: number }, color: string) => {
+            const angle = Math.atan2(to.y - from.y, to.x - from.x);
+            const size = 22;
+            ctx.save();
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.moveTo(to.x, to.y);
+            ctx.lineTo(to.x - size * Math.cos(angle - Math.PI / 6), to.y - size * Math.sin(angle - Math.PI / 6));
+            ctx.lineTo(to.x - size * Math.cos(angle + Math.PI / 6), to.y - size * Math.sin(angle + Math.PI / 6));
+            ctx.closePath();
+            ctx.fill();
+            ctx.restore();
+        };
+
+        const zones = state.annotations.filter((annotation) => annotation.visible !== false && annotation.type === 'zone');
+        const zoneHeightRanks = new Map<string, number>();
+        [...zones]
+            .sort((a, b) => toFiniteNumber(b.height, 100) - toFiniteNumber(a.height, 100))
+            .forEach((zone, rank) => zoneHeightRanks.set(zone.id, rank + 1));
+        zones.forEach((zone, index) => {
+            const x = px(toFiniteNumber(zone.x, 0));
+            const y = py(toFiniteNumber(zone.y, 0));
+            const w = px(Math.max(1, toFiniteNumber(zone.width, 150)));
+            const h = py(Math.max(1, toFiniteNumber(zone.height, 100)));
+            const rawHeight = Math.round(toFiniteNumber(zone.height, 100));
+            const rank = zoneHeightRanks.get(zone.id) || index + 1;
+            ctx.save();
+            ctx.strokeStyle = '#4f8cff';
+            ctx.fillStyle = 'rgba(79, 140, 255, 0.16)';
+            ctx.lineWidth = zone.hard ? 8 : 5;
+            ctx.setLineDash([18, 12]);
+            ctx.strokeRect(x, y, w, h);
+            ctx.fillRect(x, y, w, h);
+            ctx.restore();
+            ctx.save();
+            ctx.strokeStyle = '#22c55e';
+            ctx.lineWidth = 7;
+            ctx.setLineDash([]);
+            ctx.beginPath();
+            ctx.moveTo(x, y + h);
+            ctx.lineTo(x + w, y + h);
+            ctx.stroke();
+            ctx.restore();
+            drawLabel(`ZONE_${index + 1} GROUND H=${rawHeight} SCALE_RANK=${rank}${zone.label ? `: ${zone.label}` : ''}`, x + 14, y + 34, '#9fc0ff');
+            drawLabel(`GROUND_${index + 1}`, x + 14, y + h - 10, '#86efac');
+        });
+
+        const arrows = state.annotations.filter((annotation) => annotation.visible !== false && annotation.type === 'arrow');
+        arrows.forEach((arrow, index) => {
+            const endpoints = resolveArrowEndpoints(arrow);
+            const start = { x: px(endpoints.start.x), y: py(endpoints.start.y) };
+            const end = { x: px(endpoints.end.x), y: py(endpoints.end.y) };
+            const color = arrow.color || '#c084fc';
+            ctx.save();
+            ctx.strokeStyle = color;
+            ctx.lineWidth = Math.max(4, toFiniteNumber(arrow.thickness, 3) * 2);
+            ctx.beginPath();
+            ctx.moveTo(start.x, start.y);
+            ctx.lineTo(end.x, end.y);
+            ctx.stroke();
+            drawArrowHead(start, end, color);
+            ctx.restore();
+            drawLabel(`ARROW_${index + 1}`, Math.min(start.x, end.x) + 12, Math.min(start.y, end.y) - 10, color);
+        });
+
+        const notes = state.annotations.filter((annotation) => annotation.visible !== false && annotation.type === 'note');
+        notes.forEach((note, index) => {
+            const x = px(toFiniteNumber(note.x, 0));
+            const y = py(toFiniteNumber(note.y, 0));
+            const w = px(Math.max(1, toFiniteNumber(note.width, 150)));
+            const h = py(Math.max(1, toFiniteNumber(note.height, 100)));
+            ctx.save();
+            ctx.strokeStyle = '#facc15';
+            ctx.fillStyle = 'rgba(250, 204, 21, 0.12)';
+            ctx.lineWidth = 4;
+            ctx.strokeRect(x, y, w, h);
+            ctx.fillRect(x, y, w, h);
+            ctx.restore();
+            drawLabel(`NOTE_${index + 1}`, x + 14, y + 34, '#fde047');
+        });
+
+        regionPlan.forEach((entry) => {
+            const t = entry.token;
+            if (t.visible === false) return;
+            const width = Math.max(1, toFiniteNumber(t.width, 160));
+            const height = Math.max(1, toFiniteNumber(t.height, 220));
+            const anchorX = Math.min(1, Math.max(0, toFiniteNumber(t.anchorX, 0.5)));
+            const anchorY = Math.min(1, Math.max(0, toFiniteNumber(t.anchorY, 0.8)));
+            const x = px(toFiniteNumber(t.x, 0) - width * anchorX);
+            const y = py(toFiniteNumber(t.y, 0) - height * anchorY);
+            const w = px(width);
+            const h = py(height);
+            ctx.save();
+            ctx.strokeStyle = '#fbbf24';
+            ctx.fillStyle = 'rgba(251, 191, 36, 0.08)';
+            ctx.lineWidth = 5;
+            ctx.strokeRect(x, y, w, h);
+            ctx.fillRect(x, y, w, h);
+            ctx.restore();
+            drawLabel(`REGION_${entry.region}: ${t.tag || entry.cast?.name || 'Subject'}`, x + 14, y + Math.max(34, h - 14), '#fbbf24');
+        });
+
+        return canvas.toDataURL('image/png');
+    };
+
     // Unified Workflow Generate Button
     const generateBg = async (overrideBgUrl?: string | unknown) => {
         if (!(await ensureStagingAiAccess('Environment Plate Generation'))) return;
@@ -1838,6 +2086,7 @@ Output: environment plate only.
 
                     for (const pass of passPlan) {
                         const passAnchorPlate = await buildAnchorPlate([pass.regionEntry], runningBgUrl);
+                        const passControlOverlay = await buildSpatialControlOverlay([pass.regionEntry]);
                         const passLightingBlock = await buildAnchorLightingTransferBlock(
                             runningBgUrl,
                             [pass.regionEntry],
@@ -1857,7 +2106,8 @@ Output: environment plate only.
                             activeRefs: [passReference],
                             actorIdentitySets: passIdentitySet ? [passIdentitySet] : undefined,
                             tokens: [pass.regionEntry.token],
-                            annotations: state.annotations
+                            annotations: state.annotations,
+                            spatialFrame: viewportBox
                         });
 
                         const passRefs = [
@@ -1865,6 +2115,9 @@ Output: environment plate only.
                             { url: runningBgUrl, label: 'CLEAN_BG_PLATE' },
                             { url: passReference.url!, label: passRefLabel }
                         ];
+                        if (passControlOverlay) {
+                            passRefs.splice(2, 0, { url: passControlOverlay, label: 'CONTROL_OVERLAY' });
+                        }
                         const passRefUrlSet = new Set(passRefs.map((r) => r.url));
                         const passSupportLabels: string[] = [];
                         if (passIdentitySet) {
@@ -1922,6 +2175,7 @@ Output: environment plate only.
                 }
 
                 const anchorPlate = await buildAnchorPlate(plan);
+                const controlOverlay = await buildSpatialControlOverlay(plan);
                 const anchorLightingBlock = await buildAnchorLightingTransferBlock(
                     activeBgUrl,
                     plan,
@@ -1938,21 +2192,30 @@ Output: environment plate only.
                         state.annotations,
                         state.referenceSlots,
                         state.director,
-                        safeExtractedStyle
+                        safeExtractedStyle,
+                        viewportBox
                     );
 
                 const refs: { url: string; label: string }[] = [];
                 refs.push({ url: anchorPlate, label: "ANCHOR_GUIDE" });
                 if (activeBgUrl) refs.push({ url: activeBgUrl, label: "CLEAN_BG_PLATE" });
+                if (controlOverlay) refs.push({ url: controlOverlay, label: "CONTROL_OVERLAY" });
                 const urls = new Set(refs.map(r => r.url));
 
-                if (isReplaceMode) {
-                    for (const ref of activeReferences) {
-                        const url = ref.url;
-                        if (!url || urls.has(url)) continue;
-                        refs.push({ url, label: `REFERENCE_${ref.index}` });
-                        urls.add(url);
+                const referenceStackLabelsBySlotIndex = new Map<number, string>();
+                for (const ref of activeReferences) {
+                    const url = ref.url;
+                    if (!url) continue;
+                    const existingRef = refs.find((entry) => entry.url === url);
+                    if (existingRef) {
+                        referenceStackLabelsBySlotIndex.set(ref.index, existingRef.label);
+                        continue;
                     }
+                    if (refs.length >= 14) break;
+                    const label = `REFERENCE_${ref.index}`;
+                    refs.push({ url, label });
+                    urls.add(url);
+                    referenceStackLabelsBySlotIndex.set(ref.index, label);
                 }
 
                 const actorIdentityLabelsByActorId = new Map<string, string[]>();
@@ -1968,7 +2231,7 @@ Output: environment plate only.
                     const sortedRefs = [...activeReferences].sort((a, b) => a.index - b.index);
                     const identitySetByActorId = new Map(identitySets.map((set) => [set.actorId, set]));
                     for (const ref of sortedRefs) {
-                        const label = `REFERENCE_${ref.index}`;
+                        const label = referenceStackLabelsBySlotIndex.get(ref.index) || `REFERENCE_${ref.index}`;
                         const group = [label];
                         const linkedIdentitySet = ref.castId ? identitySetByActorId.get(ref.castId) : undefined;
                         const actorKey = toLabelKey(linkedIdentitySet?.actorLabel || ref.name || ref.castId || `REF_${ref.index}`);
@@ -1997,13 +2260,25 @@ Output: environment plate only.
                         }
                     }
                 } else {
+                    const sortedRefs = [...activeReferences].sort((a, b) => a.index - b.index);
+                    for (const ref of sortedRefs) {
+                        const label = referenceStackLabelsBySlotIndex.get(ref.index);
+                        if (!label) continue;
+                        const group = [label];
+                        orderedIdentityLabelGroups.push(group);
+                        if (ref.castId) {
+                            actorIdentityLabelsByActorId.set(ref.castId, group);
+                        }
+                    }
+
                     for (const set of identitySets) {
                         if (!hasStrongFaceAnchor(set)) {
                              console.warn(`[IdentityLock] Missing face anchor for generation request`, { actorId: set.actorId, path: 'scene-strict' });
                         }
                         const orderedUrls = buildOrderedActorIdentityInputs(set);
                         const actorKey = toLabelKey(set.actorLabel || set.actorId || 'ACTOR');
-                        const setLabels: string[] = [];
+                        const existingLabels = actorIdentityLabelsByActorId.get(set.actorId) || [];
+                        const setLabels: string[] = [...existingLabels];
                         for (const url of orderedUrls) {
                             if (!url) continue;
                             if (refs.length >= 14) break;
@@ -2018,8 +2293,11 @@ Output: environment plate only.
                             urls.add(url);
                         }
                         if (setLabels.length > 0) {
-                            actorIdentityLabelsByActorId.set(set.actorId, setLabels);
-                            orderedIdentityLabelGroups.push(setLabels);
+                            const uniqueSetLabels = Array.from(new Set(setLabels));
+                            actorIdentityLabelsByActorId.set(set.actorId, uniqueSetLabels);
+                            if (existingLabels.length === 0) {
+                                orderedIdentityLabelGroups.push(uniqueSetLabels);
+                            }
                         }
                     }
                 }
@@ -2145,6 +2423,15 @@ Output: environment plate only.
                 const references: { url: string; label: string }[] = [];
                 const urls = new Set<string>();
 
+                for (const ref of activeReferences) {
+                    const url = ref.url;
+                    if (!url) continue;
+                    if (references.length >= 14) break;
+                    if (urls.has(url)) continue;
+                    references.push({ url, label: `REFERENCE_${ref.index}` });
+                    urls.add(url);
+                }
+
                 for (const set of identitySets) {
                     if (!hasStrongFaceAnchor(set)) {
                          console.warn(`[IdentityLock] Missing face anchor for generation request`, { actorId: set.actorId, path: 'scene-loose' });
@@ -2188,6 +2475,11 @@ Output: environment plate only.
                 }
 
                 const loosePlan = buildRegionPlan({ token: tokenOverrides });
+                const looseControlOverlay = await buildSpatialControlOverlay(loosePlan);
+                if (looseControlOverlay) {
+                    const insertAt = Math.min(references.length, activeBgUrl ? 1 : 0);
+                    references.splice(insertAt, 0, { url: looseControlOverlay, label: "CONTROL_OVERLAY" });
+                }
                 const looseLightingBlock = await buildAnchorLightingTransferBlock(
                     activeBgUrl,
                     loosePlan,
@@ -2203,7 +2495,8 @@ Output: environment plate only.
                         state.referenceSlots,
                         state.director,
                         safeExtractedStyle,
-                        bgPrompt
+                        bgPrompt,
+                        viewportBox
                     ),
                     looseLightingBlock
                 ].filter(Boolean).join('\n\n');

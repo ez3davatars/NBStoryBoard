@@ -23,10 +23,12 @@ Use this checklist before merging a launch candidate.
 - [ ] `SUPABASE_URL` is set
 - [ ] `SUPABASE_ANON_KEY` is set (for generate path)
 - [ ] `SUPABASE_SECRET_KEY` or `SUPABASE_SERVICE_ROLE_KEY` is set
+- [ ] `GEMINI_API_KEY` is set
 - [ ] `R2_ACCOUNT_ID` is set
 - [ ] `R2_ACCESS_KEY_ID` is set
 - [ ] `R2_SECRET_ACCESS_KEY` is set
 - [ ] `R2_BUCKET_NAME` is set
+- [ ] `R2_PUBLIC_URL` is set
 - [ ] `CLEANUP_INVOCATION_SECRET` is set (cleanup function)
 
 ### Worker Env (`image-processor`, `cleanup-cron`)

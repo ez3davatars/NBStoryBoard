@@ -51,6 +51,7 @@ import {
   shouldApplyCharacterAnatomyIntegrity,
   withCharacterAnatomyIntegrityContract
 } from '../../prompts/characterAnatomyIntegrity';
+import { formatHostedGenerationErrorResponse } from '../utils/hostedGenerationErrors';
 
 export type ExtractedStyle = {
   medium?: string;
@@ -245,6 +246,47 @@ const getErrorMessage = (error: unknown): string => {
   if (error instanceof Error) return error.message;
   return String(error);
 };
+
+const getImageMimeTypeFromPath = (value: string): string => {
+  const clean = value.split(/[?#]/)[0].toLowerCase();
+  if (clean.endsWith('.jpg') || clean.endsWith('.jpeg')) return 'image/jpeg';
+  if (clean.endsWith('.webp')) return 'image/webp';
+  if (clean.endsWith('.gif')) return 'image/gif';
+  return 'image/png';
+};
+
+const isLikelyNativeImagePath = (value: string): boolean =>
+  /^app:\/\//i.test(value) ||
+  /^file:\/\//i.test(value) ||
+  /^[a-zA-Z]:[\\/]/.test(value) ||
+  /^\\\\/.test(value) ||
+  /^\//.test(value);
+
+const nativePathFromImageUrl = (value: string): string | null => {
+  let pathValue = value;
+
+  if (/^app:\/\/local\//i.test(pathValue)) {
+    pathValue = pathValue.replace(/^app:\/\/local\//i, '');
+  } else if (/^app:\/\//i.test(pathValue)) {
+    pathValue = pathValue.replace(/^app:\/\//i, '');
+  } else if (/^file:\/\//i.test(pathValue)) {
+    pathValue = pathValue.replace(/^file:\/\/\/?/i, '');
+  }
+
+  try {
+    pathValue = decodeURIComponent(pathValue);
+  } catch {
+    // Keep the original string if it contains literal percent characters.
+  }
+
+  pathValue = pathValue.replace(/^\/([a-zA-Z]:[\\/])/, '$1');
+  pathValue = pathValue.replace(/^([a-zA-Z])\//, '$1:/');
+
+  return isLikelyNativeImagePath(pathValue) ? pathValue : null;
+};
+
+const isLikelyRawBase64Image = (value: string): boolean =>
+  value.length > 100 && /^[A-Za-z0-9+/=\s]+$/.test(value);
 
 const HOSTED_REFERENCE_UPLOAD_PRIMARY_MAX_SIZE = 3072;
 const HOSTED_REFERENCE_UPLOAD_FALLBACK_MAX_SIZE = 2048;
@@ -472,7 +514,52 @@ export const GeminiService = {
         throw new Error("Failed to parse base64 data URL");
       }
     }
-    // 2. Handle Blob URL (or any fetchable URL)
+    // 2. Handle native packaged-app URLs/paths.
+    else if (isLikelyNativeImagePath(url)) {
+      const nativePath = nativePathFromImageUrl(url);
+      if (nativePath && window.electronAPI?.readFile) {
+        try {
+          const base64Data = await window.electronAPI.readFile(nativePath);
+          if (base64Data) {
+            resolvedMimeType = getImageMimeTypeFromPath(nativePath);
+            resolvedData = base64Data;
+          }
+        } catch (error) {
+          throw new Error(`Failed to read native image path: ${getErrorMessage(error)}`);
+        }
+      }
+
+      // app:// can also be fetchable through Electron's registered protocol.
+      if (!resolvedData && url.startsWith('app://')) {
+        try {
+          const response = await fetch(url);
+          if (!response.ok) throw new Error(`Fetch failed: ${response.statusText}`);
+          const blob = await response.blob();
+          await new Promise<void>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              const result = reader.result as string;
+              try {
+                resolvedMimeType = result.substring(result.indexOf(':') + 1, result.indexOf(';'));
+                resolvedData = result.split('base64,')[1];
+                resolve();
+              } catch {
+                reject(new Error("Failed to parse native fetch to base64"));
+              }
+            };
+            reader.onerror = () => reject(new Error("FileReader error"));
+            reader.readAsDataURL(blob);
+          });
+        } catch (error) {
+          throw new Error(`Failed to resolve native image URL: ${getErrorMessage(error)}`);
+        }
+      }
+
+      if (!resolvedData) {
+        throw new Error(`Failed to resolve native image reference: ${url.substring(0, 80)}...`);
+      }
+    }
+    // 3. Handle Blob URL (or any fetchable URL)
     else if (url.startsWith('blob:') || url.startsWith('http')) {
       try {
         const response = await fetch(url);
@@ -497,8 +584,8 @@ export const GeminiService = {
         throw new Error(`Failed to resolve image data from ${url.startsWith('blob:') ? 'blob' : 'URL'}: ${getErrorMessage(e)}`);
       }
     }
-    // 3. Handle Raw Base64 (Assume PNG)
-    else if (url.length > 100) { // Simple heuristic for raw base64
+    // 4. Handle Raw Base64 (Assume PNG)
+    else if (isLikelyRawBase64Image(url)) {
       resolvedMimeType = 'image/png';
       resolvedData = url;
     } else {
@@ -682,7 +769,7 @@ export const GeminiService = {
     await assertAuthenticatedForGeneration({ billingMode: 'hosted' });
 
     const electronApi = (window as Window & { electronAPI?: ElectronApiWithWorkerStatus }).electronAPI;
-    if (electronApi && typeof electronApi.getWorkerStatus === 'function') {
+    if (import.meta.env.DEV && electronApi && typeof electronApi.getWorkerStatus === 'function') {
         const workerState = await electronApi.getWorkerStatus();
         if (workerState.imageWorker.status !== 'online') {
             throw new Error(`Hosted Generation is unavailable because the required background worker is not currently online. Status: ${workerState.imageWorker.status}. Reason: ${workerState.imageWorker.lastError || 'None'}`);
@@ -830,10 +917,13 @@ export const GeminiService = {
         dispatchInsufficientHostedCredits(details);
         throw new InsufficientHostedCreditsError(details);
       }
-      throw new Error(`generate-image ${rawResponse.status}: ${responseText}`);
+      throw new Error(formatHostedGenerationErrorResponse(rawResponse.status, responseText));
     }
 
     const data = JSON.parse(responseText);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('refresh-credits'));
+    }
     return data.imageUrl;
   },
 
@@ -1536,7 +1626,7 @@ export const GeminiService = {
     };
 
     if (options.billingMode === 'hosted') {
-        const hostedDataUrl = await GeminiService._executeHostedRequest(useModel, requestBody, options);
+        const hostedDataUrl = await GeminiService._executeHostedRequest(useModel, requestBody, { ...options, expectedResponseType: options.expectedResponseType ?? 'text' });
         if (hostedDataUrl && hostedDataUrl.startsWith('data:application/json')) {
             return decodeURIComponent(hostedDataUrl.split(',')[1]);
         }
