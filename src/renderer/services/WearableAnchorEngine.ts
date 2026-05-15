@@ -42,37 +42,6 @@ export type WearablePlacement = WearableAnchorContract & {
     };
 };
 
-type HeadwearSizingProfile = {
-    widthFactor: number;
-    minFactor: number;
-    maxFactor: number;
-    yOffsetFaceFactor: number;
-};
-
-function getHeadwearSizingProfile(subtype?: HeadwearSubtype): HeadwearSizingProfile {
-    switch (subtype) {
-        case 'crown':
-            return { widthFactor: 0.70, minFactor: 0.58, maxFactor: 0.76, yOffsetFaceFactor: -0.14 };
-        case 'tiara':
-            return { widthFactor: 0.66, minFactor: 0.54, maxFactor: 0.74, yOffsetFaceFactor: -0.12 };
-        case 'hat':
-            return { widthFactor: 0.88, minFactor: 0.74, maxFactor: 1.08, yOffsetFaceFactor: -0.08 };
-        case 'helmet':
-            return { widthFactor: 1.02, minFactor: 0.86, maxFactor: 1.18, yOffsetFaceFactor: 0.02 };
-        case 'hood':
-            return { widthFactor: 1.08, minFactor: 0.92, maxFactor: 1.24, yOffsetFaceFactor: 0.00 };
-        case 'veil':
-            return { widthFactor: 0.92, minFactor: 0.72, maxFactor: 1.18, yOffsetFaceFactor: -0.04 };
-        case 'headband':
-            return { widthFactor: 0.86, minFactor: 0.72, maxFactor: 0.98, yOffsetFaceFactor: -0.02 };
-        case 'hairpiece':
-            return { widthFactor: 0.42, minFactor: 0.24, maxFactor: 0.70, yOffsetFaceFactor: -0.12 };
-        case 'generic_headwear':
-        default:
-            return { widthFactor: 0.78, minFactor: 0.64, maxFactor: 0.96, yOffsetFaceFactor: -0.08 };
-    }
-}
-
 export class WearableAnchorEngine {
     static inferClass(propName?: string, prompt?: string, note?: string): WearableClass {
         const text = `${propName || ''} ${prompt || ''} ${note || ''}`.toLowerCase();
@@ -134,31 +103,25 @@ export class WearableAnchorEngine {
         
         switch (fitClass) {
             case 'headwear': {
-                const faceCenter = landmarks.faceCenter || { x: landmarks.imageWidth / 2, y: landmarks.imageHeight / 2 };
-                const faceWidthPx = landmarks.faceWidthPx || 220;
-                const headWidthPx = landmarks.headWidthPx || faceWidthPx * 1.15;
-                const faceHeightPx = landmarks.faceHeightPx || landmarks.headHeightPx || 300;
-                const profile = getHeadwearSizingProfile(subtype);
+                const headWidthPx = landmarks.headWidthPx || 200;
                 
-                // Use subtype-specific sizing so each headwear category lands at a natural scale.
-                const baseWidth = headWidthPx * profile.widthFactor * scaleModifier;
-                const minTargetWidth = headWidthPx * profile.minFactor;
-                const maxTargetWidth = headWidthPx * profile.maxFactor;
-                const targetWidthPx = Math.max(minTargetWidth, Math.min(maxTargetWidth, baseWidth));
+                // Crown width should be constrained to roughly 0.78-0.90 * headWidthPx
+                const baseWidth = headWidthPx * 0.84;
+                const minTargetWidth = headWidthPx * 0.78;
+                const maxTargetWidth = headWidthPx * 0.90;
+                const targetWidthPx = Math.max(minTargetWidth, Math.min(maxTargetWidth, baseWidth * scaleModifier));
 
+                const faceCenter = landmarks.faceCenter || { x: landmarks.imageWidth / 2, y: landmarks.imageHeight / 2 };
+                const faceHeightPx = landmarks.faceHeightPx || landmarks.headHeightPx || 300;
                 const anchorX = landmarks.hairlineCenter?.x ?? landmarks.foreheadCenter?.x ?? faceCenter.x;
-                let anchorY =
-                    landmarks.hairlineCenter?.y ??
-                    landmarks.foreheadCenter?.y ??
-                    (faceCenter.y - faceHeightPx * 0.42);
-                anchorY += faceHeightPx * profile.yOffsetFaceFactor;
+                let anchorY = landmarks.hairlineCenter?.y ?? landmarks.foreheadCenter?.y ?? (faceCenter.y - faceHeightPx * 0.42);
                 
                 if (noteText.includes("lower")) {
-                    anchorY += faceHeightPx * 0.05;
+                    anchorY += 20;
                     anchorNotes.push("adjusted lower");
                 }
                 if (noteText.includes("higher")) {
-                    anchorY -= faceHeightPx * 0.05;
+                    anchorY -= 20;
                     anchorNotes.push("adjusted higher");
                 }
 
