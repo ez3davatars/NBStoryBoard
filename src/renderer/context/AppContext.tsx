@@ -21,8 +21,15 @@ import {
     createBiometricIdentityLock,
     type BiometricIdentityLock
 } from '../../prompts/identityContracts';
+import {
+    hasSeenWelcomeForInstall,
+    markWelcomeSeenForInstall
+} from '../utils/welcomeState';
+import type { HeadwearSubtype, WearableClass } from '../services/WearableAnchorEngine';
 
 export const APP_SCHEMA_VERSION = 5; // bump when persisted state shape changes
+const POST_LAUNCH_HYDRATION_DELAY_MS = 8500;
+const WELCOME_INSTALL_CONTEXT_TIMEOUT_MS = 1500;
 // --- SHARED TYPES ---
 
 export type ViewMode =
@@ -59,6 +66,11 @@ export interface PropItem {
     prompt: string;
     category?: string;
     timestamp: number;
+    classHint?: WearableClass;
+    subtypeHint?: HeadwearSubtype;
+    metadataVersion?: number;
+    originalPrompt?: string;
+    sourceKind?: 'generated' | 'uploaded' | 'saved' | 'unknown';
 }
 export interface WhitelistProfile {
     identity: string;
@@ -576,6 +588,8 @@ export interface AppState {
     isHelpOpen: boolean;
     helpContextSection: string;
     hasSeenWelcome: boolean;
+    welcomeInstallId: string | null;
+    isWelcomeStateReady: boolean;
     // -------------------------
 
     imageResolution: '1K' | '2K' | '4K';
@@ -784,6 +798,7 @@ export type Action =
     | { type: 'SET_SHOW_HELP_HINTS'; payload: boolean }
     | { type: 'TOGGLE_HELP'; payload: boolean }
     | { type: 'SET_HELP_SECTION'; payload: string }
+    | { type: 'SET_WELCOME_INSTALL_CONTEXT'; payload: { installId: string | null } }
     | { type: 'SET_SEEN_WELCOME'; payload: boolean }
     | { type: 'SET_CUSTOM_COVERS'; payload: Record<string, string> }
     | { type: 'SET_STAGE_PANEL_STATE'; payload: { id: string; isOpen: boolean } }
@@ -845,6 +860,17 @@ const loadJson = <T,>(key: string, fallback: T): T => {
     } catch {
         return fallback;
     }
+};
+
+const getInitialWelcomeStatus = (): Pick<AppState, 'hasSeenWelcome' | 'welcomeInstallId' | 'isWelcomeStateReady'> => {
+    const canResolveNativeInstall = Boolean(window.electronAPI?.getAppInstallInfo);
+
+    return {
+        // Native installs resolve this asynchronously so old app data cannot hide a fresh reinstall.
+        hasSeenWelcome: canResolveNativeInstall ? true : hasSeenWelcomeForInstall(localStorage, null),
+        welcomeInstallId: null,
+        isWelcomeStateReady: !canResolveNativeInstall
+    };
 };
 
 const clampBiometricSoundVolume = (value: unknown): number => {
@@ -1125,6 +1151,8 @@ const initialWardrobeState: WardrobeState = {
     tryOnOutputFraming: DEFAULT_WARDROBE_STATE.tryOnOutputFraming
 };
 
+const initialWelcomeStatus = getInitialWelcomeStatus();
+
 export const initialState: AppState = {
     apiKey: localStorage.getItem('nano_api_key') || '',
     model: getInitialModel(),
@@ -1180,7 +1208,9 @@ export const initialState: AppState = {
     
     isHelpOpen: false,
     helpContextSection: 'start',
-    hasSeenWelcome: loadJson<boolean>('nano_has_seen_welcome', false),
+    hasSeenWelcome: initialWelcomeStatus.hasSeenWelcome,
+    welcomeInstallId: initialWelcomeStatus.welcomeInstallId,
+    isWelcomeStateReady: initialWelcomeStatus.isWelcomeStateReady,
 
     stagePanelState: loadJson<Record<string, boolean>>('nano_stage_panel_state', {
         'anchor': false,       // Scene Generator (Open = false)
@@ -1870,6 +1900,8 @@ export const reducer = (state: AppState, action: Action): AppState => {
                 isHelpOpen: state.isHelpOpen,
                 helpContextSection: state.helpContextSection,
                 hasSeenWelcome: state.hasSeenWelcome,
+                welcomeInstallId: state.welcomeInstallId,
+                isWelcomeStateReady: state.isWelcomeStateReady,
                 showHelpHints: state.showHelpHints,
                 stagePanelState: state.stagePanelState,
                 imageResolution: state.imageResolution,
@@ -2129,8 +2161,15 @@ export const reducer = (state: AppState, action: Action): AppState => {
             return { ...state, isHelpOpen: action.payload };
         case 'SET_HELP_SECTION':
             return { ...state, helpContextSection: action.payload };
+        case 'SET_WELCOME_INSTALL_CONTEXT':
+            return {
+                ...state,
+                welcomeInstallId: action.payload.installId,
+                isWelcomeStateReady: true,
+                hasSeenWelcome: hasSeenWelcomeForInstall(localStorage, action.payload.installId)
+            };
         case 'SET_SEEN_WELCOME':
-            localStorage.setItem('nano_has_seen_welcome', JSON.stringify(action.payload));
+            markWelcomeSeenForInstall(localStorage, action.payload, state.welcomeInstallId);
             return { ...state, hasSeenWelcome: action.payload };
 
         // --- REGION EDIT ---
@@ -2672,6 +2711,53 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const hydratedRef = useRef(false);
     const persistTimerRef = useRef<number | null>(null);
 
+    useEffect(() => {
+        let cancelled = false;
+        let settled = false;
+
+        const fallbackTimer = window.setTimeout(() => {
+            if (cancelled || settled) return;
+            settled = true;
+            dispatch({ type: 'SET_WELCOME_INSTALL_CONTEXT', payload: { installId: null } });
+        }, WELCOME_INSTALL_CONTEXT_TIMEOUT_MS);
+
+        const resolveWelcomeInstallContext = async () => {
+            if (!window.electronAPI?.getAppInstallInfo) {
+                if (settled) return;
+                settled = true;
+                window.clearTimeout(fallbackTimer);
+                dispatch({ type: 'SET_WELCOME_INSTALL_CONTEXT', payload: { installId: null } });
+                return;
+            }
+
+            try {
+                const installInfo = await window.electronAPI.getAppInstallInfo();
+                if (!cancelled && !settled) {
+                    settled = true;
+                    window.clearTimeout(fallbackTimer);
+                    dispatch({
+                        type: 'SET_WELCOME_INSTALL_CONTEXT',
+                        payload: { installId: installInfo.installId || null }
+                    });
+                }
+            } catch (error) {
+                console.warn('Failed to resolve welcome install context', error);
+                if (!cancelled && !settled) {
+                    settled = true;
+                    window.clearTimeout(fallbackTimer);
+                    dispatch({ type: 'SET_WELCOME_INSTALL_CONTEXT', payload: { installId: null } });
+                }
+            }
+        };
+
+        resolveWelcomeInstallContext();
+
+        return () => {
+            cancelled = true;
+            window.clearTimeout(fallbackTimer);
+        };
+    }, []);
+
     // --- EFFECT 1: Restore / Migration ---
     useEffect(() => {
         let cancelled = false;
@@ -2848,9 +2934,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                 if (!cancelled) hydratedRef.current = true;
             }
         };
-        restore();
+        const restoreTimer = window.setTimeout(() => {
+            void restore();
+        }, POST_LAUNCH_HYDRATION_DELAY_MS);
 
-        return () => { cancelled = true; };
+        return () => {
+            cancelled = true;
+            window.clearTimeout(restoreTimer);
+        };
     }, []);
 
     // --- EFFECT 2: Persistence (Tokens & Annotations) - Debounced ---

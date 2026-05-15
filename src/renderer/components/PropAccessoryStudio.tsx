@@ -14,14 +14,14 @@ import { LibraryAssetMaterializer } from '../services/LibraryAssetMaterializer';
 import { WearableLandmarkService } from '../services/WearableLandmarkService';
 import { WearableAnchorEngine } from '../services/WearableAnchorEngine';
 import { WearableOverlayComposer } from '../services/WearableOverlayComposer';
-import { WearableRefinementValidator } from '../services/WearableRefinementValidator';
-import { WearableAdjustmentCanvas } from './WearableAdjustmentCanvas';
-import type { WearableAnchorContract, WearablePlacement, WearableClass } from '../services/WearableAnchorEngine';
+import type { WearableClass, HeadwearSubtype } from '../services/WearableAnchorEngine';
 import { useRecentGenerationsStore } from '../stores/useRecentGenerationsStore';
 import { RecentGenerationsCacheService } from '../services/RecentGenerationsCacheService';
 import RecentGenerationsStrip from './recent/RecentGenerationsStrip';
 import { createUniqueDownloadFilename } from '../utils/downloadFilenames';
 import { buildStyleCategoryContract, buildStyleNegativePrompt } from '../../prompts/styleContracts';
+import { buildPropApplicationPrompt } from '../utils/propApplicationPrompt';
+import { PropMetadataService, type PropMetadataSidecar } from '../services/PropMetadataService';
 
 type PermissionAwareDirectoryHandle = FileSystemDirectoryHandle & {
     queryPermission?: (descriptor?: { mode?: 'read' | 'readwrite' }) => Promise<PermissionState>;
@@ -53,6 +53,74 @@ const actorLibraryStyleForCategory = (category: string): string => {
         default:
             return 'exact_studio';
     }
+};
+
+const imageMimeTypeFromFilename = (filename: string): string => {
+    const extension = filename.split('.').pop()?.toLowerCase();
+    if (extension === 'jpg' || extension === 'jpeg') return 'image/jpeg';
+    if (extension === 'webp') return 'image/webp';
+    return 'image/png';
+};
+
+const imageExtensionFromBlob = (blob: Blob): string => {
+    const mime = blob.type.toLowerCase();
+    if (mime.includes('jpeg') || mime.includes('jpg')) return 'jpg';
+    if (mime.includes('webp')) return 'webp';
+    return 'png';
+};
+
+const dataUrlFromBlob = (blob: Blob): Promise<string> =>
+    new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.onerror = () => reject(new Error('Failed to read prop image data'));
+        reader.readAsDataURL(blob);
+    });
+
+const propNameFromFilename = (filename: string): string => {
+    const stem = filename.replace(/\.(png|jpg|jpeg|webp)$/i, '');
+    const withoutKnownPrefix = stem
+        .replace(/^Custom-Prop-\d+-/i, '')
+        .replace(/^prop[_-]?\d*/i, '')
+        .replace(/^PROP[_-]?\d*/i, '');
+    return (withoutKnownPrefix || stem).replace(/[_-]+/g, ' ').trim() || stem;
+};
+
+const buildScannedPropItem = (args: {
+    filename: string;
+    dataUrl: string;
+    localPath?: string;
+    timestamp?: number;
+    metadata?: PropMetadataSidecar | null;
+}): PropItem => {
+    const { filename, dataUrl, localPath, metadata } = args;
+    const fallbackName = propNameFromFilename(filename);
+    const name = metadata?.name || fallbackName;
+    const prompt = metadata?.prompt || metadata?.originalPrompt || filename;
+    const fallbackHints = PropMetadataService.inferClassHint({
+        name,
+        prompt
+    });
+    const classHint = metadata?.classHint || (metadata?.subtypeHint ? 'headwear' : fallbackHints.classHint);
+    const subtypeHint =
+        classHint === 'headwear'
+            ? metadata?.subtypeHint || fallbackHints.subtypeHint
+            : undefined;
+
+    return {
+        id: filename,
+        url: dataUrl,
+        localPath,
+        filename,
+        name,
+        prompt,
+        originalPrompt: metadata?.originalPrompt,
+        sourceKind: metadata?.sourceKind || 'saved',
+        classHint,
+        subtypeHint,
+        metadataVersion: metadata?.version,
+        timestamp: metadata?.updatedAt || args.timestamp || Date.now()
+    };
 };
 
 async function materializeDisplayUrl(url: string | null | undefined): Promise<string> {
@@ -92,22 +160,6 @@ const PropLibrarySkeletonCard = () => (
 
 const PropAccessoryStudio = () => {
     const [libraryLoading, setLibraryLoading] = useState(false);
-    const [adjustmentState, setAdjustmentState] = useState<{
-        subjectUrl: string;
-        propUrl: string;
-        fitClass: WearableClass;
-        anchorContract: WearableAnchorContract;
-        initialOffsetX?: number;
-        initialOffsetY?: number;
-        initialScale?: number;
-    } | null>(null);
-    const [lastConfirmedPlacement, setLastConfirmedPlacement] = useState<{
-        placement: WearablePlacement;
-        precompositeUrl: string;
-        propId: string;
-        offsets: {x: number, y: number, scaleMultiplier: number};
-    } | null>(null);
-    void lastConfirmedPlacement; // suppress TS6133
     const { state, dispatch } = useAppContext();
     const {
         activeTab,
@@ -152,6 +204,36 @@ const PropAccessoryStudio = () => {
         });
     };
 
+    const writePropSidecar = useCallback(async (
+        args: {
+            imageFilename: string;
+            name: string;
+            prompt: string;
+            originalPrompt?: string;
+            sourceKind: PropMetadataSidecar['sourceKind'];
+            classHint?: WearableClass;
+            subtypeHint?: HeadwearSubtype;
+        },
+        nativeFolderName = 'props'
+    ) => {
+        const sidecar = PropMetadataService.buildSidecar(args);
+
+        try {
+            if (isNativeParams() && state.saveDirectoryPath) {
+                const propsPath = await nativeJoinPath(state.saveDirectoryPath, nativeFolderName);
+                await PropMetadataService.writeNativeSidecar(propsPath, sidecar);
+                return;
+            }
+
+            if (state.saveDirectoryHandle) {
+                const propsHandle = await state.saveDirectoryHandle.getDirectoryHandle('props', { create: true });
+                await PropMetadataService.writeWebSidecar(propsHandle, sidecar);
+            }
+        } catch (error) {
+            console.warn('[PropAccessoryStudio] Prop metadata sidecar save failed:', error);
+        }
+    }, [state.saveDirectoryHandle, state.saveDirectoryPath]);
+
     const scanProps = useCallback(async () => {
         // 1. NATIVE MODE
         if (isNativeParams() && state.saveDirectoryPath) {
@@ -165,15 +247,14 @@ const PropAccessoryStudio = () => {
                         const fullPath = await nativeJoinPath(propsPath, filename);
                         const base64 = await window.electronAPI?.readFile?.(fullPath);
                         if (base64) {
-                            items.push({
-                                id: filename,
-                                url: `data:image/png;base64,${base64}`,
+                            const metadata = await PropMetadataService.readNativeSidecar(propsPath, filename);
+                            items.push(buildScannedPropItem({
+                                filename,
+                                dataUrl: `data:${imageMimeTypeFromFilename(filename)};base64,${base64}`,
                                 localPath: fullPath,
-                                filename: filename,
-                                name: filename.replace('.png', '').split('-').slice(1).join(' '),
-                                prompt: "Saved prop asset",
-                                timestamp: Date.now() // Native list doesn't give timestamp easily yet, using Now serves sort-of-ok or we can stat
-                            });
+                                metadata,
+                                timestamp: metadata?.updatedAt || Date.now()
+                            }));
                         }
                     }
                 }
@@ -197,18 +278,18 @@ const PropAccessoryStudio = () => {
             for await (const entry of iterablePropsHandle.values()) {
                 if (entry.kind === 'file' && /\.(png|jpg|jpeg|webp)$/i.test(entry.name)) {
                     const file = await (entry as FileSystemFileHandle).getFile();
+                    const metadata = await PropMetadataService.readWebSidecar(propsHandle, entry.name);
                     const reader = new FileReader();
                     const dataUrl = await new Promise<string>((resolve) => {
                         reader.onload = () => resolve(reader.result as string);
                         reader.readAsDataURL(file);
                     });
-                    items.push({
-                        id: entry.name,
-                        url: dataUrl,
-                        name: entry.name.replace('.png', '').split('-').slice(1).join(' '),
-                        prompt: "Saved prop asset",
-                        timestamp: file.lastModified
-                    });
+                    items.push(buildScannedPropItem({
+                        filename: entry.name,
+                        dataUrl,
+                        metadata,
+                        timestamp: metadata?.updatedAt || file.lastModified
+                    }));
                 }
             }
             dispatch({ type: 'SET_PROP_ITEMS', payload: items.sort((a, b) => b.timestamp - a.timestamp) });
@@ -230,11 +311,24 @@ const PropAccessoryStudio = () => {
             if (state.saveDirectoryPath && window.electronAPI?.deleteFile && window.electronAPI?.joinPath) {
                 const filePath = await window.electronAPI.joinPath(state.saveDirectoryPath, 'props', item.id);
                 deleted = await window.electronAPI.deleteFile(filePath);
+                if (deleted) {
+                    const sidecarPath = await window.electronAPI.joinPath(
+                        state.saveDirectoryPath,
+                        'props',
+                        PropMetadataService.sidecarNameForImage(item.id)
+                    );
+                    await window.electronAPI.deleteFile(sidecarPath);
+                }
             }
 
             if (!deleted && state.saveDirectoryHandle) {
                 const propsHandle = await state.saveDirectoryHandle.getDirectoryHandle('props', { create: false });
                 await propsHandle.removeEntry(item.id);
+                try {
+                    await propsHandle.removeEntry(PropMetadataService.sidecarNameForImage(item.id));
+                } catch {
+                    // Sidecars are optional; missing metadata should not block deletion.
+                }
                 deleted = true;
             }
 
@@ -265,6 +359,11 @@ const PropAccessoryStudio = () => {
             }
 
             const safeName = `Custom-Prop-${Date.now()}-${file.name.replace(/[^a-z0-9.]/gi, '_')}`;
+            const displayName = file.name.replace(/\.(png|jpg|jpeg|webp)$/i, '').substring(0, 20);
+            const hints = PropMetadataService.inferClassHint({
+                name: file.name,
+                prompt: file.name
+            });
 
             // 1. NATIVE MODE
             if (isNativeParams() && state.saveDirectoryPath) {
@@ -278,6 +377,15 @@ const PropAccessoryStudio = () => {
                 if (!success) {
                     throw new Error("Native write failed");
                 }
+                await writePropSidecar({
+                    imageFilename: safeName,
+                    name: displayName,
+                    prompt: file.name,
+                    originalPrompt: 'User Upload',
+                    sourceKind: 'uploaded',
+                    classHint: hints.classHint,
+                    subtypeHint: hints.subtypeHint
+                });
             }
             // 2. WEB MODE
             else if (state.saveDirectoryHandle) {
@@ -286,6 +394,15 @@ const PropAccessoryStudio = () => {
                 const writable = await fileHandle.createWritable();
                 await writable.write(file);
                 await writable.close();
+                await writePropSidecar({
+                    imageFilename: safeName,
+                    name: displayName,
+                    prompt: file.name,
+                    originalPrompt: 'User Upload',
+                    sourceKind: 'uploaded',
+                    classHint: hints.classHint,
+                    subtypeHint: hints.subtypeHint
+                });
             } else {
                 return; // No save method
             }
@@ -306,8 +423,13 @@ const PropAccessoryStudio = () => {
                     url: dataUrl,
                     localPath: localPath,
                     filename: safeName,
-                    name: file.name.split('.')[0].substring(0, 20),
-                    prompt: "User Upload",
+                    name: displayName,
+                    prompt: file.name,
+                    originalPrompt: 'User Upload',
+                    sourceKind: 'uploaded',
+                    classHint: hints.classHint,
+                    subtypeHint: hints.subtypeHint,
+                    metadataVersion: 1,
                     timestamp: Date.now()
                 };
                 dispatch({ type: 'ADD_PROP_ITEM', payload: newItem });
@@ -361,26 +483,87 @@ const PropAccessoryStudio = () => {
     const saveToProps = async (imageUrl: string, prompt: string) => {
         if (!state.saveDirectoryHandle && !state.saveDirectoryPath) return; // Need at least one
         try {
-            const mat = await LibraryAssetMaterializer.materializePropAsset({
-                sourceUrl: imageUrl,
-                saveDirectoryPath: state.saveDirectoryPath
+            const cleanPrompt = prompt.trim() || 'Generated prop';
+            const displayName = cleanPrompt.substring(0, 20);
+            const hints = PropMetadataService.inferClassHint({
+                name: cleanPrompt,
+                prompt: cleanPrompt
             });
 
+            let materialized: {
+                id: string;
+                url: string;
+                localPath?: string;
+                sourceUrl: string;
+                filename?: string;
+                nativeFolderName?: string;
+            };
+
+            if (isNativeParams() && state.saveDirectoryPath) {
+                const mat = await LibraryAssetMaterializer.materializePropAsset({
+                    sourceUrl: imageUrl,
+                    saveDirectoryPath: state.saveDirectoryPath
+                });
+                materialized = {
+                    id: mat.filename || `PROP-${Date.now()}.png`,
+                    url: mat.url,
+                    localPath: mat.localPath || undefined,
+                    sourceUrl: mat.sourceUrl,
+                    filename: mat.filename,
+                    nativeFolderName: 'props'
+                };
+            } else if (state.saveDirectoryHandle) {
+                const response = await fetch(imageUrl);
+                const blob = await response.blob();
+                const filename = `prop_${Date.now()}.${imageExtensionFromBlob(blob)}`;
+                const propsHandle = await state.saveDirectoryHandle.getDirectoryHandle('props', { create: true });
+                const fileHandle = await propsHandle.getFileHandle(filename, { create: true });
+                const writable = await fileHandle.createWritable();
+                await writable.write(blob);
+                await writable.close();
+
+                materialized = {
+                    id: filename,
+                    url: await dataUrlFromBlob(blob),
+                    sourceUrl: imageUrl,
+                    filename
+                };
+            } else {
+                return;
+            }
+
+            if (materialized.filename) {
+                await writePropSidecar({
+                    imageFilename: materialized.filename,
+                    name: displayName,
+                    prompt: cleanPrompt,
+                    originalPrompt: cleanPrompt,
+                    sourceKind: 'generated',
+                    classHint: hints.classHint,
+                    subtypeHint: hints.subtypeHint
+                }, materialized.nativeFolderName);
+            }
+
             const newItem: PropItem = {
-                id: mat.filename || `PROP-${Date.now()}.png`,
-                url: mat.url,
-                localPath: mat.localPath || undefined,
-                sourceUrl: mat.sourceUrl,
-                filename: mat.filename,
-                name: prompt.substring(0, 20),
-                prompt: prompt,
+                id: materialized.id,
+                url: materialized.url,
+                localPath: materialized.localPath,
+                sourceUrl: materialized.sourceUrl,
+                filename: materialized.filename,
+                name: displayName,
+                prompt: cleanPrompt,
+                originalPrompt: cleanPrompt,
+                sourceKind: 'generated',
+                classHint: hints.classHint,
+                subtypeHint: hints.subtypeHint,
+                metadataVersion: materialized.filename ? 1 : undefined,
                 timestamp: Date.now()
             };
             dispatch({ type: 'ADD_PROP_ITEM', payload: newItem });
             
             // Immediate local pivot
-            if (mat.url) setDesignerImage(mat.url);
-            dispatch({ type: 'ADD_LOG', payload: { message: `Prop saved to library: ${mat.filename || "Storage"}`, type: 'success' } });
+            if (materialized.url) setDesignerImage(materialized.url);
+            dispatch({ type: 'ADD_LOG', payload: { message: `Prop saved to library: ${materialized.filename || "Storage"}`, type: 'success' } });
         } catch (error: unknown) {
             dispatch({ type: 'ADD_LOG', payload: { message: `Failed to save prop: ${getErrorMessage(error)}`, type: 'error' } });
         }
@@ -512,207 +695,40 @@ extra objects, duplicate prop, altered proportions, floating parts, text, label,
         }
     };
 
-
-
-    const executeRefinement = async (
+    const rememberPropClassification = async (
+        item: PropItem,
         fitClass: WearableClass,
-        subjectUrl: string,
-        propUrl: string,
-        lockedPlacement: WearablePlacement,
-        precompositeUrl: string,
-        subjectStyleId?: string,
-        subjectStyleLabel = 'Subject Reference Style'
+        subtype?: HeadwearSubtype
     ) => {
-        console.warn(`[DEBUG_PATH] executeRefinement called for ${fitClass}`);
-        let finalUrl = precompositeUrl;
-        let refinementAccepted = false;
-        const refinementStyleContract = buildStyleCategoryContract(subjectStyleId, {
-            selectedStyleLabel: subjectStyleLabel,
-            sourceImagePolicy: "Subject references control identity, body, pose, and placement only; source-photo realism must not override the active character render category.",
-            boardPresentationPolicy: "Prop Studio refinement controls wearable integration only.",
-            lightingPolicy: "Contact shadowing and material integration must stay inside the active character render category.",
-            appliesTo: "Prop Studio wearable refinement, applied character preview, saved actor preview, and recent thumbnail"
-        });
-        const propIdentityLock = selectedCharacter?.identityLock
-            ? {
-                ...selectedCharacter.identityLock,
-                generatedSourceImageIndex: 1,
-                generatedSourceRole: "selected subject image is the visual/body/pose source only; uploaded biometric identity remains authoritative for this character_id",
-                appliesTo: "Prop Studio generation, wearable refinement, preview, saved actor output, and export requests for this character"
-            }
-            : undefined;
-        const refinementStyleNegativePrompt = buildStyleNegativePrompt(subjectStyleId);
+        if (fitClass === 'generic_prop') return;
+        if (item.classHint && item.classHint !== 'generic_prop') return;
+
+        const imageFilename = item.filename || item.id;
+        if (!imageFilename) return;
+
+        const updatedItem: PropItem = {
+            ...item,
+            classHint: fitClass,
+            subtypeHint: subtype,
+            metadataVersion: 1,
+            sourceKind: item.sourceKind || 'saved'
+        };
 
         dispatch({
-            type: 'ADD_LOG',
-            payload: { message: 'Running wearable refinement pass...', type: 'info' }
+            type: 'SET_PROP_ITEMS',
+            payload: state.propItems.map((prop) => (prop.id === item.id ? updatedItem : prop))
         });
+        setSelectedProp(updatedItem);
 
-        const lockedRefinementPrompt = `Create a single image.
-
-[IMAGE 1] is the exact subject.
-[IMAGE 2] is the exact ${fitClass} reference.
-[IMAGE 3] is the locked precomposite geometry that must be preserved exactly.
-
-PRIMARY RULE
-- IMAGE 3 already contains the correct wearable size and placement.
-- Preserve the geometry from IMAGE 3 exactly.
-- Do not resize the wearable.
-- Do not reposition the wearable.
-- Do not rotate the wearable.
-- Do not redesign the wearable.
-- Treat the wearable in IMAGE 3 as placement-locked and scale-locked.
-
-ALLOWED CHANGES ONLY
-- Improve edge integration.
-- Add subtle realistic overlap where appropriate (e.g. hair over straps).
-- Add subtle contact shadowing.
-- Improve realism of blending and material response.
-- Clean compositing artifacts only.
-
-STYLE CATEGORY LOCK
-- Preserve the selected character render category from the subject. Do not let realistic contact shadowing or source-photo texture convert a stylized subject into realism.
-${refinementStyleContract}
-
-FORBIDDEN CHANGES
-- No enlargement.
-- No shrinkage.
-- No re-centering.
-- No floating placement.
-- No theatrical scale.
-- No identity change.
-- No pose change.
-- No wardrobe change.
-- No background change.
-
-OUTPUT GOAL
-- The final image must look exactly like IMAGE 3 geometrically, but naturally integrated.
-- When uncertain, preserve IMAGE 3 rather than changing geometry.
-
-NEGATIVE CONSTRAINTS
-oversized wearable, resized wearable, moved wearable, floating wearable, theatrical overscaling, altered subject, changed pose, changed wardrobe, changed background, selected style category drift${refinementStyleNegativePrompt ? `, ${refinementStyleNegativePrompt}` : ''}, text, watermark.`;
-
-        try {
-            const refinedRes = await GeminiService.generateImage(
-                lockedRefinementPrompt,
-                state.apiKey,
-                state.model,
-                [
-                    { url: subjectUrl, label: 'Subject Reference' },
-                    { url: propUrl, label: `${fitClass} Reference` },
-                    { url: precompositeUrl, label: 'Locked Wearable Overlay' }
-                ],
-                {
-                    aspectRatio: '1:1',
-                    imageSize: state.imageResolution,
-                    thinkingLevel: state.enableImageThinking,
-                    googleGrounding: false,
-                    strictMode: true,
-                    billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
-                    entitlements: state.billingEntitlements,
-                    identityLock: propIdentityLock,
-                    styleCategory: subjectStyleId ? {
-                        styleId: subjectStyleId,
-                        intent: {
-                            selectedStyleLabel: subjectStyleLabel,
-                            appliesTo: "Prop Studio wearable refinement"
-                        }
-                    } : undefined
-                }
-            );
-
-            const refinedRaw = refinedRes;
-
-            if (refinedRaw) {
-                const materializedRefined = await materializeDisplayUrl(refinedRaw);
-                const isValid = await WearableRefinementValidator.validate({
-                    refinedUrl: materializedRefined,
-                    lockedPlacement,
-                    fitClass
-                });
-
-                if (isValid) {
-                    finalUrl = materializedRefined;
-                    refinementAccepted = true;
-                } else {
-                    console.warn('Refined wearable result drifted; keeping locked precomposite.');
-                    dispatch({
-                        type: 'ADD_LOG',
-                        payload: { message: 'Refinement rejected due to drift; keeping locked overlay.', type: 'error' }
-                    });
-                }
-            }
-        } catch (e) {
-            console.warn('Failed to materialize or validate refined wearable result:', e);
-            dispatch({ type: 'ADD_LOG', payload: { message: 'Refinement failed; using locked overlay.', type: 'info' } });
-        }
-
-        setAppliedImage(finalUrl);
-
-        dispatch({
-            type: 'ADD_LOG',
-            payload: {
-                message: refinementAccepted
-                    ? 'Wearable integrated with locked refinement.'
-                    : 'Wearable integrated using locked pre-fit overlay.',
-                type: 'info'
-            }
+        await writePropSidecar({
+            imageFilename,
+            name: item.name || propNameFromFilename(imageFilename),
+            prompt: item.prompt || item.originalPrompt || imageFilename,
+            originalPrompt: item.originalPrompt,
+            sourceKind: item.sourceKind || 'saved',
+            classHint: fitClass,
+            subtypeHint: subtype
         });
-    };
-
-    const handleConfirmFit = async (placement: WearablePlacement, precompositeUrl: string, persistedOffsets: {x: number, y: number, scaleMultiplier: number}) => {
-        console.warn(`[DEBUG_PATH] handleConfirmFit called`);
-        if (!adjustmentState) return;
-        const billingMode = state.billingEntitlements.effectiveBillingMode;
-        if (billingMode === 'byok' && !state.apiKey) {
-            dispatch({
-                type: 'ADD_LOG',
-                payload: { message: 'API Key required for BYOK Prop Application.', type: 'error' }
-            });
-            return;
-        }
-        if (!(await ensureAuthenticatedForGeneration({ billingMode, featureLabel: 'Prop refinement generation' }))) {
-            return;
-        }
-        const { fitClass, subjectUrl, propUrl } = adjustmentState;
-        
-        setAdjustmentState(null);
-        setLastConfirmedPlacement({
-            placement,
-            precompositeUrl,
-            propId: selectedProp?.id || '',
-            offsets: persistedOffsets
-        });
-
-        dispatch({ type: 'SET_PROCESSING', payload: true });
-        let currentPercent = 5;
-        dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text: "Integrating Prop" } });
-        const progressInterval = window.setInterval(() => {
-            currentPercent += 20;
-            if (currentPercent > 95) currentPercent = 95;
-            dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text: "Finalizing Output..." } });
-        }, 1000);
-
-        try {
-            if (fitClass === 'headwear') {
-                console.warn(`[DEBUG_PATH] headwear bypass: skipping full-frame refinement per architectural rule`);
-                setAppliedImage(precompositeUrl);
-                dispatch({
-                    type: 'ADD_LOG',
-                    payload: { message: 'Wearable integrated using direct locked composite (Refinement bypassed).', type: 'info' }
-                });
-            } else {
-                const subjectStyleId = selectedCharacter?.profile?.style || undefined;
-                const subjectStyleLabel = subjectStyleId ? subjectStyleId.replace(/_/g, ' ') : 'Subject Reference Style';
-                await executeRefinement(fitClass, subjectUrl, propUrl, placement, precompositeUrl, subjectStyleId, subjectStyleLabel);
-            }
-        } catch (error: unknown) {
-            dispatch({ type: 'ADD_LOG', payload: { message: getErrorMessage(error), type: 'error' } });
-        } finally {
-            clearInterval(progressInterval);
-            dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
-            dispatch({ type: 'SET_PROCESSING', payload: false });
-        }
     };
 
     const handleApply = async () => {
@@ -771,8 +787,13 @@ oversized wearable, resized wearable, moved wearable, floating wearable, theatri
 
         try {
             let actualGenId = '';
-            const fitClass = WearableAnchorEngine.inferClass(selectedProp?.name, selectedProp?.prompt, applyNote);
-            const subtype = fitClass === 'headwear' ? WearableAnchorEngine.inferHeadwearSubtype(selectedProp?.name, selectedProp?.prompt, applyNote) : undefined;
+            const { fitClass, subtype, inferredFitClass } = PropMetadataService.resolvePropFitClass({
+                selectedProp,
+                applyNote
+            });
+            if (!selectedProp.classHint || selectedProp.classHint === 'generic_prop') {
+                void rememberPropClassification(selectedProp, inferredFitClass, subtype);
+            }
             const subjectUrl = selectedCharacter.previewUrl || selectedCharacter.url;
             const subjectStyleId = selectedCharacter.profile?.style || undefined;
             const subjectStyleLabel = subjectStyleId ? subjectStyleId.replace(/_/g, ' ') : 'Subject Reference Style';
@@ -806,33 +827,7 @@ oversized wearable, resized wearable, moved wearable, floating wearable, theatri
 
                 const landmarks = await WearableLandmarkService.detect(framedSubjectUrl);
                 const placement = WearableAnchorEngine.computePlacement(fitClass, landmarks, applyNote, subtype);
-                
-                if (fitClass === 'headwear') {
-                    console.warn(`[DEBUG_PATH] headwear branch entered`);
-                    
-                    const reuseOffsets = lastConfirmedPlacement?.propId === selectedProp.id 
-                        ? lastConfirmedPlacement.offsets 
-                        : null;
-
-                    setAdjustmentState({
-                        subjectUrl: framedSubjectUrl,
-                        propUrl: selectedProp.url,
-                        fitClass,
-                        anchorContract: placement,
-                        initialOffsetX: reuseOffsets?.x,
-                        initialOffsetY: reuseOffsets?.y,
-                        initialScale: reuseOffsets?.scaleMultiplier
-                    });
-                    console.warn(`[DEBUG_PATH] adjustmentState set`);
-                    
-                    clearInterval(progressInterval);
-                    dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
-                    dispatch({ type: 'SET_PROCESSING', payload: false });
-                    console.warn(`[DEBUG_PATH] early return executed for confirm mode`);
-                    return;
-                }
-
-                console.warn(`[DEBUG_PATH] old deterministic auto-apply pipeline entered for ${fitClass}`);
+                console.warn(`[DEBUG_PATH] automatic ${fitClass} overlay branch entered`);
 
                 const overlay = await WearableOverlayComposer.compose({
                     subjectUrl: framedSubjectUrl,
@@ -845,44 +840,41 @@ oversized wearable, resized wearable, moved wearable, floating wearable, theatri
                 dispatch({
                     type: 'ADD_LOG',
                     payload: {
-                        message: 'Locked wearable fit established. Refinement will preserve this geometry.',
+                        message: `${fitClass === 'headwear' ? 'Headwear' : 'Eyewear'} fitted using automatic locked placement.`,
                         type: 'info'
                     }
                 });
 
-                await executeRefinement(fitClass, subjectUrl, selectedProp.url, overlay.placement, overlay.precompositeUrl, subjectStyleId, subjectStyleLabel);
+                const recentStore = useRecentGenerationsStore.getState();
+                if (recentStore.cacheDirPath && overlay.precompositeUrl) {
+                    RecentGenerationsCacheService.cacheGeneration({
+                        imageDataUrl: overlay.precompositeUrl,
+                        studio: 'props',
+                        cacheDirPath: recentStore.cacheDirPath,
+                    }).then((cacheResult) => {
+                        if (cacheResult.success && cacheResult.localCachePath && cacheResult.displayUrl) {
+                            recentStore.addRecentGeneration({
+                                studio: 'props',
+                                localCachePath: cacheResult.localCachePath,
+                                displayUrl: cacheResult.displayUrl,
+                                createdAt: Date.now(),
+                                prompt: applyNote || `${fitClass === 'headwear' ? 'Headwear' : 'Eyewear'} application`,
+                                mode: (state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok') || 'byok',
+                            });
+                        }
+                    }).catch((e) => {
+                        console.warn('[PropApp] Recent generation caching failed:', e);
+                    });
+                }
+
+                return;
             } else {
                 const res = await GeminiService.generateImage(
-                    `Create a single image.
-
-SUBJECT LOCK
-- [IMAGE 1] is the target SUBJECT.
-- Preserve the subject exactly: same face, same body, same pose, same camera angle.
-- Output must contain exactly one human subject.
-
-PROP AUTHORITY
-- [IMAGE 2] is the standalone PROP reference.
-- Copy the prop exactly. Preserve exact shape, silhouette, colors, materials, visible construction, and proportions.
-- Do not redesign, stylize, recolor, age, or decorate the prop.
-
-PLACEMENT LOCK
-- Place the prop only at this requested location: ${applyNote || "Clean professional placement in the correct grasp or on-body position."}
-- Pay strict attention to left/right instructions.
-- Preserve correct real-world scale relative to the subject.
-- Do not add extra props, straps, attachments, duplicates, or supporting objects unless visible in the prop reference.
-
-INTEGRATION
-- Match lighting and perspective to the subject.
-- The prop must look physically present, not composited.
-- Keep the solid black studio background (#000000).
-
-STYLE CATEGORY LOCK
-- Preserve the selected character render category from the subject. Prop integration changes the prop only, not the subject's style category.
-- Source image controls identity. Character Render Style controls visual category. Lighting adapts to the selected render style.
-${appliedStyleContract}
-
-NEGATIVE CONSTRAINTS:
-extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop colors, altered prop materials, prop redesign, extra straps, extra attachments, extra people, selected style category drift${appliedStyleNegativePrompt ? `, ${appliedStyleNegativePrompt}` : ''}, text, watermark.`,
+                    buildPropApplicationPrompt({
+                        applyNote,
+                        styleContract: appliedStyleContract,
+                        styleNegativePrompt: appliedStyleNegativePrompt
+                    }),
                     state.apiKey,
                     state.model,
                     [
@@ -1223,21 +1215,6 @@ extra props, duplicated prop, wrong hand, wrong side, wrong scale, altered prop 
 
                             {/* RESULT COLUMN */}
                             <div className="flex-grow min-w-0 min-h-0 flex flex-row bg-[#09090b] rounded-2xl overflow-hidden border border-gray-800 relative">
-                                {adjustmentState && (
-                                    <WearableAdjustmentCanvas
-                                        subjectUrl={adjustmentState.subjectUrl}
-                                        propUrl={adjustmentState.propUrl}
-                                        anchorContract={adjustmentState.anchorContract}
-                                        initialOffsetX={adjustmentState.initialOffsetX}
-                                        initialOffsetY={adjustmentState.initialOffsetY}
-                                        initialScale={adjustmentState.initialScale}
-                                        onConfirm={handleConfirmFit}
-                                        onCancel={() => {
-                                            setAdjustmentState(null);
-                                            dispatch({ type: 'ADD_LOG', payload: { message: 'Fit calibration aborted.', type: 'info' } });
-                                        }}
-                                    />
-                                )}
                                 <div className="flex-grow min-w-0 min-h-0 h-full bg-black flex flex-col border-r border-gray-800 relative overflow-hidden">
                                     {/* Stage Header */}
                                     <div className="min-h-[3.5rem] border-b border-gray-800 bg-white/5 flex items-center justify-between gap-3 px-4 lg:px-6 py-3 shrink-0 backdrop-blur-md">

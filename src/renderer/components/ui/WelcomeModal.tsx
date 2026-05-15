@@ -13,6 +13,7 @@ import studioLogo from '../../assets/logo-z.png';
 export const WelcomeModal: React.FC = () => {
     const { state, dispatch } = useAppContext();
 
+    if (!state.isWelcomeStateReady) return null;
     if (state.hasSeenWelcome) return null;
 
     const handleGoalRoute = (route: typeof state.view, sectionOverride?: string) => {
@@ -46,7 +47,6 @@ export const WelcomeModal: React.FC = () => {
         hoverClassName: string;
         focusClassName: string;
         lightClassName: string;
-        wide?: boolean;
     }> = [
         {
             title: 'Create a character',
@@ -115,7 +115,6 @@ export const WelcomeModal: React.FC = () => {
             hoverClassName: 'hover:border-yellow-200/55 hover:shadow-[0_20px_58px_rgba(250,204,21,0.18)]',
             focusClassName: 'focus-visible:ring-yellow-200/60',
             lightClassName: 'bg-[radial-gradient(ellipse_at_top_right,rgba(250,204,21,0.24),transparent_58%)]',
-            wide: true,
         },
     ];
 
@@ -129,13 +128,11 @@ export const WelcomeModal: React.FC = () => {
                 <div className="pointer-events-none absolute inset-x-10 top-0 h-px bg-gradient-to-r from-transparent via-yellow-200/60 to-transparent" />
                 <div className="relative max-h-[92vh] overflow-y-auto px-5 py-6 sm:px-8 sm:py-8 lg:px-10 lg:py-9">
                     <div className="mb-8 text-center">
-                        <div className="relative mx-auto mb-5 flex h-28 w-28 items-center justify-center sm:h-32 sm:w-32">
-                            <div className="absolute inset-0 rounded-full bg-yellow-300/10 blur-2xl" />
-                            <div className="absolute inset-3 rounded-full border border-yellow-200/20 bg-black/35 shadow-[inset_0_1px_0_rgba(255,255,255,0.12),0_0_45px_rgba(250,204,21,0.18)]" />
+                        <div className="relative mx-auto mb-5 flex h-28 w-32 items-center justify-center sm:h-32 sm:w-36">
                             <img
                                 src={studioLogo}
                                 alt="Cast Director Studio logo"
-                                className="relative h-24 w-24 object-contain drop-shadow-[0_18px_30px_rgba(0,0,0,0.55)] sm:h-28 sm:w-28"
+                                className="relative h-24 w-28 object-contain drop-shadow-[0_18px_28px_rgba(0,0,0,0.45)] sm:h-28 sm:w-32"
                                 draggable={false}
                             />
                         </div>
@@ -160,7 +157,7 @@ export const WelcomeModal: React.FC = () => {
                                 <button
                                     key={card.title}
                                     onClick={() => handleGoalRoute(card.route, card.sectionOverride)}
-                                    className={`group relative flex min-h-[112px] items-start gap-4 overflow-hidden rounded-2xl border border-white/10 bg-[linear-gradient(135deg,rgba(255,255,255,0.075),rgba(255,255,255,0.018)_48%,rgba(0,0,0,0.34))] p-5 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_12px_34px_rgba(0,0,0,0.28)] transition-all duration-300 hover:-translate-y-1 hover:bg-white/[0.055] focus-visible:outline-none focus-visible:ring-2 ${card.hoverClassName} ${card.focusClassName} ${card.wide ? 'sm:col-span-2' : ''}`}
+                                    className={`group relative flex min-h-[112px] items-start gap-4 overflow-hidden rounded-2xl border border-white/10 bg-[linear-gradient(135deg,rgba(255,255,255,0.075),rgba(255,255,255,0.018)_48%,rgba(0,0,0,0.34))] p-5 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_12px_34px_rgba(0,0,0,0.28)] transition-all duration-300 hover:-translate-y-1 hover:bg-white/[0.055] focus-visible:outline-none focus-visible:ring-2 ${card.hoverClassName} ${card.focusClassName}`}
                                 >
                                     <span className={`pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-500 group-hover:opacity-100 ${card.lightClassName}`} />
                                     <span className="pointer-events-none absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-white/25 to-transparent opacity-0 transition-opacity duration-500 group-hover:opacity-100" />

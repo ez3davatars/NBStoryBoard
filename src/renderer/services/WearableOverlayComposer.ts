@@ -115,6 +115,30 @@ export const HEADWEAR_PROFILES: Record<HeadwearSubtype, IntegrationParams> = {
     generic_headwear: { contactBandRatio: 0.1, occlusion: 0.5, shadow: 0.5, deformation: 0.0, templeBias: 1.0, hairOcclusionMode: 'minimal', edgeFeatherPx: 5, shadowBlurPx: 10, shadowOffsetYPx: 6 }
 };
 
+function getHeadwearBaseBandRatio(subtype?: HeadwearSubtype): number {
+    switch (subtype) {
+        case 'crown':
+            return 0.82;
+        case 'tiara':
+            return 0.78;
+        case 'hat':
+            return 0.70;
+        case 'helmet':
+            return 0.52;
+        case 'hood':
+            return 0.36;
+        case 'veil':
+            return 0.18;
+        case 'headband':
+            return 0.50;
+        case 'hairpiece':
+            return 0.70;
+        case 'generic_headwear':
+        default:
+            return 0.68;
+    }
+}
+
 export class WearableOverlayComposer {
     static async buildFramedSubject(subjectUrl: string, resolutionMode: string = '1K'): Promise<string> {
         const subjectImg = await loadImageElement(subjectUrl);
@@ -211,8 +235,7 @@ export class WearableOverlayComposer {
         let finalY = Math.round(anchorContract.anchorCenter.y - targetHeight / 2); // default centered
 
         if (anchorContract.verticalMode === 'headwear_base_lock') {
-            // crown base sits at the anchor Y
-            const baseBandRatioFromTop = 0.72;
+            const baseBandRatioFromTop = getHeadwearBaseBandRatio(anchorContract.subtype);
             finalY = Math.round(anchorContract.anchorCenter.y - targetHeight * baseBandRatioFromTop);
         } else if (anchorContract.verticalMode === 'below_anchor') {
             finalY = Math.round(anchorContract.anchorCenter.y);
@@ -220,7 +243,24 @@ export class WearableOverlayComposer {
 
         const minMargin = 4;
         const clampedX = Math.max(minMargin, Math.min(finalX, outCanvas.width - targetWidth - minMargin));
-        const clampedY = Math.max(minMargin, Math.min(finalY, outCanvas.height - targetHeight - minMargin));
+        let clampedY = Math.max(minMargin, Math.min(finalY, outCanvas.height - targetHeight - minMargin));
+
+        if (anchorContract.fitClass === 'headwear') {
+            const subtype = anchorContract.subtype;
+            const sitsOnHead =
+                !subtype ||
+                subtype === 'crown' ||
+                subtype === 'tiara' ||
+                subtype === 'hat' ||
+                subtype === 'headband' ||
+                subtype === 'hairpiece' ||
+                subtype === 'generic_headwear';
+
+            if (sitsOnHead) {
+                const lowestAllowedTopY = Math.round(anchorContract.anchorCenter.y - targetHeight * 0.88);
+                clampedY = Math.max(minMargin, Math.min(clampedY, lowestAllowedTopY));
+            }
+        }
 
         console.log('[WearableOverlayComposer]', {
             fitClass: anchorContract.fitClass,

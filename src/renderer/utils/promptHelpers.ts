@@ -9,6 +9,7 @@ import { buildSceneTruthSnapshotBlock } from './sceneTruthHelpers';
 import { stripShotDirectiveContamination } from './analysisSanitizers';
 import { buildPoseCoherenceContract, buildPoseCoherenceNegativeTokens } from '../../prompts/poseCoherence';
 import { buildStyleCategoryContract, buildStyleNegativePrompt } from '../../prompts/styleContracts';
+import { buildStagingSpatialControlBlock, type SpatialFrame } from './stagingSpatialDirectives';
 
 export const SCENE_LOCK_NEGATIVE_TOKENS = "scene alteration, background change, lighting shift, camera angle change, style deviation, new composition, structural change, reimagined scene, time of day shift, seasonal change, architectural alteration, furniture movement, lens flares, color grading shift, original studio background, white backgrounds showing through gaps";
 
@@ -84,6 +85,33 @@ export const getActiveReferenceSlots = (slots: ReferenceSlot[]) => {
   return slots
     .filter(s => !!s.url && s.active)
     .sort((a, b) => a.index - b.index);
+};
+
+const compactReferenceText = (value?: string | null, maxLength = 520): string => {
+  const text = (value || '').replace(/\s+/g, ' ').trim();
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1).trim()}...` : text;
+};
+
+const buildReferenceStackIdentitySourceBlock = (referenceSlots: ReferenceSlot[]): string => {
+  const active = getActiveReferenceSlots(referenceSlots);
+  if (active.length === 0) return '';
+
+  const lines = [
+    '### REFERENCE STACK IDENTITY SOURCES (HARD)',
+    'Every active Reference Stack image is an attached identity/body/wardrobe source. Do not treat these as mood boards only.',
+    'If a Reference Stack note names a subject, generate that subject from the matching REFERENCE_* image label. Do not invent a replacement actor or presenter.',
+    'Preserve the visible identity, body build, wardrobe, sheet/board design, and character traits from each REFERENCE_* image unless a user note explicitly changes one of those traits.'
+  ];
+
+  active.forEach((ref) => {
+    const name = compactReferenceText(ref.name, 80) || `Reference ${ref.index}`;
+    const note = compactReferenceText([ref.target, ref.analysis].filter(Boolean).join(' | '), 520);
+    lines.push(
+      `- REF_SLOT_${ref.index} (${name}) is attached as REFERENCE_${ref.index}. Use REFERENCE_${ref.index} as the exact identity/body/wardrobe source.${note ? ` Directive/DNA: "${note}".` : ''}`
+    );
+  });
+
+  return lines.join('\n');
 };
 
 import { LIGHTING_PRESETS, CAMERA_PRESETS } from '../../prompts/portraitPrompts';
@@ -215,7 +243,8 @@ export const compileV3DirectorPrompt = (
   slots: ReferenceSlot[],
   tokens: StageToken[] = [],
   bgPrompt: string = '',
-  annotations: StageAnnotation[] = []
+  annotations: StageAnnotation[] = [],
+  spatialFrame?: SpatialFrame
 ): string => {
   const activeRefs = getActiveReferenceSlots(slots);
   const heightRelationshipBlock = buildHeightRelationshipLockBlock({
@@ -224,6 +253,14 @@ export const compileV3DirectorPrompt = (
     tokens,
     annotations
   });
+  const spatialControlBlock = buildStagingSpatialControlBlock({
+    referenceSlots: slots,
+    tokens,
+    annotations,
+    spatialFrame,
+    includeTokenMap: true
+  });
+  const referenceIdentityBlock = buildReferenceStackIdentitySourceBlock(slots);
 
   const segments: string[] = [];
   const hasVisibleHumanSubject =
@@ -269,6 +306,8 @@ export const compileV3DirectorPrompt = (
       `- Do NOT reinterpret spatial layout.\n` +
       `- Lighting must respect layer separation.`
   );
+  if (spatialControlBlock) segments.push(spatialControlBlock);
+  if (referenceIdentityBlock) segments.push(referenceIdentityBlock);
 
   if (hasVisibleHumanSubject) {
     segments.push(buildPoseCoherenceContract({
@@ -554,7 +593,8 @@ export const buildStrictPrompt = (
     annotations: StageAnnotation[],
     referenceSlots: ReferenceSlot[],
     director: DirectorSettings,
-    extractedStyle?: ExtractedStyle | null
+    extractedStyle?: ExtractedStyle | null,
+    spatialFrame?: SpatialFrame
 ) => {
     const tech = buildMasterStyleKeywords(director);
 
@@ -593,10 +633,15 @@ export const buildStrictPrompt = (
         annotations
     });
 
+    const spatialControlBlock = buildStagingSpatialControlBlock({
+        referenceSlots,
+        tokens,
+        annotations,
+        spatialFrame,
+        includeTokenMap: true
+    });
     const refStackActive = getActiveReferenceSlots(referenceSlots);
-    const refStackBlock = refStackActive.length > 0
-        ? `GLOBAL STYLE/CONSISTENCY REFERENCES:\n${refStackActive.map(r => `- REFERENCE ${r.index}: ${r.analysis || r.name}`).join('\n')}`
-        : '';
+    const refStackBlock = buildReferenceStackIdentitySourceBlock(referenceSlots);
 
     const rules = [
         "SCENE RECONSTRUCTION AND COMPOSITING AUTHORIZATION:",
@@ -652,6 +697,7 @@ export const buildStrictPrompt = (
         "",
         dnaBlock ? `### ANCHOR DNA:\n${dnaBlock}\n` : "",
         notes ? `### DIRECTOR NOTES (EXPLICIT USER REQUEST - MANDATORY LOCATION/SCENE):\n${notes}\n` : "",
+        spatialControlBlock ? `${spatialControlBlock}\n` : "",
         heightRelationshipBlock ? `### HEIGHT RELATIONSHIP INSTRUCTIONS\n${heightRelationshipBlock}\n` : "",
         "",
         "### REGION COMPOSITION PLAN (FOLLOW EXACTLY):",
@@ -707,15 +753,14 @@ export const buildLoosePrompt = (
     referenceSlots: ReferenceSlot[],
     director: DirectorSettings,
     extractedStyle?: ExtractedStyle | null,
-    bgPrompt?: string
+    bgPrompt?: string,
+    spatialFrame?: SpatialFrame
 ) => {
     const sortedTokens = [...tokens].sort((a, b) => a.x - b.x);
     
     // Inline implementation of buildReferenceStackText for loose prompt
     const activeSlots = getActiveReferenceSlots(referenceSlots);
-    const refStackBlock = activeSlots.length > 0
-        ? `GLOBAL REFERENCES:\n${activeSlots.map(r => `- REF ${r.index}: ${r.analysis || r.name}`).join('\n')}`
-        : '';
+    const refStackBlock = buildReferenceStackIdentitySourceBlock(referenceSlots);
 
     const tech = buildMasterStyleKeywords(director);
 
@@ -727,6 +772,13 @@ export const buildLoosePrompt = (
         bgPrompt,
         tokens,
         annotations
+    });
+    const spatialControlBlock = buildStagingSpatialControlBlock({
+        referenceSlots,
+        tokens,
+        annotations,
+        spatialFrame,
+        includeTokenMap: true
     });
 
     let p = "";
@@ -742,6 +794,7 @@ export const buildLoosePrompt = (
         p += `(Text Layer: ${t}). `;
     }
     if (heightRelationshipBlock) p += `\n\n### HEIGHT RELATIONSHIP INSTRUCTIONS\n${heightRelationshipBlock}\n\n`;
+    if (spatialControlBlock) p += `\n\n${spatialControlBlock}\n\n`;
 
     if (refStackBlock) p += `${refStackBlock}\n\n`;
     p += "Cinematic composition. ";
@@ -912,7 +965,8 @@ export const buildStrictAnchorReplacementPrompt = (p: {
     activeRefs: ReferenceSlot[],
     actorIdentitySets?: ActorIdentityReferenceSet[],
     tokens?: StageToken[],
-    annotations?: StageAnnotation[]
+    annotations?: StageAnnotation[],
+    spatialFrame?: SpatialFrame
 }): string => {
     const strictIdentitySets = (p.actorIdentitySets && p.actorIdentitySets.length > 0)
         ? p.actorIdentitySets
@@ -965,9 +1019,23 @@ CRITICAL DIRECTIVES:
         tokens: p.tokens || [],
         annotations: p.annotations || []
     });
+    const spatialControlBlock = buildStagingSpatialControlBlock({
+        referenceSlots: p.activeRefs,
+        tokens: p.tokens || [],
+        annotations: p.annotations || [],
+        spatialFrame: p.spatialFrame,
+        includeTokenMap: true
+    });
+    const referenceIdentityBlock = buildReferenceStackIdentitySourceBlock(p.activeRefs);
 
     if (heightRelationshipBlock) {
         prompt += `\n\n### HEIGHT RELATIONSHIP INSTRUCTIONS\n${heightRelationshipBlock}`;
+    }
+    if (spatialControlBlock) {
+        prompt += `\n\n${spatialControlBlock}`;
+    }
+    if (referenceIdentityBlock) {
+        prompt += `\n\n${referenceIdentityBlock}`;
     }
 
     if (p.sceneLock) {

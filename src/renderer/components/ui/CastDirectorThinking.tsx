@@ -1,4 +1,5 @@
 import { useAppContext } from '../../context/AppContext';
+import studioLogo from '../../assets/logo-z.png';
 
 interface ProgressData {
  phase: string;
@@ -24,8 +25,13 @@ export const CastDirectorThinking = ({ progress: localProgress }: { progress?: P
 
  {/* Central Core */}
  <div className="absolute flex flex-col items-center">
- <div className="text-[38px] font-black tracking-[-0.08em] text-yellow-400 animate-bounce-slow -[0_0_20px_rgba(234,179,8,0.8)] filter brightness-110">
- CD
+ <div className="flex h-24 w-24 items-center justify-center animate-bounce-slow drop-shadow-[0_0_22px_rgba(234,179,8,0.75)] filter brightness-110">
+ <img
+ src={studioLogo}
+ alt=""
+ className="h-20 w-20 object-contain"
+ draggable={false}
+ />
  </div>
  </div>
 

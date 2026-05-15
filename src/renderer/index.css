@@ -5,9 +5,9 @@
   line-height: 1.5;
   font-weight: 400;
 
-  color-scheme: light dark;
+  color-scheme: dark;
   color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
+  background-color: #0b0b0f;
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -57,8 +57,22 @@
   --color-danger: var(--color-danger);
 }
 
+html,
+body,
+#root {
+  margin: 0;
+  min-width: 100%;
+  min-height: 100%;
+  background: #0b0b0f;
+  color: #fff;
+}
+
 html {
   overflow-y: scroll;
+}
+
+body {
+  overflow: hidden;
 }
 
 button {

@@ -118,6 +118,9 @@ const isMissingBillingMetadataColumn = (error: unknown): boolean =>
 const isMissingCreditLedgerResetColumn = (error: unknown): boolean =>
   isMissingColumnError(error, 'credit_ledger_reset_at');
 
+const USE_SETTINGS_BILLING_MODE_SELECTOR = true;
+const POST_LAUNCH_BACKGROUND_WORK_DELAY_MS = 8500;
+
 const formatHostedUsageDate = (value?: string | null): string => {
   if (!value) return 'Unknown time';
   const timestamp = new Date(value);
@@ -432,6 +435,7 @@ const FramedPanel = ({ children, className = '', trackClassName = 'px-3 py-1 gap
 
 const App = () => {
   const { state, dispatch } = useAppContext();
+  const [postLaunchBackgroundWorkReady, setPostLaunchBackgroundWorkReady] = useState(false);
 
   // Track previous credits locally for debug metrics without breaking useEffect dependencies
   const prevCreditsRef = useRef(state.hostedCredits);
@@ -448,6 +452,14 @@ const App = () => {
   const [creditUsageResetAt, setCreditUsageResetAt] = useState<string | null>(null);
   
   useEffect(() => { prevCreditsRef.current = state.hostedCredits; }, [state.hostedCredits]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setPostLaunchBackgroundWorkReady(true);
+    }, POST_LAUNCH_BACKGROUND_WORK_DELAY_MS);
+
+    return () => window.clearTimeout(timer);
+  }, []);
 
   const creditUsageTotal = useMemo(
     () => creditUsageRows.reduce((sum, row) => sum + getHostedUsageCredits(row), 0),
@@ -700,6 +712,8 @@ const App = () => {
 
   // --- RECENT GENERATIONS: Init store & cleanup on startup ---
   useEffect(() => {
+    if (!postLaunchBackgroundWorkReady) return;
+
     const initRecentGenerations = async () => {
       try {
         await useRecentGenerationsStore.getState().initStore();
@@ -719,7 +733,7 @@ const App = () => {
       }
     };
     initRecentGenerations();
-  }, []);
+  }, [postLaunchBackgroundWorkReady]);
 
   // Transient Status Auto-Clear
   useEffect(() => {
@@ -995,6 +1009,8 @@ const App = () => {
 
   // Persistence: Restore Save Directory Handle
   useEffect(() => {
+    if (!postLaunchBackgroundWorkReady) return;
+
     const restoreHandle = async () => {
       const savedHandle = await StorageService.load<FileSystemDirectoryHandle | null>('nano_save_handle', null);
       if (savedHandle) {
@@ -1005,7 +1021,7 @@ const App = () => {
       }
     };
     restoreHandle();
-  }, [dispatch]);
+  }, [dispatch, postLaunchBackgroundWorkReady]);
 
   // Sync View to Settings Modal
   useEffect(() => {
@@ -1317,6 +1333,8 @@ const App = () => {
 
   // Targeted WebFS Thumbnail Rehydrator (Materializes existing library records)
   useEffect(() => {
+    if (!postLaunchBackgroundWorkReady) return;
+
     const rehydrateLibraryThumbnails = async () => {
       if (window.electronAPI || !state.saveDirectoryHandle || state.actorLibrary.length === 0) return;
 
@@ -1366,10 +1384,12 @@ const App = () => {
     };
 
     rehydrateLibraryThumbnails();
-  }, [dispatch, state.saveDirectoryHandle, state.actorLibrary]);
+  }, [dispatch, postLaunchBackgroundWorkReady, state.saveDirectoryHandle, state.actorLibrary]);
 
   // --- NATIVE DISK SYNC (Electron) ---
   useEffect(() => {
+    if (!postLaunchBackgroundWorkReady) return;
+
     const syncFromNative = async () => {
       if (!window.electronAPI || !state.saveDirectoryPath) return;
 
@@ -1524,7 +1544,7 @@ const App = () => {
       syncFromNative();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.saveDirectoryPath]);
+  }, [postLaunchBackgroundWorkReady, state.saveDirectoryPath]);
 
   return (
     <ErrorBoundary>
@@ -1921,7 +1941,7 @@ const App = () => {
                       </div>
                     )}
 
-                    {import.meta.env.DEV ? (
+                    {USE_SETTINGS_BILLING_MODE_SELECTOR ? (
                       <>
                         <div>
                           <label className="block text-xs font-bold text-gray-400 uppercase mb-2 tracking-wider">Billing & Generation Mode (DEV OVERRIDE)</label>

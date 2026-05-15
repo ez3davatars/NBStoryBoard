@@ -21,6 +21,8 @@ const isPitchSheetPreviewGeneration = (generation: RecentGeneration) =>
   generation.featureSource === 'character_pitch_sheet' ||
   generation.displayLabel === 'Pitch Sheet Preview';
 
+const STARTUP_INIT_DELAY_MS = 8500;
+
 // --- COMPONENT ---
 
 export default function RecentGenerationsStrip({
@@ -65,9 +67,13 @@ export default function RecentGenerationsStrip({
 
   // Initialize store on first mount
   useEffect(() => {
-    if (!initialized) {
+    if (initialized) return;
+
+    const timer = window.setTimeout(() => {
       initStore();
-    }
+    }, STARTUP_INIT_DELAY_MS);
+
+    return () => window.clearTimeout(timer);
   }, [initialized, initStore]);
 
   const updateScrollState = useCallback(() => {

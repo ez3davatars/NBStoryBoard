@@ -5,6 +5,14 @@ import { ensureAuthenticatedForGeneration } from '../../services/AuthGenerationG
 import type { Action, AppState, GroundingAudit } from '../../context/AppContext';
 import { DebouncedTextarea } from '../ui/DebouncedTextarea';
 
+const getErrorMessage = (error: unknown): string => {
+    if (error instanceof Error) return error.message;
+    return String(error);
+};
+
+const ACTOR_ANALYSIS_UI_WAIT_MS = 60000;
+const ACTOR_ANALYSIS_HARD_TIMEOUT_MS = 70000;
+
 interface ActorIntelligencePanelProps {
     state: AppState;
     dispatch: (action: Action) => void;
@@ -192,15 +200,48 @@ export const ActorIntelligencePanel = ({
                                             return;
                                         }
                                         setAnalyzingTokenId(token.id);
+                                        const abortController = new AbortController();
+                                        let timeoutId: ReturnType<typeof setTimeout> | null = null;
                                         try {
-                                            const intelligence = await GeminiService.analyzeImage(
+                                            const imageUrl =
+                                                token.sourceImageUrl ||
+                                                token.cutoutUrl ||
+                                                token.url ||
+                                                state.actorLibrary.find(actor => actor.id === token.castId)?.url ||
+                                                state.cast.find(actor => actor.id === token.castId)?.url;
+
+                                            if (!imageUrl) {
+                                                throw new Error('No analyzable actor image was found.');
+                                            }
+
+                                            const analysisPromise = GeminiService.analyzeImage(
                                                 "Describe this character's pose, expression, and physical action in this scene context. Be very specific about lighting interaction. Max 30 words.",
-                                                state.apiKey || '', state.model, token.url,
-                                                { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', expectedResponseType: 'text' }
+                                                state.apiKey || '', state.model, imageUrl,
+                                                {
+                                                    billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
+                                                    expectedResponseType: 'text',
+                                                    uiWaitWindowMs: ACTOR_ANALYSIS_UI_WAIT_MS,
+                                                    signal: abortController.signal
+                                                }
                                             );
+                                            analysisPromise.catch(() => undefined);
+
+                                            const timeoutPromise = new Promise<never>((_, reject) => {
+                                                timeoutId = setTimeout(() => {
+                                                    abortController.abort();
+                                                    reject(new Error(`Actor analysis timed out after ${Math.round(ACTOR_ANALYSIS_HARD_TIMEOUT_MS / 1000)} seconds. The hosted backend may still be processing or unavailable.`));
+                                                }, ACTOR_ANALYSIS_HARD_TIMEOUT_MS);
+                                            });
+
+                                            const intelligence = await Promise.race([analysisPromise, timeoutPromise]);
                                             dispatch({ type: 'UPDATE_TOKEN', payload: { id: token.id, intelligence } });
-                                        } catch { /* error handled by UI state */ }
-                                        setAnalyzingTokenId(null);
+                                            dispatch({ type: 'ADD_LOG', payload: { message: `Actor analysis complete: ${token.tag}`, type: 'success' } });
+                                        } catch (error) {
+                                            dispatch({ type: 'ADD_LOG', payload: { message: `Actor analysis failed: ${getErrorMessage(error)}`, type: 'error' } });
+                                        } finally {
+                                            if (timeoutId) clearTimeout(timeoutId);
+                                            setAnalyzingTokenId(null);
+                                        }
                                     }}
                                     disabled={analyzingTokenId === token.id}
                                     className="text-[11px] text-blue-400 hover:text-blue-300 font-bold uppercase flex items-center gap-1"
@@ -213,8 +254,8 @@ export const ActorIntelligencePanel = ({
                                 <DebouncedTextarea
                                     value={token.intelligence || ''}
                                     onChange={(val) => dispatch({ type: 'UPDATE_TOKEN', payload: { id: token.id, intelligence: val } })}
-                                    className="w-full bg-[#09090b] border border-[#27272a] rounded p-2 text-xs text-gray-400 focus:border-blue-500 outline-none resize-none leading-relaxed"
-                                    rows={2}
+                                    className="w-full min-h-[132px] max-h-[280px] bg-[#09090b] border border-[#27272a] rounded p-2 text-xs text-gray-400 focus:border-blue-500 outline-none resize-y overflow-y-auto leading-relaxed"
+                                    rows={6}
                                     placeholder="Pose, Action, Lighting DNA..."
                                 />
 

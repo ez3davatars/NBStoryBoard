@@ -329,7 +329,7 @@ export const LibraryAssetMaterializer = {
 
         try {
             const timestamp = Date.now();
-            const relativeFolder = 'Props';
+            const relativeFolder = 'props';
             const filename = `prop_${timestamp}.png`;
 
             const folderPath = await window.electronAPI.joinPath(args.saveDirectoryPath, relativeFolder);

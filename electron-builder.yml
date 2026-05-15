@@ -6,6 +6,7 @@ directories:
   buildResources: build
 files:
   - out/**/*
+  - '!out/dist/**/*'
   - package.json
   - resources/**/*
 win:

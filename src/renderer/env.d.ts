@@ -77,6 +77,8 @@ declare global {
       imageWorker: { status: string; lastError?: string | null; startedAt?: number | null; pid?: number | null };
       cleanupWorker: { status: string; lastError?: string | null; startedAt?: number | null; pid?: number | null };
     }>;
+    getAppInstallInfo?: () => Promise<{ version: string; installId: string | null }>;
+    notifyRendererReady?: () => void;
     // --- Recent Generations Cache ---
     getRecentGenerationsPath?: () => Promise<string | null>;
     cleanupRecentGenerations?: (olderThanDays?: number) => Promise<{ success: boolean; deletedCount: number }>;

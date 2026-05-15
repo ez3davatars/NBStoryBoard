@@ -1,9 +1,9 @@
 "use strict";
 const electron = require("electron");
-const path = require("path");
-const require$$0 = require("fs");
-const require$$2 = require("os");
 const crypto = require("crypto");
+const require$$0 = require("fs");
+const path = require("path");
+const require$$2 = require("os");
 const child_process = require("child_process");
 const fs = require("fs/promises");
 function _interopNamespaceDefault(e) {
@@ -22,8 +22,8 @@ function _interopNamespaceDefault(e) {
   n.default = e;
   return Object.freeze(n);
 }
-const path__namespace = /* @__PURE__ */ _interopNamespaceDefault(path);
 const crypto__namespace = /* @__PURE__ */ _interopNamespaceDefault(crypto);
+const path__namespace = /* @__PURE__ */ _interopNamespaceDefault(path);
 const fs__namespace = /* @__PURE__ */ _interopNamespaceDefault(fs);
 const is = {
   dev: !electron.app.isPackaged
@@ -917,6 +917,272 @@ const { app, shell, BrowserWindow, ipcMain, protocol, net } = electron;
 mainExports.config({ path: path.join(__dirname, "../../.env") });
 let isQuitting = false;
 let appCloseIpcRegistered = false;
+const APP_BACKGROUND_COLOR = "#0b0b0f";
+const RENDERER_READY_FALLBACK_MS = 6500;
+const MIN_SPLASH_DISPLAY_MS = 4900;
+const SPLASH_READY_HOLD_MS = 250;
+const SPLASH_EXIT_FADE_MS = 220;
+function getSplashLogoDataUrl() {
+  const logoPaths = [
+    path.join(__dirname, "../renderer/logo-z.png"),
+    path.join(__dirname, "../../public/logo-z.png"),
+    path.join(__dirname, "../../src/renderer/assets/logo-z.png")
+  ];
+  for (const logoPath of logoPaths) {
+    try {
+      return `data:image/png;base64,${require$$0.readFileSync(logoPath).toString("base64")}`;
+    } catch {
+    }
+  }
+  return "";
+}
+function getSplashHtml() {
+  const splashLogo = getSplashLogoDataUrl();
+  const splashLogoMarkup = splashLogo ? `<img src="${splashLogo}" alt="" draggable="false" />` : "";
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cast Director Studio</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      background: ${APP_BACKGROUND_COLOR};
+      color: #ffffff;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: ${APP_BACKGROUND_COLOR};
+    }
+
+    body {
+      display: grid;
+      place-items: center;
+      opacity: 1;
+      transform: scale(1);
+      transition:
+        opacity ${SPLASH_EXIT_FADE_MS}ms ease,
+        transform ${SPLASH_EXIT_FADE_MS}ms ease;
+      user-select: none;
+    }
+
+    body.is-closing {
+      opacity: 0;
+      transform: scale(1.012);
+    }
+
+    .surface {
+      position: relative;
+      box-sizing: border-box;
+      width: 100%;
+      height: 100%;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      background:
+        linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+        #0b0b0f;
+      background-size: 32px 32px;
+    }
+
+    .surface::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(circle at 50% 18%, rgba(250, 204, 21, 0.16), transparent 30%),
+        linear-gradient(145deg, rgba(18, 20, 28, 0.94), rgba(5, 5, 8, 0.98));
+    }
+
+    .content {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+      text-align: center;
+    }
+
+    .logo {
+      width: 104px;
+      height: 112px;
+      display: grid;
+      place-items: center;
+      filter:
+        drop-shadow(0 22px 24px rgba(0, 0, 0, 0.42))
+        drop-shadow(0 0 26px rgba(250, 204, 21, 0.22));
+    }
+
+    .logo img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+
+    body.is-ready .logo {
+      filter:
+        drop-shadow(0 22px 24px rgba(0, 0, 0, 0.42))
+        drop-shadow(0 0 34px rgba(250, 204, 21, 0.34));
+    }
+
+    .brand {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .eyebrow {
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: rgba(250, 204, 21, 0.75);
+    }
+
+    .title {
+      font-size: 24px;
+      line-height: 1;
+      font-weight: 900;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #f8fafc;
+    }
+
+    .status {
+      min-width: 190px;
+      height: 3px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    .status::before {
+      content: "";
+      display: block;
+      width: 46%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, transparent, #facc15, transparent);
+      animation: load 1.15s ease-in-out infinite;
+    }
+
+    body.is-ready .status::before {
+      width: 100%;
+      animation: none;
+      background: linear-gradient(90deg, #facc15, #fde047, #facc15);
+      transform: translateX(0);
+      transition: width 180ms ease, background 180ms ease;
+    }
+
+    .phase {
+      min-height: 13px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: rgba(212, 212, 216, 0.68);
+      transition: color 180ms ease, opacity 180ms ease;
+    }
+
+    body.is-ready .phase {
+      color: rgba(250, 204, 21, 0.78);
+    }
+
+    @keyframes load {
+      0% { transform: translateX(-120%); }
+      100% { transform: translateX(250%); }
+    }
+  </style>
+</head>
+<body>
+  <main class="surface">
+    <section class="content" aria-label="Cast Director Studio is launching">
+      <div class="logo" aria-hidden="true">
+        ${splashLogoMarkup}
+      </div>
+      <div class="brand">
+        <div class="eyebrow">Launching</div>
+        <div class="title">Cast Director Studio</div>
+      </div>
+      <div class="status" aria-hidden="true"></div>
+      <div class="phase" id="phase">Preparing creative workspace</div>
+    </section>
+  </main>
+</body>
+</html>`;
+}
+function createSplashWindow(bounds) {
+  const splashWindow = new BrowserWindow({
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+    show: false,
+    frame: false,
+    resizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    hasShadow: false,
+    backgroundColor: APP_BACKGROUND_COLOR,
+    webPreferences: {
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+  splashWindow.once("ready-to-show", () => {
+    if (!splashWindow.isDestroyed()) {
+      splashWindow.show();
+    }
+  });
+  void splashWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(getSplashHtml())}`);
+  return splashWindow;
+}
+function closeSplashWindow(splashWindow) {
+  if (!splashWindow || splashWindow.isDestroyed()) return;
+  void splashWindow.webContents.executeJavaScript("document.body.classList.add('is-closing')").catch(() => void 0);
+  setTimeout(() => {
+    if (!splashWindow.isDestroyed()) {
+      splashWindow.destroy();
+    }
+  }, SPLASH_EXIT_FADE_MS + 40);
+}
+function markSplashReady(splashWindow) {
+  if (!splashWindow || splashWindow.isDestroyed()) return;
+  void splashWindow.webContents.executeJavaScript(`
+      document.body.classList.add('is-ready');
+      const phase = document.getElementById('phase');
+      if (phase) phase.textContent = 'Opening studio';
+    `).catch(() => void 0);
+}
+function getInstallId() {
+  try {
+    const exePath = app.getPath("exe");
+    const stats = require$$0.statSync(exePath);
+    const seed = [
+      app.getVersion(),
+      exePath,
+      Math.round(stats.birthtimeMs || 0),
+      Math.round(stats.mtimeMs || 0),
+      stats.size
+    ].join("|");
+    return crypto.createHash("sha256").update(seed).digest("hex").slice(0, 24);
+  } catch (error) {
+    console.warn("Failed to compute app install id", error);
+    return null;
+  }
+}
 function registerAppCloseIpcHandlers() {
   if (appCloseIpcRegistered) return;
   appCloseIpcRegistered = true;
@@ -937,24 +1203,90 @@ function registerAppCloseIpcHandlers() {
     await shell.openExternal(url);
     return true;
   });
+  ipcMain.handle("app:getInstallInfo", () => ({
+    version: app.getVersion(),
+    installId: getInstallId()
+  }));
 }
 function createWindow() {
+  const { workArea } = electron.screen.getPrimaryDisplay();
+  const splashWindow = createSplashWindow(workArea);
+  const splashStartedAt = Date.now();
   const mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 900,
+    x: workArea.x,
+    y: workArea.y,
+    width: workArea.width,
+    height: workArea.height,
     show: false,
+    paintWhenInitiallyHidden: true,
+    backgroundColor: APP_BACKGROUND_COLOR,
     autoHideMenuBar: true,
     icon: path.join(__dirname, "../../resources/icon.ico"),
     webPreferences: {
       preload: path.join(__dirname, "../preload/index.js"),
       sandbox: false,
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      backgroundThrottling: false
     }
   });
-  mainWindow.on("ready-to-show", () => {
-    mainWindow.maximize();
+  mainWindow.maximize();
+  let revealFallback = null;
+  let revealTimer = null;
+  let hasRevealedMainWindow = false;
+  const revealMainWindow = () => {
+    if (hasRevealedMainWindow || mainWindow.isDestroyed()) return;
+    hasRevealedMainWindow = true;
+    if (revealFallback) {
+      clearTimeout(revealFallback);
+      revealFallback = null;
+    }
+    if (revealTimer) {
+      clearTimeout(revealTimer);
+      revealTimer = null;
+    }
+    if (!mainWindow.isMaximized()) {
+      mainWindow.maximize();
+    }
     mainWindow.show();
+    try {
+      splashWindow.moveTop();
+    } catch {
+    }
+    closeSplashWindow(splashWindow);
+    setTimeout(() => {
+      if (!mainWindow.isDestroyed()) {
+        mainWindow.focus();
+      }
+    }, SPLASH_EXIT_FADE_MS + 60);
+  };
+  const scheduleRevealMainWindow = (force = false) => {
+    if (hasRevealedMainWindow || mainWindow.isDestroyed() || revealTimer) return;
+    const elapsedMs = Date.now() - splashStartedAt;
+    const readyDelayMs = force ? Math.max(MIN_SPLASH_DISPLAY_MS - elapsedMs, 0) : Math.max(MIN_SPLASH_DISPLAY_MS - SPLASH_READY_HOLD_MS - elapsedMs, 0);
+    revealTimer = setTimeout(() => {
+      markSplashReady(splashWindow);
+      revealTimer = setTimeout(() => {
+        revealTimer = null;
+        revealMainWindow();
+      }, SPLASH_READY_HOLD_MS);
+    }, readyDelayMs);
+  };
+  const handleRendererReady = (event) => {
+    if (event.sender !== mainWindow.webContents) return;
+    ipcMain.off("app:renderer-ready", handleRendererReady);
+    scheduleRevealMainWindow();
+  };
+  ipcMain.on("app:renderer-ready", handleRendererReady);
+  revealFallback = setTimeout(() => scheduleRevealMainWindow(true), RENDERER_READY_FALLBACK_MS);
+  mainWindow.once("ready-to-show", () => {
+    scheduleRevealMainWindow();
+  });
+  mainWindow.once("closed", () => {
+    ipcMain.off("app:renderer-ready", handleRendererReady);
+    if (revealFallback) clearTimeout(revealFallback);
+    if (revealTimer) clearTimeout(revealTimer);
+    closeSplashWindow(splashWindow);
   });
   mainWindow.on("close", (e) => {
     if (isQuitting) return;
@@ -1018,7 +1350,9 @@ app.whenReady().then(() => {
   registerFileIpcHandlers();
   registerDepthIpcHandlers();
   createWindow();
-  startImageWorker();
+  if (is.dev) {
+    startImageWorker();
+  }
   app.on("activate", function() {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

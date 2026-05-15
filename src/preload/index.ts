@@ -27,6 +27,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     renameFile: (oldPath: string, newPath: string) => ipcRenderer.invoke('file:rename', oldPath, newPath),
     getWorkerStatus: () => ipcRenderer.invoke('worker:getStatus'),
     restartWorker: () => ipcRenderer.invoke('worker:restart'),
+    getAppInstallInfo: () => ipcRenderer.invoke('app:getInstallInfo'),
+    notifyRendererReady: () => ipcRenderer.send('app:renderer-ready'),
     // --- Recent Generations Cache ---
     getRecentGenerationsPath: () => ipcRenderer.invoke('app:getRecentGenerationsPath'),
     cleanupRecentGenerations: (olderThanDays?: number) => ipcRenderer.invoke('app:cleanupRecentGenerations', olderThanDays)
