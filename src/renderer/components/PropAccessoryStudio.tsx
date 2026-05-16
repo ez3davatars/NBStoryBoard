@@ -11,16 +11,13 @@ import type { PropItem, CastMember } from '../context/AppContext';
 import ConfirmDialog from './ui/ConfirmDialog';
 import ActorSaveModal from './ActorSaveModal';
 import { LibraryAssetMaterializer } from '../services/LibraryAssetMaterializer';
-import { WearableLandmarkService } from '../services/WearableLandmarkService';
-import { WearableAnchorEngine } from '../services/WearableAnchorEngine';
-import { WearableOverlayComposer } from '../services/WearableOverlayComposer';
 import type { WearableClass, HeadwearSubtype } from '../services/WearableAnchorEngine';
 import { useRecentGenerationsStore } from '../stores/useRecentGenerationsStore';
 import { RecentGenerationsCacheService } from '../services/RecentGenerationsCacheService';
 import RecentGenerationsStrip from './recent/RecentGenerationsStrip';
 import { createUniqueDownloadFilename } from '../utils/downloadFilenames';
 import { buildStyleCategoryContract, buildStyleNegativePrompt } from '../../prompts/styleContracts';
-import { buildEffectivePropApplicationNote, buildPropApplicationPrompt } from '../utils/propApplicationPrompt';
+import { buildPropApplicationPrompt } from '../utils/propApplicationPrompt';
 import { PropMetadataService, type PropMetadataSidecar } from '../services/PropMetadataService';
 
 type PermissionAwareDirectoryHandle = FileSystemDirectoryHandle & {
@@ -84,6 +81,37 @@ const propNameFromFilename = (filename: string): string => {
         .replace(/^prop[_-]?\d*/i, '')
         .replace(/^PROP[_-]?\d*/i, '');
     return (withoutKnownPrefix || stem).replace(/[_-]+/g, ' ').trim() || stem;
+};
+
+const inferSimplePropTypeHint = (prop?: PropItem | null, note?: string): string => {
+    const text = `${prop?.name || ''} ${prop?.prompt || ''} ${prop?.originalPrompt || ''} ${note || ''}`.toLowerCase();
+
+    if (/\b(crown|tiara|hat|cap|helmet|hood|veil|headband|hairpiece|headpiece|wig|fascinator|bonnet|beanie|beret|fedora)\b/.test(text)) {
+        return 'headwear';
+    }
+    if (/\b(glasses|eyeglasses|spectacles|goggles|sunglasses|monocle|visor)\b/.test(text)) {
+        return 'eyewear';
+    }
+    if (/\b(earring|earrings|ear cuff|earcuff)\b/.test(text)) {
+        return 'ear accessory';
+    }
+    if (/\b(necklace|choker|pendant|chain|collar|medallion)\b/.test(text)) {
+        return 'neck accessory';
+    }
+    if (/\b(bracelet|watch|wristband|bangle|cuff)\b/.test(text)) {
+        return 'wrist accessory';
+    }
+    if (/\b(belt|waistband|sash)\b/.test(text)) {
+        return 'belt or waist accessory';
+    }
+    if (/\b(shoe|shoes|boot|boots|heel|heels|sandal|sandals)\b/.test(text)) {
+        return 'footwear';
+    }
+    if (/\b(microphone|staff|scepter|sceptre|wand|sword|shield|bag|purse|umbrella|megaphone|book|phone)\b/.test(text)) {
+        return 'held prop';
+    }
+
+    return 'generic prop';
 };
 
 const buildScannedPropItem = (args: {
@@ -794,9 +822,9 @@ extra objects, duplicate prop, altered proportions, floating parts, text, label,
             if (!selectedProp.classHint || selectedProp.classHint === 'generic_prop') {
                 void rememberPropClassification(selectedProp, inferredFitClass, subtype);
             }
-            const isHeadwearApplication = fitClass === 'headwear';
-            const effectiveApplyNote = buildEffectivePropApplicationNote(applyNote, fitClass);
             const subjectUrl = selectedCharacter.previewUrl || selectedCharacter.url;
+            const userInstruction = applyNote?.trim() || 'Add the selected prop naturally to the subject.';
+            const propTypeHint = inferSimplePropTypeHint(selectedProp, userInstruction);
             const subjectStyleId = selectedCharacter.profile?.style || undefined;
             const subjectStyleLabel = subjectStyleId ? subjectStyleId.replace(/_/g, ' ') : 'Subject Reference Style';
             const appliedStyleContract = buildStyleCategoryContract(subjectStyleId, {
@@ -817,148 +845,102 @@ extra objects, duplicate prop, altered proportions, floating parts, text, label,
             const appliedStyleNegativePrompt = buildStyleNegativePrompt(subjectStyleId);
 
             console.warn(`[DEBUG_PATH] fitClass inferred: ${fitClass} for prop: ${selectedProp?.name}`);
+            dispatch({
+                type: 'ADD_LOG',
+                payload: { message: `Applying prop using guided edit${propTypeHint ? ` (${propTypeHint})` : ''}.`, type: 'info' }
+            });
 
-            if (fitClass === 'eyewear') {
-                console.warn(`[DEBUG_PATH] Deterministic branch entered for: ${fitClass}`);
-                dispatch({
-                    type: 'ADD_LOG',
-                    payload: { message: `Building deterministic wearable overlay for ${fitClass}...`, type: 'info' }
-                });
+            const prompt = buildPropApplicationPrompt({
+                applyNote: userInstruction,
+                propTypeHint,
+                styleContract: appliedStyleContract,
+                styleNegativePrompt: appliedStyleNegativePrompt
+            });
 
-                const framedSubjectUrl = await WearableOverlayComposer.buildFramedSubject(subjectUrl, state.imageResolution);
+            const imageRefs = [
+                {
+                    url: subjectUrl,
+                    label: 'IMAGE 1 - LOCKED SUBJECT, preserve exactly'
+                },
+                {
+                    url: selectedProp.url,
+                    label: 'IMAGE 2 - PROP TO ADD, preserve design'
+                }
+            ];
 
-                const landmarks = await WearableLandmarkService.detect(framedSubjectUrl);
-                const placement = WearableAnchorEngine.computePlacement(fitClass, landmarks, applyNote, subtype);
-                console.warn(`[DEBUG_PATH] automatic ${fitClass} overlay branch entered`);
-
-                const overlay = await WearableOverlayComposer.compose({
-                    subjectUrl: framedSubjectUrl,
-                    propUrl: selectedProp.url,
-                    anchorContract: placement
-                });
-
-                setAppliedImage(overlay.precompositeUrl);
-
-                dispatch({
-                    type: 'ADD_LOG',
-                    payload: {
-                        message: 'Eyewear fitted using automatic locked placement.',
-                        type: 'info'
-                    }
-                });
-
-                const recentStore = useRecentGenerationsStore.getState();
-                if (recentStore.cacheDirPath && overlay.precompositeUrl) {
-                    RecentGenerationsCacheService.cacheGeneration({
-                        imageDataUrl: overlay.precompositeUrl,
-                        studio: 'props',
-                        cacheDirPath: recentStore.cacheDirPath,
-                    }).then((cacheResult) => {
-                        if (cacheResult.success && cacheResult.localCachePath && cacheResult.displayUrl) {
-                            recentStore.addRecentGeneration({
-                                studio: 'props',
-                                localCachePath: cacheResult.localCachePath,
-                                displayUrl: cacheResult.displayUrl,
-                                createdAt: Date.now(),
-                                prompt: applyNote || 'Eyewear application',
-                                mode: (state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok') || 'byok',
-                            });
+            const res = await GeminiService.generateImage(
+                prompt,
+                state.apiKey,
+                state.model,
+                imageRefs,
+                {
+                    aspectRatio: '1:1',
+                    imageSize: state.imageResolution,
+                    thinkingLevel: state.enableImageThinking,
+                    googleGrounding: false,
+                    strictMode: true,
+                    billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
+                    entitlements: state.billingEntitlements,
+                    identityLock: appliedIdentityLock,
+                    styleCategory: subjectStyleId ? {
+                        styleId: subjectStyleId,
+                        intent: {
+                            selectedStyleLabel: subjectStyleLabel,
+                            appliesTo: 'Prop Studio prop application edit'
                         }
-                    }).catch((e) => {
-                        console.warn('[PropApp] Recent generation caching failed:', e);
-                    });
-                }
-
-                return;
-            } else {
-                if (isHeadwearApplication) {
-                    dispatch({
-                        type: 'ADD_LOG',
-                        payload: { message: 'Applying headwear using guided image edit.', type: 'info' }
-                    });
-                }
-
-                const res = await GeminiService.generateImage(
-                    buildPropApplicationPrompt({
-                        applyNote: effectiveApplyNote,
-                        styleContract: appliedStyleContract,
-                        styleNegativePrompt: appliedStyleNegativePrompt
-                    }),
-                    state.apiKey,
-                    state.model,
-                    [
-                        { url: subjectUrl, label: "Subject Reference" },
-                        { url: selectedProp.url, label: "Prop Reference" }
-                    ],
-                    {
-                        aspectRatio: '1:1',
-                        imageSize: state.imageResolution,
-                        thinkingLevel: state.enableImageThinking,
-                        googleGrounding: false,
-                        strictMode: true,
-                        billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
-                        entitlements: state.billingEntitlements,
-                        identityLock: appliedIdentityLock,
-                        styleCategory: subjectStyleId ? {
-                            styleId: subjectStyleId,
-                            intent: {
-                                selectedStyleLabel: subjectStyleLabel,
-                                appliesTo: "Prop Studio applied character render"
+                    } : undefined,
+                    onJobAccepted: (id, acceptedAt) => {
+                        actualGenId = id;
+                        actualAcceptedAt = acceptedAt || Date.now();
+                        dispatch({
+                            type: 'ADD_BACKGROUND_JOB',
+                            payload: {
+                                id,
+                                status: 'polling_foreground',
+                                context: 'prop_applied',
+                                startedAt: Date.now(),
+                                timing: { submittedAt, edgeAcceptedAt: actualAcceptedAt }
                             }
-                        } : undefined,
-                        onJobAccepted: (id, acceptedAt) => {
-                            actualGenId = id;
-                            actualAcceptedAt = acceptedAt || Date.now();
-                            dispatch({
-                                type: 'ADD_BACKGROUND_JOB',
-                                payload: {
-                                    id,
-                                    status: 'polling_foreground',
-                                    context: 'prop_applied',
-                                    startedAt: Date.now(),
-                                    timing: { submittedAt, edgeAcceptedAt: actualAcceptedAt }
-                                }
-                            });
-                        }
+                        });
                     }
-                );
-
-                if (actualGenId) dispatch({ type: 'REMOVE_BACKGROUND_JOB', payload: actualGenId });
-
-                const rawUrl = res;
-
-                let safeUrl = rawUrl;
-                try {
-                    safeUrl = await materializeDisplayUrl(rawUrl);
-                } catch (e) {
-                    console.warn("Failed to materialize applied prop result:", e);
                 }
+            );
 
-                setAppliedImage(safeUrl);
-                dispatch({ type: 'ADD_LOG', payload: { message: "Prop integrated.", type: 'info' } });
+            if (actualGenId) dispatch({ type: 'REMOVE_BACKGROUND_JOB', payload: actualGenId });
 
-                // --- RECENT GENERATIONS: Cache applied prop result ---
-                const recentStore = useRecentGenerationsStore.getState();
-                if (recentStore.cacheDirPath && safeUrl) {
-                    RecentGenerationsCacheService.cacheGeneration({
-                        imageDataUrl: safeUrl,
-                        studio: 'props',
-                        cacheDirPath: recentStore.cacheDirPath,
-                    }).then((cacheResult) => {
-                        if (cacheResult.success && cacheResult.localCachePath && cacheResult.displayUrl) {
-                            recentStore.addRecentGeneration({
-                                studio: 'props',
-                                localCachePath: cacheResult.localCachePath,
-                                displayUrl: cacheResult.displayUrl,
-                                createdAt: Date.now(),
-                                prompt: applyNote || (isHeadwearApplication ? 'Headwear application' : 'Prop application'),
-                                mode: (state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok') || 'byok',
-                            });
-                        }
-                    }).catch((e) => {
-                        console.warn('[PropApp] Recent generation caching failed:', e);
-                    });
-                }
+            const rawUrl = res;
+
+            let safeUrl = rawUrl;
+            try {
+                safeUrl = await materializeDisplayUrl(rawUrl);
+            } catch (e) {
+                console.warn("Failed to materialize applied prop result:", e);
+            }
+
+            setAppliedImage(safeUrl);
+            dispatch({ type: 'ADD_LOG', payload: { message: "Prop applied using guided edit.", type: 'info' } });
+
+            // --- RECENT GENERATIONS: Cache applied prop result ---
+            const recentStore = useRecentGenerationsStore.getState();
+            if (recentStore.cacheDirPath && safeUrl) {
+                RecentGenerationsCacheService.cacheGeneration({
+                    imageDataUrl: safeUrl,
+                    studio: 'props',
+                    cacheDirPath: recentStore.cacheDirPath,
+                }).then((cacheResult) => {
+                    if (cacheResult.success && cacheResult.localCachePath && cacheResult.displayUrl) {
+                        recentStore.addRecentGeneration({
+                            studio: 'props',
+                            localCachePath: cacheResult.localCachePath,
+                            displayUrl: cacheResult.displayUrl,
+                            createdAt: Date.now(),
+                            prompt: userInstruction,
+                            mode: (state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok') || 'byok',
+                        });
+                    }
+                }).catch((e) => {
+                    console.warn('[PropApp] Recent generation caching failed:', e);
+                });
             }
 
         } catch (error: unknown) {

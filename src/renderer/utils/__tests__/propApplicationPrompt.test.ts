@@ -2,62 +2,18 @@ import { describe, expect, it } from 'vitest';
 
 import { PropMetadataService } from '../../services/PropMetadataService';
 import { WearableAnchorEngine } from '../../services/WearableAnchorEngine';
-import { buildEffectivePropApplicationNote, buildPropApplicationPrompt } from '../propApplicationPrompt';
+import { buildPropApplicationPrompt } from '../propApplicationPrompt';
 
 describe('prop application guardrails', () => {
-  it('classifies explicit head fitting as headwear for guided application prompts', () => {
-    expect(WearableAnchorEngine.inferClass('PROP_172658062.png', 'Saved prop asset', 'Fit to her head')).toBe('headwear');
-    expect(WearableAnchorEngine.inferClass('uploaded prop', '', 'place on top of her head')).toBe('headwear');
-    expect(WearableAnchorEngine.inferClass('uploaded prop', '', 'background above her head')).toBe('generic_prop');
+  it('keeps simple classification available for metadata without routing the apply flow', () => {
     expect(WearableAnchorEngine.inferClass('royal crown.png', 'Saved prop asset', '')).toBe('headwear');
-    expect(WearableAnchorEngine.inferClass('wide brim hat.png', '', '')).toBe('headwear');
-    expect(WearableAnchorEngine.inferClass('helmet.png', '', '')).toBe('headwear');
-    expect(WearableAnchorEngine.inferClass('veil.png', '', '')).toBe('headwear');
-    expect(WearableAnchorEngine.inferClass('headband.png', '', '')).toBe('headwear');
-    expect(WearableAnchorEngine.inferClass('wig.png', '', '')).toBe('headwear');
+    expect(WearableAnchorEngine.inferClass('uploaded prop', '', 'place on top of her head')).toBe('headwear');
+    expect(WearableAnchorEngine.inferClass('reading glasses.png', '', 'put on her face')).toBe('eyewear');
+    expect(WearableAnchorEngine.inferClass('handheld microphone.png', '', 'place in her hand')).toBe('held_prop');
+    expect(WearableAnchorEngine.inferClass('uploaded prop', '', 'background above her head')).toBe('generic_prop');
   });
 
-  it('detects universal headwear subtypes', () => {
-    expect(WearableAnchorEngine.inferHeadwearSubtype('royal crown.png', '', '')).toBe('crown');
-    expect(WearableAnchorEngine.inferHeadwearSubtype('silver tiara.png', '', '')).toBe('tiara');
-    expect(WearableAnchorEngine.inferHeadwearSubtype('baseball cap.png', '', '')).toBe('hat');
-    expect(WearableAnchorEngine.inferHeadwearSubtype('combat helmet.png', '', '')).toBe('helmet');
-    expect(WearableAnchorEngine.inferHeadwearSubtype('bridal veil.png', '', '')).toBe('veil');
-    expect(WearableAnchorEngine.inferHeadwearSubtype('winter hood.png', '', '')).toBe('hood');
-    expect(WearableAnchorEngine.inferHeadwearSubtype('sports headband.png', '', '')).toBe('headband');
-    expect(WearableAnchorEngine.inferHeadwearSubtype('curly wig.png', '', '')).toBe('hairpiece');
-  });
-
-  it('uses subtype-aware headwear sizing and vertical anchors', () => {
-    const landmarks = {
-      imageWidth: 1024,
-      imageHeight: 1024,
-      faceCenter: { x: 512, y: 520 },
-      foreheadCenter: { x: 512, y: 350 },
-      hairlineCenter: { x: 512, y: 330 },
-      leftEye: { x: 455, y: 455 },
-      rightEye: { x: 570, y: 455 },
-      faceWidthPx: 250,
-      faceHeightPx: 360,
-      headWidthPx: 290,
-      headHeightPx: 430
-    };
-
-    const crown = WearableAnchorEngine.computePlacement('headwear', landmarks, 'fit on head', 'crown');
-    const hat = WearableAnchorEngine.computePlacement('headwear', landmarks, 'fit on head', 'hat');
-    const helmet = WearableAnchorEngine.computePlacement('headwear', landmarks, 'fit on head', 'helmet');
-    const headband = WearableAnchorEngine.computePlacement('headwear', landmarks, 'fit on head', 'headband');
-
-    expect(crown.targetWidthPx).toBeLessThan(hat.targetWidthPx);
-    expect(hat.targetWidthPx).toBeLessThanOrEqual(helmet.targetWidthPx);
-    expect(headband.targetWidthPx).toBeGreaterThan(crown.targetWidthPx);
-
-    expect(crown.anchorCenter.y).toBeLessThan(landmarks.hairlineCenter.y);
-    expect(hat.anchorCenter.y).toBeLessThan(landmarks.hairlineCenter.y);
-    expect(helmet.anchorCenter.y).toBeGreaterThanOrEqual(crown.anchorCenter.y);
-  });
-
-  it('lets durable prop metadata win over anonymous saved names', () => {
+  it('keeps durable prop metadata available for future hints', () => {
     const resolved = PropMetadataService.resolvePropFitClass({
       selectedProp: {
         name: 'PROP_123.png',
@@ -72,62 +28,61 @@ describe('prop application guardrails', () => {
     expect(resolved.subtype).toBe('crown');
   });
 
-  it('keeps fallback prop application edit-only and forbids invented scene dressing', () => {
+  it('builds one universal guided edit prompt for prop application', () => {
     const prompt = buildPropApplicationPrompt({
-      applyNote: 'Fit to her head',
+      applyNote: 'Place the crown on top of her head.',
+      propTypeHint: 'headwear',
       styleContract: 'STYLE LOCK',
       styleNegativePrompt: 'style drift'
     });
 
-    expect(prompt).toContain('This is a locked prop application/editing pass');
-    expect(prompt).toContain('Add exactly one instance of the selected prop');
-    expect(prompt).toContain('Do not invent any additional objects');
-    expect(prompt).toContain('FIT SEMANTICS - UNIVERSAL');
-    expect(prompt).toContain('Interpret the user\'s instruction as a fitting/integration request');
-    expect(prompt).toContain('This fit rule applies to every subject, body type, age, hairstyle, camera angle, render style, and prop category.');
-    expect(prompt).toContain('HEAD FIT STRICTNESS');
-    expect(prompt).toContain('fit the prop to the head geometry, not merely on top of it');
-    expect(prompt).toContain('no visible air gap');
-    expect(prompt).toContain('Hair must be contained under or behind the fitted head prop');
-    expect(prompt).toContain('no hair should poke through solid metal, fabric, frame, jewels, bands, arches, holes, trim, or decorative openings');
-    expect(prompt).toContain('subject pixels must never visibly pass through the prop');
-    expect(prompt).toContain('Do not extend the prop behind the shoulders');
-    expect(prompt).toContain('enlarge into a backdrop');
-    expect(prompt).toContain('royal throne');
-    expect(prompt).toContain('background crown');
-    expect(prompt).toContain('Fit to her head');
+    expect(prompt).toContain('Create a single image.');
+    expect(prompt).toContain('TASK');
+    expect(prompt).toContain('Edit IMAGE 1 by adding IMAGE 2 as the selected prop/accessory.');
+    expect(prompt).toContain('Apply the prop according to this user instruction: "Place the crown on top of her head."');
+    expect(prompt).toContain('Simple prop type hint: headwear');
+    expect(prompt).toContain('The final image must look like the same subject from IMAGE 1 with the prop from IMAGE 2 added.');
+    expect(prompt).toContain('SUBJECT LOCK');
+    expect(prompt).toContain('Preserve IMAGE 1 exactly except for the added prop.');
+    expect(prompt).toContain('Do not redesign, restyle, beautify, mechanize, age, slim, enlarge, shrink, or alter the subject.');
+    expect(prompt).toContain('PROP LOCK');
+    expect(prompt).toContain('Use IMAGE 2 as the only prop to add.');
+    expect(prompt).toContain('Do not turn the prop into scenery, a background object, a frame, a halo, a throne, architecture, or a new costume.');
+    expect(prompt).toContain('HEADWEAR CLARIFICATION');
+    expect(prompt).toContain('If the selected prop is headwear, place it on the top/head/hairline area at realistic wearable scale.');
+    expect(prompt).toContain('Do not deform it into a helmet, wrap, armor, or background decoration.');
+    expect(prompt).toContain('OUTPUT');
+    expect(prompt).toContain('Same black background.');
     expect(prompt).toContain('STYLE LOCK');
     expect(prompt).toContain('style drift');
   });
 
-  it('strengthens headwear notes for guided image edit routing', () => {
-    const effectiveNote = buildEffectivePropApplicationNote('fit the crown naturally on her head', 'headwear');
+  it('does not reintroduce subtype-specific or deterministic-fit prompt language', () => {
     const prompt = buildPropApplicationPrompt({
-      applyNote: effectiveNote
+      applyNote: 'Place the crown on top of her head.',
+      propTypeHint: 'headwear'
     });
 
-    expect(effectiveNote).toContain('fit the crown naturally on her head');
-    expect(effectiveNote).toContain('Fit the selected headwear naturally onto the subject\'s head');
-    expect(effectiveNote).toContain('Do not place it too high above the head');
-    expect(effectiveNote).toContain('Do not turn it into a background object, halo, throne, frame, or oversized decoration');
-    expect(prompt).toContain('HEAD FIT STRICTNESS');
-    expect(prompt).toContain('The headwear must be worn by the subject at natural scale');
-    expect(prompt).toContain('Keep the solid black studio background (#000000).');
-  });
-
-  it('leaves non-headwear notes unchanged', () => {
-    expect(buildEffectivePropApplicationNote('hold the microphone naturally', 'held_prop')).toBe('hold the microphone naturally');
-  });
-
-  it('adds universal fit semantics for non-head prop targets too', () => {
-    const prompt = buildPropApplicationPrompt({
-      applyNote: 'Fit the bracelet around his wrist'
-    });
-
-    expect(prompt).toContain('FIT SEMANTICS - UNIVERSAL');
-    expect(prompt).toContain('scaled, aligned, perspective-matched, and contact-locked');
-    expect(prompt).toContain('subject hair, skin, clothing, fingers, or body parts must not poke through solid prop surfaces');
-    expect(prompt).toContain('wrist');
+    expect(prompt).not.toContain('FIT SEMANTICS - UNIVERSAL');
     expect(prompt).not.toContain('HEAD FIT STRICTNESS');
+    expect(prompt).not.toContain('RIGID CROWN');
+    expect(prompt).not.toContain('CROWN / TIARA');
+    expect(prompt).not.toContain('computePlacement');
+    expect(prompt).not.toContain('flexible inner fit');
+    expect(prompt).not.toContain('conform to the skull');
+  });
+
+  it('uses the same prompt structure for held and generic props', () => {
+    const prompt = buildPropApplicationPrompt({
+      applyNote: 'Place the microphone in her hand.',
+      propTypeHint: 'held prop'
+    });
+
+    expect(prompt).toContain('Apply the prop according to this user instruction: "Place the microphone in her hand."');
+    expect(prompt).toContain('Simple prop type hint: held prop');
+    expect(prompt).toContain('Place the prop only where requested by the user.');
+    expect(prompt).toContain('One added prop only.');
+    expect(prompt).not.toContain('HEAD FIT STRICTNESS');
+    expect(prompt).not.toContain('RIGID CROWN');
   });
 });
