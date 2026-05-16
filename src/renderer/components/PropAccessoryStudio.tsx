@@ -11,13 +11,15 @@ import type { PropItem, CastMember } from '../context/AppContext';
 import ConfirmDialog from './ui/ConfirmDialog';
 import ActorSaveModal from './ActorSaveModal';
 import { LibraryAssetMaterializer } from '../services/LibraryAssetMaterializer';
-import type { WearableClass, HeadwearSubtype } from '../services/WearableAnchorEngine';
+import { WearableAnchorEngine } from '../services/WearableAnchorEngine';
+import type { WearableClass, HeadwearSubtype, WearablePlacement } from '../services/WearableAnchorEngine';
+import { WearableLandmarkService } from '../services/WearableLandmarkService';
+import { WearableOverlayComposer } from '../services/WearableOverlayComposer';
+import { WearableRefinementValidator } from '../services/WearableRefinementValidator';
 import { useRecentGenerationsStore } from '../stores/useRecentGenerationsStore';
 import { RecentGenerationsCacheService } from '../services/RecentGenerationsCacheService';
 import RecentGenerationsStrip from './recent/RecentGenerationsStrip';
 import { createUniqueDownloadFilename } from '../utils/downloadFilenames';
-import { buildStyleCategoryContract, buildStyleNegativePrompt } from '../../prompts/styleContracts';
-import { buildPropApplicationPrompt } from '../utils/propApplicationPrompt';
 import { PropMetadataService, type PropMetadataSidecar } from '../services/PropMetadataService';
 
 type PermissionAwareDirectoryHandle = FileSystemDirectoryHandle & {
@@ -81,37 +83,6 @@ const propNameFromFilename = (filename: string): string => {
         .replace(/^prop[_-]?\d*/i, '')
         .replace(/^PROP[_-]?\d*/i, '');
     return (withoutKnownPrefix || stem).replace(/[_-]+/g, ' ').trim() || stem;
-};
-
-const inferSimplePropTypeHint = (prop?: PropItem | null, note?: string): string => {
-    const text = `${prop?.name || ''} ${prop?.prompt || ''} ${prop?.originalPrompt || ''} ${note || ''}`.toLowerCase();
-
-    if (/\b(crown|tiara|hat|cap|helmet|hood|veil|headband|hairpiece|headpiece|wig|fascinator|bonnet|beanie|beret|fedora)\b/.test(text)) {
-        return 'headwear';
-    }
-    if (/\b(glasses|eyeglasses|spectacles|goggles|sunglasses|monocle|visor)\b/.test(text)) {
-        return 'eyewear';
-    }
-    if (/\b(earring|earrings|ear cuff|earcuff)\b/.test(text)) {
-        return 'ear accessory';
-    }
-    if (/\b(necklace|choker|pendant|chain|collar|medallion)\b/.test(text)) {
-        return 'neck accessory';
-    }
-    if (/\b(bracelet|watch|wristband|bangle|cuff)\b/.test(text)) {
-        return 'wrist accessory';
-    }
-    if (/\b(belt|waistband|sash)\b/.test(text)) {
-        return 'belt or waist accessory';
-    }
-    if (/\b(shoe|shoes|boot|boots|heel|heels|sandal|sandals)\b/.test(text)) {
-        return 'footwear';
-    }
-    if (/\b(microphone|staff|scepter|sceptre|wand|sword|shield|bag|purse|umbrella|megaphone|book|phone)\b/.test(text)) {
-        return 'held prop';
-    }
-
-    return 'generic prop';
 };
 
 const buildScannedPropItem = (args: {
@@ -723,44 +694,7 @@ extra objects, duplicate prop, altered proportions, floating parts, text, label,
         }
     };
 
-    const rememberPropClassification = async (
-        item: PropItem,
-        fitClass: WearableClass,
-        subtype?: HeadwearSubtype
-    ) => {
-        if (fitClass === 'generic_prop') return;
-        if (item.classHint && item.classHint !== 'generic_prop') return;
-
-        const imageFilename = item.filename || item.id;
-        if (!imageFilename) return;
-
-        const updatedItem: PropItem = {
-            ...item,
-            classHint: fitClass,
-            subtypeHint: subtype,
-            metadataVersion: 1,
-            sourceKind: item.sourceKind || 'saved'
-        };
-
-        dispatch({
-            type: 'SET_PROP_ITEMS',
-            payload: state.propItems.map((prop) => (prop.id === item.id ? updatedItem : prop))
-        });
-        setSelectedProp(updatedItem);
-
-        await writePropSidecar({
-            imageFilename,
-            name: item.name || propNameFromFilename(imageFilename),
-            prompt: item.prompt || item.originalPrompt || imageFilename,
-            originalPrompt: item.originalPrompt,
-            sourceKind: item.sourceKind || 'saved',
-            classHint: fitClass,
-            subtypeHint: subtype
-        });
-    };
-
     const handleApply = async () => {
-        console.warn(`[DEBUG_PATH] handleApply invoked! Button was clicked.`);
         const billingMode = state.billingEntitlements.effectiveBillingMode;
 
         if (!selectedCharacter || !selectedProp) {
@@ -815,61 +749,162 @@ extra objects, duplicate prop, altered proportions, floating parts, text, label,
 
         try {
             let actualGenId = '';
-            const { fitClass, subtype, inferredFitClass } = PropMetadataService.resolvePropFitClass({
-                selectedProp,
-                applyNote
-            });
-            if (!selectedProp.classHint || selectedProp.classHint === 'generic_prop') {
-                void rememberPropClassification(selectedProp, inferredFitClass, subtype);
-            }
             const subjectUrl = selectedCharacter.previewUrl || selectedCharacter.url;
-            const userInstruction = applyNote?.trim() || 'Add the selected prop naturally to the subject.';
-            const propTypeHint = inferSimplePropTypeHint(selectedProp, userInstruction);
-            const subjectStyleId = selectedCharacter.profile?.style || undefined;
-            const subjectStyleLabel = subjectStyleId ? subjectStyleId.replace(/_/g, ' ') : 'Subject Reference Style';
-            const appliedStyleContract = buildStyleCategoryContract(subjectStyleId, {
-                selectedStyleLabel: subjectStyleLabel,
-                sourceImagePolicy: "Subject references control identity, body, pose, and placement only; source-photo realism must not override the active character render category.",
-                boardPresentationPolicy: "Prop Studio application controls prop placement and integration only.",
-                lightingPolicy: "Prop lighting and perspective matching must be interpreted inside the active character render category.",
-                appliesTo: "Prop Studio applied character render, saved actor preview, and recent thumbnail"
-            });
-            const appliedIdentityLock = selectedCharacter.identityLock
-                ? {
-                    ...selectedCharacter.identityLock,
-                    generatedSourceImageIndex: 1,
-                    generatedSourceRole: "selected subject image is the visual/body/pose source only; uploaded biometric identity remains authoritative for this character_id",
-                    appliesTo: "Prop Studio generation, wearable refinement, preview, saved actor output, and export requests for this character"
-                }
-                : undefined;
-            const appliedStyleNegativePrompt = buildStyleNegativePrompt(subjectStyleId);
 
-            console.warn(`[DEBUG_PATH] fitClass inferred: ${fitClass} for prop: ${selectedProp?.name}`);
-            dispatch({
-                type: 'ADD_LOG',
-                payload: { message: `Applying prop using guided edit${propTypeHint ? ` (${propTypeHint})` : ''}.`, type: 'info' }
-            });
+            const propText = `${selectedProp.name || ''} ${selectedProp.prompt || ''} ${selectedProp.filename || ''}`.toLowerCase();
 
-            const prompt = buildPropApplicationPrompt({
-                applyNote: userInstruction,
-                propTypeHint,
-                styleContract: appliedStyleContract,
-                styleNegativePrompt: appliedStyleNegativePrompt
-            });
+            const looksLikeHeadwear =
+                /\b(crown|tiara|hat|cap|helmet|hood|veil|headband|headpiece|hairpiece|wig|turban)\b/i.test(propText);
 
-            const imageRefs = [
+            const userInstruction = applyNote?.trim() || (
+                looksLikeHeadwear
+                    ? "Place the selected headwear on top of the subject's head as a worn accessory. It must appear in front of the hair/head at the contact point, not behind the subject, not behind the shoulders, and not as scenery or a background object."
+                    : 'Add the selected prop to the subject.'
+            );
+            let guideFallbackUrl: string | null = null;
+            let guidePlacement: WearablePlacement | null = null;
+            let applicationPrompt = `
+Create a single edited image.
+
+IMAGE 1 is the locked base subject.
+IMAGE 2 is the prop to add.
+
+TASK
+Edit IMAGE 1 by adding IMAGE 2 to the subject according to this instruction:
+"${userInstruction}"
+
+SUBJECT LOCK
+Preserve IMAGE 1 exactly except for the added prop.
+Keep the same face, identity, expression, age, skin, hair, hairstyle, body, pose, clothing, lighting, camera angle, and black background.
+Do not redesign the subject.
+Do not change the subject into another character.
+Do not add new clothing, armor, hair, accessories, scenery, wires, mechanical details, or background elements.
+
+PROP LOCK
+Use IMAGE 2 as the only prop being added.
+Preserve the prop's recognizable design, colors, materials, and structure.
+Do not duplicate the prop.
+Do not turn the prop into a background object, scenery, halo, throne, frame, architecture, armor, or costume.
+
+PLACEMENT
+Place the prop only where the user requested.
+The prop should look physically present and naturally scaled.
+Match the subject's perspective and lighting.
+Use only minimal contact shadow or occlusion where needed.
+
+${looksLikeHeadwear ? `
+HEADWEAR CLARIFICATION
+The prop in IMAGE 2 is wearable headwear.
+Place it on the subject's head as an accessory being worn.
+It must appear in front of the hair/head at the contact point.
+It must not appear behind the subject, behind the shoulders, or as a background decoration.
+Keep it above the eyes.
+Do not turn it into a throne, halo, scenery, frame, backdrop, armor, or helmet unless the prop itself is a helmet.
+` : ''}
+
+OUTPUT
+One subject.
+One added prop.
+Same black background.
+No text.
+No watermark.
+`;
+            let imageRefs = [
                 {
                     url: subjectUrl,
-                    label: 'IMAGE 1 - LOCKED SUBJECT, preserve exactly'
+                    label: 'IMAGE 1 - LOCKED BASE SUBJECT, preserve exactly'
                 },
                 {
                     url: selectedProp.url,
-                    label: 'IMAGE 2 - PROP TO ADD, preserve design'
+                    label: looksLikeHeadwear
+                        ? 'IMAGE 2 - WEARABLE HEADWEAR PROP, place on head in foreground'
+                        : 'IMAGE 2 - PROP TO ADD'
                 }
             ];
 
+            if (looksLikeHeadwear) {
+                const subtype = selectedProp.subtypeHint ||
+                    WearableAnchorEngine.inferHeadwearSubtype(selectedProp.name, selectedProp.prompt, userInstruction);
+                const framedSubjectUrl = await WearableOverlayComposer.buildFramedSubject(subjectUrl, state.imageResolution);
+                const landmarks = await WearableLandmarkService.detect(framedSubjectUrl);
+                const placement = WearableAnchorEngine.computePlacement(
+                    'headwear',
+                    landmarks,
+                    applyNote,
+                    subtype
+                );
+                const guide = await WearableOverlayComposer.compose({
+                    subjectUrl: framedSubjectUrl,
+                    propUrl: selectedProp.url,
+                    anchorContract: placement
+                });
+
+                guideFallbackUrl = guide.precompositeUrl;
+                guidePlacement = guide.placement;
+                applicationPrompt = `
+Create a single edited image.
+
+IMAGE 1 is the locked subject.
+IMAGE 2 is the exact headwear prop.
+IMAGE 3 is the locked placement guide.
+
+PRIMARY RULE
+- Follow IMAGE 3 for the exact headwear position, size, scale, and depth order.
+- The headwear placement in IMAGE 3 is already correct.
+- Do not move, resize, enlarge, shrink, lower, raise, rotate, reshape, or reinterpret the headwear.
+- Do not turn the headwear into hair, costume, armor, scenery, a throne, a halo, or a background object.
+
+SUBJECT LOCK
+- Preserve IMAGE 1 exactly.
+- Keep the same face, identity, expression, skin, hair, hairstyle, body, clothing, pose, lighting, camera angle, and black background.
+- Do not redesign the subject.
+- Do not change the hair to fit the headwear.
+- Do not weave hair through the crown.
+- Do not add new hair, clothing, armor, accessories, wires, panels, scenery, or background elements.
+
+PROP LOCK
+- Preserve IMAGE 2 as the selected headwear.
+- Preserve its silhouette, structure, jewels, colors, materials, trim, and proportions.
+- Do not squash, stretch, flatten, wrap, or deform the headwear.
+- Do not separate parts of the headwear.
+
+ALLOWED CHANGES ONLY
+- Improve edge blending.
+- Add subtle contact shadow.
+- Add minimal natural occlusion only at the contact point.
+- Clean visible pasted edges.
+- Match lighting slightly while preserving the prop design.
+
+FORBIDDEN
+- No hair over the front band unless the placement guide already shows it.
+- No hair woven through the crown.
+- No crown behind the head.
+- No crown behind the shoulders.
+- No crown as background scenery.
+- No changed subject.
+- No changed hairstyle.
+- No changed clothing.
+- No changed face.
+- No changed body.
+- No extra objects.
+
+OUTPUT
+- Same subject.
+- Same black background.
+- Same headwear placement as IMAGE 3.
+- One headwear prop only.
+- No text.
+- No watermark.
+`;
+                imageRefs = [
+                    { url: framedSubjectUrl, label: 'IMAGE 1 - LOCKED SUBJECT' },
+                    { url: selectedProp.url, label: 'IMAGE 2 - EXACT HEADWEAR PROP' },
+                    { url: guide.precompositeUrl, label: 'IMAGE 3 - LOCKED PLACEMENT GUIDE' }
+                ];
+            }
+
             const res = await GeminiService.generateImage(
-                prompt,
+                applicationPrompt,
                 state.apiKey,
                 state.model,
                 imageRefs,
@@ -881,14 +916,8 @@ extra objects, duplicate prop, altered proportions, floating parts, text, label,
                     strictMode: true,
                     billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
                     entitlements: state.billingEntitlements,
-                    identityLock: appliedIdentityLock,
-                    styleCategory: subjectStyleId ? {
-                        styleId: subjectStyleId,
-                        intent: {
-                            selectedStyleLabel: subjectStyleLabel,
-                            appliesTo: 'Prop Studio prop application edit'
-                        }
-                    } : undefined,
+                    identityLock: undefined,
+                    styleCategory: undefined,
                     onJobAccepted: (id, acceptedAt) => {
                         actualGenId = id;
                         actualAcceptedAt = acceptedAt || Date.now();
@@ -917,8 +946,27 @@ extra objects, duplicate prop, altered proportions, floating parts, text, label,
                 console.warn("Failed to materialize applied prop result:", e);
             }
 
+            if (looksLikeHeadwear && guideFallbackUrl && guidePlacement) {
+                const refinementOk = await WearableRefinementValidator.validate({
+                    refinedUrl: safeUrl,
+                    lockedPlacement: guidePlacement,
+                    fitClass: 'headwear'
+                });
+
+                if (!refinementOk) {
+                    safeUrl = guideFallbackUrl;
+                    dispatch({
+                        type: 'ADD_LOG',
+                        payload: { message: 'Refinement drifted; using locked placement guide.', type: 'info' }
+                    });
+                }
+            }
+
             setAppliedImage(safeUrl);
-            dispatch({ type: 'ADD_LOG', payload: { message: "Prop applied using guided edit.", type: 'info' } });
+            dispatch({
+                type: 'ADD_LOG',
+                payload: { message: 'Prop applied.', type: 'info' }
+            });
 
             // --- RECENT GENERATIONS: Cache applied prop result ---
             const recentStore = useRecentGenerationsStore.getState();

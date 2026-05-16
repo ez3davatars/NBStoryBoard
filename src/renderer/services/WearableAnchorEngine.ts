@@ -52,9 +52,9 @@ type HeadwearSizingProfile = {
 function getHeadwearSizingProfile(subtype?: HeadwearSubtype): HeadwearSizingProfile {
     switch (subtype) {
         case 'crown':
-            return { widthFactor: 0.70, minFactor: 0.58, maxFactor: 0.76, yOffsetFaceFactor: -0.14 };
+            return { widthFactor: 0.74, minFactor: 0.62, maxFactor: 0.82, yOffsetFaceFactor: -0.02 };
         case 'tiara':
-            return { widthFactor: 0.66, minFactor: 0.54, maxFactor: 0.74, yOffsetFaceFactor: -0.12 };
+            return { widthFactor: 0.72, minFactor: 0.60, maxFactor: 0.80, yOffsetFaceFactor: -0.02 };
         case 'hat':
             return { widthFactor: 0.88, minFactor: 0.74, maxFactor: 1.08, yOffsetFaceFactor: -0.08 };
         case 'helmet':

@@ -104,8 +104,8 @@ export type IntegrationParams = {
 };
 
 export const HEADWEAR_PROFILES: Record<HeadwearSubtype, IntegrationParams> = {
-    crown: { contactBandRatio: 0.15, occlusion: 0.8, shadow: 0.5, deformation: 0.05, templeBias: 1.5, hairOcclusionMode: 'full', edgeFeatherPx: 12, shadowBlurPx: 12, shadowOffsetYPx: 8 },
-    tiara: { contactBandRatio: 0.1, occlusion: 0.6, shadow: 0.4, deformation: 0.03, templeBias: 1.2, hairOcclusionMode: 'temple_only', edgeFeatherPx: 8, shadowBlurPx: 8, shadowOffsetYPx: 4 },
+    crown: { contactBandRatio: 0.15, occlusion: 0.0, shadow: 0.5, deformation: 0.0, templeBias: 0.0, hairOcclusionMode: 'none', edgeFeatherPx: 2, shadowBlurPx: 12, shadowOffsetYPx: 8 },
+    tiara: { contactBandRatio: 0.1, occlusion: 0.0, shadow: 0.4, deformation: 0.0, templeBias: 0.0, hairOcclusionMode: 'none', edgeFeatherPx: 2, shadowBlurPx: 8, shadowOffsetYPx: 4 },
     hat: { contactBandRatio: 0.2, occlusion: 0.4, shadow: 0.7, deformation: 0.02, templeBias: 1.0, hairOcclusionMode: 'temple_only', edgeFeatherPx: 10, shadowBlurPx: 20, shadowOffsetYPx: 15 },
     helmet: { contactBandRatio: 0.3, occlusion: 0.0, shadow: 0.3, deformation: 0.0, templeBias: 0.0, hairOcclusionMode: 'none', edgeFeatherPx: 0, shadowBlurPx: 15, shadowOffsetYPx: 5 },
     veil: { contactBandRatio: 0.05, occlusion: 0.9, shadow: 0.3, deformation: 0.0, templeBias: 2.0, hairOcclusionMode: 'full', edgeFeatherPx: 20, shadowBlurPx: 5, shadowOffsetYPx: 2 },
@@ -261,20 +261,6 @@ export class WearableOverlayComposer {
                 clampedY = Math.max(minMargin, Math.min(clampedY, lowestAllowedTopY));
             }
         }
-
-        console.log('[WearableOverlayComposer]', {
-            fitClass: anchorContract.fitClass,
-            anchorCenter: anchorContract.anchorCenter,
-            targetWidthPx: anchorContract.targetWidthPx,
-            propBounds,
-            scaledHeight: targetHeight,
-            finalX,
-            finalY,
-            clampedX,
-            clampedY,
-            canvasW: outCanvas.width,
-            canvasH: outCanvas.height
-        });
 
         const placement: WearablePlacement = {
             ...anchorContract,
