@@ -14,8 +14,7 @@ import { LibraryAssetMaterializer } from '../services/LibraryAssetMaterializer';
 import { WearableLandmarkService } from '../services/WearableLandmarkService';
 import { WearableAnchorEngine } from '../services/WearableAnchorEngine';
 import { WearableOverlayComposer } from '../services/WearableOverlayComposer';
-import { WearableAdjustmentCanvas } from './WearableAdjustmentCanvas';
-import type { WearableAnchorContract, WearablePlacement, WearableClass, HeadwearSubtype } from '../services/WearableAnchorEngine';
+import type { WearableClass, HeadwearSubtype } from '../services/WearableAnchorEngine';
 import { useRecentGenerationsStore } from '../stores/useRecentGenerationsStore';
 import { RecentGenerationsCacheService } from '../services/RecentGenerationsCacheService';
 import RecentGenerationsStrip from './recent/RecentGenerationsStrip';
@@ -161,21 +160,6 @@ const PropLibrarySkeletonCard = () => (
 
 const PropAccessoryStudio = () => {
     const [libraryLoading, setLibraryLoading] = useState(false);
-    const [adjustmentState, setAdjustmentState] = useState<{
-        subjectUrl: string;
-        propUrl: string;
-        fitClass: WearableClass;
-        anchorContract: WearableAnchorContract;
-        initialOffsetX?: number;
-        initialOffsetY?: number;
-        initialScale?: number;
-    } | null>(null);
-    const [lastConfirmedPlacement, setLastConfirmedPlacement] = useState<{
-        placement: WearablePlacement;
-        precompositeUrl: string;
-        propId: string;
-        offsets: { x: number; y: number; scaleMultiplier: number };
-    } | null>(null);
     const { state, dispatch } = useAppContext();
     const {
         activeTab,
@@ -747,77 +731,6 @@ extra objects, duplicate prop, altered proportions, floating parts, text, label,
         });
     };
 
-    const cacheAppliedPropGeneration = (imageDataUrl: string, prompt: string) => {
-        const recentStore = useRecentGenerationsStore.getState();
-        if (!recentStore.cacheDirPath || !imageDataUrl) return;
-
-        RecentGenerationsCacheService.cacheGeneration({
-            imageDataUrl,
-            studio: 'props',
-            cacheDirPath: recentStore.cacheDirPath,
-        }).then((cacheResult) => {
-            if (cacheResult.success && cacheResult.localCachePath && cacheResult.displayUrl) {
-                recentStore.addRecentGeneration({
-                    studio: 'props',
-                    localCachePath: cacheResult.localCachePath,
-                    displayUrl: cacheResult.displayUrl,
-                    createdAt: Date.now(),
-                    prompt,
-                    mode: (state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok') || 'byok',
-                });
-            }
-        }).catch((error) => {
-            console.warn('[PropApp] Recent generation caching failed:', error);
-        });
-    };
-
-    const handleConfirmFit = async (
-        placement: WearablePlacement,
-        precompositeUrl: string,
-        persistedOffsets: { x: number; y: number; scaleMultiplier: number }
-    ) => {
-        if (!adjustmentState) return;
-        const { fitClass } = adjustmentState;
-
-        setAdjustmentState(null);
-        setLastConfirmedPlacement({
-            placement,
-            precompositeUrl,
-            propId: selectedProp?.id || '',
-            offsets: persistedOffsets
-        });
-
-        dispatch({ type: 'SET_PROCESSING', payload: true });
-        let currentPercent = 5;
-        dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text: "Integrating Prop" } });
-        const progressInterval = window.setInterval(() => {
-            currentPercent += 20;
-            if (currentPercent > 95) currentPercent = 95;
-            dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: currentPercent, text: "Finalizing Output..." } });
-        }, 1000);
-
-        try {
-            setAppliedImage(precompositeUrl);
-            cacheAppliedPropGeneration(
-                precompositeUrl,
-                applyNote || `${fitClass === 'headwear' ? 'Headwear' : 'Wearable'} application`
-            );
-            dispatch({
-                type: 'ADD_LOG',
-                payload: {
-                    message: 'Wearable integrated using direct locked composite (Refinement bypassed).',
-                    type: 'info'
-                }
-            });
-        } catch (error: unknown) {
-            dispatch({ type: 'ADD_LOG', payload: { message: getErrorMessage(error), type: 'error' } });
-        } finally {
-            clearInterval(progressInterval);
-            dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
-            dispatch({ type: 'SET_PROCESSING', payload: false });
-        }
-    };
-
     const handleApply = async () => {
         console.warn(`[DEBUG_PATH] handleApply invoked! Button was clicked.`);
         const billingMode = state.billingEntitlements.effectiveBillingMode;
@@ -916,27 +829,6 @@ extra objects, duplicate prop, altered proportions, floating parts, text, label,
                 const placement = WearableAnchorEngine.computePlacement(fitClass, landmarks, applyNote, subtype);
                 console.warn(`[DEBUG_PATH] automatic ${fitClass} overlay branch entered`);
 
-                if (fitClass === 'headwear') {
-                    const reuseOffsets = lastConfirmedPlacement?.propId === selectedProp.id
-                        ? lastConfirmedPlacement.offsets
-                        : null;
-
-                    setAdjustmentState({
-                        subjectUrl: framedSubjectUrl,
-                        propUrl: selectedProp.url,
-                        fitClass,
-                        anchorContract: placement,
-                        initialOffsetX: reuseOffsets?.x,
-                        initialOffsetY: reuseOffsets?.y,
-                        initialScale: reuseOffsets?.scaleMultiplier
-                    });
-                    dispatch({
-                        type: 'ADD_LOG',
-                        payload: { message: 'Headwear fit prepared. Confirm the locked placement before applying.', type: 'info' }
-                    });
-                    return;
-                }
-
                 const overlay = await WearableOverlayComposer.compose({
                     subjectUrl: framedSubjectUrl,
                     propUrl: selectedProp.url,
@@ -948,7 +840,7 @@ extra objects, duplicate prop, altered proportions, floating parts, text, label,
                 dispatch({
                     type: 'ADD_LOG',
                     payload: {
-                        message: 'Eyewear fitted using automatic locked placement.',
+                        message: `${fitClass === 'headwear' ? 'Headwear' : 'Eyewear'} fitted using automatic locked placement.`,
                         type: 'info'
                     }
                 });
@@ -966,7 +858,7 @@ extra objects, duplicate prop, altered proportions, floating parts, text, label,
                                 localCachePath: cacheResult.localCachePath,
                                 displayUrl: cacheResult.displayUrl,
                                 createdAt: Date.now(),
-                                prompt: applyNote || 'Eyewear application',
+                                prompt: applyNote || `${fitClass === 'headwear' ? 'Headwear' : 'Eyewear'} application`,
                                 mode: (state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok') || 'byok',
                             });
                         }
@@ -1323,21 +1215,6 @@ extra objects, duplicate prop, altered proportions, floating parts, text, label,
 
                             {/* RESULT COLUMN */}
                             <div className="flex-grow min-w-0 min-h-0 flex flex-row bg-[#09090b] rounded-2xl overflow-hidden border border-gray-800 relative">
-                                {adjustmentState && (
-                                    <WearableAdjustmentCanvas
-                                        subjectUrl={adjustmentState.subjectUrl}
-                                        propUrl={adjustmentState.propUrl}
-                                        anchorContract={adjustmentState.anchorContract}
-                                        initialOffsetX={adjustmentState.initialOffsetX}
-                                        initialOffsetY={adjustmentState.initialOffsetY}
-                                        initialScale={adjustmentState.initialScale}
-                                        onConfirm={handleConfirmFit}
-                                        onCancel={() => {
-                                            setAdjustmentState(null);
-                                            dispatch({ type: 'ADD_LOG', payload: { message: 'Fit calibration aborted.', type: 'info' } });
-                                        }}
-                                    />
-                                )}
                                 <div className="flex-grow min-w-0 min-h-0 h-full bg-black flex flex-col border-r border-gray-800 relative overflow-hidden">
                                     {/* Stage Header */}
                                     <div className="min-h-[3.5rem] border-b border-gray-800 bg-white/5 flex items-center justify-between gap-3 px-4 lg:px-6 py-3 shrink-0 backdrop-blur-md">
