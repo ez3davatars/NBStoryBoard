@@ -4,6 +4,17 @@ export type PropApplicationPromptArgs = {
     styleNegativePrompt?: string;
 };
 
+const HEADWEAR_GUIDED_APPLICATION_NOTE = `Fit the selected headwear naturally onto the subject's head. Preserve the subject's exact face, identity, pose, body, clothing, and black studio background. Preserve the selected headwear's design, colors, materials, and proportions. The headwear must be worn by the subject at natural scale, with realistic contact, perspective, and slight overlap or occlusion where appropriate. Do not place it too high above the head. Do not cover the eyes. Do not turn it into a background object, halo, throne, frame, or oversized decoration.`;
+
+export function buildEffectivePropApplicationNote(applyNote?: string, fitClass?: string): string | undefined {
+    if (fitClass !== 'headwear') return applyNote;
+
+    const instruction = applyNote?.trim() || 'Fit the selected headwear naturally on the subject head.';
+    return `${instruction}
+
+${HEADWEAR_GUIDED_APPLICATION_NOTE}`;
+}
+
 export function buildPropApplicationPrompt({
     applyNote,
     styleContract = '',

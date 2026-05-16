@@ -20,7 +20,7 @@ import { RecentGenerationsCacheService } from '../services/RecentGenerationsCach
 import RecentGenerationsStrip from './recent/RecentGenerationsStrip';
 import { createUniqueDownloadFilename } from '../utils/downloadFilenames';
 import { buildStyleCategoryContract, buildStyleNegativePrompt } from '../../prompts/styleContracts';
-import { buildPropApplicationPrompt } from '../utils/propApplicationPrompt';
+import { buildEffectivePropApplicationNote, buildPropApplicationPrompt } from '../utils/propApplicationPrompt';
 import { PropMetadataService, type PropMetadataSidecar } from '../services/PropMetadataService';
 
 type PermissionAwareDirectoryHandle = FileSystemDirectoryHandle & {
@@ -794,6 +794,8 @@ extra objects, duplicate prop, altered proportions, floating parts, text, label,
             if (!selectedProp.classHint || selectedProp.classHint === 'generic_prop') {
                 void rememberPropClassification(selectedProp, inferredFitClass, subtype);
             }
+            const isHeadwearApplication = fitClass === 'headwear';
+            const effectiveApplyNote = buildEffectivePropApplicationNote(applyNote, fitClass);
             const subjectUrl = selectedCharacter.previewUrl || selectedCharacter.url;
             const subjectStyleId = selectedCharacter.profile?.style || undefined;
             const subjectStyleLabel = subjectStyleId ? subjectStyleId.replace(/_/g, ' ') : 'Subject Reference Style';
@@ -816,7 +818,7 @@ extra objects, duplicate prop, altered proportions, floating parts, text, label,
 
             console.warn(`[DEBUG_PATH] fitClass inferred: ${fitClass} for prop: ${selectedProp?.name}`);
 
-            if (fitClass === 'headwear' || fitClass === 'eyewear') {
+            if (fitClass === 'eyewear') {
                 console.warn(`[DEBUG_PATH] Deterministic branch entered for: ${fitClass}`);
                 dispatch({
                     type: 'ADD_LOG',
@@ -840,7 +842,7 @@ extra objects, duplicate prop, altered proportions, floating parts, text, label,
                 dispatch({
                     type: 'ADD_LOG',
                     payload: {
-                        message: `${fitClass === 'headwear' ? 'Headwear' : 'Eyewear'} fitted using automatic locked placement.`,
+                        message: 'Eyewear fitted using automatic locked placement.',
                         type: 'info'
                     }
                 });
@@ -858,7 +860,7 @@ extra objects, duplicate prop, altered proportions, floating parts, text, label,
                                 localCachePath: cacheResult.localCachePath,
                                 displayUrl: cacheResult.displayUrl,
                                 createdAt: Date.now(),
-                                prompt: applyNote || `${fitClass === 'headwear' ? 'Headwear' : 'Eyewear'} application`,
+                                prompt: applyNote || 'Eyewear application',
                                 mode: (state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok') || 'byok',
                             });
                         }
@@ -869,9 +871,16 @@ extra objects, duplicate prop, altered proportions, floating parts, text, label,
 
                 return;
             } else {
+                if (isHeadwearApplication) {
+                    dispatch({
+                        type: 'ADD_LOG',
+                        payload: { message: 'Applying headwear using guided image edit.', type: 'info' }
+                    });
+                }
+
                 const res = await GeminiService.generateImage(
                     buildPropApplicationPrompt({
-                        applyNote,
+                        applyNote: effectiveApplyNote,
                         styleContract: appliedStyleContract,
                         styleNegativePrompt: appliedStyleNegativePrompt
                     }),
@@ -942,7 +951,7 @@ extra objects, duplicate prop, altered proportions, floating parts, text, label,
                                 localCachePath: cacheResult.localCachePath,
                                 displayUrl: cacheResult.displayUrl,
                                 createdAt: Date.now(),
-                                prompt: applyNote || 'Prop application',
+                                prompt: applyNote || (isHeadwearApplication ? 'Headwear application' : 'Prop application'),
                                 mode: (state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok') || 'byok',
                             });
                         }
