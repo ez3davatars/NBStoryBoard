@@ -132,12 +132,13 @@ export const defaultCharacterPitchSheetInput: CharacterPitchSheetInput = {
     sourcePanelMode: "costume_matched",
     characterRenderStyle: "biometric_realism",
     boardPresentationStyle: "premium_film_board",
+    physiquePriority: "match_face_impression",
     characterName: "",
     aliasCodename: "",
     visualAge: "",
     height: "",
     build: "",
-    designLanguage: "Grounded cinematic realism with premium concept-art polish",
+    designLanguage: "Cinematic actor-based character design",
     worldEra: "",
     corePersonality: "",
     internalConflict: "",
@@ -855,13 +856,11 @@ const inferWardrobe = (input: CharacterPitchSheetInput): string => {
     return `Wardrobe inferred from ${world} and ${designLanguage}: clear silhouette, functional layering, visible footwear, and one memorable costume signature repeated consistently from every angle.`;
 };
 
-const inferProps = (input: CharacterPitchSheetInput): string => {
+export const inferProps = (input: CharacterPitchSheetInput): string => {
     const supplied = normalize(input.propsSignatureItems);
     if (supplied) return supplied;
 
-    const world = valueOr(input.worldEra, "the story world");
-
-    return `One or two signature items inferred from ${world}, with precise placement and scale.`;
+    return "";
 };
 
 const inferEnvironment = (input: CharacterPitchSheetInput): string => {
@@ -877,7 +876,7 @@ const inferMaterialNotes = (input: CharacterPitchSheetInput): string => {
     const supplied = normalize(input.materialCostumeNotes);
     if (supplied) return supplied;
 
-    return "Render fabric, leather, metal, footwear, stitching, closures, straps, edges, wear, and patina with production-ready clarity.";
+    return "Render fabric, leather, metal, footwear, stitching, visible closures, garment edges, wear, and patina with production-ready clarity.";
 };
 
 const inferProductionNotes = (input: CharacterPitchSheetInput): string => {
@@ -930,6 +929,41 @@ const buildBodyGuide = (input: CharacterPitchSheetInput): string => {
         .join(", ");
 };
 
+const buildBodyMetadataForBoard = (input: CharacterPitchSheetInput): string => {
+    return buildBodyGuide(input);
+};
+
+const cleanBodyGuideText = (value: string): string => {
+    return value
+        .replace(/\s*,\s*,/g, ",")
+        .replace(/^\s*,\s*|\s*,\s*$/g, "")
+        .trim();
+};
+
+const buildBodyGuideForPrompt = (input: CharacterPitchSheetInput): string => {
+    const rawGuide = buildBodyGuide(input);
+    const strictBodySpecs = input.physiquePriority === "strict_body_specs";
+
+    if (strictBodySpecs) return rawGuide;
+
+    const withoutExactWeight = cleanBodyGuideText(rawGuide
+        .replace(/\b\d{2,3}\s*lb\b/gi, "")
+    );
+    const buildTextWithoutExactWeight = cleanBodyGuideText(
+        normalize(input.build).replace(/\b\d+(?:\.\d+)?\s*(?:lb|lbs|pound|pounds)\b/gi, "")
+    );
+
+    const qualitative = dedupeList([
+        withoutExactWeight,
+        input.buildInterpretation ? `${input.buildInterpretation.replace(/_/g, "-")} build` : "",
+        input.frameSize ? `${input.frameSize} frame` : "",
+        input.musculature ? `${input.musculature} musculature` : "",
+        buildTextWithoutExactWeight
+    ].filter(Boolean)).join(", ");
+
+    return qualitative || "preserve source-visible build and proportions";
+};
+
 const CHARACTER_RENDER_STYLE_BLOCKS: Record<CharacterPitchSheetRenderStyle, string> = {
     biometric_realism: "Biometric Realism: realistic actor-based character design sheet, face-reference likeness, consistent subject across panels, realistic skin, wardrobe, and materials.",
     cinematic_photoreal: "Cinematic Photoreal: premium film-grade character board, realistic actor-based likeness, cinematic lighting, believable wardrobe, strong production presentation.",
@@ -940,7 +974,7 @@ const CHARACTER_RENDER_STYLE_BLOCKS: Record<CharacterPitchSheetRenderStyle, stri
     animated_feature: "Animated Feature: appealing character-design translation, expressive face, animation-ready material treatment, soft cinematic lighting, polished feature-quality finish.",
     family_3d: "High-end family 3D animation style: appealing stylized forms, soft geometry, warm lighting, readable expression, polished CG materials. Preserve the exact source subject while translating only the rendering style.",
     premium_animated_3d: "Premium animated-feature 3D style: appealing proportions, expressive actor-based face, soft cinematic lighting, polished high-quality CG character finish. Preserve the exact source subject while translating only the rendering style.",
-    claymation: "Claymation-inspired tactile style: handcrafted material feel, soft sculpted forms, subtle clay-like surface texture, physical stop-motion charm. Preserve the exact source subject while translating only the rendering style.",
+    claymation: "Claymation / tactile stop-motion style: handcrafted sculpted character, plasticine/clay material feel, photographed miniature puppet presence, visible hand-shaped surface irregularity, tactile stop-motion charm, non-photoreal handmade finish. Preserve the exact source subject while translating only the rendering style. Do not drift into premium animated-feature 3D, polished CG, or Pixar-like rendering.",
     editorial_illustration: "Editorial Illustration: refined illustrated portrait treatment, elegant value hierarchy, controlled color blocking, magazine-quality production finish.",
     concept_art: "Concept Art: production-design polish, clear material rendering, cinematic atmosphere, resolved wardrobe details, art-department presentation.",
     retro_cel: "Retro cel animation style: clean hand-drawn shapes, cel shading, limited painterly texture, classic animation-board feel. Preserve the exact source subject while translating only the rendering style.",
@@ -953,6 +987,13 @@ const CHARACTER_RENDER_STYLE_BLOCKS: Record<CharacterPitchSheetRenderStyle, stri
     cyberpunk: "Cyberpunk style: futuristic urban styling, techwear influence, moody lighting, high-tech world language. Preserve the exact source subject while translating only the rendering style.",
     no_specific_style: "No specific style override: follow the user's brief, world, wardrobe, and board presentation style without adding a strong preset look. Preserve the exact source subject while translating only the rendering style."
 };
+
+const strictRenderedFamilyStyles = new Set<CharacterPitchSheetRenderStyle>([
+    "dslr_capture",
+    "photorealism",
+    "exact_studio",
+    "biometric_realism"
+]);
 
 const isCharacterRenderStyle = (value: string): value is CharacterPitchSheetRenderStyle =>
     value in CHARACTER_RENDER_STYLE_BLOCKS;
@@ -987,15 +1028,36 @@ export function buildCharacterPitchSheetPrompt(input: CharacterPitchSheetInput):
     const characterName = valueOr(visibleInput.characterName, visibleInput.aliasCodename, "Unnamed lead character");
     const alias = valueOr(visibleInput.aliasCodename, "No public codename");
     const visualAge = inferVisualAge(visibleInput);
-    const bodyGuide = buildBodyGuide(visibleInput);
+    const bodyMetadataForBoard = buildBodyMetadataForBoard(visibleInput);
+    const bodyGuideForPrompt = buildBodyGuideForPrompt(visibleInput);
     const height = valueOr(formatHeightLabel(visibleInput.heightIn), visibleInput.height, "height inferred from role and proportions");
-    const build = valueOr(bodyGuide, visibleInput.build, inferBuild(visibleInput));
+    const buildMetadata = valueOr(bodyMetadataForBoard, visibleInput.build, inferBuild(visibleInput));
+    const buildPromptGuide = valueOr(bodyGuideForPrompt, inferBuild(visibleInput));
     const designLanguage = valueOr(visibleInput.designLanguage, defaultCharacterPitchSheetInput.designLanguage);
     const worldEra = valueOr(visibleInput.worldEra, "original cinematic world inferred from the brief");
     const corePersonality = valueOr(visibleInput.corePersonality, "layered, specific, screen-readable personality");
     const internalConflict = valueOr(visibleInput.internalConflict, "private inner contradiction visible through posture and expression");
     const wardrobe = inferWardrobe(visibleInput);
     const props = inferProps(visibleInput);
+    const hasExplicitProps = !!normalize(visibleInput.propsSignatureItems);
+    const propsDisplay = hasExplicitProps ? props : "No signature props specified.";
+    const propOrFootwearInsetText = hasExplicitProps ? "selected prop and footwear insets" : "footwear and material-detail insets";
+    const wardrobeText = normalize(visibleInput.wardrobeDirection).toLowerCase();
+    const generatedSourceText = [
+        wardrobeText,
+        normalize(visibleInput.propsSignatureItems),
+        normalize(visibleInput.designLanguage),
+        normalize(visibleInput.worldEra),
+        normalize(visibleInput.additionalNotes),
+        normalize(visibleInput.productionNotes)
+    ].join(" ").toLowerCase();
+    const impliesTacticalOrArmor =
+        /\b(tactical|military|combat|armor|armour|vest|plate|utility|holster|weapon|rifle|pistol|gun|blade|sword|shield|mecha|sci[- ]?fi soldier)\b/.test(generatedSourceText);
+    const hasExplicitWeaponLikeProps =
+        /\b(gun|pistol|rifle|shotgun|blade|knife|sword|staff|shield|bow|weapon)\b/i.test(normalize(visibleInput.propsSignatureItems));
+    const performanceStudyRule = hasExplicitWeaponLikeProps || impliesTacticalOrArmor
+        ? "Include one compact gesture or action study that preserves the same face, build, hairstyle, costume, props, and emotional presence."
+        : "Include one compact gesture study or stance study that preserves the same face, build, hairstyle, costume, and emotional presence. Do not invent weapons, combat poses, or combat props.";
     const environment = inferEnvironment(visibleInput);
     const lightingMood = valueOr(visibleInput.lightingMood, defaultCharacterPitchSheetInput.lightingMood);
     const sheetStyle = valueOr(visibleInput.sheetStyle, defaultCharacterPitchSheetInput.sheetStyle);
@@ -1009,6 +1071,7 @@ export function buildCharacterPitchSheetPrompt(input: CharacterPitchSheetInput):
     const boardPresentationStyle = visibleInput.boardPresentationStyle || defaultCharacterPitchSheetInput.boardPresentationStyle || "premium_film_board";
     const characterRenderStyleLabel = CHARACTER_RENDER_STYLE_BLOCKS[characterRenderStyle].split(":")[0] || characterRenderStyle;
     const debugVisibleLabels = visibleInput.debugVisibleLabels === true;
+    const strictBodySpecs = visibleInput.physiquePriority === "strict_body_specs";
     const pitchSheetCallouts = buildPitchSheetCallouts(visibleInput);
     const calloutPlan = formatCalloutPlan(pitchSheetCallouts);
     const visibleVocabularyRule = buildVisibleVocabularyRule(visibleInput, pitchSheetCallouts);
@@ -1066,8 +1129,20 @@ export function buildCharacterPitchSheetPrompt(input: CharacterPitchSheetInput):
         `codename: ${alias}`,
         `visual age: ${visualAge}`,
         `height: ${height}`,
-        `build/body: ${build}`
+        `build/body metadata: ${buildMetadata}`
     ].join("; ");
+    const bodyAuthorityRule = hasGeneratedCharacterSource
+        ? strictBodySpecs
+            ? "Image A remains identity and costume authority. Apply structured body specs only as a controlled proportional adjustment; do not recast the actor, change the face, change the head, change the age impression, or replace the body with a generic model."
+            : "Image A is the body, outfit, silhouette, costume, stance, and proportion authority. Structured height/build/weight values are metadata and subtle fit guidance only; they must not override Image A's visible person, body identity, face, head, proportions, or costume silhouette."
+        : hasReferenceDrivenIdentity
+            ? strictBodySpecs
+                ? "Biometric references remain face/head/identity authority. Apply structured body specs only as a controlled proportional guide; do not recast the actor or infer a different person from the weight."
+                : "Biometric references are identity authority. Structured height/build/weight values are metadata and subtle body-fit guidance only; they must not override biometric identity, face, head, age impression, or create a different person."
+            : "Keep one consistent invented character body across all full-body views. Use structured build values as design guidance without changing identity between panels.";
+    const strictBodySpecsRule = strictBodySpecs
+        ? "- Because strict body specs is enabled, apply body specs more directly, but still preserve the same actor identity, same face, same head, same age impression, and same character source."
+        : "";
     const pitchSheetPoseCoherence = buildTurnaroundPoseCoherenceContract([
         { label: "front full-body panel", viewAngle: "front", degrees: 0, bodyFacing: "straight front-facing unified axis" },
         { label: "three-quarter full-body panel", viewAngle: "front_3_4_left", degrees: 45, bodyFacing: "one consistent three-quarter axis" },
@@ -1124,6 +1199,26 @@ export function buildCharacterPitchSheetPrompt(input: CharacterPitchSheetInput):
             "annotations and callout presentation"
         ]
     });
+    const strictRenderedFamilyLock = strictRenderedFamilyStyles.has(characterRenderStyle)
+        ? `STRICT RENDERED FAMILY LOCK:
+- Every panel containing the character must stay in the same rendered style family as the selected Character Render Style.
+- Hero portrait, turnaround figures, head studies, expression study, and gesture study must all look like the same rendering family.
+- Do not switch secondary panels into concept art, painted concept sheet style, comic style, cel style, line-art model sheet style, diagram style, flat-color character thumbnail style, or semi-illustrated board style.
+- For DSLR Capture, all character-containing panels must read as DSLR-style rendered imagery, not drawn or painted concept art.
+- If a panel contains the character's body, face, head, pose, or costume-on-body silhouette, it must match the selected rendered family exactly.`
+        : "";
+    const claymationStrictRule = characterRenderStyle === "claymation"
+        ? `STRICT CLAYMATION STYLE LOCK:
+- Every panel containing the character must read as the same tactile stop-motion / claymation rendering family.
+- The character must feel handcrafted and sculpted, like a photographed stop-motion puppet or clay miniature.
+- Preserve actor likeness, but translate it into clay/plasticine form.
+- Do not render the character as premium animated-feature 3D, family CG, sleek stylized 3D, Pixar-like CG, or polished modern animation.
+- Do not use clean CG skin shading, overly perfect surfaces, or generic premium-animated 3D materials.
+- Any inset showing the face, body, pose, costume-on-body silhouette, or expression must match the same claymation/tactile rendering family.`
+        : "";
+    const claymationStyleDriftNegative = characterRenderStyle === "claymation"
+        ? "- No premium animated 3D drift. No Pixar-like CG drift. No family-animation gloss. No polished sleek CG skin. No modern premium feature-animation rendering. No rendering the claymation character as ordinary stylized 3D."
+        : "";
     const styleNegativePrompt = buildStyleNegativePrompt(characterRenderStyle);
 
     return `Create a full cinematic production-grade CHARACTER PITCH SHEET for ${characterName}. The result must feel like a premium character design board for film development, not a generic model sheet.
@@ -1134,6 +1229,13 @@ ${BOARD_PRESENTATION_STYLE_BLOCKS[boardPresentationStyle]}
 ${CHARACTER_RENDER_STYLE_BLOCKS[characterRenderStyle]}
 ${styleCategoryContract}
 ${sheetStyleLockContract}
+${strictRenderedFamilyLock}
+${claymationStrictRule}
+
+CHARACTER PANEL STYLE PURITY:
+- Board presentation style may affect layout and typography only.
+- It must not cause character-containing panels to become more illustrative, diagrammatic, painted, concept-art-like, or off-style than the selected Character Render Style.
+- Premium film-board presentation is a layout treatment, not permission to mix rendering families.
 
 ${biometricIdentityLockContract}
 ${identityContract}
@@ -1141,12 +1243,18 @@ ${identityRule}
 ${sourcePanelRule}
 ${generatedCharacterSourceRule}
 ${styleReferenceRule}
-Body consistency: ${hasGeneratedCharacterSource ? "match Image A's body, outfit fit, proportions, body mass, shoulder width, waist relationship, limb thickness, stance attitude, and overall build unless explicit structured UI values override them." : "keep the same proportions, body mass, shoulder width, waist relationship, limb thickness, and overall build across all full-body views."} Body guide: ${build}.
+Body consistency: ${bodyAuthorityRule}
+Body guide: ${buildPromptGuide}.
 ${pitchSheetPoseCoherence}
 ${CHARACTER_ANATOMY_INTEGRITY_CONTRACT}
 
-STRUCTURED CHARACTER DATA SOURCE OF TRUTH:
-- Use the current structured UI values as the single source of truth for character name, codename, visual age, height, build, and body settings: ${structuredBodySourceOfTruth}.
+STRUCTURED CHARACTER DATA / BOARD METADATA:
+- Use the current structured UI values for board metadata, visible labels, and controlled costume/body-fit guidance: ${structuredBodySourceOfTruth}.
+- These values must not override biometric identity, approved generated character source, face, head shape, age impression, hairstyle, costume silhouette, or body identity.
+- Numeric weight values are metadata and subtle proportional guidance only, not permission to recast the actor or generate a different person.
+- Weight/build metadata must not recast the actor, replace the likeness, or become a new casting specification.
+- If a numeric weight conflicts with the supplied identity/source images, preserve the supplied identity/source images.
+${strictBodySpecsRule}
 - Do not let stale older prompt fragments, previous generated board text, or older metadata conflict with these current structured values.
 
 UNIVERSAL STYLE CONSISTENCY CONTRACT:
@@ -1162,7 +1270,7 @@ UNIVERSAL STYLE CONSISTENCY CONTRACT:
 - Cinematic lighting, premium film-board language, and photo-grade presentation words must not dilute or override the selected Character Render Style.
 
 STYLE-PHYSIQUE RULE:
-- Keep the body guide locked across every render style: ${build}. Do not let stylization alter height impression, frame size, body mass, shoulder width, waist relationship, limb thickness, footwear scale, or costume fit.
+- Keep the source-visible body identity locked across every render style. Use this body guide only as identity-safe fit guidance: ${buildPromptGuide}. Do not let stylization or body metadata alter the actor identity, height impression, frame size, shoulder width, waist relationship, limb thickness, footwear scale, or costume fit.
 
 SOURCE PANEL MODE HAS PRIORITY OVER STYLE:
 - Follow source panel mode before render style. If source panel mode hides raw references or requires costume-matched head studies, style must obey that mode and may only alter the rendered finish.
@@ -1173,9 +1281,15 @@ STYLE-SAFE VISIBLE LABELING:
 
 STYLE DRIFT NEGATIVE CONSTRAINTS:
 - No recasting, no beautifying into a different person, no generic photoreal model, no generic stylized face, no widened or bulked body, no new animated character, no costume redesign, no genre upgrade, no footwear changes, no accessory swaps, no prop replacements, no world/era drift.
-- ${hasGeneratedCharacterSource ? "Do not ignore Image A. Do not treat Image A as optional inspiration. Do not generate a generic board from the biometric scans alone. Do not change Image A's outfit, body type, proportions, style category, costume package, or character silhouette unless explicitly requested." : "Do not change body type or proportions unless explicitly requested. Do not over-infer body mass from face scans."}
+- ${hasGeneratedCharacterSource ? "Do not ignore Image A. Do not treat Image A as optional inspiration. Do not generate a generic board from the biometric scans alone. Do not change Image A's outfit, body type, proportions, style category, costume package, or character silhouette unless explicitly requested." : "Do not change body type or proportions unless explicitly requested. Do not over-infer body build from face scans."}
+- Do not recast the actor due to weight, build, height, or body metadata.
+- Do not generate a generic person matching the weight number.
+- Do not change face, skull, head, eyes, nose, mouth, jaw, skin tone, facial hair, age impression, or identity because of build/weight text.
+- Do not treat "200 lb" or any numeric weight as a new casting specification.
+- Numeric body metadata must not override the supplied biometric references or generated character source.
 - ${SHEET_STYLE_LOCK_NEGATIVE_TEXT}
 - No selected-style category drift: ${styleNegativePrompt || "do not blur the selected render style with another category"}.
+${claymationStyleDriftNegative}
 - No ${buildPoseCoherenceNegativeTokens()}.
 - No ${buildHeadshotWardrobeNegativeTokens()}.
 - ${CHARACTER_ANATOMY_NEGATIVE_TEXT}
@@ -1267,7 +1381,8 @@ CHARACTER IDENTITY BLOCK:
 - Codename: ${alias}
 - Visual age: ${visualAge}
 - Height: ${height}
-- Build: ${build}
+- Build metadata / board label: ${buildMetadata}
+- Body generation guidance: ${buildPromptGuide}
 - Design language: ${designLanguage}
 - World or era: ${worldEra}
 - Sheet style: ${sheetStyle}
@@ -1281,15 +1396,21 @@ PSYCHOLOGICAL PROFILE:
 - Internal conflict: ${internalConflict}
 - Communicate psychology through posture, gaze, wardrobe wear, gesture economy, grooming, and how the character occupies space.
 
+WEAPON / PROP SAFETY RULE:
+- Do not invent weapons, combat props, tactical gear, holsters, utility rigs, armor, shields, or action accessories unless explicitly requested in props/wardrobe notes or clearly present in the approved generated character source.
+- If no props are specified, do not add a weapon.
+
 PERFORMANCE DIRECTION:
 - ${performanceDirection}
-- Include one compact action pose or gesture study that preserves the same face, build, hairstyle, costume, props, and emotional presence.
+- ${performanceStudyRule}
 
 WARDROBE BREAKDOWN:
 - Direction: ${wardrobe}
-- Props and signature items: ${props}
-- Show full outfit from head to toe, including footwear.
-- Define outer layer, inner layer, closures, belts, straps, jewelry, gloves, bags, armor, footwear, and prop attachment points with continuity-ready clarity.
+- Props and signature items: ${propsDisplay}
+- Show the full outfit from head to toe, including footwear.
+- Preserve the approved costume package and silhouette consistently across the sheet.
+- Define only visible and relevant garment layers, closures, accessories, and material details.
+- Do not invent armor, tactical harnesses, bags, straps, holsters, prop attachment points, or weapons unless they are explicitly requested or clearly present in the approved generated character source.
 
 MATERIAL ACCURACY:
 - ${materialNotes}
@@ -1298,7 +1419,8 @@ MATERIAL ACCURACY:
 STRICT TURNAROUND INSTRUCTIONS:
 - Include full-body front view, three-quarter view, clean side/profile view, and back view of the same character.
 - The turnaround must be costume-consistent without becoming a generic evenly spaced model-sheet row.
-- Back view must resolve rear closures, straps, layered hems, bags, armor plates, and footwear backs.
+- Back view must resolve only the rear costume details that are actually visible or clearly implied by the approved character design.
+- Do not invent bags, armor plates, tactical harnesses, straps, or weapon rigs unless explicitly requested or clearly present in the approved generated character source.
 
 HEAD STUDY INSTRUCTIONS:
 - Include rendered head studies: neutral front head, three-quarter head, side profile, and one expressive close-up.
@@ -1315,8 +1437,8 @@ PRODUCTION NOTES:
 - Additional notes: ${additionalNotes}
 
 PREMIUM ASYMMETRIC LAYOUT RULES:
-- Use an editorial, high-end asymmetric layout: one dominant cinematic portrait, supporting full-body turnarounds, head studies, material detail callouts, and selected prop/footwear insets.
-- Include the action pose as a designed supporting element, not a separate redesign.
+- Use an editorial, high-end asymmetric layout: one dominant cinematic portrait, supporting full-body turnarounds, head studies, material detail callouts, and ${propOrFootwearInsetText}.
+- Include the gesture or stance study as a designed supporting element, not a separate redesign.
 - Avoid generic grid layouts, evenly spaced model-sheet rows, rigid contact-sheet spacing, and empty repeated boxes.
 - Use tasteful negative space, layered scale hierarchy, subtle labels if needed, and composition that feels designed rather than templated.
 

@@ -366,40 +366,53 @@ const STYLE_CONTRACTS: Record<StyleCategoryId, StyleCategoryContract> = {
         label: 'Claymation / Tactile Stop-Motion',
         category: 'handcrafted tactile stylized character rendering',
         positivePrompt: [
-            'tactile stop-motion character',
-            'soft sculpted handcrafted forms',
-            'subtle clay-like surface',
-            'non-photoreal physical miniature feel'
+            'tactile stop-motion clay character',
+            'handcrafted sculpted forms',
+            'plasticine / clay material feel',
+            'photographed miniature puppet presence',
+            'visible handmade surface character',
+            'non-photoreal practical stop-motion feel'
         ],
         requiredTraits: [
             'handcrafted sculpted forms',
-            'tactile material finish',
-            'stop-motion character design',
-            'non-photoreal look'
+            'tactile clay/plasticine material response',
+            'stop-motion puppet / miniature presence',
+            'non-photoreal handmade finish',
+            'clear separation from polished premium CG'
         ],
         forbiddenTraits: [
             'photorealistic human portrait',
             'live-action actor',
             'real skin pores',
-            'raw DSLR photo'
+            'raw DSLR photo',
+            'premium animated-feature CG',
+            'Pixar-like polished 3D',
+            'sleek family-animation rendering',
+            'clean modern CG skin shading'
         ],
         materialRules: [
-            'Use tactile, sculpted, handmade material language.',
-            'Avoid realistic skin pore rendering.'
+            'Use tactile, sculpted, handmade clay/plasticine material language.',
+            'Surfaces should feel shaped by hand rather than digitally perfect.',
+            'Avoid realistic skin pores or polished CG skin shading.'
         ],
         lightingRules: [
-            'Lighting can be cinematic but must feel like a photographed tactile miniature/stop-motion asset.',
-            'Do not become live-action human realism.'
+            'Lighting may be cinematic but must feel like a photographed stop-motion puppet or miniature character asset.',
+            'Do not become live-action human realism or premium animated-feature CG.'
         ],
         negativePrompt: [
             'photorealistic',
             'live-action',
             'raw photo',
             'real skin pores',
-            'DSLR portrait'
+            'DSLR portrait',
+            'Pixar-like',
+            'premium animated 3D',
+            'polished family 3D',
+            'sleek CG character'
         ],
         validationCriteria: [
-            'The image reads as tactile stop-motion/clay-inspired character art.'
+            'The image reads as tactile stop-motion/clay-inspired character art.',
+            'The result does not read as premium animated-feature 3D.'
         ]
     }
 };
@@ -427,6 +440,7 @@ export const inferStyleCategoryIdFromPrompt = (prompt: string): StyleCategoryId 
         .replace(/\bNEGATIVE CONSTRAINTS?:[\s\S]*$/i, '')
         .replace(/\bDO NOT INCLUDE:[\s\S]*$/i, '');
 
+    if (/\b(claymation|stop-motion|clay-like|plasticine)\b/i.test(promptWithoutNegatives)) return 'claymation_tactile';
     if (/\b(family 3d|premium animated 3d|premium animated-feature|stylized animated 3d|animated feature|animation-film|non-photorealistic animated)\b/i.test(promptWithoutNegatives)) {
         return 'stylized_animated_3d';
     }
@@ -437,7 +451,6 @@ export const inferStyleCategoryIdFromPrompt = (prompt: string): StyleCategoryId 
     if (/\b(illustration|illustrated|concept art|painted)\b/i.test(promptWithoutNegatives)) return 'illustration_painted';
     if (/\b(comic book|graphic novel|graphic noir|halftone)\b/i.test(promptWithoutNegatives)) return 'graphic_comic';
     if (/\b(cyberpunk|sci-fi|science fiction|neon techwear)\b/i.test(promptWithoutNegatives)) return 'sci_fi_stylized';
-    if (/\b(claymation|stop-motion|clay-like)\b/i.test(promptWithoutNegatives)) return 'claymation_tactile';
     return undefined;
 };
 

@@ -11,7 +11,8 @@ export type SheetStyleFamily =
     | "toon_cartoon"
     | "noir"
     | "retro_futuristic"
-    | "editorial_fashion_render";
+    | "editorial_fashion_render"
+    | "claymation_tactile";
 
 export type SheetStyleLock = {
     enabled: true;
@@ -40,7 +41,8 @@ const STYLE_FAMILY_DESCRIPTIONS: Record<SheetStyleFamily, string> = {
     toon_cartoon: "toon/cartoon character rendering with simplified shape language, consistent non-realistic shading, and coherent animated surface treatment",
     noir: "graphic noir character rendering with consistent ink/shadow language, dramatic contrast, restrained palette, and unified graphic material finish",
     retro_futuristic: "retro-futuristic character rendering with cohesive sci-fi material language, neon or analog-future lighting logic, and consistent stylized surface treatment",
-    editorial_fashion_render: "editorial fashion character render with polished magazine-board lighting, refined garment material emphasis, and consistent high-end fashion illustration or photography finish"
+    editorial_fashion_render: "editorial fashion character render with polished magazine-board lighting, refined garment material emphasis, and consistent high-end fashion illustration or photography finish",
+    claymation_tactile: "tactile stop-motion / claymation character rendering with handcrafted sculpted forms, photographed miniature/puppet feel, visible handmade material response, non-photoreal clay surfaces, and cohesive stop-motion production finish"
 };
 
 const LEGACY_PREMIUM_ANIMATED_3D_STYLE_ID = ["p", "i", "x", "a", "r"].join("");
@@ -61,7 +63,7 @@ const STYLE_ID_TO_FAMILY: Record<string, SheetStyleFamily> = {
     [LEGACY_PREMIUM_ANIMATED_3D_STYLE_ID]: "stylized_3D",
     animated_feature: "stylized_3D",
     stylized_animated_3d: "stylized_3D",
-    claymation: "toon_cartoon",
+    claymation: "claymation_tactile",
     retro_cel: "anime",
     retro_anime: "anime",
     anime_manga: "anime",
