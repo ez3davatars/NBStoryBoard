@@ -85,38 +85,37 @@ const STYLE_CONTRACTS: Record<StyleCategoryId, StyleCategoryContract> = {
         label: 'Premium Stylized Animated 3D',
         category: 'non-photorealistic animated 3D character design',
         positivePrompt: [
-            'premium stylized animated 3D character',
-            'family-feature animation style',
-            'expressive simplified facial forms',
-            'appealing exaggerated proportions',
-            'soft sculpted features',
+            'premium Pixar-style animated 3D character rendering',
+            'feature-quality stylized animated 3D finish',
+            'same biometric actor translated into animated 3D',
             'smooth stylized skin shader',
-            'high-end animated film asset'
+            'soft sculpted forms',
+            'warm cinematic animated-feature lighting',
+            'high-end family-feature CG materials'
         ],
         requiredTraits: [
-            'clearly stylized 3D animated character',
-            'simplified but expressive facial structure',
-            'slightly exaggerated proportions',
-            'softened facial planes',
+            'clearly premium animated 3D character rendering',
+            'same biometric identity geometry preserved in stylized form',
+            'recognizable head silhouette, scalp shape, facial hair pattern, and age impression',
+            'stylized surface treatment without recasting',
             'clean sculpted geometry',
-            'large readable eyes compared to realistic human anatomy',
-            'smooth appealing forms',
-            'non-photorealistic rendering',
-            'animation-film character design language'
+            'smooth appealing CG materials',
+            'non-photorealistic animated rendering',
+            'consistent animated 3D family across all panels'
         ],
         forbiddenTraits: [
+            'different actor likeness',
+            'generic animated protagonist face',
+            'overly friendly redesigned face',
+            'younger redesigned face',
+            'over-rounded face',
+            'oversized eyes that change identity',
             'photorealistic human',
             'live-action actor',
             'realistic skin pores',
-            'documentary portrait',
-            'real camera photograph',
-            'gritty realism',
-            'hyperreal skin texture',
-            'realistic DSLR portrait',
-            'cinematic live-action realism',
-            'real human head pasted onto stylized body',
-            'uncanny semi-realism',
-            'scan-like realism'
+            'claymation texture',
+            'painterly concept-art drift',
+            'line-art model-sheet drift'
         ],
         materialRules: [
             'Use non-photoreal animation-film materials and stylized skin shading.',
@@ -129,24 +128,29 @@ const STYLE_CONTRACTS: Record<StyleCategoryId, StyleCategoryContract> = {
             'Use soft sculptural key/fill/rim behavior appropriate to animation-film assets.'
         ],
         negativePrompt: [
+            'different person',
+            'new face',
+            'generic stylized face',
+            'generic animated man',
+            'overly friendly face',
+            'broad smile unless requested',
+            'oversized eyes',
+            'over-rounded face',
+            'changed facial hair',
+            'changed head shape',
+            'changed age impression',
             'photorealistic',
-            'realistic human portrait',
-            'live-action',
             'DSLR photo',
-            'documentary realism',
-            'real skin pores',
-            'natural human scan',
-            'gritty realism',
-            'uncanny realistic face',
-            'realistic head on cartoon body',
-            'semi-realistic cinematic photograph',
-            'raw photo'
+            'live-action realism',
+            'claymation',
+            'line-art mannequin',
+            'concept art painting'
         ],
         validationCriteria: [
             'The face and body read as one stylized animated 3D character, not a photographed person.',
             'Headshots and full-body panels share the same stylized 3D category.',
             'Skin is smooth/stylized rather than pore-level photographic.',
-            'Proportions show appealing animation-film simplification.'
+            'Biometric identity geometry remains preserved after animated 3D stylization.'
         ]
     },
     cinematic_realism: {
@@ -366,17 +370,21 @@ const STYLE_CONTRACTS: Record<StyleCategoryId, StyleCategoryContract> = {
         label: 'Claymation / Tactile Stop-Motion',
         category: 'handcrafted tactile stylized character rendering',
         positivePrompt: [
-            'tactile stop-motion clay character',
+            'same biometric likeness translated into clay',
             'handcrafted sculpted forms',
             'plasticine / clay material feel',
-            'photographed miniature puppet presence',
+            'same adult actor proportions',
+            'same head and facial hair structure',
             'visible handmade surface character',
             'non-photoreal practical stop-motion feel'
         ],
         requiredTraits: [
+            'same biometric likeness translated into clay',
+            'same adult actor proportions',
+            'same head and facial hair structure',
+            'tactile clay surface without recasting',
             'handcrafted sculpted forms',
             'tactile clay/plasticine material response',
-            'stop-motion puppet / miniature presence',
             'non-photoreal handmade finish',
             'clear separation from polished premium CG'
         ],
@@ -388,7 +396,15 @@ const STYLE_CONTRACTS: Record<StyleCategoryId, StyleCategoryContract> = {
             'premium animated-feature CG',
             'Pixar-like polished 3D',
             'sleek family-animation rendering',
-            'clean modern CG skin shading'
+            'clean modern CG skin shading',
+            'new puppet identity',
+            'generic clay character',
+            'cute mascot face',
+            'chibi proportions',
+            'toy figurine proportions',
+            'overly friendly redesigned face',
+            'different actor likeness',
+            'premium animated 3D'
         ],
         materialRules: [
             'Use tactile, sculpted, handmade clay/plasticine material language.',
@@ -396,7 +412,7 @@ const STYLE_CONTRACTS: Record<StyleCategoryId, StyleCategoryContract> = {
             'Avoid realistic skin pores or polished CG skin shading.'
         ],
         lightingRules: [
-            'Lighting may be cinematic but must feel like a photographed stop-motion puppet or miniature character asset.',
+            'Lighting may be cinematic but must feel like the same actor recreated as a tactile stop-motion clay/plasticine character asset.',
             'Do not become live-action human realism or premium animated-feature CG.'
         ],
         negativePrompt: [
@@ -408,10 +424,21 @@ const STYLE_CONTRACTS: Record<StyleCategoryId, StyleCategoryContract> = {
             'Pixar-like',
             'premium animated 3D',
             'polished family 3D',
-            'sleek CG character'
+            'sleek CG character',
+            'different person',
+            'new face',
+            'generic clay puppet',
+            'cute mascot',
+            'chibi',
+            'toy-like proportions',
+            'oversized head',
+            'over-smiling face',
+            'random clay blob',
+            'flesh blob inset'
         ],
         validationCriteria: [
             'The image reads as tactile stop-motion/clay-inspired character art.',
+            'The result preserves the same biometric likeness and adult actor proportions.',
             'The result does not read as premium animated-feature 3D.'
         ]
     }

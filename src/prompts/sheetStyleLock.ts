@@ -42,7 +42,7 @@ const STYLE_FAMILY_DESCRIPTIONS: Record<SheetStyleFamily, string> = {
     noir: "graphic noir character rendering with consistent ink/shadow language, dramatic contrast, restrained palette, and unified graphic material finish",
     retro_futuristic: "retro-futuristic character rendering with cohesive sci-fi material language, neon or analog-future lighting logic, and consistent stylized surface treatment",
     editorial_fashion_render: "editorial fashion character render with polished magazine-board lighting, refined garment material emphasis, and consistent high-end fashion illustration or photography finish",
-    claymation_tactile: "tactile stop-motion / claymation character rendering with handcrafted sculpted forms, photographed miniature/puppet feel, visible handmade material response, non-photoreal clay surfaces, and cohesive stop-motion production finish"
+    claymation_tactile: "tactile stop-motion / claymation character rendering that translates the same actor identity into handcrafted clay/plasticine material, visible handmade surface response, non-photoreal clay surfaces, and cohesive stop-motion production finish"
 };
 
 const LEGACY_PREMIUM_ANIMATED_3D_STYLE_ID = ["p", "i", "x", "a", "r"].join("");

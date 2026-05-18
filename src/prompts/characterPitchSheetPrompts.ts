@@ -829,6 +829,17 @@ const inferFaceDesign = (input: CharacterPitchSheetInput): string => {
     const supplied = normalize(input.faceDetails);
     if (supplied) return supplied;
 
+    const hasIdentityDrivenSource =
+        isBiometricIdentitySource(input) ||
+        !!input.referenceImageUrl ||
+        !!input.referenceImages?.length ||
+        !!input.characterStyleReferenceUrl ||
+        !!input.identityLock;
+
+    if (hasIdentityDrivenSource) {
+        return "Preserve the supplied biometric/reference face exactly: same head shape, scalp/bald shape, brow structure, eye shape and spacing, nose shape, mouth shape, jaw, facial hair pattern, age impression, and visible identity markers. Do not invent a new face design.";
+    }
+
     const personality = valueOr(input.corePersonality, "complex, readable personality");
     const conflict = valueOr(input.internalConflict, "private emotional pressure");
     const designLanguage = valueOr(input.designLanguage, defaultCharacterPitchSheetInput.designLanguage);
@@ -840,20 +851,21 @@ const inferPerformance = (input: CharacterPitchSheetInput): string => {
     const supplied = normalize(input.performanceDirection);
     if (supplied) return supplied;
 
-    const personality = valueOr(input.corePersonality, "controlled, watchful presence");
-    const conflict = valueOr(input.internalConflict, "unspoken inner tension");
-
-    return `Body language communicates ${personality}; expression carries ${conflict}. Keep the performance cinematic and specific.`;
+    return "Neutral, controlled, readable presence matching the supplied biometric references.";
 };
 
 const inferWardrobe = (input: CharacterPitchSheetInput): string => {
     const supplied = normalize(input.wardrobeDirection);
     if (supplied) return supplied;
 
+    if (input.characterStyleReferenceUrl) {
+        return "Preserve the approved generated character source costume package, silhouette, footwear, material language, and visible wardrobe layers. Do not invent major new costume signatures unless requested.";
+    }
+
     const world = valueOr(input.worldEra, "the character's inferred world");
     const designLanguage = valueOr(input.designLanguage, defaultCharacterPitchSheetInput.designLanguage);
 
-    return `Wardrobe inferred from ${world} and ${designLanguage}: clear silhouette, functional layering, visible footwear, and one memorable costume signature repeated consistently from every angle.`;
+    return `Wardrobe inferred conservatively from ${world} and ${designLanguage}: clear silhouette, visible footwear, and consistent material language. Do not invent weapons, tactical gear, armor, or major accessories unless requested.`;
 };
 
 export const inferProps = (input: CharacterPitchSheetInput): string => {
@@ -971,10 +983,10 @@ const CHARACTER_RENDER_STYLE_BLOCKS: Record<CharacterPitchSheetRenderStyle, stri
     photorealism: "Photorealistic rendering: natural camera realism, believable skin, realistic fabric, grounded lighting, no illustration. Preserve the exact source subject while translating only the rendering style.",
     dslr_capture: "DSLR capture look: real camera portraiture, natural lens behavior, subtle depth of field, realistic skin texture, documentary-quality detail. Preserve the exact source subject while translating only the rendering style.",
     stylized_realism: "Stylized Realism: grounded actor identity with controlled shape simplification, painterly surface finish, realistic materials, and cinematic character-board polish.",
-    animated_feature: "Animated Feature: appealing character-design translation, expressive face, animation-ready material treatment, soft cinematic lighting, polished feature-quality finish.",
-    family_3d: "High-end family 3D animation style: appealing stylized forms, soft geometry, warm lighting, readable expression, polished CG materials. Preserve the exact source subject while translating only the rendering style.",
-    premium_animated_3d: "Premium animated-feature 3D style: appealing proportions, expressive actor-based face, soft cinematic lighting, polished high-quality CG character finish. Preserve the exact source subject while translating only the rendering style.",
-    claymation: "Claymation / tactile stop-motion style: handcrafted sculpted character, plasticine/clay material feel, photographed miniature puppet presence, visible hand-shaped surface irregularity, tactile stop-motion charm, non-photoreal handmade finish. Preserve the exact source subject while translating only the rendering style. Do not drift into premium animated-feature 3D, polished CG, or Pixar-like rendering.",
+    animated_feature: "Animated Feature style: the same supplied actor translated into polished animated-feature 3D, with readable stylized expression, soft sculpted forms, animation-ready material treatment, and soft cinematic non-photoreal lighting. Preserve the exact source subject and biometric likeness while translating only the rendering style. Do not redesign the actor into a generic animated protagonist.",
+    family_3d: "High-end family 3D animation style: the same supplied actor translated into polished family-animation 3D, with clean sculpted forms, soft cinematic stylized lighting, readable expression, and smooth non-photoreal CG materials. Preserve the exact source subject and biometric likeness while translating only the rendering style. Do not drift into realism, claymation, concept art, or a generic family-animation protagonist.",
+    premium_animated_3d: "Premium Pixar-style animated 3D: polished family-feature animated character rendering with smooth stylized materials, soft cinematic animated-feature lighting, clean sculpted forms, and appealing CG finish. This is a render-style translation of the same biometric actor, not a new character design. Preserve the actor's biometric identity geometry, head silhouette, facial hair pattern, age impression, body presence, and costume continuity while changing only the render/material style. Do not drift into realism, claymation, concept art, line art, or generic animated-character redesign.",
+    claymation: "Claymation / tactile stop-motion style: translate the same supplied actor identity into handcrafted clay/plasticine material. Preserve the exact face structure, head shape, scalp/bald shape, facial hair pattern, brow shape, eyes, nose, mouth, jaw, age impression, body proportions, and costume continuity while changing only the material/render treatment into tactile clay. Use subtle handmade surface character and stop-motion material feel, but do not create a new puppet character, mascot, caricature, chibi figure, toy-like body, or premium animated 3D character.",
     editorial_illustration: "Editorial Illustration: refined illustrated portrait treatment, elegant value hierarchy, controlled color blocking, magazine-quality production finish.",
     concept_art: "Concept Art: production-design polish, clear material rendering, cinematic atmosphere, resolved wardrobe details, art-department presentation.",
     retro_cel: "Retro cel animation style: clean hand-drawn shapes, cel shading, limited painterly texture, classic animation-board feel. Preserve the exact source subject while translating only the rendering style.",
@@ -988,11 +1000,55 @@ const CHARACTER_RENDER_STYLE_BLOCKS: Record<CharacterPitchSheetRenderStyle, stri
     no_specific_style: "No specific style override: follow the user's brief, world, wardrobe, and board presentation style without adding a strong preset look. Preserve the exact source subject while translating only the rendering style."
 };
 
+const renderedFamilyStyles = new Set<CharacterPitchSheetRenderStyle>([
+    "biometric_realism",
+    "cinematic_photoreal",
+    "exact_studio",
+    "photorealism",
+    "dslr_capture"
+]);
+
+const illustratedFamilyStyles = new Set<CharacterPitchSheetRenderStyle>([
+    "retro_cel",
+    "retro_anime",
+    "anime_manga",
+    "comic_book",
+    "graphic_novel",
+    "graphic_noir",
+    "editorial_illustration",
+    "concept_art"
+]);
+
+const stylizedBiometricTranslationStyles = new Set<CharacterPitchSheetRenderStyle>([
+    "stylized_realism",
+    "animated_feature",
+    "family_3d",
+    "premium_animated_3d",
+    "claymation",
+    "editorial_illustration",
+    "concept_art",
+    "retro_cel",
+    "retro_anime",
+    "comic_book",
+    "graphic_novel",
+    "graphic_noir",
+    "anime_manga",
+    "cyberpunk_neon",
+    "cyberpunk"
+]);
+
 const strictRenderedFamilyStyles = new Set<CharacterPitchSheetRenderStyle>([
     "dslr_capture",
     "photorealism",
     "exact_studio",
     "biometric_realism"
+]);
+
+const animated3dStyles = new Set<string>([
+    "premium_animated_3d",
+    "family_3d",
+    "animated_feature",
+    LEGACY_PREMIUM_ANIMATED_3D_STYLE_ID
 ]);
 
 const isCharacterRenderStyle = (value: string): value is CharacterPitchSheetRenderStyle =>
@@ -1042,22 +1098,8 @@ export function buildCharacterPitchSheetPrompt(input: CharacterPitchSheetInput):
     const hasExplicitProps = !!normalize(visibleInput.propsSignatureItems);
     const propsDisplay = hasExplicitProps ? props : "No signature props specified.";
     const propOrFootwearInsetText = hasExplicitProps ? "selected prop and footwear insets" : "footwear and material-detail insets";
-    const wardrobeText = normalize(visibleInput.wardrobeDirection).toLowerCase();
-    const generatedSourceText = [
-        wardrobeText,
-        normalize(visibleInput.propsSignatureItems),
-        normalize(visibleInput.designLanguage),
-        normalize(visibleInput.worldEra),
-        normalize(visibleInput.additionalNotes),
-        normalize(visibleInput.productionNotes)
-    ].join(" ").toLowerCase();
-    const impliesTacticalOrArmor =
-        /\b(tactical|military|combat|armor|armour|vest|plate|utility|holster|weapon|rifle|pistol|gun|blade|sword|shield|mecha|sci[- ]?fi soldier)\b/.test(generatedSourceText);
-    const hasExplicitWeaponLikeProps =
-        /\b(gun|pistol|rifle|shotgun|blade|knife|sword|staff|shield|bow|weapon)\b/i.test(normalize(visibleInput.propsSignatureItems));
-    const performanceStudyRule = hasExplicitWeaponLikeProps || impliesTacticalOrArmor
-        ? "Include one compact gesture or action study that preserves the same face, build, hairstyle, costume, props, and emotional presence."
-        : "Include one compact gesture study or stance study that preserves the same face, build, hairstyle, costume, and emotional presence. Do not invent weapons, combat poses, or combat props.";
+    const performanceStudyRule = `- Include one compact gesture study or stance study that preserves the same face, build, hairstyle, costume, props, and emotional presence.
+- Do not invent combat/action behavior unless explicitly requested.`;
     const environment = inferEnvironment(visibleInput);
     const lightingMood = valueOr(visibleInput.lightingMood, defaultCharacterPitchSheetInput.lightingMood);
     const sheetStyle = valueOr(visibleInput.sheetStyle, defaultCharacterPitchSheetInput.sheetStyle);
@@ -1207,17 +1249,85 @@ export function buildCharacterPitchSheetPrompt(input: CharacterPitchSheetInput):
 - For DSLR Capture, all character-containing panels must read as DSLR-style rendered imagery, not drawn or painted concept art.
 - If a panel contains the character's body, face, head, pose, or costume-on-body silhouette, it must match the selected rendered family exactly.`
         : "";
+    const animated3dIdentityLock = animated3dStyles.has(characterRenderStyle)
+        ? `PREMIUM ANIMATED 3D BIOMETRIC GEOMETRY LOCK:
+- Translate the supplied biometric actor into Premium Animated 3D.
+- Preserve the actor's biometric identity geometry across every panel.
+- Keep the same head silhouette, scalp/bald shape, forehead height, brow placement, brow thickness impression, eye spacing, eye angle, nose length, nose width, mouth width, lip shape impression, cheek structure, jaw width, chin shape, facial hair outline, facial hair density pattern, age impression, neck thickness, shoulder relationship, and body presence.
+- Stylization may change the surface shader, lighting model, and material finish, but it must not change the underlying identity geometry.
+- Do not make the actor generically friendlier, younger, slimmer, smoother, cuter, rounder, or more heroic.
+- Preserve the source expression attitude unless the user explicitly requests a new performance note.
+- Do not default to a broad smile unless explicitly requested.
+- Do not add a broad smile or friendly expression by default.
+- Do not turn the actor into a generic family-animation protagonist.
+- The result must read as the same biometric person rendered in Premium Animated 3D.
+
+Important distinction:
+- Allowed: smooth stylized animated 3D materials, premium animated lighting, simplified skin texture, clean CG surface.
+- Forbidden: changing the face design, changing expression, changing skull/head proportions, changing facial hair shape, changing age impression, changing body identity.`
+        : "";
+    const animated3dPanelLock = animated3dStyles.has(characterRenderStyle)
+        ? `PREMIUM ANIMATED 3D PANEL FAMILY LOCK:
+- Every panel containing the character must stay in the same premium animated 3D rendering family.
+- Hero portrait, turnarounds, head studies, expression study, gesture study, and all character-containing insets must match the same stylized animated 3D family.
+- Do not drift into live-action realism, photoreal portraiture, painterly concept art, flat illustration, claymation, cel animation, line-art mannequin studies, or semi-realistic off-style panels.
+- Board presentation style may affect layout and typography only; it must not change the character rendering family.
+- Lighting must remain premium animated-feature lighting: soft cinematic, sculptural, readable, polished, and non-photoreal.`
+        : "";
     const claymationStrictRule = characterRenderStyle === "claymation"
         ? `STRICT CLAYMATION STYLE LOCK:
 - Every panel containing the character must read as the same tactile stop-motion / claymation rendering family.
-- The character must feel handcrafted and sculpted, like a photographed stop-motion puppet or clay miniature.
-- Preserve actor likeness, but translate it into clay/plasticine form.
+- The character must feel handcrafted and sculpted while remaining the same actor translated into clay/plasticine form.
+- Preserve actor likeness, adult proportions, head shape, facial hair, costume continuity, and body identity while changing only the material/render surface.
 - Do not render the character as premium animated-feature 3D, family CG, sleek stylized 3D, Pixar-like CG, or polished modern animation.
 - Do not use clean CG skin shading, overly perfect surfaces, or generic premium-animated 3D materials.
 - Any inset showing the face, body, pose, costume-on-body silhouette, or expression must match the same claymation/tactile rendering family.`
         : "";
+    const claymationIdentityLock = characterRenderStyle === "claymation"
+        ? `CLAYMATION BIOMETRIC LIKENESS LOCK:
+- Claymation is a material/render translation of the same actor, not a new character design.
+- Preserve the supplied biometric identity across every panel.
+- Keep the same head shape, scalp/bald shape, brow structure, eye spacing, nose shape, mouth shape, jaw, facial hair shape, skin tone value, age impression, and body proportions.
+- Do not make the actor cuter, younger, rounder, more toy-like, more mascot-like, or more generic.
+- Do not exaggerate facial features into a caricature.
+- Do not turn the actor into a chibi, toy figurine, generic stop-motion villager, or premium animated 3D character.
+- The result should look like the same person recreated in clay/plasticine material.`
+        : "";
+    const claymationInsetRule = characterRenderStyle === "claymation"
+        ? `CLAYMATION INSET CLEANUP RULE:
+- Do not create random clay lumps, flesh blobs, disconnected facial chunks, abstract body-part fragments, or malformed clay masses.
+- Material/detail insets should show clean costume fabric, leather, footwear, seams, buckles, buttons, or full readable character/costume crops only.
+- If showing clay surface texture, use a clean neutral material swatch, not an isolated body part or malformed clay fragment.
+`
+        : "";
     const claymationStyleDriftNegative = characterRenderStyle === "claymation"
         ? "- No premium animated 3D drift. No Pixar-like CG drift. No family-animation gloss. No polished sleek CG skin. No modern premium feature-animation rendering. No rendering the claymation character as ordinary stylized 3D."
+        : "";
+    const characterPanelStylePurity = characterRenderStyle === "claymation"
+        ? `CHARACTER PANEL STYLE PURITY:
+- Board presentation style may affect layout and typography only.
+- Every character-containing panel must remain claymation / tactile stop-motion.
+- Do not drift into premium animated 3D, Pixar-like CG, photorealism, or flat illustration.`
+        : renderedFamilyStyles.has(characterRenderStyle)
+            ? `CHARACTER PANEL STYLE PURITY:
+- Board presentation style may affect layout and typography only.
+- Every character-containing panel must remain in the selected rendered/photographic style family.
+- Do not switch secondary panels into concept art, painted concept sheet style, comic style, cel style, line-art model sheet style, diagram style, flat-color thumbnails, or semi-illustrated board style.`
+            : illustratedFamilyStyles.has(characterRenderStyle)
+                ? `CHARACTER PANEL STYLE PURITY:
+- Board presentation style may affect layout and typography only.
+- Every character-containing panel must remain in the selected illustrated style family.
+- Do not drift into photorealism, DSLR capture, premium animated 3D, claymation, or unrelated rendering families.`
+                : `CHARACTER PANEL STYLE PURITY:
+- Board presentation style may affect layout and typography only.
+- Every character-containing panel must remain in the selected Character Render Style.
+- Do not mix rendering families between hero portrait, head studies, turnarounds, gesture study, and character-containing insets.`;
+    const stylizedBiometricTranslationRule = stylizedBiometricTranslationStyles.has(characterRenderStyle) && hasReferenceDrivenIdentity
+        ? `STYLIZED BIOMETRIC TRANSLATION RULE:
+- For stylized render styles, style changes the rendering/material language only.
+- Biometric identity geometry remains locked.
+- Do not use the selected style as permission to invent a new face, new skull shape, new expression, new facial hair pattern, new age impression, or new body identity.
+- The output should look like the supplied biometric person translated into the selected style.`
         : "";
     const styleNegativePrompt = buildStyleNegativePrompt(characterRenderStyle);
 
@@ -1230,15 +1340,15 @@ ${CHARACTER_RENDER_STYLE_BLOCKS[characterRenderStyle]}
 ${styleCategoryContract}
 ${sheetStyleLockContract}
 ${strictRenderedFamilyLock}
+${animated3dIdentityLock}
+${animated3dPanelLock}
 ${claymationStrictRule}
-
-CHARACTER PANEL STYLE PURITY:
-- Board presentation style may affect layout and typography only.
-- It must not cause character-containing panels to become more illustrative, diagrammatic, painted, concept-art-like, or off-style than the selected Character Render Style.
-- Premium film-board presentation is a layout treatment, not permission to mix rendering families.
+${claymationIdentityLock}
+${characterPanelStylePurity}
 
 ${biometricIdentityLockContract}
 ${identityContract}
+${stylizedBiometricTranslationRule}
 ${identityRule}
 ${sourcePanelRule}
 ${generatedCharacterSourceRule}
@@ -1354,7 +1464,13 @@ STYLE-LOCKED INSET RULE:
 - Color blocking, palette, construction, material, footwear, expression, and gesture boxes are part of the same character sheet, not separate illustration modes.
 - Do not generate "Character Color Blocking" or any palette panel as flat 2D/vector/cartoon miniature character drawings when the sheet style is rendered, 3D, photographic, painterly, anime, or another non-flat style.
 - Color-blocking information should appear as material swatches, palette chips, or cropped costume/material details. If a person, head, body, hands, feet, pose, or costume-on-body silhouette appears in an inset, it must match the hero portrait and turnaround rendering style exactly.
+- If an inset contains face, skin, head, body, hands, feet, pose, or costume-on-body silhouette, it must be a readable character crop matching the same actor and same selected style.
+- If an inset contains face, body, pose, hands, feet, or costume-on-body silhouette, it must match the same selected render family exactly.
+- Do not generate off-style miniatures, line-art mannequin studies, claymation fragments, painterly crops, or semi-realistic side-panels inside a Premium Animated 3D board.
+- Do not use isolated body fragments or ambiguous clay/flesh shapes as design insets.
 - Do not add simplified diagram characters, alternate model-sheet miniatures, flat-color stand-ins, icon bodies, or off-style thumbnails anywhere on the board.
+
+${claymationInsetRule}
 
 FORBIDDEN INTERNAL VISIBLE TERMS:
 - Do not show internal workflow/debug terms as visible board callouts unless debugVisibleLabels is true.
@@ -1402,13 +1518,13 @@ WEAPON / PROP SAFETY RULE:
 
 PERFORMANCE DIRECTION:
 - ${performanceDirection}
-- ${performanceStudyRule}
+${performanceStudyRule}
 
 WARDROBE BREAKDOWN:
 - Direction: ${wardrobe}
 - Props and signature items: ${propsDisplay}
-- Show the full outfit from head to toe, including footwear.
-- Preserve the approved costume package and silhouette consistently across the sheet.
+- Show full outfit from head to toe, including footwear.
+- Preserve the approved costume package and visible silhouette consistently across the sheet.
 - Define only visible and relevant garment layers, closures, accessories, and material details.
 - Do not invent armor, tactical harnesses, bags, straps, holsters, prop attachment points, or weapons unless they are explicitly requested or clearly present in the approved generated character source.
 
