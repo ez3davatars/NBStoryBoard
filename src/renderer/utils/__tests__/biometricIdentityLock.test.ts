@@ -1,7 +1,9 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import {
   BIOMETRIC_IDENTITY_LOCK_NEGATIVE_TEXT,
+  BIOMETRIC_IDENTITY_LOCK_REQUIRED_PROMPT,
   buildBiometricIdentityLockContract,
   buildStrictBiometricIdentityContract,
   createBiometricIdentityLock,
@@ -118,8 +120,86 @@ describe('biometric identity lock contract', () => {
     const combined = `${strictContract}\n${styleContract}`.toLowerCase();
 
     expect(combined).toContain('clean-shaven');
+    expect(combined).toContain('translate the same scanned person into premium animated 3d');
+    expect(combined).toContain('preserve head silhouette, scalp/bald shape, brow placement, eye spacing');
+    expect(combined).toContain('skin tone value, age impression, neck thickness, shoulder relationship');
+    expect(combined).toContain('visible neck identity boundary, and distinctive marks');
+    expect(combined).toContain('no generic friendly animated man');
+    expect(combined).toContain('no broad smile unless explicitly requested');
+    expect(combined).toContain('no default cute animated face template');
+    expect(combined).toContain('no changed facial-hair silhouette');
+    expect(combined).toContain('no altered bald/scalp shape');
+    expect(combined).toContain('no younger/slimmer/softer redesign');
+    expect(combined).toContain('no generic family-animation protagonist');
     expect(combined).not.toContain('salt-and-pepper goatee');
     expect(combined).not.toContain('jaw/chin/goatee');
     expect(combined).not.toContain('generic animated bald man');
+    expect(combined).not.toContain('keep identity geometry close to source');
+  });
+
+  it('uses biometric identity as the first priority in shared identity contracts', () => {
+    const source = readFileSync('src/prompts/identityContracts.ts', 'utf8');
+
+    expect(source).toContain('biometric identity > style lock');
+    expect(source).toContain('Preserve the same actor identity first.');
+    expect(BIOMETRIC_IDENTITY_LOCK_REQUIRED_PROMPT).toContain('skull/head/scalp shape');
+    expect(BIOMETRIC_IDENTITY_LOCK_REQUIRED_PROMPT).toContain('facial hair shape/length/density/color pattern');
+    expect(BIOMETRIC_IDENTITY_LOCK_NEGATIVE_TEXT).toContain('No cleanup into a smoother stock actor');
+    expect(BIOMETRIC_IDENTITY_LOCK_NEGATIVE_TEXT).toContain('No changed hairline, baldness pattern, hairstyle');
+  });
+
+  it('keeps Nano Cast morphology subordinate to biometric identity', () => {
+    const source = readFileSync('src/renderer/components/NanoCastingDirector.tsx', 'utf8');
+    const morphologySource = readFileSync('src/renderer/nanocast/nanoMorphologyGuides.ts', 'utf8');
+
+    expect(source).toContain('buildNanoCastPrompt(nanoBlueprint)');
+    expect(source).toContain('validateNanoBlueprint(nanoBlueprint)');
+    expect(morphologySource).toContain('Morphology controls BODY SILHOUETTE ONLY.');
+    expect(morphologySource).toContain('It must not change facial identity, head shape, scalp/bald shape, facial hair, expression, age impression, skin tone, or recognizable likeness');
+    expect(morphologySource).toContain('Titan means muscular/broad, not fat.');
+    expect(morphologySource).toContain('Do not make the subject overweight, heavy-set, bulky, stocky, obese, or large-bellied.');
+    expect(morphologySource).toContain('Never apply chibi, childlike, or oversized-head proportions to adult scans.');
+    expect(morphologySource).toContain('MORPHOLOGY BODY AUTHORITY MODEL');
+    expect(source).not.toContain('Select physical substrate for neural projection mapping.');
+    expect(source).not.toContain('Heroic V-taper');
+    expect(source).not.toContain('heavy-set rectangular frame');
+  });
+
+  it('keeps Nano Cast biometric anchors authoritative across style settings', () => {
+    const nanoCastSource = readFileSync('src/renderer/components/NanoCastingDirector.tsx', 'utf8');
+    const appContextSource = readFileSync('src/renderer/context/AppContext.tsx', 'utf8');
+    const nanoBuilderSource = readFileSync('src/renderer/nanocast/nanoPromptBuilder.ts', 'utf8');
+    const nanoIdentitySource = readFileSync('src/renderer/nanocast/nanoIdentityAnchor.ts', 'utf8');
+    const styleEnforcementSource = readFileSync('src/prompts/nanoCastStyleIdentityEnforcement.ts', 'utf8');
+
+    expect(appContextSource).toContain("identitySource: 'biometric'");
+    expect(nanoCastSource).toContain('NANO_CAST_BIOMETRIC_PIPELINE');
+    expect(nanoCastSource).toContain('buildNanoCastPrompt(nanoBlueprint)');
+    expect(nanoCastSource).toContain('PRIMARY FRONT LIKENESS ANCHOR');
+    expect(nanoCastSource).toContain('SUPPORTING GEOMETRY ANCHOR');
+    expect(nanoCastSource).toContain('Do not average all views into a new person');
+    expect(nanoBuilderSource).toContain('buildNanoIdentityContract');
+    expect(nanoIdentitySource).toContain('NANO CAST IMMUTABLE IDENTITY CONTRACT');
+    expect(nanoIdentitySource).toContain('The scanned biometric subject is the only identity source.');
+    expect(nanoCastSource).toContain('sheetStyleLock: false');
+    expect(nanoCastSource).toContain('poseCoherence: false');
+    expect(nanoCastSource).toContain('headshotWardrobeContinuity: false');
+    expect(nanoCastSource).toContain('characterAnatomyIntegrity: false');
+    expect(nanoCastSource).toContain('styleCategory: { enabled: false }');
+    expect(nanoCastSource).toContain("identitySource !== 'generated' && hasBiometrics");
+    expect(nanoCastSource).toContain('Portrait ignores scan anchors');
+    expect(styleEnforcementSource).toContain('UNIVERSAL SCAN-IDENTITY OVERRIDE');
+    expect(styleEnforcementSource).toContain('no cleaner stock actor');
+    expect(styleEnforcementSource).toContain('no changed scalp, baldness, or hairline shape');
+  });
+
+  it('allows Nano Cast primary renders to skip sheet-style contracts', () => {
+    const serviceSource = readFileSync('src/renderer/services/GeminiService.ts', 'utf8');
+
+    expect(serviceSource).toContain('sheetStyleLock?: boolean');
+    expect(serviceSource).toContain('characterAnatomyIntegrity?: boolean');
+    expect(serviceSource).toContain('options.sheetStyleLock !== false');
+    expect(serviceSource).toContain('options.characterAnatomyIntegrity !== false');
+    expect(serviceSource).toContain(': promptWithAnatomyIntegrity');
   });
 });

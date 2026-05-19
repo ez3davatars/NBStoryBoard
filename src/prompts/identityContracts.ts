@@ -1,14 +1,15 @@
-export const PROMPT_PRIORITY_ORDER_LABEL = "premium board quality > actor identity > costume/world > views > callouts > metadata/body";
+export const PROMPT_PRIORITY_ORDER_LABEL = "biometric identity > style lock > costume/world > views > callouts > metadata/body > presentation polish";
 
 export const PROMPT_PRIORITY_ORDER_BLOCK = `PROMPT PRIORITY ORDER:
-1. Premium cinematic board quality.
-2. One consistent actor-based identity.
+1. Biometric / actor identity.
+2. Style lock.
 3. Costume / world presentation.
 4. Turnaround and head-study consistency.
 5. Accurate restrained callouts.
 6. Metadata / body consistency.
+7. Premium cinematic board quality and presentation polish.
 
-Keep the board premium and cinematic first. Preserve one consistent actor-based subject across panels while allowing costume, world, and film-board presentation to stay rich and production-ready.`;
+Preserve the same actor identity first. Style, costume, body metadata, board layout, labels, and presentation polish must adapt around that identity; they must never recast, redesign, beautify, age-shift, or genericize the subject.`;
 
 type IdentityContractOptions = {
     sourceDescription: string;
@@ -49,11 +50,53 @@ export type BiometricIdentityLockOptions = Omit<
     strictness?: "high" | "maximum";
 };
 
+export type CharacterInvariantContext = {
+    hasBiometricIdentity?: boolean;
+    hasGeneratedCharacterSource?: boolean;
+    selectedStyleId?: string;
+    selectedStyleFamily?: string;
+    hasExplicitBodyOverride?: boolean;
+    hasExplicitProps?: boolean;
+};
+
+export function buildGlobalCharacterInvariantContract(ctx: CharacterInvariantContext = {}): string {
+    const biometricLine = ctx.hasBiometricIdentity
+        ? "Biometric identity remains the source of truth for face/head identity when supplied."
+        : "If biometric identity is supplied, it becomes the source of truth for face/head identity.";
+    const generatedSourceLine = ctx.hasGeneratedCharacterSource
+        ? "Generated character source remains the approved visual/body/costume source when supplied."
+        : "If a generated character source is supplied, it remains the approved visual/body/costume source.";
+    const bodyOverrideLine = ctx.hasExplicitBodyOverride
+        ? "Explicit body override is active: apply it only to body silhouette/proportion and never to facial identity."
+        : "No explicit body override is active: do not let default numeric body metadata change the generated body.";
+    const styleLine = ctx.selectedStyleFamily ? `Selected render family: ${ctx.selectedStyleFamily}.` : "";
+    const propLine = ctx.hasExplicitProps
+        ? "Explicit props may appear, but they must not alter identity, body, style family, or costume locks."
+        : "No explicit props are required; do not invent props that change the character package.";
+
+    return `GLOBAL CHARACTER INVARIANT CONTRACT:
+- ${styleLine || "Selected style controls rendering/material language only."}
+- The selected style changes rendering/material language only; it must not recast the person.
+- ${biometricLine}
+- ${generatedSourceLine}
+- Do not change skull/head shape, scalp/bald shape, hairline, brow placement, eye spacing, eye shape impression, nose shape/projection, mouth width/shape, jaw/chin structure, ears, facial hair pattern, skin tone value, visible marks, age impression, or identity markers.
+- Do not create a new person inspired by the references.
+- Do not beautify, youthify, age up, slim, bulk, feminize, masculinize, cute-ify, or genericize the subject unless explicitly requested.
+- Do not infer body mass from face/head/neck scans.
+- Large neck, full cheeks, broad jaw, rounded chin, mature face weight, facial hair, and close crop are identity features only, not body-mass evidence.
+- Body changes require either selected Morphological Matrix archetype or explicit Advanced/Pitch Sheet Brief body instructions.
+- Numeric body metadata is not permission to recast identity.
+- ${bodyOverrideLine}
+- Pitch Sheet Brief build/weight fields are board/body metadata for pitch-sheet workflow only; they must not override the base Nano Cast actor unless explicitly passed.
+- ${propLine}
+- All panels must show one coherent character package.`;
+}
+
 export const BIOMETRIC_IDENTITY_LOCK_REQUIRED_PROMPT =
-    "Use the uploaded biometric reference images as the absolute source of truth for this character's identity. Preserve the same visible facial structure, head shape, hair or baldness pattern, brow, eyes, nose, mouth, jawline, cheeks, ears, skin tone, age impression, facial hair if present, body build if visible, and distinctive identity traits across every panel. The render style may change only the artistic treatment, not the identity.";
+    "Use the uploaded biometric reference images as the absolute source of truth for this character's identity. Preserve the same visible facial structure, skull/head/scalp shape, hairline or baldness pattern, brow shape and placement, eye shape and spacing, nose shape and projection, mouth shape and width, jawline, cheeks, chin, ears, skin tone value, skin marks, age impression, facial hair shape/length/density/color pattern if present, body build if visible, and distinctive identity traits across every panel. The render style may change only the artistic treatment, not the identity.";
 
 export const BIOMETRIC_IDENTITY_LOCK_NEGATIVE_TEXT =
-    "No identity drift. No face redesign. No altered head or skull shape. No changed hairline, baldness pattern, hairstyle, brow, eyes, nose, mouth, jawline, cheeks, chin, ears, skin tone, age impression, ethnicity, facial hair, body build, or distinctive identity traits. No beautification. No generic face. No stylized replacement face. No cartoon face replacing the biometric likeness. No younger version. No older version. No slimmer face. No wider face. No prompt update, style update, costume update, layout update, or regeneration pass may weaken biometric likeness.";
+    "No identity drift. No face redesign. No altered head, skull, scalp, or baldness shape. No changed hairline, baldness pattern, hairstyle, brow, eyes, nose, mouth, jawline, cheeks, chin, ears, skin tone, age impression, ethnicity, facial hair shape, facial hair length, facial hair density, facial hair color pattern, body build, or distinctive identity traits. No beautification. No cleanup into a smoother stock actor. No generic face. No stylized replacement face. No cartoon face replacing the biometric likeness. No younger version. No older version. No slimmer face. No wider face. No prompt update, style update, costume update, layout update, or regeneration pass may weaken biometric likeness.";
 
 export const createBiometricIdentityLock = ({
     enabled = true,
@@ -216,11 +259,11 @@ export const buildStrictBiometricIdentityContract = ({
 - Identity source mode: ${mode}. Identity lock: ${lockStrength}%${highLock ? " (strong biometric lock)" : ""}.
 - Scan coverage: ${faceDominant ? "face/head dominant. Treat body mass as underdetermined unless a full-body source or explicit body directive exists." : "body evidence available. Preserve only body traits that are visibly supported."}
 - Generate the same person shown in the scan, translated into the selected style.
-- Do not invent a new face, mascot, actor, lookalike, or generic character.
-- Preserve the subject's recognizable facial structure, skull shape, head shape, brow structure, eye spacing, nose bridge/tip shape, cheek volume, mouth proportions, jaw/chin structure, skin tone, age impression, and visible facial marks.
+- Do not invent a new face, mascot, actor, lookalike, cleaner stock performer, or generic character.
+- Preserve the subject's recognizable facial structure, skull shape, head/scalp shape, brow structure, eye spacing, eye angle, nose bridge/tip/projection, cheek volume, mouth width and shape, jaw/chin structure, ears, skin tone value, age impression, and visible facial marks.
 - Preserve facial topology: the source person's brow-to-eye relationship, eye spacing, nose projection, cheek volume, mouth width, jaw mass, chin shape, and facial asymmetries must survive stylization.
 - Preserve the bald head or hair state shown in the biometric scan.
-- Preserve the visible facial-hair state exactly: if facial hair is present, keep its shape, density, length, color distribution, and placement; if the subject is clean-shaven, do not add stubble, mustache, beard, or goatee.
+- Preserve the visible facial-hair state exactly: if facial hair is present, keep its shape, outline, density, length impression, color distribution, and placement; do not trim, shorten, reshape, recolor, or simplify it into a generic mustache, beard, or goatee. If the subject is clean-shaven, do not add stubble, mustache, beard, or goatee.
 - Preserve mature facial features and fuller/broader face structure when shown by the scan, but do not translate facial fullness into overweight body mass.
 - Stylization may simplify texture/rendering, but it must not erase recognizable identity, shrink the broad mature face, soften the jaw/chin into a generic cartoon face, or average the nose/eyes/brow into a style template.
 - Do not make the subject younger, slimmer, smoother, more symmetrical, or more conventionally attractive unless explicitly requested.

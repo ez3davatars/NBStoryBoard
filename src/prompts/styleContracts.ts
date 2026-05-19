@@ -1,7 +1,11 @@
 import {
     SHEET_STYLE_LOCK_NEGATIVE_TEXT,
-    buildSheetStyleLockCorrectionText
+    buildSheetStyleLockCorrectionText,
+    resolveRenderFamily,
+    type RenderFamily
 } from "./sheetStyleLock";
+
+export { resolveRenderFamily, type RenderFamily } from "./sheetStyleLock";
 
 export type StyleCategoryId =
     | 'cinematic_realism'
@@ -15,7 +19,9 @@ export type StyleCategoryId =
 export type StyleCategoryContract = {
     id: StyleCategoryId;
     label: string;
+    renderFamily: RenderFamily;
     category: string;
+    identityTranslationRule: string;
     positivePrompt: string[];
     requiredTraits: string[];
     forbiddenTraits: string[];
@@ -83,7 +89,9 @@ const STYLE_CONTRACTS: Record<StyleCategoryId, StyleCategoryContract> = {
     stylized_animated_3d: {
         id: 'stylized_animated_3d',
         label: 'Premium Stylized Animated 3D',
+        renderFamily: 'premium_animated_3d',
         category: 'non-photorealistic animated 3D character design',
+        identityTranslationRule: 'Translate the same biometric actor into premium animated 3D. Preserve biometric identity geometry: head silhouette, scalp/bald shape, brow placement, eye spacing, eye shape impression, nose/mouth/jaw/chin relationships, facial hair pattern, age impression, body presence, and costume continuity. Stylization may change surface shader, material response, and lighting, but must not recast the face.',
         positivePrompt: [
             'premium Pixar-style animated 3D character rendering',
             'feature-quality stylized animated 3D finish',
@@ -91,7 +99,8 @@ const STYLE_CONTRACTS: Record<StyleCategoryId, StyleCategoryContract> = {
             'smooth stylized skin shader',
             'soft sculpted forms',
             'warm cinematic animated-feature lighting',
-            'high-end family-feature CG materials'
+            'clean high-end CG finish',
+            'subtle stylized proportion simplification without recasting'
         ],
         requiredTraits: [
             'clearly premium animated 3D character rendering',
@@ -101,7 +110,9 @@ const STYLE_CONTRACTS: Record<StyleCategoryId, StyleCategoryContract> = {
             'clean sculpted geometry',
             'smooth appealing CG materials',
             'non-photorealistic animated rendering',
-            'consistent animated 3D family across all panels'
+            'consistent Family 3D style across all panels',
+            'readable animated eyes that preserve the source eye spacing and identity',
+            'no separate cartoon/flat inset'
         ],
         forbiddenTraits: [
             'different actor likeness',
@@ -114,6 +125,9 @@ const STYLE_CONTRACTS: Record<StyleCategoryId, StyleCategoryContract> = {
             'live-action actor',
             'realistic skin pores',
             'claymation texture',
+            'flat cartoon inset',
+            'line-art mannequin',
+            'concept-art painted panel',
             'painterly concept-art drift',
             'line-art model-sheet drift'
         ],
@@ -143,6 +157,7 @@ const STYLE_CONTRACTS: Record<StyleCategoryId, StyleCategoryContract> = {
             'DSLR photo',
             'live-action realism',
             'claymation',
+            'flat cartoon inset',
             'line-art mannequin',
             'concept art painting'
         ],
@@ -156,7 +171,9 @@ const STYLE_CONTRACTS: Record<StyleCategoryId, StyleCategoryContract> = {
     cinematic_realism: {
         id: 'cinematic_realism',
         label: 'Cinematic Realism',
+        renderFamily: 'photoreal',
         category: 'realistic live-action / premium photographic character rendering',
+        identityTranslationRule: 'Preserve biometric identity literally and photographically.',
         positivePrompt: [
             'realistic live-action film character',
             'natural human proportions',
@@ -166,9 +183,13 @@ const STYLE_CONTRACTS: Record<StyleCategoryId, StyleCategoryContract> = {
         requiredTraits: [
             'realistic human proportions',
             'natural skin texture',
+            'real skin/face texture',
             'photographic lighting',
+            'camera/plausible lighting',
             'live-action film character read',
-            'grounded anatomy and materials'
+            'grounded anatomy and materials',
+            'no stylized family animation',
+            'no cartoon/anime/clay/illustration panels'
         ],
         forbiddenTraits: [
             'cartoon exaggeration',
@@ -204,7 +225,9 @@ const STYLE_CONTRACTS: Record<StyleCategoryId, StyleCategoryContract> = {
     anime_stylized: {
         id: 'anime_stylized',
         label: 'Anime / Cel-Stylized',
+        renderFamily: 'anime_cel',
         category: 'anime-inspired stylized character rendering',
+        identityTranslationRule: 'Translate biometric identity into anime/cel style while preserving head silhouette, facial hair pattern, age impression, and key facial relationships.',
         positivePrompt: [
             'anime-inspired facial structure',
             'cel-stylized rendering',
@@ -222,7 +245,10 @@ const STYLE_CONTRACTS: Record<StyleCategoryId, StyleCategoryContract> = {
             'real skin pores',
             'live-action DSLR portrait',
             'documentary realism',
-            'realistic human face texture'
+            'realistic human face texture',
+            'premium 3D CG panels',
+            'claymation',
+            'random anime protagonist unrelated to source'
         ],
         materialRules: [
             'Use cel/anime-inspired material simplification.',
@@ -248,7 +274,9 @@ const STYLE_CONTRACTS: Record<StyleCategoryId, StyleCategoryContract> = {
     illustration_painted: {
         id: 'illustration_painted',
         label: 'Illustration / Concept Art',
+        renderFamily: 'illustrated_concept',
         category: 'drawn or painted character rendering',
+        identityTranslationRule: 'Translate biometric identity into illustrated/concept-art style while preserving the same head silhouette, face relationships, age impression, body presence, costume continuity, and identity markers.',
         positivePrompt: [
             'illustrated character art',
             'painted or drawn finish',
@@ -289,7 +317,9 @@ const STYLE_CONTRACTS: Record<StyleCategoryId, StyleCategoryContract> = {
     graphic_comic: {
         id: 'graphic_comic',
         label: 'Graphic Comic / Noir',
+        renderFamily: 'graphic_comic',
         category: 'graphic novel or comic-book character rendering',
+        identityTranslationRule: 'Translate biometric identity into graphic/inked style while preserving key silhouette and facial structure.',
         positivePrompt: [
             'graphic novel character rendering',
             'controlled ink/line language',
@@ -305,7 +335,10 @@ const STYLE_CONTRACTS: Record<StyleCategoryId, StyleCategoryContract> = {
             'photorealistic portrait',
             'raw DSLR photo',
             'live-action realism',
-            'smooth animated toy-like look unless explicitly hybrid'
+            'smooth animated toy-like look unless explicitly hybrid',
+            'premium animated 3D panels',
+            'anime drift unless selected',
+            'unrelated comic face template'
         ],
         materialRules: [
             'Materials should simplify into graphic shapes and readable marks.',
@@ -329,7 +362,9 @@ const STYLE_CONTRACTS: Record<StyleCategoryId, StyleCategoryContract> = {
     sci_fi_stylized: {
         id: 'sci_fi_stylized',
         label: 'Stylized Sci-Fi / Cyberpunk',
+        renderFamily: 'cyberpunk_stylized',
         category: 'stylized high-tech character rendering',
+        identityTranslationRule: 'Translate same biometric actor into cyberpunk/stylized sci-fi look without changing core face/head identity.',
         positivePrompt: [
             'stylized sci-fi character design',
             'high-tech material language',
@@ -345,7 +380,11 @@ const STYLE_CONTRACTS: Record<StyleCategoryId, StyleCategoryContract> = {
             'plain documentary realism',
             'generic modern portrait',
             'unselected photorealistic actor rendering',
-            'style-neutral studio photo'
+            'style-neutral studio photo',
+            'generic attractive cyberpunk model',
+            'different face',
+            'random prosthetics/cybernetic face changes unless requested',
+            'realism/flat illustration drift'
         ],
         materialRules: [
             'Sci-fi materials should look intentional and designed.',
@@ -368,14 +407,19 @@ const STYLE_CONTRACTS: Record<StyleCategoryId, StyleCategoryContract> = {
     claymation_tactile: {
         id: 'claymation_tactile',
         label: 'Claymation / Tactile Stop-Motion',
+        renderFamily: 'claymation_tactile',
         category: 'handcrafted tactile stylized character rendering',
+        identityTranslationRule: 'Translate the same biometric actor into clay/plasticine material. Do not create a new puppet identity.',
         positivePrompt: [
             'same biometric likeness translated into clay',
             'handcrafted sculpted forms',
             'plasticine / clay material feel',
+            'tactile stop-motion clay/plasticine rendering',
+            'same biometric actor recreated in clay material',
             'same adult actor proportions',
             'same head and facial hair structure',
             'visible handmade surface character',
+            'photographed miniature/stop-motion material feel',
             'non-photoreal practical stop-motion feel'
         ],
         requiredTraits: [
@@ -399,6 +443,7 @@ const STYLE_CONTRACTS: Record<StyleCategoryId, StyleCategoryContract> = {
             'clean modern CG skin shading',
             'new puppet identity',
             'generic clay character',
+            'generic clay puppet',
             'cute mascot face',
             'chibi proportions',
             'toy figurine proportions',
@@ -491,16 +536,18 @@ export const buildStyleCategoryContract = (
     const resolvedStyleId = resolveStyleCategoryId(styleId) || inferStyleCategoryIdFromPrompt(styleId || '');
     const contract = resolvedStyleId ? STYLE_CONTRACTS[resolvedStyleId] : undefined;
     if (!contract) return '';
+    const renderFamily = resolveRenderFamily(intent.selectedStyleId || styleId || resolvedStyleId);
 
     const selectedStyleLabel = intent.selectedStyleLabel || contract.label;
     const sourceImagePolicy = intent.sourceImagePolicy || 'Source images control identity only; they do not control visual style category.';
     const boardPresentationPolicy = intent.boardPresentationPolicy || 'Board Presentation Style controls layout, typography, labels, and production-board composition only.';
     const lightingPolicy = intent.lightingPolicy || 'Lighting Mood must adapt to the selected Character Render Style.';
-    const appliesTo = intent.appliesTo || 'all character panels, full-body views, turnarounds, headshots, action insets, and previews where the character appears';
+    const appliesTo = intent.appliesTo || 'all character panels, full-body views, turnarounds, headshots, supporting pose insets, and previews where the character appears';
 
 return `STYLE CATEGORY CONTRACT (CHARACTER RENDER STYLE LOCK):
 - categoryId: ${contract.id}
 - selectedStyleLabel: ${selectedStyleLabel}
+- renderFamily: ${renderFamily}
 - category: ${contract.category}
 - appliesTo: ${appliesTo}
 
@@ -521,7 +568,10 @@ ARCHITECTURAL RULES:
 - ${boardPresentationPolicy}
 - ${lightingPolicy}
 - Cinematic, premium, photo-grade, film-board, or realistic lighting language must not override the selected character render category.
-- The selected Character Render Style must apply consistently to main body render, turnarounds, headshots, action pose insets, and character previews.
+- The selected Character Render Style must apply consistently to main body render, turnarounds, headshots, supporting pose render insets, and character previews.
+
+IDENTITY TRANSLATION RULE:
+- ${contract.identityTranslationRule}
 
 POSITIVE STYLE DEFINITION:
 ${contract.positivePrompt.map((line) => `- ${line}`).join('\n')}
@@ -573,6 +623,7 @@ export const buildStyleValidationPrompt = (
     const resolved = resolveStyleCategoryId(styleId) || inferStyleCategoryIdFromPrompt(originalPrompt);
     const contract = resolved ? STYLE_CONTRACTS[resolved] : undefined;
     if (!contract) return '';
+    const renderFamily = resolveRenderFamily(intent.selectedStyleId || styleId || resolved);
 
     return `
 You are a strict style-category quality gate for generated character imagery.
@@ -580,12 +631,13 @@ You are a strict style-category quality gate for generated character imagery.
 Selected style category:
 - categoryId: ${contract.id}
 - label: ${intent.selectedStyleLabel || contract.label}
+- renderFamily: ${renderFamily}
 - category: ${contract.category}
 
 Evaluate whether every visible character panel matches the selected category.
 Source images are identity only; do not allow source-photo realism to override the selected render style.
 Board/presentation style controls layout only; do not allow premium film board or cinematic lighting to change character category.
-Also evaluate sheet-level style consistency: hero render, head studies, turnarounds, action pose, footwear/material insets, and callout presentation must share one rendering family.
+Also evaluate sheet-level style consistency: hero render, head studies, turnarounds, supporting pose render, footwear/material insets, and callout presentation must share one rendering family.
 Any color-blocking, palette, construction, material, footwear, expression, or gesture inset that contains a character/body/head/pose/costume-on-body silhouette must match that same rendering family. A flat/vector/cartoon miniature character in a rendered sheet is style drift, not an acceptable diagram.
 
 Mixed-style rejection rule:
@@ -604,8 +656,36 @@ Prompt context:
 ${originalPrompt.slice(0, 6000)}
 
 Reject obvious category drift only. If the character category is correct but lighting/layout differs, pass.
+Reject if the selected style family is mixed with another family.
 Reject obvious mixed-style sheets where one panel is stylized 3D and another is flat illustration, realism, cartoon, anime, painterly, or another rendering family without explicit multi-style comparison instructions.
 Reject sheets where a color-blocking or detail inset uses simplified flat/vector character thumbnails while the rest of the character sheet uses the selected rendered style.
+Reject if a supporting pose inset or gesture inset uses a different rendering family than the main character board.
+Reject if a rendered 3D board contains a flat/cartoon/vector/mascot/chibi miniature character.
+Reject if a Family 3D sheet contains photoreal or line-art inset.
+Reject if a clay sheet contains premium CG or malformed clay/flesh blob inset.
+Reject if profile panel has axis mismatch.
+Reject if supporting pose render uses another render family.
+Reject if a full-body panel shows upper-body/lower-body directional disagreement.
+Reject if a side-profile panel has a profile torso but non-profile hips, legs, feet, or head.
+Reject the sheet if a left profile head and right profile head do not read as opposite signed profile views.
+Reject the sheet if a 3/4 left head and 3/4 right head collapse into the same orientation.
+Reject the sheet if a profile head appears too frontal.
+Reject the sheet if a 3/4 head appears too profile or too frontal.
+Reject the sheet if the labeled head direction does not match the rendered craniofacial direction.
+Reject the sheet if one head study appears to be a mirrored duplicate of another.
+
+Possible drift traits:
+- mixed render family
+- cartoon inset in rendered sheet
+- off-style supporting pose
+- body-axis split
+- profile axis cheat
+- signed head-angle drift
+- head label/render mismatch
+- mirrored profile duplication
+- left/right head ambiguity
+- identity recast
+- morphology/body override leak
 
 Return ONLY valid JSON:
 {

@@ -1,3 +1,5 @@
+import { resolveRenderFamily } from "./styleContracts";
+
 export type NanoCastStyleIdentityStrength = "maximum" | "very_high" | "high";
 export type NanoCastFacialLandmarkStrictness = "exact" | "strict" | "style_translated";
 export type NanoCastBodyFidelityStrength = "source_locked" | "strict" | "conservative";
@@ -32,20 +34,26 @@ const NANO_CAST_STYLE_IDENTITY_CONFIGS: NanoCastStyleIdentityEnforcementConfig[]
         identityStrength: "maximum",
         bodyFidelityStrength: "source_locked",
         facialLandmarkStrictness: "strict",
-        allowableStylizationRange: "stylize shaders, surface softness, eye readability, and appealing 3D form language only; keep identity geometry close to source",
+        allowableStylizationRange: "stylize shaders, material finish, smooth CG surface response, and animation-film lighting only; preserve biometric identity geometry",
         positiveRules: [
-            "Preserve the source head shape as closely as possible while translating it into premium stylized 3D.",
-            "Preserve brow shape, brow placement, eye spacing, eye shape, nose width, nose length, nose profile, mouth shape, smile structure, jawline, chin, ears, hairline, and facial-hair or clean-shaven state.",
-            "Keep the jaw/chin/grooming relationship recognizable; facial hair or clean-shaven state must remain the same pattern, density, length impression, color distribution, and placement.",
-            "Use animation-film materials and softened planes around the actual source likeness, not around a default cute face template.",
-            "Preserve body build, shoulder/waist relationship, torso length, limb thickness, and stance from the generated character source or explicit body guidance."
+            "Translate the same scanned person into premium animated 3D; do not create a new animated character inspired by them.",
+            "Preserve head silhouette, scalp/bald shape, brow placement, eye spacing, eye shape impression, nose length/width/profile, mouth width/shape, cheek structure, jaw width, chin shape, ears, facial-hair pattern, skin tone value, age impression, neck thickness, shoulder relationship, visible neck identity boundary, and distinctive marks.",
+            "Use animation-film materials, smooth stylized skin shading, and softened planes around the actual source likeness, not around a default cute face template.",
+            "Preserve the selected Morphological Matrix or explicit body guidance and never infer body mass from face, head, or neck scans."
         ],
         negativeRules: [
             "do not make a generic animated person",
+            "no generic friendly animated man",
+            "no broad smile unless explicitly requested",
+            "no default cute animated face template",
             "do not round out or simplify the face into a different person",
             "do not enlarge eyes into a different eye-spacing pattern",
             "do not shrink or average the nose",
             "do not soften the jaw/chin/grooming into a generic cartoon muzzle",
+            "no changed facial-hair silhouette",
+            "no altered bald/scalp shape",
+            "no younger/slimmer/softer redesign",
+            "no generic family-animation protagonist",
             "do not over-cartoony distort proportions",
             "do not beautify, youthify, slim, cute-ify, mascot-ify, or archetype-swap the subject"
         ]
@@ -58,16 +66,21 @@ const NANO_CAST_STYLE_IDENTITY_CONFIGS: NanoCastStyleIdentityEnforcementConfig[]
         facialLandmarkStrictness: "exact",
         allowableStylizationRange: "lighting, lens, and studio finish only; zero identity geometry deviation",
         positiveRules: [
-            "Replicate the source facial geometry as a strict digital-double likeness.",
-            "Preserve skin tone, facial marks, grooming, hair state, and facial-hair or clean-shaven state without idealization.",
-            "Preserve body and outfit from the generated character source or explicit body guidance."
+            "Perform a direct biometric reconstruction of the same scanned person, not a cleaner stock actor or lookalike.",
+            "Replicate source head/scalp or hairline shape, brow placement, eye spacing, eye shape, nose length/width/profile, mouth width/shape, cheek structure, jaw width, chin shape, ears, skin tone value, age impression, facial marks, and visible asymmetries.",
+            "Preserve grooming and facial-hair or clean-shaven state without idealization; keep facial-hair outline, length impression, density, placement, and dark/gray/color distribution exactly when visible.",
+            "Preserve body and outfit from the generated character source or explicit body guidance without changing facial identity."
         ],
         negativeRules: [
             "no beautified actor replacement",
+            "no cleaner stock actor",
+            "no generic bald man",
             "no face averaging",
             "no stylized geometry changes",
             "no altered facial-hair or clean-shaven state",
-            "no changed hairline"
+            "no shortened or reshaped facial hair",
+            "no changed scalp, baldness, or hairline shape",
+            "no younger/slimmer/smoother face"
         ]
     },
     {
@@ -165,7 +178,7 @@ const formatGeneratedSourceRule = (sourceIndex?: number | null): string => {
         return "- Generated character source: none supplied for this request; use biometric images and explicit body/style controls as the authority.";
     }
 
-    return `- Generated character source: [IMAGE ${sourceIndex}] is the primary visual/design source for body, outfit, silhouette, style translation, proportions, grooming read, and overall character design. It is not optional inspiration.`;
+    return `- Generated character source: [IMAGE ${sourceIndex}] is the primary visual/design source for body, outfit, silhouette, style translation, proportions, and overall character design only. It is not a face/head/grooming identity authority.`;
 };
 
 export const buildNanoCastStyleIdentityEnforcementContract = (
@@ -174,6 +187,7 @@ export const buildNanoCastStyleIdentityEnforcementContract = (
 ): string => {
     const config = resolveNanoCastStyleIdentityEnforcementConfig(styleId);
     const styleLabel = options.selectedStyleLabel || config.label;
+    const renderFamily = resolveRenderFamily(styleId);
     const identityRange = options.identityRangeText || "the supplied identity reference images";
     const requestedIdentityStrength = typeof options.requestedIdentityStrength === "number"
         ? Math.max(0, Math.min(100, Math.round(options.requestedIdentityStrength)))
@@ -183,11 +197,20 @@ export const buildNanoCastStyleIdentityEnforcementContract = (
         : `- Identity source: ${identityRange} remains the identity authority.`;
     const bodyGuidance = options.bodyGuidance
         ? `- Body fidelity source: ${options.bodyGuidance}.`
-        : "- Body fidelity source: generated character source first, then explicit body controls, then conservative neutral body inference.";
+        : "- Body fidelity source: selected Morphological Matrix first, then explicit Advanced body overrides when active; never infer body mass from face/head/neck scans.";
     const appliesTo = options.appliesTo || "NanoCast character render and any generated reference or pitch-sheet handoff";
+    const biometricHardLine = options.usesBiometricIdentity
+        ? `
+UNIVERSAL SCAN-IDENTITY OVERRIDE:
+- The selected style, body archetype, outfit, logo, lighting, presentation, and regeneration target are all subordinate to the uploaded biometric identity.
+- Preserve the same visible head/scalp or hairline shape, brow/eye/nose/mouth/jaw/chin relationships, ears, skin tone value, visible marks, age impression, and facial-hair or clean-shaven state from ${identityRange}.
+- Do not clean up, slim, smooth, beautify, youthify, average, or replace the scan with a generic style-template face.
+- If style language conflicts with biometric geometry, reduce style deformation and preserve the scanned person's identity geometry.`
+        : "";
 
     return `NANOCAST STYLE-SPECIFIC IDENTITY ENFORCEMENT:
 - selectedStyle: ${styleLabel}
+- selectedRenderFamily: ${renderFamily}
 - identityStrengthTier: ${config.identityStrength}${requestedIdentityStrength !== undefined ? `; userIdentityLock: ${requestedIdentityStrength}%` : ""}
 - bodyFidelityTier: ${config.bodyFidelityStrength}
 - facialLandmarkStrictness: ${config.facialLandmarkStrictness}
@@ -199,6 +222,7 @@ ${formatGeneratedSourceRule(options.generatedCharacterSourceIndex)}
 ${biometricRule}
 - Style preset: rendering treatment only. Style must adapt to the same person; the person must not adapt into a generic style template.
 ${bodyGuidance}
+${biometricHardLine}
 
 STYLE-SPECIFIC POSITIVE IDENTITY RULES:
 ${config.positiveRules.map(rule => `- ${rule}`).join("\n")}

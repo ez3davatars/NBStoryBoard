@@ -1,14 +1,52 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildHeadViewLockContract,
   buildPoseCoherenceCorrectionPrompt,
   buildPoseCoherenceValidationPrompt,
   buildTurnaroundPoseCoherenceContract,
   buildTurnaroundViewDefinitionContract,
+  buildWholeBodyAxisLockContract,
   getTurnaroundPanelOrientations,
   parsePoseCoherenceValidation
 } from '../../../prompts/poseCoherence';
+import {
+  buildCharacterPitchSheetPrompt,
+  defaultCharacterPitchSheetInput,
+  type CharacterPitchSheetInput
+} from '../../../prompts/characterPitchSheetPrompts';
+
+const buildPitchSheetInput = (overrides: Partial<CharacterPitchSheetInput>): CharacterPitchSheetInput => ({
+  ...defaultCharacterPitchSheetInput,
+  characterName: 'Abner',
+  worldEra: 'Contemporary drama',
+  ...overrides
+});
 
 describe('pose coherence head-axis lock', () => {
+  it('exports a reusable whole-body axis lock with pelvis and footwear anchors', () => {
+    const contract = buildWholeBodyAxisLockContract();
+
+    expect(contract).toContain('BODY AXIS LOCK');
+    expect(contract).toContain('Head, neck, shoulders, sternum, ribcage, pelvis, hips, knees, ankles, feet');
+    expect(contract).toContain('No torso-front/legs-side mismatch');
+    expect(contract).toContain('No shoes pointing opposite the torso');
+    expect(contract).toContain('Pelvis and footwear are hard orientation anchors');
+  });
+
+  it('exports a signed head-view lock for pitch and reference sheets', () => {
+    const contract = buildHeadViewLockContract();
+
+    expect(contract).toContain('HEAD VIEW LOCK');
+    expect(contract).toContain('FRONT HEAD = true 0 degree');
+    expect(contract).toContain('3/4 LEFT HEAD');
+    expect(contract).toContain('3/4 RIGHT HEAD');
+    expect(contract).toContain('LEFT PROFILE HEAD = true 90 degree');
+    expect(contract).toContain('RIGHT PROFILE HEAD = true 90 degree');
+    expect(contract).toContain('Do not mirror one head panel to create another');
+    expect(contract).toContain('No mirrored duplicate head');
+    expect(contract).toContain('No left/right collapse');
+  });
+
   it('adds strict head orientation rules to turnaround panel maps', () => {
     const contract = buildTurnaroundPoseCoherenceContract([
       { label: 'front panel', viewAngle: 'front', degrees: 0, bodyFacing: 'front-facing unified axis' },
@@ -22,6 +60,7 @@ describe('pose coherence head-axis lock', () => {
     expect(contract).toContain('headFacing: back of head only, no front facial features');
     expect(contract).toContain('profile body with a 3/4 head');
     expect(contract).toContain('neck, skull, jaw, nose direction, and facial plane');
+    expect(contract).toContain('HEAD VIEW LOCK');
   });
 
   it('asks validation to reject head-angle drift separately from body-axis drift', () => {
@@ -108,5 +147,26 @@ describe('pose coherence head-axis lock', () => {
     expect(prompt).toContain('right profile view: 270 degrees');
     expect(prompt).toContain('true 90-degree right side profile head');
     expect(prompt).toContain('facial plane must all obey this assigned panel axis');
+    expect(prompt).toContain('The pelvis and footwear are hard orientation anchors');
+  });
+
+  it('adds signed head-study requests to pitch sheet prompts', () => {
+    const prompt = buildCharacterPitchSheetPrompt(buildPitchSheetInput({
+      characterRenderStyle: 'family_3d',
+      boardPresentationStyle: 'premium_film_board'
+    }));
+
+    expect(prompt).toContain('HEAD STUDY LOCK');
+    expect(prompt).toContain('HEAD VIEW LOCK');
+    expect(prompt).toContain('Neutral Front Head - true 0 degree front-facing head');
+    expect(prompt).toContain("3/4 Left Head - true 45 degree turn to the character's left");
+    expect(prompt).toContain("3/4 Right Head - true 45 degree turn to the character's right");
+    expect(prompt).toContain("Left Profile Head - true 90 degree profile to the character's left");
+    expect(prompt).toContain("Right Profile Head - true 90 degree profile to the character's right");
+    expect(prompt).toContain('Do not mirror one head panel to create another');
+    expect(prompt).toContain('No mislabeled head angle');
+    expect(prompt).toContain('No mirrored duplicate');
+    expect(prompt).toContain('No left/right profile duplication');
+    expect(prompt).not.toMatch(/\n-\s*Profile Head\b/);
   });
 });

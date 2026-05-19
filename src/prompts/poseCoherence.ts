@@ -245,6 +245,20 @@ export const buildPoseCoherenceNegativeTokens = (): string =>
         'facial plane not matching body yaw'
     ].join(', ');
 
+export function buildWholeBodyAxisLockContract(): string {
+    return `BODY AXIS LOCK:
+- Every full-body panel must use one coherent whole-body viewing axis.
+- Head, neck, shoulders, sternum, ribcage, pelvis, hips, knees, ankles, feet, toe direction, and footwear direction must agree with the labeled view angle.
+- No torso-front/legs-side mismatch.
+- No pelvis facing a different direction from shoulders.
+- No shoes pointing opposite the torso.
+- No side profile cheating.
+- No owl-turn anatomy.
+- Pelvis and footwear are hard orientation anchors.
+- No split-body twist, no torso-front/legs-side mismatch, no hips facing away from shoulders, no feet pointing opposite the torso, no accidental upper/lower axis conflict, no broken pelvis-to-ribcage orientation.
+- A panel is invalid if the pelvis, knees, feet, or footwear do not match the assigned body axis, even if the head and torso look correct.`;
+}
+
 // Body-axis coherence keeps torso/pelvis/legs/feet aligned. Head-axis
 // coherence separately locks skull, facial plane, jaw, and neck to the same
 // panel angle unless an explicit head turn has been requested.
@@ -285,6 +299,51 @@ ${headTurnRule}
 ${panelLines ? `\nPANEL HEAD-ANGLE MAP:\n${panelLines}` : ''}`;
 };
 
+export function buildHeadViewLockContract(): string {
+    return `HEAD VIEW LOCK:
+- Every labeled head study must obey its labeled viewing direction exactly.
+- Head direction labels are authoritative and must match the rendered craniofacial orientation.
+- Never treat left-facing and right-facing head studies as interchangeable.
+- Never mirror one head study to fake the opposite side.
+- Each head study must be independently rendered with correct signed orientation.
+
+SIGNED HEAD ORIENTATION RULES:
+- FRONT HEAD = true 0 degree front-facing head view.
+- 3/4 LEFT HEAD = approximately 45 degrees turned to the character's left.
+- 3/4 RIGHT HEAD = approximately 45 degrees turned to the character's right.
+- LEFT PROFILE HEAD = true 90 degree profile to the character's left.
+- RIGHT PROFILE HEAD = true 90 degree profile to the character's right.
+- BACK HEAD = true 180 degree rear head view if requested.
+
+HEAD GEOMETRY REQUIREMENTS:
+- In a true profile head, only one ear should dominate clearly.
+- Nose bridge, brow ridge, lips, chin, jaw, and goatee contour must read as true side profile.
+- A left profile and right profile must show opposite-side craniofacial orientation.
+- The face must not read as front-facing if the label says profile.
+- The face must not read as profile if the label says 3/4.
+- The eyes, nose direction, jaw direction, ear visibility, cheek plane, and neck attachment must agree with the labeled head view.
+
+NO MIRROR-CHEAT RULE:
+- Do not mirror one head panel to create another.
+- Do not create a right profile by reusing or horizontally mirroring the left profile.
+- Do not create a left profile by reusing or horizontally mirroring the right profile.
+- Do not create a 3/4 right head by mirroring a 3/4 left head.
+- Each labeled head view must be a genuine independently oriented head render of the same person.
+
+IDENTITY CONSISTENCY:
+- All head studies must preserve the same skull shape, brow shape, eye spacing, nose structure, cheek fullness, ear placement, jawline, chin/goatee structure, scalp contour, and neck-to-head connection.
+- Direction may change, identity must not.
+
+NEGATIVE RULES:
+- No mirrored duplicate head.
+- No mislabeled head angle.
+- No pseudo-profile.
+- No front/profile ambiguity.
+- No directionally swapped head study.
+- No left/right collapse.
+- No accidental same-side repetition.`;
+}
+
 export const buildPoseCoherenceContract = (intent: PoseCoherenceIntent = {}): string => {
     const viewAngle = formatAngle(intent.panelViewAngle || intent.viewAngle || intent.cameraYaw);
     const bodyFacing = intent.bodyFacing || 'same as the requested camera/view angle';
@@ -310,6 +369,8 @@ STRUCTURED ORIENTATION INTENT:
 - subjectScope: ${subjectScope}
 
 RULES:
+${buildWholeBodyAxisLockContract()}
+
 - Keep the entire visible body aligned to one coherent global facing direction.
 - The ribcage, sternum, shoulders, pelvis, hips, knees, shins, and feet must agree on the same primary facing direction.
 - The pelvis/hip line and foot direction anchor the body axis; feet must support the same facing angle as the torso.
@@ -321,7 +382,9 @@ ${twistRule}
 - If no pose is specified, use a natural balanced stance with grounded feet and coherent anatomy.
 - No split-direction stance unless explicitly requested.
 
-${buildHeadOrientationContract(intent)}`;
+${buildHeadOrientationContract(intent)}
+
+${buildHeadViewLockContract()}`;
 };
 
 export const buildTurnaroundPoseCoherenceContract = (
@@ -353,6 +416,7 @@ export const buildTurnaroundPoseCoherenceContract = (
 TURNAROUND / REFERENCE SHEET AXIS MAP:
 ${panelLines}
 - Every panel is a rotated view of the same coherent body, not a torso rotation pasted onto a different lower-body direction.
+- The pelvis and footwear are hard orientation anchors: if the pelvis, knees, feet, or footwear do not match the assigned body axis, the panel is invalid even if the head and torso look correct.
 - Side and back panels must preserve spine-to-pelvis-to-foot alignment with the intended panel angle.
 - Head and body are both technical angle commitments: profile body with a 3/4 head, front body with a side-turned head, or back body with visible front facial features is invalid unless explicitly requested.
 - Before final output, internally reject any panel where chest direction, hip direction, knee direction, foot direction, neck alignment, skull yaw, nose direction, jawline, or facial-plane visibility disagrees with the assigned yaw.`;

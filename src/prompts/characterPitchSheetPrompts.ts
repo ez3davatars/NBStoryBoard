@@ -2,12 +2,13 @@ import {
     PROMPT_PRIORITY_ORDER_BLOCK,
     buildAuthoritativeIdentityContract,
     buildBiometricIdentityLockContract,
+    buildGlobalCharacterInvariantContract,
     type BiometricIdentityLock
 } from "./identityContracts";
 import { buildHeadshotWardrobeContinuityContract, buildHeadshotWardrobeNegativeTokens } from "./headshotWardrobeContinuity";
-import { buildPoseCoherenceNegativeTokens, buildTurnaroundPoseCoherenceContract } from "./poseCoherence";
+import { buildPoseCoherenceNegativeTokens, buildTurnaroundPoseCoherenceContract, buildWholeBodyAxisLockContract } from "./poseCoherence";
 import { SHEET_STYLE_LOCK_NEGATIVE_TEXT, buildSheetStyleLockContract } from "./sheetStyleLock";
-import { buildStyleCategoryContract, buildStyleNegativePrompt } from "./styleContracts";
+import { buildStyleCategoryContract, buildStyleNegativePrompt, resolveRenderFamily } from "./styleContracts";
 import { CHARACTER_ANATOMY_INTEGRITY_CONTRACT, CHARACTER_ANATOMY_NEGATIVE_TEXT } from "./characterAnatomyIntegrity";
 
 export type CharacterPitchSheetIdentitySource =
@@ -537,7 +538,7 @@ const buildGarmentCalloutCandidates = (input: CharacterPitchSheetInput): PitchSh
         );
     } else if (context === "stylized/animated") {
         callouts.push(
-            makeCallout("Pose Silhouette", "performance", "visible pose silhouette, posture, or gesture study", { placementHint: "point to posture or body language, not costume material" }),
+            makeCallout("Pose Read", "performance", "visible pose read, posture, or body-language study", { placementHint: "point to the rendered pose or body language, not costume material" }),
             makeCallout("Character Color Blocking", "material", "visible costume color zones", { material: "costume color/material areas", placementHint: "point to a clear color block or material swatch" })
         );
     } else if (context === "historical/period") {
@@ -1098,8 +1099,6 @@ export function buildCharacterPitchSheetPrompt(input: CharacterPitchSheetInput):
     const hasExplicitProps = !!normalize(visibleInput.propsSignatureItems);
     const propsDisplay = hasExplicitProps ? props : "No signature props specified.";
     const propOrFootwearInsetText = hasExplicitProps ? "selected prop and footwear insets" : "footwear and material-detail insets";
-    const performanceStudyRule = `- Include one compact gesture study or stance study that preserves the same face, build, hairstyle, costume, props, and emotional presence.
-- Do not invent combat/action behavior unless explicitly requested.`;
     const environment = inferEnvironment(visibleInput);
     const lightingMood = valueOr(visibleInput.lightingMood, defaultCharacterPitchSheetInput.lightingMood);
     const sheetStyle = valueOr(visibleInput.sheetStyle, defaultCharacterPitchSheetInput.sheetStyle);
@@ -1110,6 +1109,11 @@ export function buildCharacterPitchSheetPrompt(input: CharacterPitchSheetInput):
     const productionNotes = inferProductionNotes(visibleInput);
     const sourcePanelMode = visibleInput.sourcePanelMode || defaultCharacterPitchSheetInput.sourcePanelMode || "costume_matched";
     const characterRenderStyle = normalizeCharacterRenderStyle(visibleInput.characterRenderStyle);
+    const characterRenderFamily = resolveRenderFamily(characterRenderStyle);
+    const supportingPosePanelLabel = "supporting pose render";
+    const performanceStudyRule = `- Include one compact ${supportingPosePanelLabel} that preserves the same face, build, hairstyle, costume, props, body proportions, and emotional presence.
+- If the ${supportingPosePanelLabel} cannot be rendered in the exact same style family as the rest of the sheet, omit it instead of rendering a cartoon, flat illustration, vector, doodle, or off-style miniature.
+- Do not invent combat/action behavior unless explicitly requested.`;
     const boardPresentationStyle = visibleInput.boardPresentationStyle || defaultCharacterPitchSheetInput.boardPresentationStyle || "premium_film_board";
     const characterRenderStyleLabel = CHARACTER_RENDER_STYLE_BLOCKS[characterRenderStyle].split(":")[0] || characterRenderStyle;
     const debugVisibleLabels = visibleInput.debugVisibleLabels === true;
@@ -1137,8 +1141,8 @@ export function buildCharacterPitchSheetPrompt(input: CharacterPitchSheetInput):
         ? buildBiometricIdentityLockContract(input.identityLock)
         : "";
     const identityRule = hasReferenceDrivenIdentity
-        ? "Identity consistency: use supplied references as identity guidance, and keep the same subject across the hero portrait, head studies, turnaround figures, action pose, and expression study."
-        : "Identity consistency: keep the same invented character identity across the hero portrait, head studies, turnaround figures, action pose, and expression study.";
+        ? `Identity consistency: use supplied references as identity guidance, and keep the same subject across the hero portrait, head studies, turnaround figures, ${supportingPosePanelLabel}, and expression study.`
+        : `Identity consistency: keep the same invented character identity across the hero portrait, head studies, turnaround figures, ${supportingPosePanelLabel}, and expression study.`;
     const sourcePanelRule = hasReferenceDrivenIdentity && sourcePanelMode === "costume_matched"
         ? "Source panel mode: Costume Matched. Raw reference photos are hidden identity authority only; visible head studies must be costume/world matched with no raw technical labels."
         : hasReferenceDrivenIdentity && sourcePanelMode === "raw_source"
@@ -1157,7 +1161,7 @@ export function buildCharacterPitchSheetPrompt(input: CharacterPitchSheetInput):
 - Use Images B-F / the biometric scan images only to preserve identity accuracy: face, skull/head shape, skin tone, age impression, hair state, facial hair, visible marks, and facial proportions.
 - Do not create a new character design.
 - Do not reinterpret the body, face, age, outfit, style category, or proportions away from the generated character source.
-- The pitch sheet should present this same generated character consistently across hero portrait, head studies, turnaround views, action pose, expression study, and material/wardrobe detail panels.
+- The pitch sheet should present this same generated character consistently across hero portrait, head studies, turnaround views, ${supportingPosePanelLabel}, expression study, and material/wardrobe detail panels.
 - If Image A and the biometric scans appear to conflict, preserve Image A's costume/body/design while using the biometric scans to correct facial identity only.
 - Do not ignore the generated character source, do not generate a generic character board from the biometric scan alone, and do not output the biometric scan collage.`
         : "";
@@ -1183,14 +1187,14 @@ export function buildCharacterPitchSheetPrompt(input: CharacterPitchSheetInput):
                 : "Biometric references are identity authority. Structured height/build/weight values are metadata and subtle body-fit guidance only; they must not override biometric identity, face, head, age impression, or create a different person."
             : "Keep one consistent invented character body across all full-body views. Use structured build values as design guidance without changing identity between panels.";
     const strictBodySpecsRule = strictBodySpecs
-        ? "- Because strict body specs is enabled, apply body specs more directly, but still preserve the same actor identity, same face, same head, same age impression, and same character source."
+        ? "- Because strict body specs is enabled, apply body specs more directly, but strict_body_specs still cannot change identity; preserve the same actor identity, same face, same head, same age impression, and same character source."
         : "";
     const pitchSheetPoseCoherence = buildTurnaroundPoseCoherenceContract([
         { label: "front full-body panel", viewAngle: "front", degrees: 0, bodyFacing: "straight front-facing unified axis" },
         { label: "three-quarter full-body panel", viewAngle: "front_3_4_left", degrees: 45, bodyFacing: "one consistent three-quarter axis" },
         { label: "side/profile full-body panel", viewAngle: "left_profile", degrees: 90, bodyFacing: "true side profile axis" },
         { label: "back full-body panel", viewAngle: "back", degrees: 180, bodyFacing: "straight rear-facing unified axis" },
-        { label: "action pose / gesture study", viewAngle: "custom", bodyFacing: "single deliberate action-pose axis; no accidental upper/lower split" }
+        { label: supportingPosePanelLabel, viewAngle: "custom", bodyFacing: "single deliberate supporting-pose axis; no accidental upper/lower split" }
     ]);
     const headshotWardrobeContinuity = buildHeadshotWardrobeContinuityContract({
         identitySource: hasReferenceDrivenIdentity
@@ -1206,13 +1210,14 @@ export function buildCharacterPitchSheetPrompt(input: CharacterPitchSheetInput):
         strictness: boardPresentationStyle === "forensic_reference_board" ? "forensic_board" : "reference_sheet"
     });
     const styleCategoryContract = buildStyleCategoryContract(characterRenderStyle, {
+        selectedStyleId: characterRenderStyle,
         selectedStyleLabel: CHARACTER_RENDER_STYLE_BLOCKS[characterRenderStyle],
         sourceImagePolicy: hasGeneratedCharacterSource
             ? "Image A controls the current generated character design, costume, body, silhouette, proportions, and style translation. Images B-F control biometric identity only; source-photo realism must not leak into stylized render categories."
             : "Source images control identity likeness only; source-photo realism must not leak into stylized render categories.",
         boardPresentationPolicy: "Board Presentation Style controls layout, hierarchy, typography, labels, and production-board composition only.",
         lightingPolicy: "Lighting mood must be interpreted inside the selected Character Render Style and must not convert the character category.",
-        appliesTo: "hero portrait, full-body turnarounds, head studies, action pose, expression study, prop/detail insets where the character appears, and board previews"
+        appliesTo: `hero portrait, full-body turnarounds, head studies, ${supportingPosePanelLabel}, expression study, prop/detail insets where the character appears, and board previews`
     });
     const sheetStyleLockContract = buildSheetStyleLockContract(characterRenderStyle, {
         source: characterRenderStyle !== "no_specific_style"
@@ -1227,13 +1232,15 @@ export function buildCharacterPitchSheetPrompt(input: CharacterPitchSheetInput):
         strictness: "high",
         appliesTo: [
             "hero full-body render",
-            "front head",
-            "3/4 head",
-            "side profile head",
+            "Neutral Front Head",
+            "3/4 Left Head",
+            "3/4 Right Head",
+            "Left Profile Head",
+            "Right Profile Head",
             "expressive close-up",
             "full-body turnaround views",
             "rear view",
-            "action pose / gesture study",
+            supportingPosePanelLabel,
             "color blocking / palette inset",
             "costume detail crop",
             "footwear and material detail insets",
@@ -1244,7 +1251,7 @@ export function buildCharacterPitchSheetPrompt(input: CharacterPitchSheetInput):
     const strictRenderedFamilyLock = strictRenderedFamilyStyles.has(characterRenderStyle)
         ? `STRICT RENDERED FAMILY LOCK:
 - Every panel containing the character must stay in the same rendered style family as the selected Character Render Style.
-- Hero portrait, turnaround figures, head studies, expression study, and gesture study must all look like the same rendering family.
+- Hero portrait, turnaround figures, head studies, expression study, and ${supportingPosePanelLabel} must all look like the same rendering family.
 - Do not switch secondary panels into concept art, painted concept sheet style, comic style, cel style, line-art model sheet style, diagram style, flat-color character thumbnail style, or semi-illustrated board style.
 - For DSLR Capture, all character-containing panels must read as DSLR-style rendered imagery, not drawn or painted concept art.
 - If a panel contains the character's body, face, head, pose, or costume-on-body silhouette, it must match the selected rendered family exactly.`
@@ -1269,7 +1276,7 @@ Important distinction:
     const animated3dPanelLock = animated3dStyles.has(characterRenderStyle)
         ? `PREMIUM ANIMATED 3D PANEL FAMILY LOCK:
 - Every panel containing the character must stay in the same premium animated 3D rendering family.
-- Hero portrait, turnarounds, head studies, expression study, gesture study, and all character-containing insets must match the same stylized animated 3D family.
+- Hero portrait, turnarounds, head studies, expression study, supporting pose render, and all character-containing insets must match the same stylized animated 3D family.
 - Do not drift into live-action realism, photoreal portraiture, painterly concept art, flat illustration, claymation, cel animation, line-art mannequin studies, or semi-realistic off-style panels.
 - Board presentation style may affect layout and typography only; it must not change the character rendering family.
 - Lighting must remain premium animated-feature lighting: soft cinematic, sculptural, readable, polished, and non-photoreal.`
@@ -1321,7 +1328,7 @@ Important distinction:
                 : `CHARACTER PANEL STYLE PURITY:
 - Board presentation style may affect layout and typography only.
 - Every character-containing panel must remain in the selected Character Render Style.
-- Do not mix rendering families between hero portrait, head studies, turnarounds, gesture study, and character-containing insets.`;
+- Do not mix rendering families between hero portrait, head studies, turnarounds, ${supportingPosePanelLabel}, and character-containing insets.`;
     const stylizedBiometricTranslationRule = stylizedBiometricTranslationStyles.has(characterRenderStyle) && hasReferenceDrivenIdentity
         ? `STYLIZED BIOMETRIC TRANSLATION RULE:
 - For stylized render styles, style changes the rendering/material language only.
@@ -1330,10 +1337,21 @@ Important distinction:
 - The output should look like the supplied biometric person translated into the selected style.`
         : "";
     const styleNegativePrompt = buildStyleNegativePrompt(characterRenderStyle);
+    const globalInvariantContract = buildGlobalCharacterInvariantContract({
+        hasBiometricIdentity: isBiometricIdentitySource(input),
+        hasGeneratedCharacterSource,
+        selectedStyleId: characterRenderStyle,
+        selectedStyleFamily: characterRenderFamily,
+        hasExplicitBodyOverride: strictBodySpecs,
+        hasExplicitProps
+    });
+    const localBodyAxisLock = buildWholeBodyAxisLockContract();
 
     return `Create a full cinematic production-grade CHARACTER PITCH SHEET for ${characterName}. The result must feel like a premium character design board for film development, not a generic model sheet.
 
 ${PROMPT_PRIORITY_ORDER_BLOCK}
+
+${globalInvariantContract}
 
 ${BOARD_PRESENTATION_STYLE_BLOCKS[boardPresentationStyle]}
 ${CHARACTER_RENDER_STYLE_BLOCKS[characterRenderStyle]}
@@ -1359,7 +1377,11 @@ ${pitchSheetPoseCoherence}
 ${CHARACTER_ANATOMY_INTEGRITY_CONTRACT}
 
 STRUCTURED CHARACTER DATA / BOARD METADATA:
-- Use the current structured UI values for board metadata, visible labels, and controlled costume/body-fit guidance: ${structuredBodySourceOfTruth}.
+- Structured values are board metadata and subtle fit guidance only: ${structuredBodySourceOfTruth}.
+- Generated character source Image A remains visual/body/costume authority when supplied.
+- Biometric references remain identity authority.
+- Numeric weight values must not recast body unless strict body specs / explicit override is active.
+- "athletic, 200 lbs" means athletic solid adult build, not overweight.
 - These values must not override biometric identity, approved generated character source, face, head shape, age impression, hairstyle, costume silhouette, or body identity.
 - Numeric weight values are metadata and subtle proportional guidance only, not permission to recast the actor or generate a different person.
 - Weight/build metadata must not recast the actor, replace the likeness, or become a new casting specification.
@@ -1470,6 +1492,12 @@ STYLE-LOCKED INSET RULE:
 - Do not use isolated body fragments or ambiguous clay/flesh shapes as design insets.
 - Do not add simplified diagram characters, alternate model-sheet miniatures, flat-color stand-ins, icon bodies, or off-style thumbnails anywhere on the board.
 
+RENDERED INSET ENFORCEMENT:
+- If the selected Character Render Style is a rendered 3D, CG, photographic, claymation, or other non-flat family, every inset containing a character, face, body, hands, feet, pose, costume-on-body silhouette, or expression must be rendered in that same selected style family.
+- Never use a flat illustration, vector diagram, mascot drawing, cartoon miniature, simplified model-sheet doodle, icon body, chibi insert, silhouette diagram, or 2D auxiliary figure inside a rendered character sheet.
+- If the available space is too small to render the supporting pose in the selected family, omit that character inset rather than switching style families.
+- Material swatches may be simple samples only if they contain no character body, no face, no hands, no feet, no pose, and no costume-on-body silhouette.
+
 ${claymationInsetRule}
 
 FORBIDDEN INTERNAL VISIBLE TERMS:
@@ -1538,11 +1566,48 @@ STRICT TURNAROUND INSTRUCTIONS:
 - Back view must resolve only the rear costume details that are actually visible or clearly implied by the approved character design.
 - Do not invent bags, armor plates, tactical harnesses, straps, or weapon rigs unless explicitly requested or clearly present in the approved generated character source.
 
+${localBodyAxisLock}
+- Front view: face, chest, pelvis, knees, toes, and footwear fronts are all front-facing.
+- Three-quarter view: head, torso, pelvis, knees, and feet all share one 45-degree axis.
+- Side/profile view: shoulders, chest plane, pelvis, knees, feet, and footwear must all read as true side profile.
+- Back view: true rear axis with no visible front facial features.
+- Supporting pose render: one deliberate whole-body pose axis; no accidental upper/lower split.
+
 HEAD STUDY INSTRUCTIONS:
-- Include rendered head studies: neutral front head, three-quarter head, side profile, and one expressive close-up.
+- Include multiple strictly labeled signed head studies:
+  1. Neutral Front Head - true 0 degree front-facing head.
+  2. 3/4 Left Head - true 45 degree turn to the character's left.
+  3. Left Profile Head - true 90 degree profile to the character's left.
+  4. 3/4 Right Head - true 45 degree turn to the character's right.
+  5. Right Profile Head - true 90 degree profile to the character's right.
+- If space is limited, omit one of the intermediate 3/4 views before sacrificing correctness.
 - Head studies must match the same character and costume/world styling.
 - Head-study panels must use the sheet's clean neutral/studio background only; never preserve source-photo rooms, doors, walls, windows, furniture, shelves, lighting fixtures, or other environment details.
 - Any visible neckline, collar, shoulder, lapel, upper chest, jewelry, armor, robe, tunic, jacket, uniform, or accessory detail in head studies must match the final character wardrobe shown in the hero portrait and turnarounds. Never keep the source-photo shirt/collar.
+
+HEAD STUDY LOCK:
+- If head studies are included, each labeled head panel must obey the label exactly.
+- FRONT HEAD must be true front.
+- 3/4 LEFT HEAD must be true 45-degree left.
+- 3/4 RIGHT HEAD must be true 45-degree right.
+- LEFT PROFILE HEAD must be true 90-degree left profile.
+- RIGHT PROFILE HEAD must be true 90-degree right profile.
+- Do not mirror one head panel to create another.
+- Do not reuse the same head orientation under different labels.
+- Left-facing and right-facing panels must be genuinely opposite signed views of the same person.
+- The rendered craniofacial direction must match the text label.
+- Use explicit labels only: Neutral Front Head, 3/4 Left Head, 3/4 Right Head, Left Profile Head, and Right Profile Head.
+- Do not use a generic single-side profile label when both profile sides are requested.
+- No mislabeled head angle.
+- No mirrored duplicate.
+- No left/right profile duplication.
+- No front-looking profile.
+- No profile-looking 3/4.
+- No inconsistent ear / nose / jaw direction.
+
+HEAD CALLOUT DIRECTION RULE:
+- If a visible callout refers to a head view, use direction-safe wording such as Specific Head Contour, Neutral Front Study, Signed 3/4 View, True Side Profile, Left Profile Head, or Right Profile Head.
+- Avoid loose head callout language that could blur signed direction, such as unspecific profile study, head contour, or side head without left/right wording.
 
 CINEMATIC PORTRAIT INSTRUCTIONS:
 - Include one larger cinematic portrait of ${characterName} with ${lightingMood}.
@@ -1554,7 +1619,7 @@ PRODUCTION NOTES:
 
 PREMIUM ASYMMETRIC LAYOUT RULES:
 - Use an editorial, high-end asymmetric layout: one dominant cinematic portrait, supporting full-body turnarounds, head studies, material detail callouts, and ${propOrFootwearInsetText}.
-- Include the gesture or stance study as a designed supporting element, not a separate redesign.
+- Include the ${supportingPosePanelLabel} as a designed supporting element, not a separate redesign.
 - Avoid generic grid layouts, evenly spaced model-sheet rows, rigid contact-sheet spacing, and empty repeated boxes.
 - Use tasteful negative space, layered scale hierarchy, subtle labels if needed, and composition that feels designed rather than templated.
 

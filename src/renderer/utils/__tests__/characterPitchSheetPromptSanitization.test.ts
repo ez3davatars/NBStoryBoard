@@ -9,8 +9,8 @@ import {
   type CharacterPitchSheetRenderStyle,
   type CharacterPitchSheetInput,
 } from '../../../prompts/characterPitchSheetPrompts';
-import { SHEET_STYLE_LOCK_NEGATIVE_TEXT, buildSheetStyleLockContract, withSheetStyleLockContract } from '../../../prompts/sheetStyleLock';
-import { buildStyleCategoryContract, buildStyleCorrectionPrompt, buildStyleNegativePrompt, buildStyleValidationPrompt } from '../../../prompts/styleContracts';
+import { SHEET_STYLE_LOCK_NEGATIVE_TEXT, buildRenderFamilyPanelContract, buildSheetStyleLockContract, withSheetStyleLockContract } from '../../../prompts/sheetStyleLock';
+import { buildStyleCategoryContract, buildStyleCorrectionPrompt, buildStyleNegativePrompt, buildStyleValidationPrompt, resolveRenderFamily } from '../../../prompts/styleContracts';
 
 const buildInput = (overrides: Partial<CharacterPitchSheetInput>): CharacterPitchSheetInput => ({
   ...defaultCharacterPitchSheetInput,
@@ -143,10 +143,7 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
       expect(prompt).toContain('props');
       expect(prompt).toContain('world/era');
 
-      if (characterRenderStyle.includes('_')) {
-        const promptWithoutInternalStyleLock = prompt.replace(/SHEET STYLE LOCK:[\s\S]*?AUTHORITATIVE IDENTITY CONTRACT:/, 'AUTHORITATIVE IDENTITY CONTRACT:');
-        expect(promptWithoutInternalStyleLock).not.toContain(characterRenderStyle);
-      }
+      expect(prompt).toContain('Do not print render-style enum keys');
     }
   });
 
@@ -205,18 +202,40 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
 
     expect(prompt).toContain('SHEET STYLE LOCK');
     expect(prompt).toContain('"style_lock"');
-    expect(prompt).toContain('"style_family": "stylized_3D"');
+    expect(prompt).toContain('"style_family": "premium_animated_3d"');
     expect(prompt).toContain('"allow_mixed_styles": false');
-    expect(prompt).toContain('hero full-body render: inherit style_family "stylized_3D" exactly.');
-    expect(prompt).toContain('front head: inherit style_family "stylized_3D" exactly.');
-    expect(prompt).toContain('3/4 head: inherit style_family "stylized_3D" exactly.');
-    expect(prompt).toContain('side profile head: inherit style_family "stylized_3D" exactly.');
-    expect(prompt).toContain('action pose / gesture study: inherit style_family "stylized_3D" exactly.');
-    expect(prompt).toContain('footwear and material detail insets: inherit style_family "stylized_3D" exactly.');
-    expect(prompt).toContain('color blocking / palette inset: inherit style_family "stylized_3D" exactly.');
-    expect(prompt).toContain('any inset containing the character, body, head, hands, costume, or footwear: inherit style_family "stylized_3D" exactly.');
-    expect(prompt).toContain('annotations and callout presentation: inherit style_family "stylized_3D" exactly.');
+    expect(prompt).toContain('RENDER FAMILY PANEL CONTRACT');
+    expect(prompt).toContain('Selected render family: premium_animated_3d.');
+    expect(prompt).toContain('No vector/cartoon mini figure.');
+    expect(prompt).toContain('hero full-body render: inherit style_family "premium_animated_3d" exactly.');
+    expect(prompt).toContain('Neutral Front Head: inherit style_family "premium_animated_3d" exactly.');
+    expect(prompt).toContain('3/4 Left Head: inherit style_family "premium_animated_3d" exactly.');
+    expect(prompt).toContain('3/4 Right Head: inherit style_family "premium_animated_3d" exactly.');
+    expect(prompt).toContain('Left Profile Head: inherit style_family "premium_animated_3d" exactly.');
+    expect(prompt).toContain('Right Profile Head: inherit style_family "premium_animated_3d" exactly.');
+    expect(prompt).toContain('supporting pose render: inherit style_family "premium_animated_3d" exactly.');
+    expect(prompt).toContain('footwear and material detail insets: inherit style_family "premium_animated_3d" exactly.');
+    expect(prompt).toContain('color blocking / palette inset: inherit style_family "premium_animated_3d" exactly.');
+    expect(prompt).toContain('any inset containing the character, body, head, hands, costume, or footwear: inherit style_family "premium_animated_3d" exactly.');
+    expect(prompt).toContain('annotations and callout presentation: inherit style_family "premium_animated_3d" exactly.');
+    expect(prompt).toContain('HEAD PANEL VALIDATION');
+    expect(prompt).toContain('head-direction mismatch');
+    expect(prompt).toContain('mirrored head duplication');
+    expect(prompt).toContain('left-right profile collapse');
     expect(prompt).toContain(SHEET_STYLE_LOCK_NEGATIVE_TEXT);
+  });
+
+  it('resolves render families from one shared style-family map', () => {
+    expect(resolveRenderFamily('premium_animated_3d')).toBe('premium_animated_3d');
+    expect(resolveRenderFamily('family_3d')).toBe('premium_animated_3d');
+    expect(resolveRenderFamily('claymation')).toBe('claymation_tactile');
+    expect(resolveRenderFamily('dslr_capture')).toBe('photoreal');
+    expect(resolveRenderFamily('retro_anime')).toBe('anime_cel');
+
+    const familyContract = buildRenderFamilyPanelContract('family_3d');
+    expect(familyContract).toContain('RENDER FAMILY PANEL CONTRACT');
+    expect(familyContract).toContain('Selected render family: premium_animated_3d.');
+    expect(familyContract).toContain('No separate 2D pose diagram.');
   });
 
   it('locks premium animated 3D sheets to the same biometric actor and render family', () => {
@@ -262,15 +281,19 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
 
     expect(styleContract).toContain('premium Pixar-style animated 3D character rendering');
     expect(styleContract).toContain('same biometric actor translated into animated 3D');
+    expect(styleContract).toContain('Translate the same biometric actor into premium animated 3D.');
+    expect(styleContract).toContain('renderFamily: premium_animated_3d');
     expect(styleContract).toContain('same biometric identity geometry preserved in stylized form');
     expect(styleContract).toContain('recognizable head silhouette, scalp shape, facial hair pattern, and age impression');
     expect(styleContract).toContain('stylized surface treatment without recasting');
-    expect(styleContract).toContain('consistent animated 3D family across all panels');
+    expect(styleContract).toContain('consistent Family 3D style across all panels');
     expect(styleContract).toContain('generic animated protagonist face');
     expect(styleContract).toContain('overly friendly redesigned face');
     expect(styleContract).toContain('younger redesigned face');
     expect(styleContract).toContain('oversized eyes that change identity');
     expect(styleContract).toContain('claymation texture');
+    expect(styleContract).toContain('flat cartoon inset');
+    expect(styleContract).toContain('line-art mannequin');
     expect(styleContract).toContain('line-art model-sheet drift');
     expect(styleContract).not.toContain('large readable eyes compared to realistic human anatomy');
     expect(styleContract).not.toContain('appealing exaggerated proportions');
@@ -282,6 +305,7 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
     expect(negativePrompt).toContain('new face');
     expect(negativePrompt).toContain('generic stylized face');
     expect(negativePrompt).toContain('generic animated man');
+    expect(negativePrompt).toContain('flat cartoon inset');
     expect(negativePrompt).toContain('overly friendly face');
     expect(negativePrompt).toContain('broad smile unless requested');
     expect(negativePrompt).toContain('oversized eyes');
@@ -356,6 +380,8 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
     expect(prompt).not.toContain('The character must feel handcrafted and sculpted, like a photographed stop-motion puppet or clay miniature.');
 
     expect(styleContract).toContain('same biometric likeness translated into clay');
+    expect(styleContract).toContain('Translate the same biometric actor into clay/plasticine material. Do not create a new puppet identity.');
+    expect(styleContract).toContain('renderFamily: claymation_tactile');
     expect(styleContract).toContain('plasticine / clay material feel');
     expect(styleContract).toContain('same adult actor proportions');
     expect(styleContract).toContain('same head and facial hair structure');
@@ -363,6 +389,7 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
     expect(styleContract).toContain('clear separation from polished premium CG');
     expect(styleContract).toContain('new puppet identity');
     expect(styleContract).toContain('generic clay character');
+    expect(styleContract).toContain('generic clay puppet');
     expect(styleContract).toContain('different actor likeness');
     expect(styleContract).toContain('Pixar-like polished 3D');
     expect(styleContract).toContain('clean modern CG skin shading');
@@ -410,7 +437,7 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
     }));
 
     expect(prompt).toContain('STRICT RENDERED FAMILY LOCK');
-    expect(prompt).toContain('Hero portrait, turnaround figures, head studies, expression study, and gesture study must all look like the same rendering family.');
+    expect(prompt).toContain('Hero portrait, turnaround figures, head studies, expression study, and supporting pose render must all look like the same rendering family.');
     expect(prompt).toContain('Do not switch secondary panels into concept art, painted concept sheet style, comic style, cel style, line-art model sheet style, diagram style, flat-color character thumbnail style, or semi-illustrated board style.');
     expect(prompt).toContain('For DSLR Capture, all character-containing panels must read as DSLR-style rendered imagery, not drawn or painted concept art.');
     expect(prompt).toContain('CHARACTER PANEL STYLE PURITY');
@@ -492,6 +519,37 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
     expect(prompt).toContain('No flat color-blocking character miniatures');
   });
 
+  it('uses rendered supporting pose insets and local body-axis locks for premium animated 3D', () => {
+    const prompt = buildCharacterPitchSheetPrompt(buildInput({
+      characterRenderStyle: 'premium_animated_3d',
+      boardPresentationStyle: 'premium_film_board',
+      wardrobeDirection: 'Black polo, dark trousers, polished shoes.',
+    }));
+    const labels = buildPitchSheetCallouts(buildInput({
+      characterRenderStyle: 'premium_animated_3d',
+      wardrobeDirection: 'Black polo, dark trousers, polished shoes.',
+      worldEra: 'contemporary animated feature',
+    })).map(callout => callout.label);
+
+    expect(prompt).toContain('supporting pose render');
+    expect(prompt).toContain('Include one compact supporting pose render that preserves the same face, build, hairstyle, costume, props, body proportions, and emotional presence.');
+    expect(prompt).toContain('omit it instead of rendering a cartoon, flat illustration, vector, doodle, or off-style miniature.');
+    expect(prompt).toContain('GLOBAL CHARACTER INVARIANT CONTRACT');
+    expect(prompt).toContain('The selected style changes rendering/material language only; it must not recast the person.');
+    expect(prompt).toContain('Do not infer body mass from face/head/neck scans.');
+    expect(prompt).toContain('Structured values are board metadata and subtle fit guidance only');
+    expect(prompt).toContain('RENDERED INSET ENFORCEMENT');
+    expect(prompt).toContain('Never use a flat illustration, vector diagram, mascot drawing, cartoon miniature, simplified model-sheet doodle, icon body, chibi insert, silhouette diagram, or 2D auxiliary figure inside a rendered character sheet.');
+    expect(prompt).toContain('BODY AXIS LOCK');
+    expect(prompt).toContain('No split-body twist');
+    expect(prompt).not.toContain('Pose Silhouette');
+    expect(prompt).not.toContain('visible pose silhouette');
+    expect(prompt).not.toContain('Include one compact action pose / gesture study');
+    expect(prompt).not.toContain('Include one compact gesture study or stance study');
+    expect(labels).toContain('Pose Read');
+    expect(labels).not.toContain('Pose Silhouette');
+  });
+
   it('teaches the style validator and retry prompt to reject mixed-style sheets', () => {
     const prompt = buildCharacterPitchSheetPrompt(buildInput({
       characterRenderStyle: 'family_3d',
@@ -511,6 +569,22 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
 
     expect(validationPrompt).toContain('Also evaluate sheet-level style consistency');
     expect(validationPrompt).toContain(SHEET_STYLE_LOCK_NEGATIVE_TEXT);
+    expect(validationPrompt).toContain('Reject if the selected style family is mixed with another family.');
+    expect(validationPrompt).toContain('Reject if a Family 3D sheet contains photoreal or line-art inset.');
+    expect(validationPrompt).toContain('Reject if a clay sheet contains premium CG or malformed clay/flesh blob inset.');
+    expect(validationPrompt).toContain('Reject if a supporting pose inset or gesture inset uses a different rendering family than the main character board.');
+    expect(validationPrompt).toContain('Reject if a full-body panel shows upper-body/lower-body directional disagreement.');
+    expect(validationPrompt).toContain('cartoon inset in rendered sheet');
+    expect(validationPrompt).toContain('off-style supporting pose');
+    expect(validationPrompt).toContain('body-axis split');
+    expect(validationPrompt).toContain('profile axis cheat');
+    expect(validationPrompt).toContain('signed head-angle drift');
+    expect(validationPrompt).toContain('head label/render mismatch');
+    expect(validationPrompt).toContain('mirrored profile duplication');
+    expect(validationPrompt).toContain('left/right head ambiguity');
+    expect(validationPrompt).toContain('mixed render family');
+    expect(validationPrompt).toContain('identity recast');
+    expect(validationPrompt).toContain('morphology/body override leak');
     expect(correctionPrompt).toContain('SHEET STYLE LOCK CORRECTION PASS');
     expect(correctionPrompt).toContain('Correct style only. Do not change character likeness, proportions, wardrobe, identity, pose, head angle, or callouts.');
     expect(correctionPrompt).toContain(SHEET_STYLE_LOCK_NEGATIVE_TEXT);
@@ -527,9 +601,10 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
     );
 
     expect(prompt).toContain('SHEET STYLE LOCK');
-    expect(prompt).toContain('"style_family": "stylized_3D"');
-    expect(prompt).toContain('hero full-body render: inherit style_family "stylized_3D" exactly.');
-    expect(prompt).toContain('footwear detail inset: inherit style_family "stylized_3D" exactly.');
+    expect(prompt).toContain('"style_family": "premium_animated_3d"');
+    expect(prompt).toContain('hero full-body render: inherit style_family "premium_animated_3d" exactly.');
+    expect(prompt).toContain('supporting pose render: inherit style_family "premium_animated_3d" exactly.');
+    expect(prompt).toContain('footwear detail inset: inherit style_family "premium_animated_3d" exactly.');
     expect(prompt).toContain(SHEET_STYLE_LOCK_NEGATIVE_TEXT);
   });
 
@@ -715,7 +790,7 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
     }));
 
     expect(prompt).toContain('PROMPT PRIORITY ORDER');
-    expect(prompt.indexOf('1. Premium cinematic board quality.')).toBeLessThan(prompt.indexOf('2. One consistent actor-based identity.'));
+    expect(prompt.indexOf('1. Biometric / actor identity.')).toBeLessThan(prompt.indexOf('7. Premium cinematic board quality and presentation polish.'));
     expect(prompt).toContain('AUTHORITATIVE IDENTITY CONTRACT');
     expect(prompt).toContain('the original multi-view biometric source image set');
     expect(prompt).toContain('Do not substitute a similar-looking person.');
@@ -789,7 +864,7 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
 
     expect(prompt).toContain('Apply structured body specs only as a controlled proportional adjustment');
     expect(prompt).toContain('do not recast the actor, change the face, change the head, change the age impression');
-    expect(prompt).toContain('Because strict body specs is enabled, apply body specs more directly, but still preserve the same actor identity, same face, same head, same age impression, and same character source.');
+    expect(prompt).toContain('Because strict body specs is enabled, apply body specs more directly, but strict_body_specs still cannot change identity');
     expect(prompt).toContain('Body guide: 200 lb.');
   });
 
