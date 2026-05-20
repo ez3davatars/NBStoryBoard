@@ -246,16 +246,18 @@ export const buildPoseCoherenceNegativeTokens = (): string =>
     ].join(', ');
 
 export function buildWholeBodyAxisLockContract(): string {
-    return `BODY AXIS LOCK:
-- Every full-body panel must use one coherent whole-body viewing axis.
-- Head, neck, shoulders, sternum, ribcage, pelvis, hips, knees, ankles, feet, toe direction, and footwear direction must agree with the labeled view angle.
+    return `WHOLE BODY AXIS LOCK:
+- Every full-body view must have one continuous axis from head through feet.
+- Shoulders, ribcage, pelvis, knees, feet, and shoe direction must agree with the view label.
+- Side profile means true side through torso, pelvis, legs, feet, and shoes.
+- Do not render a side/profile panel with front-facing legs, front-facing shoes, or a semi-front torso.
+- Pelvis and footwear are hard orientation anchors.
 - No torso-front/legs-side mismatch.
 - No pelvis facing a different direction from shoulders.
 - No shoes pointing opposite the torso.
 - No side profile cheating.
 - No owl-turn anatomy.
-- Pelvis and footwear are hard orientation anchors.
-- No split-body twist, no torso-front/legs-side mismatch, no hips facing away from shoulders, no feet pointing opposite the torso, no accidental upper/lower axis conflict, no broken pelvis-to-ribcage orientation.
+- No split-body twist, no hips facing away from shoulders, no feet pointing opposite the torso, no accidental upper/lower axis conflict, no broken pelvis-to-ribcage orientation.
 - A panel is invalid if the pelvis, knees, feet, or footwear do not match the assigned body axis, even if the head and torso look correct.`;
 }
 
@@ -484,6 +486,13 @@ Review:
 - skull yaw and facial-plane visibility
 - nose direction, chin direction, jawline/profile consistency
 - eye visibility pattern and ear visibility pattern
+
+Flag and reject the following body-axis validation drift traits:
+- body-axis split (torso facing one direction, legs/pelvis facing another)
+- profile axis cheat (rendering a semi-front torso or hips in a side/profile panel)
+- feet direction mismatch (feet pointing in a direction conflicting with the torso or the view label)
+- torso-leg mismatch (torso and legs rotated on conflicting axes)
+- pelvis orientation mismatch (pelvis does not align with the requested global body axis)
 
 Reject obvious body-axis failures, such as torso profile with front-facing legs, chest turned left while feet point right, hips facing back while shoulders face side, or side-view body with lower body drifting to front/3/4.
 Reject obvious head-angle failures, such as a 90-degree side/profile panel with a 3/4 head, a 45-degree panel with a nearly front-facing head, a front panel with a side-turned head, a back panel leaking front facial features, or a profile body with the head turned toward the viewer.

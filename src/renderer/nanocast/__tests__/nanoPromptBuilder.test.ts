@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildNanoCastPrompt } from "../nanoPromptBuilder";
+import { resolveNanoCastStyleIdentityEnforcementConfig, getFallbackNanoCastStyleConfig } from "../../../prompts/nanoCastStyleIdentityEnforcement";
 import type { NanoActorBlueprint } from "../nanoTypes";
 
 const buildBlueprint = (overrides: Partial<NanoActorBlueprint> = {}): NanoActorBlueprint => ({
@@ -35,16 +36,20 @@ describe("buildNanoCastPrompt", () => {
     expect(prompt).toContain("Morphology controls BODY SILHOUETTE ONLY");
     expect(prompt).toContain("MORPHOLOGY MATRIX CONTRACT");
     expect(prompt).toContain("MORPHOLOGY BODY AUTHORITY MODEL");
+    expect(prompt).toContain("SURFACE MARK FIDELITY CONTRACT");
+    expect(prompt).toContain("do not invent, relocate, or multiply skin marks on arms, hands, torso, clothing, or body skin");
+    expect(prompt).toContain("NANOCAST STYLE-SPECIFIC IDENTITY ENFORCEMENT");
     expect(prompt).toContain("different person");
     expect(prompt).toContain("new actor");
     expect(prompt).toContain("face replacement");
+    expect(prompt).toContain("generic style-template face");
   });
 
   it("keeps Titan strict and muscular without fat inference", () => {
     const prompt = buildNanoCastPrompt(buildBlueprint({ morphologyKey: "titan" }));
 
     expect(prompt).toContain("STRICT BODY ARCHETYPE: broad-shouldered, powerful, muscular adult frame");
-    expect(prompt).toContain("Titan means muscular and broad, not fat");
+    expect(prompt).toContain("Titan means muscular/broad, not fat");
     expect(prompt).not.toMatch(/subtly/i);
   });
 
@@ -52,7 +57,7 @@ describe("buildNanoCastPrompt", () => {
     const prompt = buildNanoCastPrompt(buildBlueprint({ morphologyKey: "guardian" }));
 
     expect(prompt).toContain("STRICT BODY ARCHETYPE: sturdy solid adult frame");
-    expect(prompt).toContain("Guardian means sturdy and solid; it must not become obese unless explicit user body text asks for it");
+    expect(prompt).toContain("Guardian means sturdy/solid; it must not become obese unless explicit user body text asks for it");
   });
 
   it("keeps Scout lean and bans face-based body mass inference", () => {
@@ -76,6 +81,8 @@ describe("buildNanoCastPrompt", () => {
 
     expect(animated).toContain("No photorealism");
     expect(animated).toContain("no live-action realism");
+    expect(animated).toContain("no default cute animated face template");
+    expect(animated).toContain("no invented arm/body marks");
     expect(realism).toContain("No Pixar style");
     expect(realism).toContain("no anime");
     expect(realism).toContain("no cartoon proportions");
@@ -154,5 +161,22 @@ describe("buildNanoCastPrompt", () => {
     }));
 
     expect(prompt).toContain("Identity lock is above 90, so use maximum identity preservation");
+  });
+
+  it("handles fallback configuration and generated character source correctly", () => {
+    const unknownConfig = resolveNanoCastStyleIdentityEnforcementConfig("unknown_style_xyz");
+    expect(unknownConfig).toBeUndefined();
+
+    const fallbackConfig = getFallbackNanoCastStyleConfig();
+    expect(fallbackConfig.label).toBe("Family 3D Animation");
+
+    const prompt = buildNanoCastPrompt(buildBlueprint({
+      generatedCharacterSourceIndex: 3,
+      generatedCharacterSourceRole: "approved generated source"
+    }));
+
+    expect(prompt).toContain("GLOBAL CHARACTER INVARIANT CONTRACT");
+    expect(prompt).toContain("Generated character source remains the approved visual/body/costume source when supplied.");
+    expect(prompt).toContain("[IMAGE 3] controls body silhouette, outfit, costume, proportions, stance, and visual design. Biometric scans control face/head identity only.");
   });
 });

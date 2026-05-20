@@ -12,6 +12,7 @@ export type RegenerationTarget =
 export type LockedRegenerationContractOptions = {
     characterId: string;
     approvedSourceImageId?: string | null;
+    approvedSourceUsage?: string;
     biometricReferenceIds?: string[];
     regenerationTarget?: RegenerationTarget;
     identityLockPresent?: boolean;
@@ -46,6 +47,7 @@ const targetDescription: Record<RegenerationTarget, string> = {
 export const buildLockedRegenerationContract = ({
     characterId,
     approvedSourceImageId,
+    approvedSourceUsage,
     biometricReferenceIds = [],
     regenerationTarget = "quality_artifacts_only",
     identityLockPresent = false,
@@ -64,6 +66,7 @@ export const buildLockedRegenerationContract = ({
         generation_mode: "REGENERATE_LOCKED_CHARACTER",
         character_id: characterId,
         approved_source_image_id: approvedSourceImageId || null,
+        approved_source_usage: approvedSourceUsage || "approved continuity reference only; never identity authority when biometric references are supplied",
         biometric_reference_ids: biometricReferenceIds,
         locks: {
             identity_lock: {
@@ -108,7 +111,7 @@ REGENERATION MODE:
 - This request must not be handled as CREATE_NEW_CHARACTER.
 - ${LOCKED_REGENERATION_REQUIRED_PROMPT}
 - Active regeneration target: ${regenerationTarget}. ${targetDescription[regenerationTarget]}
-- Approved source image: ${approvedSourceImageId || "none supplied"}. If supplied, use it as the current approved character source for body, silhouette, wardrobe, style, pose attitude, and design continuity.
+- Approved source image: ${approvedSourceImageId || "none supplied"}. ${approvedSourceImageId ? (approvedSourceUsage || "If supplied, use it as the current approved continuity reference, while biometric references remain identity authority.") : "No previous generated result is approved as source authority for this pass."}
 - Biometric references: ${biometricReferenceIds.length ? biometricReferenceIds.join(", ") : "none supplied"}. If supplied, they remain the highest-priority identity authority.
 - Identity lock always outranks approved source image, style, costume, body, prompt edits, and board presentation.
 - Body lock source: ${bodyLockSource}${bodyDescription ? ` (${bodyDescription})` : ""}.

@@ -49,4 +49,6 @@ export interface NanoActorBlueprint {
   wardrobe: NanoWardrobeLayer;
   stylization: number;
   bodyOverride?: NanoBodyOverride;
+  generatedCharacterSourceIndex?: number | null;
+  generatedCharacterSourceRole?: string;
 }

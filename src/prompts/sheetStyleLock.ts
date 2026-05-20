@@ -105,10 +105,13 @@ export const SHEET_STYLE_LOCK_NEGATIVE_TEXT =
 const normalizeStyleId = (styleId?: string | null): string =>
     (styleId || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 
-export const resolveRenderFamily = (styleId?: string | null): RenderFamily => {
+export const resolveRenderFamily = (
+    styleId?: string | null,
+    fallback: RenderFamily = "premium_animated_3d"
+): RenderFamily => {
     const clean = normalizeStyleId(styleId);
-    if (!clean || clean === "none" || clean === "no_specific_style") return "photoreal";
-    return STYLE_ID_TO_RENDER_FAMILY[clean] || "photoreal";
+    if (!clean || clean === "none" || clean === "no_specific_style") return fallback;
+    return STYLE_ID_TO_RENDER_FAMILY[clean] || fallback;
 };
 
 export const resolveSheetStyleFamily = (styleId?: string | null): SheetStyleFamily =>
@@ -264,15 +267,16 @@ SHEET STYLE VALIDATION:
 };
 
 export const shouldApplySheetStyleLock = (prompt: string): boolean =>
-    /\b(character pitch sheet|character reference sheet|reference sheet|turnaround|head studies|full-body|footwear|material detail|gesture study|supporting pose render)\b/i.test(prompt);
+    /\b(character pitch sheet|pitch sheet|character reference sheet|reference sheet|character sheet|turnaround sheet|production board|model sheet)\b/i.test(prompt);
 
 export const withSheetStyleLockContract = (
     prompt: string,
     styleId?: string | null,
-    intent: SheetStyleLockIntent = {}
+    intent: SheetStyleLockIntent = {},
+    force = false
 ): string => {
     if (/SHEET STYLE LOCK:/i.test(prompt)) return prompt;
-    if (!shouldApplySheetStyleLock(prompt)) return prompt;
+    if (!force && !shouldApplySheetStyleLock(prompt)) return prompt;
     return `${prompt.trim()}\n\n${buildSheetStyleLockContract(styleId, intent)}`;
 };
 

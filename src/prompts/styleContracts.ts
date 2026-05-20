@@ -673,6 +673,22 @@ Reject the sheet if a profile head appears too frontal.
 Reject the sheet if a 3/4 head appears too profile or too frontal.
 Reject the sheet if the labeled head direction does not match the rendered craniofacial direction.
 Reject the sheet if one head study appears to be a mirrored duplicate of another.
+Reject if the output is a different person than the biometric/source identity.
+Reject if a generic Family 3D face replaces the scan.
+Reject if the facial-hair silhouette changes away from the source.
+Reject if the scalp/bald shape changes away from the source.
+Reject if brow/eye/nose/mouth/jaw relationships change away from the source.
+Reject if age impression changes away from the source.
+Reject if unsupported random marks appear.
+Reject if face/head/neck marks are relocated to arms/body.
+Reject if the morphology body archetype is ignored.
+Reject if Scout becomes heavy-set or overweight.
+Reject if Family 3D output becomes too generic or not based on scan.
+Reject if two head-study panels show the same signed viewpoint with different labels.
+Reject if a head-study label does not match the rendered view direction.
+Reject if a callout arrow points to the wrong object category.
+Reject if "Layering System" appears when no actual layering is visible.
+Reject if side/profile body view shows torso/legs/feet on conflicting axes.
 
 Possible drift traits:
 - mixed render family
@@ -685,7 +701,15 @@ Possible drift traits:
 - mirrored profile duplication
 - left/right head ambiguity
 - identity recast
+- generic style-template face
+- surface mark drift
+- invented body marks
 - morphology/body override leak
+- unsupported body-mass inference
+- duplicate head view
+- mislabeled head direction
+- inaccurate callout target
+- unsupported layering callout
 
 Return ONLY valid JSON:
 {

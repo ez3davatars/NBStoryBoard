@@ -230,6 +230,29 @@ const CHARACTER_RENDER_STYLE_OPTIONS: CharacterRenderStyleOption[] = [
 
 const LEGACY_PREMIUM_ANIMATED_3D_STYLE_ID = ["p", "i", "x", "a", "r"].join("");
 
+const mapNanoStyleToPitchSheetRenderStyle = (value: unknown): NonNullable<CharacterPitchSheetInput["characterRenderStyle"]> => {
+    const rawStyle = typeof value === "string" ? value.trim() : "";
+    if (rawStyle === "premium_animated_3d" || rawStyle === "family_3d") {
+        return "family_3d";
+    }
+    if (rawStyle === "premium_cg" || rawStyle === "hyper_real" || rawStyle === "realism") {
+        return "cinematic_photoreal";
+    }
+    if (rawStyle === "exact_studio") {
+        return "exact_studio";
+    }
+    if (rawStyle === "retro_cel" || rawStyle === "retro_anime") {
+        return "retro_cel";
+    }
+    if (rawStyle === "comic_book" || rawStyle === "graphic_novel") {
+        return "comic_book";
+    }
+    if (rawStyle === "cyberpunk" || rawStyle === "cyberpunk_neon") {
+        return "cyberpunk_neon";
+    }
+    return normalizePitchSheetRenderStyle(rawStyle);
+};
+
 const normalizePitchSheetRenderStyle = (value: unknown): NonNullable<CharacterPitchSheetInput["characterRenderStyle"]> => {
     const clean = typeof value === "string" ? value.trim() : "";
     if (clean === LEGACY_PREMIUM_ANIMATED_3D_STYLE_ID) return "premium_animated_3d";
@@ -723,6 +746,15 @@ export default function PortraitStudio() {
         const payload: NanoPitchSheetHandoff | null = state.pendingPitchSheetHandoff;
         if (!payload) return;
 
+        console.warn('[PORTRAIT_NANO_HANDOFF_RECEIVED]', {
+            mode: payload.mode,
+            finalCharacterUrl: payload.finalCharacterUrl,
+            characterStyleReferenceUrl: payload.characterStyleReferenceUrl,
+            identityImageCount: payload.identityImages?.length,
+            generatedSourceImageIndex: payload.generatedSourceImageIndex,
+            generatedSourceRole: payload.generatedSourceRole
+        });
+
         try {
             if (payload.source !== "nanocast_biometric_scan" || !Array.isArray(payload.identityImages) || payload.identityImages.length === 0) {
                 dispatch({ type: "ADD_LOG", payload: { message: "Pitch Sheet handoff was empty. Please send the NanoCast scan again.", type: "error" } });
@@ -748,9 +780,11 @@ export default function PortraitStudio() {
                 : "Preserve hair, hairline, facial hair, and grooming consistently across every view.";
             const productionNote = "Maintain actor-based likeness continuity across hero portrait, head studies, turnaround views, and expression study.";
 
+            const mappedStyle = mapNanoStyleToPitchSheetRenderStyle(payload.selectedStyle);
             setMode("pitch_sheet");
             setGeneratedImage(null);
             setPitchSheetInput(prev => ({
+                characterRenderStyle: mappedStyle,
                 ...prev,
                 referenceImageUrl: undefined,
                 referenceImages,
@@ -758,6 +792,7 @@ export default function PortraitStudio() {
                 identitySource,
                 identityStrength: payload.identityStrength || 100,
                 characterStyleReferenceUrl: payload.mode === "scan_plus_character" ? payload.finalCharacterUrl || undefined : undefined,
+                sourcePanelMode: payload.mode === "scan_plus_character" ? "costume_matched" : prev.sourcePanelMode,
                 visualAge: "",
                 height: "",
                 heightIn: undefined,
@@ -986,7 +1021,9 @@ export default function PortraitStudio() {
         const portraitIdentityReference = safePitchSheetInput.referenceImageUrl
             ? [{
                 url: safePitchSheetInput.referenceImageUrl,
-                label: hasGeneratedCharacterSource
+                label: safePitchSheetInput.identitySource === "portrait_reference"
+                    ? "Image A - Primary Approved Character Portrait: preserve this character's body, outfit, silhouette, proportions, render style, costume, and overall design."
+                    : hasGeneratedCharacterSource
                     ? "Additional Portrait Identity Guide - secondary to Image A design and biometric identity anchors."
                     : "Actor Likeness Guide"
             }]
@@ -1194,6 +1231,7 @@ export default function PortraitStudio() {
                         identityLock: isBiometricPitchSheetSource(pitchSheetInput.identitySource)
                             ? pitchSheetInput.identityLock
                             : undefined,
+                        sheetStyleLock: true,
                         styleCategory: {
                             enabled: pitchSheetCharacterRenderStyle !== "no_specific_style",
                             styleId: pitchSheetCharacterRenderStyle,

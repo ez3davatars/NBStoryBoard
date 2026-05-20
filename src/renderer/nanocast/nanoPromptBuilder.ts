@@ -1,8 +1,9 @@
-import { buildGlobalCharacterInvariantContract } from "../../prompts/identityContracts";
+import { buildGlobalCharacterInvariantContract, buildSurfaceMarkFidelityContract } from "../../prompts/identityContracts";
+import { buildNanoCastStyleIdentityEnforcementContract, resolveNanoCastStyleIdentityEnforcementConfig, getFallbackNanoCastStyleConfig } from "../../prompts/nanoCastStyleIdentityEnforcement";
 import { resolveRenderFamily } from "../../prompts/styleContracts";
 import { buildNanoIdentityContract } from "./nanoIdentityAnchor";
-import { NANO_MORPHOLOGY_GUIDES, buildNanoMorphologyContract } from "./nanoMorphologyGuides";
-import { buildNanoStyleProtocol } from "./nanoStyleProtocols";
+import { buildNanoMorphologyBodyAuthorityContract } from "./nanoMorphologyGuides";
+import { NANO_STYLE_PROTOCOLS, buildNanoStyleProtocol } from "./nanoStyleProtocols";
 import type { NanoActorBlueprint, NanoBodyScope, NanoGenderMode } from "./nanoTypes";
 
 const clampPercent = (value: number): number => {
@@ -45,56 +46,6 @@ const buildBodyScopeSection = (scope: NanoBodyScope): string => {
   }
 };
 
-const formatHeight = (inches: number): string => {
-  const safeInches = Number.isFinite(inches) ? Math.max(0, Math.round(inches)) : 70;
-  const feet = Math.floor(safeInches / 12);
-  const remainingInches = safeInches % 12;
-  return `${feet}'${remainingInches}"`;
-};
-
-const buildBodyMorphologySection = (blueprint: NanoActorBlueprint): string => {
-  const guide = NANO_MORPHOLOGY_GUIDES[blueprint.morphologyKey];
-  const bodyOverrideActive = Boolean(blueprint.bodyOverride?.active);
-  const heightLine = typeof blueprint.bodyOverride?.heightIn === "number" && Number.isFinite(blueprint.bodyOverride.heightIn)
-    ? `- Target Height: ${formatHeight(blueprint.bodyOverride.heightIn)}`
-    : "- Target Height: user-edited value unavailable";
-  const weightLine = typeof blueprint.bodyOverride?.weightLbs === "number" && Number.isFinite(blueprint.bodyOverride.weightLbs)
-    ? `- Target Mass: ${Math.round(blueprint.bodyOverride.weightLbs / 5) * 5} lbs`
-    : "- Target Mass: user-edited value unavailable";
-  const advancedOverrideBlock = bodyOverrideActive
-    ? `ADVANCED BODY OVERRIDE ACTIVE:
-${heightLine}
-${weightLine}
-- Apply these user-edited body values to the full-body silhouette only.
-- Do not change face, skull, scalp/bald shape, facial hair, expression, skin tone, age impression, or identity.`
-    : `ADVANCED BODY OVERRIDE INACTIVE:
-- Ignore default height/weight slider values for body generation.
-- Use the selected Morphological Matrix archetype as the body silhouette authority.`;
-
-  return `BODY MORPHOLOGY:
-- Selected Morphological Matrix: ${guide.label}.
-- The selected Morphological Matrix body archetype is strict for this Nano Cast generation.
-- Apply ${guide.label} to the generated full-body silhouette.
-- Do not infer a different body type from the face/head/neck biometric images.
-- Biometric images preserve face/head identity only.
-- If Advanced body override is inactive, do not use default height/weight slider values.
-- If Advanced body override is active, combine the selected morphology with the edited height/weight while preserving identity.
-
-${advancedOverrideBlock}
-
-FACE/NECK BODY-INFERENCE BAN:
-- Do not infer overweight, stocky, obese, bulky, large-bellied, skinny, younger, older, or bodybuilder body type from face/head/neck scans.
-- Large neck, full cheeks, broad jaw, rounded chin, mature face weight, facial hair, and close camera crop are facial identity features only, not body-mass evidence.
-
-OVERWEIGHT OUTPUT RULE:
-- Overweight/heavy-set/obese/large-belly output is allowed only if Guardian is selected and Advanced override or user text explicitly asks for heavy/overweight.
-- Overweight/heavy-set/obese/large-belly output is allowed only if the user explicitly enters overweight/heavy-set/obese/large belly/stocky/bulky in an advanced/custom body field.
-- Pitch Sheet Brief build fields may request those traits only in the pitch sheet workflow; do not import those body traits into the base Nano Cast actor unless explicitly passed.
-- Scout must never produce overweight, heavy-set, bulky, or large-belly bodies.
-- Titan means muscular and broad, not fat.
-- Guardian means sturdy and solid; it must not become obese unless explicit user body text asks for it.`;
-};
-
 const buildWardrobeSection = (outfitPrompt?: string): string => {
   const outfit = outfitPrompt?.trim();
   return `WARDROBE LAYER:
@@ -126,14 +77,28 @@ const buildLogoSection = (hasLogo?: boolean, logoPlacement?: string): string => 
 - Logo must not change costume structure, body, identity, face, head shape, age impression, or likeness.`;
 };
 
+const NANO_STYLE_KEY_TO_STYLE_ID: Record<NanoActorBlueprint["styleKey"], string> = {
+  premiumAnimated3D: "premium_animated_3d",
+  premiumCGRealism: "premium_cg",
+  retroCelAnime: "retro_anime",
+  graphicNovelNoir: "graphic_noir",
+  cyberpunkV2: "cyberpunk",
+  exactLikenessStudio: "exact_studio"
+};
+
 const NEGATIVE_CONSTRAINTS = [
   "different person",
   "new actor",
   "recast identity",
   "face replacement",
+  "generic style-template face",
   "identity averaging",
   "morphology guide becoming the person",
   "style sample becoming the person",
+  "surface mark drift",
+  "invented body marks",
+  "random skin dots",
+  "face/head/neck marks relocated to arms or body",
   "photorealism in animated mode",
   "cartooning in realism mode",
   "mixed style",
@@ -155,9 +120,20 @@ export const buildNanoCastPrompt = (blueprint: NanoActorBlueprint): string => {
   const identityLock = clampPercent(blueprint.identityAnchor.identityLock);
   const stylization = clampPercent(blueprint.stylization);
   const source = blueprint.identityAnchor.sourceImageId || "the uploaded biometric scan references";
+  const selectedStyleId = NANO_STYLE_KEY_TO_STYLE_ID[blueprint.styleKey];
+  const selectedStyleLabel = NANO_STYLE_PROTOCOLS[blueprint.styleKey].label;
+  const hasGeneratedCharacterSource =
+    typeof blueprint.generatedCharacterSourceIndex === "number" &&
+    Number.isFinite(blueprint.generatedCharacterSourceIndex);
   const ageLine = typeof blueprint.identityAnchor.apparentAge === "number" && Number.isFinite(blueprint.identityAnchor.apparentAge)
     ? `- Apparent age target: approximately ${Math.round(blueprint.identityAnchor.apparentAge)}. Preserve the biometric age impression and do not age-shift away from the scanned person.`
     : "- Preserve the apparent age from the biometric scan.";
+
+  const styleConfig = resolveNanoCastStyleIdentityEnforcementConfig(selectedStyleId) ?? getFallbackNanoCastStyleConfig();
+  const combinedNegatives = [
+    ...NEGATIVE_CONSTRAINTS,
+    ...styleConfig.negativeRules
+  ];
 
   return [
     buildNanoIdentityContract({
@@ -166,12 +142,13 @@ export const buildNanoCastPrompt = (blueprint: NanoActorBlueprint): string => {
     }),
     buildGlobalCharacterInvariantContract({
       hasBiometricIdentity: true,
-      hasGeneratedCharacterSource: false,
-      selectedStyleId: blueprint.styleKey,
-      selectedStyleFamily: resolveRenderFamily(blueprint.styleKey),
+      hasGeneratedCharacterSource: hasGeneratedCharacterSource,
+      selectedStyleId,
+      selectedStyleFamily: resolveRenderFamily(selectedStyleId),
       hasExplicitBodyOverride: Boolean(blueprint.bodyOverride?.active),
       hasExplicitProps: Boolean(blueprint.wardrobe.outfitPrompt?.trim() || blueprint.wardrobe.hasLogo)
     }),
+    buildSurfaceMarkFidelityContract(),
     `BIOMETRIC SOURCE RULE:
 - Use ${source} as the biometric source for the actor.
 - Biometric Scan -> Identity Anchor -> Actor Blueprint -> Morphology Modifier -> Style Translator -> Wardrobe / Hair / Logo Surface Layer -> Generation Prompt -> Validation Guard.
@@ -181,9 +158,19 @@ export const buildNanoCastPrompt = (blueprint: NanoActorBlueprint): string => {
 ${ageLine}
 - ${describeGenderMode(blueprint.identityAnchor.genderMode)}
 - Gender mode guides presentation only and must not override biometric identity.`,
-    buildNanoMorphologyContract(blueprint.morphologyKey),
-    buildBodyMorphologySection(blueprint),
+    buildNanoMorphologyBodyAuthorityContract(blueprint.morphologyKey, blueprint.bodyOverride),
     buildNanoStyleProtocol(blueprint.styleKey, stylization),
+    buildNanoCastStyleIdentityEnforcementContract(selectedStyleId, {
+      selectedStyleLabel,
+      identityRangeText: source,
+      requestedIdentityStrength: identityLock,
+      usesBiometricIdentity: true,
+      bodyGuidance: hasGeneratedCharacterSource
+        ? `[IMAGE ${blueprint.generatedCharacterSourceIndex}] controls body silhouette, outfit, costume, proportions, stance, and visual design. Biometric scans control face/head identity only.`
+        : "selected Morphological Matrix controls body silhouette only; Advanced height/weight applies only when explicitly active",
+      appliesTo: "Nano Cast primary generated actor render, handoff image, recent thumbnail, and any downstream character-derived output",
+      generatedCharacterSourceIndex: blueprint.generatedCharacterSourceIndex
+    }),
     buildBodyScopeSection(blueprint.bodyScope),
     buildWardrobeSection(blueprint.wardrobe.outfitPrompt),
     buildHairSection(blueprint.wardrobe.hairPrompt),
@@ -200,6 +187,6 @@ ${ageLine}
 - This render must depict the same scanned person as other Nano Cast renders in this session.
 - Do not reinterpret, recast, beautify, age-shift, weight-shift, or replace the actor.`,
     `NEGATIVE CONSTRAINTS:
-- ${NEGATIVE_CONSTRAINTS.join(", ")}.`
+- ${combinedNegatives.join(", ")}.`
   ].join("\n\n");
 };

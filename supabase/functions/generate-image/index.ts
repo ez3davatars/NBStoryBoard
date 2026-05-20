@@ -33,6 +33,7 @@ type GenerateImageRequestBody = {
     generationType?: unknown;
     resolutionTier?: unknown;
     requiredCredits?: unknown;
+    hostedQualityGateBilling?: unknown;
   } | unknown;
   generationType?: unknown;
   resolutionTier?: unknown;
@@ -43,6 +44,7 @@ type GenerateImageRequestBody = {
 type GenerationType = 'standard' | 'character_sheet';
 type ResolutionTier = '1k' | '2k' | '4k';
 type ExpectedResponseType = 'image' | 'text' | 'json';
+type HostedQualityGateBilling = 'skip' | 'included' | 'paid';
 
 type GeminiProviderPart = {
   text?: string;
@@ -364,11 +366,32 @@ const deriveResolutionTierFromRequestBody = (requestBody: unknown): ResolutionTi
   return normalizeResolutionTier(imageConfig.imageSize);
 };
 
-const normalizeClientRequiredCredits = (value: unknown): number | null => {
+const normalizeHostedQualityGateBilling = (value: unknown): HostedQualityGateBilling | null => {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'skip' || normalized === 'included' || normalized === 'paid') return normalized;
+  return null;
+};
+
+const isIncludedHostedQualityGateBilling = (
+  options: Record<string, unknown>,
+  expectedResponseType: ExpectedResponseType
+): boolean =>
+  normalizeHostedQualityGateBilling(options.hostedQualityGateBilling) === 'included' &&
+  (expectedResponseType === 'text' || expectedResponseType === 'json');
+
+const normalizeClientRequiredCredits = (value: unknown, allowZero = false): number | null => {
   if (value === undefined || value === null || value === '') return null;
   const numeric = Number(value);
-  if (!Number.isInteger(numeric) || numeric < 1) {
-    throw new HttpError(400, 'INVALID_REQUIRED_CREDITS', 'requiredCredits must be a positive integer.');
+  const minimum = allowZero ? 0 : 1;
+  if (!Number.isInteger(numeric) || numeric < minimum) {
+    throw new HttpError(
+      400,
+      'INVALID_REQUIRED_CREDITS',
+      allowZero
+        ? 'requiredCredits must be a non-negative integer.'
+        : 'requiredCredits must be a positive integer.'
+    );
   }
   return numeric;
 };
@@ -379,7 +402,7 @@ const calculateBackendRequiredCredits = (_generationType: GenerationType, resolu
   return 1;
 };
 
-const readHostedCreditMetadata = (body: GenerateImageRequestBody) => {
+const readHostedCreditMetadata = (body: GenerateImageRequestBody, expectedResponseType: ExpectedResponseType) => {
   const payload = body.payload ?? {};
   const options = isObjectRecord(body.options) ? body.options : {};
 
@@ -400,11 +423,15 @@ const readHostedCreditMetadata = (body: GenerateImageRequestBody) => {
     deriveResolutionTierFromRequestBody(payload.requestBody) ??
     '1k';
 
-  const backendCalculatedRequiredCredits = calculateBackendRequiredCredits(generationType, resolutionTier);
+  const includedQualityGate = isIncludedHostedQualityGateBilling(options, expectedResponseType);
+  const backendCalculatedRequiredCredits = includedQualityGate
+    ? 0
+    : calculateBackendRequiredCredits(generationType, resolutionTier);
   const clientRequiredCredits = normalizeClientRequiredCredits(
     body.requiredCredits ??
     payload.requiredCredits ??
-    options.requiredCredits
+    options.requiredCredits,
+    includedQualityGate
   );
 
   if (clientRequiredCredits !== null && clientRequiredCredits !== backendCalculatedRequiredCredits) {
@@ -966,7 +993,7 @@ serve(async (req) => {
     const expectedResponseType = readExpectedResponseType(requestBody);
     expectedResponseTypeForFailure = expectedResponseType;
 
-    const creditMetadata = readHostedCreditMetadata(requestBody);
+    const creditMetadata = readHostedCreditMetadata(requestBody, expectedResponseType);
     let currentCredits = await readHostedCreditBalance(supabaseService, userId);
 
     if (currentCredits < creditMetadata.requiredCredits) {

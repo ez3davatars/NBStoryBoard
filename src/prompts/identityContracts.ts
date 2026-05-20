@@ -93,10 +93,10 @@ export function buildGlobalCharacterInvariantContract(ctx: CharacterInvariantCon
 }
 
 export const BIOMETRIC_IDENTITY_LOCK_REQUIRED_PROMPT =
-    "Use the uploaded biometric reference images as the absolute source of truth for this character's identity. Preserve the same visible facial structure, skull/head/scalp shape, hairline or baldness pattern, brow shape and placement, eye shape and spacing, nose shape and projection, mouth shape and width, jawline, cheeks, chin, ears, skin tone value, skin marks, age impression, facial hair shape/length/density/color pattern if present, body build if visible, and distinctive identity traits across every panel. The render style may change only the artistic treatment, not the identity.";
+    "Use the uploaded biometric reference images as the absolute source of truth for this character's identity. Preserve the same visible facial structure, skull/head/scalp shape, hairline or baldness pattern, brow shape and placement, eye shape and spacing, nose shape and projection, mouth shape and width, jawline, cheeks, chin, ears, skin tone value, skin marks (SURFACE MARK FIDELITY: keep facial surface treatment clean, restrained, and identity-faithful; ignore temporary texture, lighting noise, compression artifacts, shaving texture, and other non-identity surface noise; preserve only stable identity-relevant facial details clearly visible across biometric references), age impression, facial hair shape/length/density/color pattern if present (if the subject has a goatee but the upper lip is clean-shaven, you MUST keep the upper lip completely smooth, bald, and hairless, with absolutely no mustache or stubble), body build if visible, and distinctive identity traits across every panel. The render style may change only the artistic treatment, not the identity.";
 
 export const BIOMETRIC_IDENTITY_LOCK_NEGATIVE_TEXT =
-    "No identity drift. No face redesign. No altered head, skull, scalp, or baldness shape. No changed hairline, baldness pattern, hairstyle, brow, eyes, nose, mouth, jawline, cheeks, chin, ears, skin tone, age impression, ethnicity, facial hair shape, facial hair length, facial hair density, facial hair color pattern, body build, or distinctive identity traits. No beautification. No cleanup into a smoother stock actor. No generic face. No stylized replacement face. No cartoon face replacing the biometric likeness. No younger version. No older version. No slimmer face. No wider face. No prompt update, style update, costume update, layout update, or regeneration pass may weaken biometric likeness.";
+    "No identity drift. No face redesign. No altered head, skull, scalp, or baldness shape. No changed hairline, baldness pattern, hairstyle, brow, eyes, nose, mouth, jawline, cheeks, chin, ears, skin tone, age impression, ethnicity, facial hair shape, facial hair length, facial hair density, facial hair color pattern, body build, or distinctive identity traits. No beautification. No cleanup into a smoother stock actor. No generic face. No stylized replacement face. No cartoon face replacing the biometric likeness. No younger version. No older version. No slimmer face. No wider face. No invented or exaggerated skin marks, no conversion of noise/pores/shadows into facial marks, no relocation or multiplication of marks. No mustache if the upper lip is clean-shaven in the reference scan, no upper lip stubble. No prompt update, style update, costume update, layout update, or regeneration pass may weaken biometric likeness.";
 
 export const createBiometricIdentityLock = ({
     enabled = true,
@@ -170,7 +170,8 @@ export const buildBiometricIdentityLockContract = (
     const styleLine = lock.selectedStyleLabel
         ? `Selected style "${lock.selectedStyleLabel}" changes rendering treatment only; it must not replace this character's biometric likeness.`
         : "Selected or detected render style changes artistic treatment only; it must not replace this character's biometric likeness.";
-    const generatedSourceLine = lock.generatedSourceImageIndex
+    const hasGeneratedSourceImageIndex = typeof lock.generatedSourceImageIndex === "number" && Number.isFinite(lock.generatedSourceImageIndex);
+    const generatedSourceLine = hasGeneratedSourceImageIndex
         ? `Generated source image [IMAGE ${lock.generatedSourceImageIndex}] is secondary to identity_lock: use it for wardrobe, design, body presentation, pose language, and visual styling only. If it conflicts with uploaded biometric references, preserve biometric identity.`
         : "Generated source character images, previews, recent generations, or prior outputs are secondary to identity_lock and must never replace uploaded biometric identity.";
     const appliesToLine = lock.appliesTo
@@ -261,9 +262,12 @@ export const buildStrictBiometricIdentityContract = ({
 - Generate the same person shown in the scan, translated into the selected style.
 - Do not invent a new face, mascot, actor, lookalike, cleaner stock performer, or generic character.
 - Preserve the subject's recognizable facial structure, skull shape, head/scalp shape, brow structure, eye spacing, eye angle, nose bridge/tip/projection, cheek volume, mouth width and shape, jaw/chin structure, ears, skin tone value, age impression, and visible facial marks.
+- Preserve the real head silhouette, scalp/bald shape, brow placement, eye spacing, skin tone value, age impression, neck relationship, shoulder relationship, and distinctive supported marks.
 - Preserve facial topology: the source person's brow-to-eye relationship, eye spacing, nose projection, cheek volume, mouth width, jaw mass, chin shape, and facial asymmetries must survive stylization.
 - Preserve the bald head or hair state shown in the biometric scan.
-- Preserve the visible facial-hair state exactly: if facial hair is present, keep its shape, outline, density, length impression, color distribution, and placement; do not trim, shorten, reshape, recolor, or simplify it into a generic mustache, beard, or goatee. If the subject is clean-shaven, do not add stubble, mustache, beard, or goatee.
+- Preserve the visible facial-hair state exactly: if facial hair is present, keep its shape, outline, density, length impression, color distribution, and placement; do not trim, shorten, reshape, recolor, or simplify it.
+- MUSTACHE AND UPPER LIP PROHIBITION: If the subject has facial hair on the chin (such as a goatee) but the upper lip is clean-shaven, you MUST keep the upper lip completely smooth, bald, and hairless. Absolutely do NOT draw a mustache, stubble, or shadow on the upper lip.
+- If the subject is clean-shaven, do not add stubble, mustache, beard, or goatee.
 - Preserve mature facial features and fuller/broader face structure when shown by the scan, but do not translate facial fullness into overweight body mass.
 - Stylization may simplify texture/rendering, but it must not erase recognizable identity, shrink the broad mature face, soften the jaw/chin into a generic cartoon face, or average the nose/eyes/brow into a style template.
 - Do not make the subject younger, slimmer, smoother, more symmetrical, or more conventionally attractive unless explicitly requested.
@@ -273,3 +277,28 @@ ${highLock ? "- HIGH LOCK ENFORCEMENT: facial geometry and distinctive identity 
 - When style defaults conflict with biometric facial topology, preserve biometric topology and express style through materials, shader, lighting, proportions around the existing likeness, and non-photoreal surface treatment.
 - Treat scan clothing and background as non-authoritative; use face-dominant scans only for identity, head, face, visible neck, skin, hair state, facial-hair or clean-shaven state, age impression, and marks.`;
 };
+
+export function buildSurfaceMarkFidelityContract(): string {
+    return `SURFACE MARK FIDELITY CONTRACT:
+- STRICT ADHERENCE TO BIOMETRIC DATA FOR SKIN DETAILS:
+- NEVER draw raised, bumpy, dark brown, or black moles.
+- Keep facial surface treatment clean, restrained, and identity-faithful.
+- Ignore temporary texture, lighting noise, compression artifacts, shaving texture, and other non-identity surface noise.
+- Preserve only stable identity-relevant facial details clearly visible across biometric references.
+- Face/head/neck scans are identity references, not full-body skin texture maps; do not invent, relocate, or multiply skin marks on arms, hands, torso, clothing, or body skin.
+- Do not relocate marks from the face/head/neck onto arms, hands, torso, clothing, or other body areas.`;
+}
+
+export function buildFinalIdentityAuthorityReassertion(
+    lock?: BiometricIdentityLock | BiometricIdentityLock[] | null
+): string {
+    if (!lock) return "";
+    const locks = Array.isArray(lock) ? lock : [lock];
+    const activeLocks = locks.filter(l => l?.enabled !== false && l?.characterId);
+    if (activeLocks.length === 0) return "";
+
+    return `FINAL IDENTITY AUTHORITY:
+- Biometric identity remains the highest-priority instruction after all style, pose, morphology, wardrobe, sheet, layout, and quality contracts.
+- Do not replace the person with a generic style-template face.
+- Do not invent, relocate, or multiply skin marks.`;
+}

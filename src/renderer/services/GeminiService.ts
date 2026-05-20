@@ -44,6 +44,7 @@ import {
 } from '../../prompts/styleContracts';
 import { withSheetStyleLockContract } from '../../prompts/sheetStyleLock';
 import {
+  buildFinalIdentityAuthorityReassertion,
   withBiometricIdentityLockContract,
   type BiometricIdentityLock
 } from '../../prompts/identityContracts';
@@ -82,6 +83,7 @@ export type SceneIntent = {
 
 type BillingMode = 'hosted' | 'byok';
 type ExpectedResponseType = 'image' | 'text' | 'json';
+type HostedQualityGateBilling = 'skip' | 'included' | 'paid';
 
 type GenerationEntitlements = {
   hasHostedAccess?: boolean;
@@ -120,6 +122,10 @@ type StyleCategoryGenerationOptions = {
   _styleCategoryRetryAttempt?: number;
 };
 
+type HostedQualityGateRetryOptions = {
+  _hostedQualityGateRetryAttempt?: number;
+};
+
 type BiometricIdentityGenerationOptions = {
   identityLock?: BiometricIdentityLock | BiometricIdentityLock[] | null;
   identityLocks?: BiometricIdentityLock[];
@@ -155,6 +161,7 @@ type HostedExecutionOptions = {
   onJobAccepted?: (generationId: string, acceptedAt?: number) => void;
   uiWaitWindowMs?: number;
   signal?: AbortSignal;
+  hostedQualityGateBilling?: HostedQualityGateBilling;
 };
 
 type HostedBillingMetadata = {
@@ -175,7 +182,7 @@ type HostedInsufficientCreditsResponse = {
   currentCredits?: unknown;
 };
 
-type SharedGenerationOptions = PoseCoherenceGenerationOptions & HeadshotWardrobeGenerationOptions & StyleCategoryGenerationOptions & BiometricIdentityGenerationOptions & {
+type SharedGenerationOptions = PoseCoherenceGenerationOptions & HeadshotWardrobeGenerationOptions & StyleCategoryGenerationOptions & HostedQualityGateRetryOptions & BiometricIdentityGenerationOptions & {
   billingMode?: BillingMode;
   entitlements?: GenerationEntitlements;
   onJobAccepted?: (generationId: string, acceptedAt?: number) => void;
@@ -184,7 +191,9 @@ type SharedGenerationOptions = PoseCoherenceGenerationOptions & HeadshotWardrobe
   creditRenderType?: HostedCreditRenderType;
   uiWaitWindowMs?: number;
   signal?: AbortSignal;
-  hostedQualityGateBilling?: 'skip' | 'paid';
+  hostedQualityGateBilling?: HostedQualityGateBilling;
+  sheetStyleLock?: boolean;
+  characterAnatomyIntegrity?: boolean;
 };
 
 type ImageGenerationOptions = SharedGenerationOptions & {
@@ -194,17 +203,40 @@ type ImageGenerationOptions = SharedGenerationOptions & {
   strictMode?: boolean;
 };
 
+const withFinalIdentityAuthorityContract = (
+  prompt: string,
+  identityLock?: BiometricIdentityLock | BiometricIdentityLock[] | null
+): string => {
+  const finalIdentityAuthority = buildFinalIdentityAuthorityReassertion(identityLock);
+  if (!finalIdentityAuthority) return prompt;
+  // Appends FINAL IDENTITY AUTHORITY after all style/pose/sheet/anatomy contracts.
+  if (prompt.includes('FINAL IDENTITY AUTHORITY:')) return prompt;
+  return `${prompt}\n\n${finalIdentityAuthority}`;
+};
+
 const QUALITY_GATE_UI_WAIT_WINDOW_MS = 90000;
 
 const withQualityGateWaitWindow = <T extends SharedGenerationOptions>(options: T): T => ({
   ...options,
   imageSize: undefined,
   creditRenderType: undefined,
-  uiWaitWindowMs: Math.min(options.uiWaitWindowMs ?? QUALITY_GATE_UI_WAIT_WINDOW_MS, QUALITY_GATE_UI_WAIT_WINDOW_MS)
+  uiWaitWindowMs: Math.min(options.uiWaitWindowMs ?? QUALITY_GATE_UI_WAIT_WINDOW_MS, QUALITY_GATE_UI_WAIT_WINDOW_MS),
+  hostedQualityGateBilling: options.hostedQualityGateBilling ?? 'included'
 });
 
 const shouldSkipHostedQualityGate = (options: SharedGenerationOptions): boolean =>
-  options.billingMode === 'hosted' && options.hostedQualityGateBilling !== 'paid';
+  options.billingMode === 'hosted' && options.hostedQualityGateBilling === 'skip';
+
+const shouldRejectHostedQualityGateFailure = (options: SharedGenerationOptions): boolean =>
+  options.billingMode === 'hosted' && options.hostedQualityGateBilling !== 'skip';
+
+const hasUsedHostedQualityGateRetry = (options: SharedGenerationOptions): boolean =>
+  options.billingMode === 'hosted' && (options._hostedQualityGateRetryAttempt ?? 0) > 0;
+
+const incrementHostedQualityGateRetry = (options: SharedGenerationOptions): HostedQualityGateRetryOptions =>
+  options.billingMode === 'hosted'
+    ? { _hostedQualityGateRetryAttempt: (options._hostedQualityGateRetryAttempt ?? 0) + 1 }
+    : {};
 
 type HostedSupabaseClient = {
   auth: {
@@ -424,6 +456,13 @@ class InsufficientHostedCreditsError extends Error {
   }
 }
 
+class HostedQualityGateRejectionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'HostedQualityGateRejectionError';
+  }
+}
+
 const getHostedRequestImageSize = (
   requestBody: Record<string, unknown>,
   fallback?: HostedImageSize
@@ -435,6 +474,10 @@ const getHostedRequestImageSize = (
   return imageSize === '1K' || imageSize === '2K' || imageSize === '4K' ? imageSize : undefined;
 };
 
+const isIncludedHostedQualityGateBilling = (options: HostedExecutionOptions = {}): boolean =>
+  options.hostedQualityGateBilling === 'included' &&
+  (options.expectedResponseType === 'text' || options.expectedResponseType === 'json');
+
 const buildHostedBillingMetadata = (
   requestBody: Record<string, unknown>,
   options: HostedExecutionOptions = {}
@@ -442,10 +485,12 @@ const buildHostedBillingMetadata = (
   const imageSize = getHostedRequestImageSize(requestBody, options.imageSize);
   const resolutionTier = toHostedResolutionTier(imageSize);
   const generationType = options.creditRenderType ?? 'standard';
-  const requiredCredits = calculateRequiredGenerationCredits({
-    generationType,
-    resolutionTier
-  });
+  const requiredCredits = isIncludedHostedQualityGateBilling(options)
+    ? 0
+    : calculateRequiredGenerationCredits({
+      generationType,
+      resolutionTier
+    });
 
   return {
     generationType,
@@ -655,11 +700,11 @@ export const GeminiService = {
     }
 
     // Convert the Director prompt's NEGATIVE CONSTRAINTS block into bullets
-    const negBlockMatch = p.match(/\n\nNEGATIVE\s+CONSTRAINTS[\s\S]*?:\s*([\s\S]+)$/i);
+    const negBlockMatch = p.match(/\n\nNEGATIVE\s+CONSTRAINTS[\s\S]*?:\s*([\s\S]+?)(?=\n\n[A-Z0-9_\-\s]{3,}:|$)/i);
     if (negBlockMatch?.[1]) {
       const negCsv = negBlockMatch[1].trim();
-      p = p.replace(/\n\nNEGATIVE\s+CONSTRAINTS[\s\S]*?$/i, '').trim();
-      avoid.push(...negCsv.split(',').map(s => s.trim()).filter(Boolean));
+      p = p.replace(/\n\nNEGATIVE\s+CONSTRAINTS[\s\S]*?(?=\n\n[A-Z0-9_\-\s]{3,}:|$)/i, '').trim();
+      avoid.push(...negCsv.split(',').map(s => s.replace(/^[-*•\s]+/, '').trim()).filter(Boolean));
     }
 
     // Convert the Environment generator's ABSOLUTE FINAL NEGATIVE PROMPT block into bullets
@@ -944,6 +989,7 @@ export const GeminiService = {
     const validateAllowed = typeof poseOption === 'object' ? poseOption.validate !== false : true;
     const retryAllowed = typeof poseOption === 'object' ? poseOption.retry !== false : true;
     const alreadyRetried = (options._poseCoherenceRetryAttempt ?? 0) > 0;
+    const hostedRetryAlreadyUsed = hasUsedHostedQualityGateRetry(options);
 
     if (!poseEnabled || !validateAllowed || !shouldValidatePoseCoherence(effectivePrompt, referenceLabels)) {
       return imageUrl;
@@ -962,14 +1008,20 @@ export const GeminiService = {
         { ...withQualityGateWaitWindow(options), expectedResponseType: 'text' }
       );
       const validation = parsePoseCoherenceValidation(validationText);
-      const shouldRetry =
-        retryAllowed &&
-        !alreadyRetried &&
+      const poseFailed =
         validation.requiresRetry &&
         (validation.poseCoherent === false || validation.headCoherent === false) &&
         validation.confidence >= 0.55;
+      const shouldRetry =
+        retryAllowed &&
+        !alreadyRetried &&
+        !hostedRetryAlreadyUsed &&
+        poseFailed;
 
       if (!shouldRetry) {
+        if (poseFailed && shouldRejectHostedQualityGateFailure(options)) {
+          throw new HostedQualityGateRejectionError(`[PoseCoherence] Hosted quality gate rejected generated image: ${validation.issueSummary || validation.headIssueSummary || 'body-axis or head-angle mismatch'}`);
+        }
         return imageUrl;
       }
 
@@ -986,14 +1038,16 @@ export const GeminiService = {
           strictMode: true,
           poseCoherence: {
             enabled: true,
-            validate: false,
+            validate: true,
             retry: false,
             intent
           },
-          _poseCoherenceRetryAttempt: (options._poseCoherenceRetryAttempt ?? 0) + 1
+          _poseCoherenceRetryAttempt: (options._poseCoherenceRetryAttempt ?? 0) + 1,
+          ...incrementHostedQualityGateRetry(options)
         }
       );
     } catch (error) {
+      if (error instanceof HostedQualityGateRejectionError) throw error;
       console.warn('[PoseCoherence] Validation skipped after quality-gate error.', error);
       return imageUrl;
     }
@@ -1017,6 +1071,7 @@ export const GeminiService = {
     const validateAllowed = typeof poseOption === 'object' ? poseOption.validate !== false : true;
     const retryAllowed = typeof poseOption === 'object' ? poseOption.retry !== false : true;
     const alreadyRetried = (options._poseCoherenceRetryAttempt ?? 0) > 0;
+    const hostedRetryAlreadyUsed = hasUsedHostedQualityGateRetry(options);
 
     if (!poseEnabled || !validateAllowed || !shouldValidatePoseCoherence(effectivePrompt, referenceLabels)) {
       return imageUrl;
@@ -1035,14 +1090,20 @@ export const GeminiService = {
         { ...withQualityGateWaitWindow(options), expectedResponseType: 'text' }
       );
       const validation = parsePoseCoherenceValidation(validationText);
-      const shouldRetry =
-        retryAllowed &&
-        !alreadyRetried &&
+      const poseFailed =
         validation.requiresRetry &&
         (validation.poseCoherent === false || validation.headCoherent === false) &&
         validation.confidence >= 0.55;
+      const shouldRetry =
+        retryAllowed &&
+        !alreadyRetried &&
+        !hostedRetryAlreadyUsed &&
+        poseFailed;
 
       if (!shouldRetry) {
+        if (poseFailed && shouldRejectHostedQualityGateFailure(options)) {
+          throw new HostedQualityGateRejectionError(`[PoseCoherence] Hosted custom quality gate rejected generated image: ${validation.issueSummary || validation.headIssueSummary || 'body-axis or head-angle mismatch'}`);
+        }
         return imageUrl;
       }
 
@@ -1052,13 +1113,15 @@ export const GeminiService = {
         ...options,
         poseCoherence: {
           enabled: true,
-          validate: false,
+          validate: true,
           retry: false,
           intent
         },
-        _poseCoherenceRetryAttempt: (options._poseCoherenceRetryAttempt ?? 0) + 1
+        _poseCoherenceRetryAttempt: (options._poseCoherenceRetryAttempt ?? 0) + 1,
+        ...incrementHostedQualityGateRetry(options)
       });
     } catch (error) {
+      if (error instanceof HostedQualityGateRejectionError) throw error;
       console.warn('[PoseCoherence] Custom validation skipped after quality-gate error.', error);
       return imageUrl;
     }
@@ -1081,6 +1144,7 @@ export const GeminiService = {
     const validateAllowed = typeof headshotOption === 'object' ? headshotOption.validate !== false : true;
     const retryAllowed = typeof headshotOption === 'object' ? headshotOption.retry !== false : true;
     const alreadyRetried = (options._headshotWardrobeRetryAttempt ?? 0) > 0;
+    const hostedRetryAlreadyUsed = hasUsedHostedQualityGateRetry(options);
 
     if (!enabled || !validateAllowed || !shouldValidateHeadshotWardrobeContinuity(effectivePrompt, referenceLabels)) {
       return imageUrl;
@@ -1099,14 +1163,20 @@ export const GeminiService = {
         { ...withQualityGateWaitWindow(options), expectedResponseType: 'text' }
       );
       const validation = parseHeadshotWardrobeValidation(validationText);
-      const shouldRetry =
-        retryAllowed &&
-        !alreadyRetried &&
+      const wardrobeFailed =
         validation.requiresRetry &&
         validation.wardrobeCoherent === false &&
         validation.confidence >= 0.55;
+      const shouldRetry =
+        retryAllowed &&
+        !alreadyRetried &&
+        !hostedRetryAlreadyUsed &&
+        wardrobeFailed;
 
       if (!shouldRetry) {
+        if (wardrobeFailed && shouldRejectHostedQualityGateFailure(options)) {
+          throw new HostedQualityGateRejectionError(`[HeadshotWardrobeContinuity] Hosted quality gate rejected generated image: ${validation.issueSummary || 'headshot wardrobe continuity failure'}`);
+        }
         return imageUrl;
       }
 
@@ -1123,14 +1193,16 @@ export const GeminiService = {
           strictMode: true,
           headshotWardrobeContinuity: {
             enabled: true,
-            validate: false,
+            validate: true,
             retry: false,
             intent
           },
-          _headshotWardrobeRetryAttempt: (options._headshotWardrobeRetryAttempt ?? 0) + 1
+          _headshotWardrobeRetryAttempt: (options._headshotWardrobeRetryAttempt ?? 0) + 1,
+          ...incrementHostedQualityGateRetry(options)
         }
       );
     } catch (error) {
+      if (error instanceof HostedQualityGateRejectionError) throw error;
       console.warn('[HeadshotWardrobeContinuity] Validation skipped after quality-gate error.', error);
       return imageUrl;
     }
@@ -1154,6 +1226,7 @@ export const GeminiService = {
     const validateAllowed = typeof styleOption === 'object' ? styleOption.validate !== false : true;
     const retryAllowed = typeof styleOption === 'object' ? styleOption.retry !== false : true;
     const alreadyRetried = (options._styleCategoryRetryAttempt ?? 0) > 0;
+    const hostedRetryAlreadyUsed = hasUsedHostedQualityGateRetry(options);
     const resolvedStyleId = typeof styleOption === 'object' ? styleOption.styleId ?? styleId : styleId;
 
     if (!enabled || !validateAllowed || !shouldValidateStyleCategory(`${effectivePrompt}\n${referenceLabels.join('\n')}`, resolvedStyleId)) {
@@ -1176,14 +1249,21 @@ export const GeminiService = {
         { ...withQualityGateWaitWindow(options), expectedResponseType: 'text' }
       );
       const validation = parseStyleValidation(validationText);
-      const shouldRetry =
-        retryAllowed &&
-        !alreadyRetried &&
+      const styleFailed =
         validation.requiresRetry &&
         validation.styleCoherent === false &&
         validation.confidence >= 0.55;
+      const shouldRetry =
+        retryAllowed &&
+        !alreadyRetried &&
+        !hostedRetryAlreadyUsed &&
+        styleFailed;
 
       if (!shouldRetry) {
+        if (styleFailed && shouldRejectHostedQualityGateFailure(options)) {
+          const traits = validation.driftTraits?.length ? ` Drift traits: ${validation.driftTraits.join(', ')}.` : '';
+          throw new HostedQualityGateRejectionError(`[StyleCategory] Hosted quality gate rejected generated image: ${validation.issueSummary || 'style-family or sheet-style mismatch'}${traits}`);
+        }
         return imageUrl;
       }
 
@@ -1200,15 +1280,17 @@ export const GeminiService = {
           strictMode: true,
           styleCategory: {
             enabled: true,
-            validate: false,
+            validate: true,
             retry: false,
             styleId: resolvedStyleId,
             intent
           },
-          _styleCategoryRetryAttempt: (options._styleCategoryRetryAttempt ?? 0) + 1
+          _styleCategoryRetryAttempt: (options._styleCategoryRetryAttempt ?? 0) + 1,
+          ...incrementHostedQualityGateRetry(options)
         }
       );
     } catch (error) {
+      if (error instanceof HostedQualityGateRejectionError) throw error;
       console.warn('[StyleCategory] Validation skipped after quality-gate error.', error);
       return imageUrl;
     }
@@ -1255,19 +1337,26 @@ export const GeminiService = {
       styleCategoryEnabled && shouldApplyStyleCategoryContract(promptWithGenerationContracts, styleCategoryId)
         ? withStyleCategoryContract(promptWithGenerationContracts, styleCategoryId, styleCategoryIntent)
         : promptWithGenerationContracts;
+    const characterAnatomyIntegrityEnabled = options.characterAnatomyIntegrity !== false;
     const promptWithAnatomyIntegrity =
-      shouldApplyCharacterAnatomyIntegrity(promptWithStyleCategory, referenceLabels)
+      characterAnatomyIntegrityEnabled && shouldApplyCharacterAnatomyIntegrity(promptWithStyleCategory, referenceLabels)
         ? withCharacterAnatomyIntegrityContract(promptWithStyleCategory)
         : promptWithStyleCategory;
-    const promptWithAllContracts = withSheetStyleLockContract(
-      promptWithAnatomyIntegrity,
-      styleCategoryId,
-      {
-        source: styleCategoryId ? 'user_selected' : 'auto_detected',
-        selectedStyleLabel: styleCategoryIntent?.selectedStyleLabel,
-        strictness: 'high'
-      }
-    );
+    const sheetStyleLockDisabled = options.sheetStyleLock === false;
+    const sheetStyleLockForceEnabled = options.sheetStyleLock === true;
+    const promptWithContractStack = !sheetStyleLockDisabled
+      ? withSheetStyleLockContract(
+        promptWithAnatomyIntegrity,
+        styleCategoryId,
+        {
+          source: styleCategoryId ? 'user_selected' : 'auto_detected',
+          selectedStyleLabel: styleCategoryIntent?.selectedStyleLabel,
+          strictness: 'high'
+        },
+        sheetStyleLockForceEnabled
+      )
+      : promptWithAnatomyIntegrity;
+    const promptWithAllContracts = withFinalIdentityAuthorityContract(promptWithContractStack, identityLockOption);
 
     // --- API ACCESS LAYER ---
     // All features are available in both Hosted and BYOK. The only difference is API prerequisites.

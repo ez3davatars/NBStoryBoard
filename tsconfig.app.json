@@ -31,5 +31,8 @@
   },
   "include": [
     "src/renderer"
+  ],
+  "exclude": [
+    "src/renderer/NBStoryBoard-launch-final-v1"
   ]
 }

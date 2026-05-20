@@ -471,6 +471,8 @@ export type NanoCastSessionState = {
     characterId: string;
     biometricImages: Record<PitchSheetHandoffAngle, string | null>;
     generatedCharacterUrl: string | null;
+    generatedCharacterApprovedForPitchSheet: boolean;
+    approvedPitchSheetSourceUrl: string | null;
     identityLock: BiometricIdentityLock | null;
     selectedStyle: string | null;
     selectedBody: string | null;
@@ -500,6 +502,9 @@ export type PendingPitchSheetHandoff = {
     selectedStyle?: string | null;
     finalCharacterUrl?: string | null;
     mode: 'scan_only' | 'scan_plus_character';
+    characterStyleReferenceUrl?: string | null;
+    generatedSourceImageIndex?: number | null;
+    generatedSourceRole?: string | null;
 };
 
 export type PendingRefSheetHandoff = {
@@ -912,11 +917,13 @@ const createDefaultNanoCastSession = (): NanoCastSessionState => ({
         down: null
     },
     generatedCharacterUrl: null,
+    generatedCharacterApprovedForPitchSheet: false,
+    approvedPitchSheetSourceUrl: null,
     identityLock: null,
     selectedStyle: null,
     selectedBody: null,
     bodyScope: null,
-    identitySource: 'hybrid',
+    identitySource: 'biometric',
     heightIn: 70,
     weightLbs: 170,
     directorControls: {
@@ -1422,6 +1429,8 @@ export const reducer = (state: AppState, action: Action): AppState => {
                     [action.payload.angle]: action.payload.imageUrl
                 },
                 generatedCharacterUrl: shouldClearGeneratedResult ? null : session.generatedCharacterUrl,
+                generatedCharacterApprovedForPitchSheet: shouldClearGeneratedResult ? false : session.generatedCharacterApprovedForPitchSheet,
+                approvedPitchSheetSourceUrl: shouldClearGeneratedResult ? null : session.approvedPitchSheetSourceUrl,
                 updatedAt: Date.now()
             };
             return {
@@ -1439,6 +1448,8 @@ export const reducer = (state: AppState, action: Action): AppState => {
                 nanoCastSession: {
                     ...session,
                     generatedCharacterUrl: action.payload,
+                    generatedCharacterApprovedForPitchSheet: false,
+                    approvedPitchSheetSourceUrl: null,
                     updatedAt: Date.now()
                 }
             };

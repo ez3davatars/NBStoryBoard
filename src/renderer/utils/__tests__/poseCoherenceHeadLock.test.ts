@@ -27,7 +27,7 @@ describe('pose coherence head-axis lock', () => {
     const contract = buildWholeBodyAxisLockContract();
 
     expect(contract).toContain('BODY AXIS LOCK');
-    expect(contract).toContain('Head, neck, shoulders, sternum, ribcage, pelvis, hips, knees, ankles, feet');
+    expect(contract).toContain('Shoulders, ribcage, pelvis, knees, feet');
     expect(contract).toContain('No torso-front/legs-side mismatch');
     expect(contract).toContain('No shoes pointing opposite the torso');
     expect(contract).toContain('Pelvis and footwear are hard orientation anchors');
@@ -156,17 +156,15 @@ describe('pose coherence head-axis lock', () => {
       boardPresentationStyle: 'premium_film_board'
     }));
 
-    expect(prompt).toContain('HEAD STUDY LOCK');
-    expect(prompt).toContain('HEAD VIEW LOCK');
-    expect(prompt).toContain('Neutral Front Head - true 0 degree front-facing head');
-    expect(prompt).toContain("3/4 Left Head - true 45 degree turn to the character's left");
-    expect(prompt).toContain("3/4 Right Head - true 45 degree turn to the character's right");
-    expect(prompt).toContain("Left Profile Head - true 90 degree profile to the character's left");
-    expect(prompt).toContain("Right Profile Head - true 90 degree profile to the character's right");
-    expect(prompt).toContain('Do not mirror one head panel to create another');
-    expect(prompt).toContain('No mislabeled head angle');
-    expect(prompt).toContain('No mirrored duplicate');
-    expect(prompt).toContain('No left/right profile duplication');
+    expect(prompt).toContain('HEAD STUDY INSTRUCTIONS:');
+    expect(prompt).toContain('SIGNED HEAD VIEW LOCK:');
+    expect(prompt).toContain('Neutral Front Head — true 0-degree front-facing head.');
+    expect(prompt).toContain("3/4 Left Head — true 45-degree turn to the character's left.");
+    expect(prompt).toContain("Left Profile Head — true 90-degree left side profile.");
+    expect(prompt).toContain("Right Profile Head — true 90-degree right side profile.");
+    expect(prompt).toContain('Do not mirror one head study to fake the opposite side.');
+    expect(prompt).toContain('no duplicate head viewpoints');
+    expect(prompt).toContain('no left/right collapse');
     expect(prompt).not.toMatch(/\n-\s*Profile Head\b/);
   });
 });

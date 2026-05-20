@@ -2411,6 +2411,7 @@ SPLIT LAYOUT FINAL PROFILE CHECK:
             strictMode: true,
             billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
             entitlements: state.billingEntitlements,
+            sheetStyleLock: true,
             styleCategory: selectedStyleId ? {
               styleId: selectedStyleId,
               intent: {

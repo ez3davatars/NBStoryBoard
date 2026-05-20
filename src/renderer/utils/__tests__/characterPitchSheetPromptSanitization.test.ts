@@ -608,6 +608,30 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
     expect(prompt).toContain(SHEET_STYLE_LOCK_NEGATIVE_TEXT);
   });
 
+  it('supports explicit sheet-style lock opt-in without keyword detection', () => {
+    const defaultPrompt = withSheetStyleLockContract(
+      'Create one clean isolated character portrait.',
+      'family_3d',
+      {
+        source: 'user_selected',
+        selectedStyleLabel: 'Family 3D Animation',
+      }
+    );
+    const forcedPrompt = withSheetStyleLockContract(
+      'Create one clean isolated character portrait.',
+      'family_3d',
+      {
+        source: 'user_selected',
+        selectedStyleLabel: 'Family 3D Animation',
+      },
+      true
+    );
+
+    expect(defaultPrompt).not.toContain('SHEET STYLE LOCK');
+    expect(forcedPrompt).toContain('SHEET STYLE LOCK');
+    expect(forcedPrompt).toContain('"style_family": "premium_animated_3d"');
+  });
+
   it('adds subject preservation language to app-library render style mappings', () => {
     const appLibraryStyles: CharacterPitchSheetRenderStyle[] = [
       'exact_studio',
@@ -754,10 +778,10 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
     expect(labels).toContain('Field Jacket');
     expect(labels).toContain('Map Case');
     expect(labels.join(' ')).not.toMatch(/\b(Construction Detail|Material Read|Design Detail|Object Detail|Accessory Detail|Primary Garment|Primary Material Swatch)\b/i);
-    expect(prompt).toContain('Every callout arrow must point directly to the exact visible object');
-    expect(prompt).toContain('Do not point a prop label to a face, body part, or garment.');
-    expect(prompt).toContain('Do not label a face, profile, head, body, garment, or background area as a prop or prop construction detail.');
-    expect(prompt).toContain('It is better to have 4 correct callouts than 8 inaccurate ones.');
+    expect(prompt).toContain('A callout arrow must terminate inside the exact visible object');
+    expect(prompt).toContain('Do not point a callout to a nearby garment');
+    expect(prompt).toContain('Do not point performance/pose callouts to clothing seams');
+    expect(prompt).toContain('Fewer correct callouts are better than inaccurate callouts.');
   });
 
   it('prevents uploaded source-photo backgrounds from appearing in head-study panels', () => {
@@ -911,5 +935,64 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
     expect(prompt).not.toContain('CINEMATIC PHOTOREAL CONTRACT');
     expect(prompt).not.toContain('REALISM MODE IDENTITY PRIORITY');
     expect(prompt).not.toContain('REALISM NEGATIVE CONSTRAINTS');
+  });
+
+  it('applies the approved portrait design lock, surface mark fidelity, and grooming fidelity in portrait_reference mode', () => {
+    const input = buildInput({
+      identitySource: 'portrait_reference',
+      referenceImageUrl: 'data:image/png;base64,portrait',
+      characterRenderStyle: 'family_3d',
+      wardrobeDirection: 'Green tunic, brown belt, leather sandals.',
+      faceDetails: 'This subject has small moles and light stubble.',
+    });
+
+    const sanitized = sanitizeVisibleBoardLanguage(input);
+    expect(sanitized.faceDetails).toContain('beauty marks and light stubble');
+    expect(sanitized.faceDetails).not.toContain('moles');
+
+    const prompt = buildCharacterPitchSheetPrompt(input);
+    expect(prompt).toContain('APPROVED PORTRAIT DESIGN LOCK');
+    expect(prompt).toContain("[IMAGE 1] / Image A is the approved character portrait generated in Portrait Studio.");
+    expect(prompt).toContain("Build the pitch sheet from this same approved character portrait, not from scratch.");
+    expect(prompt).toContain("Approved Portrait Source: Image A is the approved character portrait.");
+
+    expect(prompt).toContain('SURFACE MARK FIDELITY CONTRACT');
+    expect(prompt).toContain('STRICT ADHERENCE TO BIOMETRIC DATA FOR SKIN DETAILS');
+    expect(prompt).toContain('NEVER draw raised, bumpy, dark brown, or black moles.');
+
+    expect(prompt).toContain('GROOMING FIDELITY CONTRACT');
+    expect(prompt).toContain('CLEAN-SHAVEN CONTINUITY: If the reference subject/Image A is clean-shaven, there must be ABSOLUTELY NO mustache, no upper lip stubble');
+    expect(prompt).toContain('NO INVENTED FACIAL HAIR: Do not draw any invented beard, mustache, stubble, or hair');
+  });
+
+  it('enforces exact signed head studies, signed head view locks, and conservative callout rules', () => {
+    const input = buildInput({
+      characterRenderStyle: 'family_3d',
+      wardrobeDirection: 'Plain black polo, dark trousers, practical shoes.',
+      propsSignatureItems: '',
+    });
+
+    const prompt = buildCharacterPitchSheetPrompt(input);
+
+    expect(prompt).toContain('exactly four signed head studies');
+    expect(prompt).toContain('no duplicate head viewpoints');
+    expect(prompt).toContain('SIGNED HEAD VIEW LOCK');
+    expect(prompt).toContain('If space is tight, omit Right Profile Head before duplicating or mislabeling');
+
+    expect(prompt).toContain('CALLOUT TARGET ACCURACY RULE');
+    expect(prompt).toContain('If no exact visible target exists, omit the callout');
+
+    const calloutsPlain = buildPitchSheetCallouts(input);
+    const labelsPlain = calloutsPlain.map(c => c.label);
+    expect(labelsPlain).not.toContain('Layering System');
+
+    const inputLayered = buildInput({
+      characterRenderStyle: 'family_3d',
+      wardrobeDirection: 'Canvas jacket, overlapping tunic, weathered cloak, boots.',
+      propsSignatureItems: '',
+    });
+    const calloutsLayered = buildPitchSheetCallouts(inputLayered);
+    const labelsLayered = calloutsLayered.map(c => c.label);
+    expect(labelsLayered).toContain('Layering System');
   });
 });

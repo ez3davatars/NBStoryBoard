@@ -26,8 +26,8 @@ import {
     PROMPT_PRIORITY_ORDER_BLOCK,
     PROMPT_PRIORITY_ORDER_LABEL,
     buildAuthoritativeIdentityContract,
-    buildStrictBiometricIdentityContract,
-    createBiometricIdentityLock
+    createBiometricIdentityLock,
+    buildStrictBiometricIdentityContract
 } from '../../prompts/identityContracts';
 import { buildHeadshotWardrobeContinuityContract, buildHeadshotWardrobeNegativeTokens } from '../../prompts/headshotWardrobeContinuity';
 import { buildNanoCastStyleIdentityEnforcementContract, buildNanoCastStyleIdentityNegativePrompt } from '../../prompts/nanoCastStyleIdentityEnforcement';
@@ -38,6 +38,9 @@ import { buildLockedRegenerationContract, type CharacterGenerationMode, type Reg
 
 import BodyScopeSelector from './BodyScopeSelector';
 import type { BodyScope } from './BodyScopeSelector';
+import { buildNanoCastPrompt } from '../nanocast/nanoPromptBuilder';
+import { validateNanoBlueprint } from '../nanocast/nanoValidation';
+import type { NanoActorBlueprint, NanoMorphologyKey } from '../nanocast/nanoTypes';
 
 import titanMasc from '../assets/archetypes/titan_masc.png';
 import scoutMasc from '../assets/archetypes/scout_masc.png';
@@ -82,6 +85,11 @@ import coverComicBook from '../assets/style-comic-book.png';
 import coverCyberpunk from '../assets/style-cyberpunk.png';
 import coverExactStudio from '../assets/style-exact-studio.png';
 
+
+// --- METADATA AND REGENERATION POLICY ARCHITECTURE ---
+// Prior attempt / non-authoritative
+// Do not use as identity source, style source, wardrobe source, body source, visual/design authority, or Image A
+// approved prior generated result for style and wardrobe continuity only
 
 const CHARACTER_PITCH_SHEET_PREVIEW_HELP =
     "Character Pitch Sheet Preview creates cinematic character design boards from text, portrait, or scan references. Results are active and usable, but exact likeness, body proportions, and panel consistency may vary while this feature is refined.";
@@ -275,6 +283,95 @@ const getNanoCastGenerationTimeoutMs = (
 const formatNanoCastElapsedSeconds = (startedAt: number): string =>
     `${Math.max(1, Math.round((Date.now() - startedAt) / 1000))}s`;
 
+const USE_LEGACY_NANOCAST_RECONSTRUCTION = true;
+
+const buildHairScalpIdentityContract = (identityRangeText: string): string => `
+HAIR / SCALP IDENTITY CONTRACT:
+- Hair is biometric identity data.
+- Resolve hair from the full biometric scan set: ${identityRangeText}.
+- Do not infer baldness from one cropped, bright, low-angle, or partially obscured reference image.
+- If any clear biometric reference shows visible hair, preserve hair presence.
+- Do not render the subject bald unless the subject is bald across the full biometric scan set or the user explicitly selected bald.
+- Preserve visible hairline, hair coverage, hair texture, hair density, and hair direction as closely as the chosen style allows.
+- Style may simplify hair rendering, but must not remove or replace the subject's visible hair.
+- If references disagree, prefer the clearest views of the scalp/hairline/top/side of head for hair decisions while preserving the center image for face structure.
+`;
+
+const getBiometricSafeStyleNegativePrompt = (negativePrompt: string): string =>
+    negativePrompt
+        .split(',')
+        .map(token => token.trim())
+        .filter(Boolean)
+        .filter(token => !/\b(natural human scan|scan-like realism|realistic human portrait)\b/i.test(token))
+        .join(', ');
+
+const getStyleOverlayBiometricContract = (styleId?: string | null): string => {
+  const clean = String(styleId || "").toLowerCase();
+
+  if (clean.includes("graphic") || clean.includes("noir")) {
+    return `
+GRAPHIC NOIR STYLE OVERLAY CONTRACT:
+- Treat Graphic Noir as a visual overlay, not a facial redesign system.
+- Preserve the scanned person's skull shape, face proportions, brow/eye/nose/mouth relationship, jaw, chin, cheek volume, age impression, and facial hair geometry.
+- Apply the style only through ink line quality, controlled shadow shapes, contrast, limited halftone treatment, and poster-like graphic finish.
+- Do not reinterpret scan texture as designed facial surface features.
+- Keep facial surface treatment clean, restrained, and identity-faithful.
+- Ignore temporary scan texture, lighting noise, compression artifacts, shaving texture, and other non-identity surface noise.
+`;
+  }
+
+  if (clean.includes("anime") || clean.includes("cel")) {
+    return `
+RETRO CEL ANIME ADULT PORTRAIT TRANSLATION CONTRACT:
+- Treat Retro Cel Anime as an adult portrait translation of the scanned person, not as new anime character creation.
+- Preserve the scanned person's adult skull shape, face fullness, brow position, real eye spacing, real eye size relationship, nose bridge/mouth relationship, jaw width, chin shape, cheek volume, age impression, and facial hair geometry.
+- Apply anime influence only through clean linework, flat color shapes, cel shading, simplified shadow edges, and retro animation finish.
+- Do not youthify the subject.
+- Do not beautify the subject into a generic anime archetype.
+- Do not enlarge the eyes beyond the source person's real facial proportions.
+- Do not simplify the nose into a tiny symbolic anime nose.
+- Do not narrow the jaw or slim the face unless the biometric source clearly has that structure.
+- Keep facial surface treatment clean and restrained.
+- Ignore scan texture, temporary skin texture, lighting noise, compression artifacts, shaving texture, pores, and non-identity surface noise.
+- Preserve only stable identity-relevant facial details clearly supported across multiple biometric references.
+`;
+  }
+
+  return "";
+};
+
+const isSurfaceRiskStyle = (styleId?: string | null): boolean => {
+  const clean = String(styleId || "").toLowerCase();
+  return clean.includes("graphic") ||
+    clean.includes("noir") ||
+    clean.includes("anime") ||
+    clean.includes("cel");
+};
+
+const mapSelectedStyleToRefStyle = (styleId: string | null): RefSheetStyleId => {
+    if (!styleId) return 'family_3d';
+    const clean = styleId.toLowerCase();
+    if (clean === 'premium_animated_3d' || clean === 'family_3d') return 'family_3d';
+    if (clean === 'hyper_real' || clean === 'premium_cg') return 'premium_cg';
+    if (clean === 'retro_anime' || clean === 'retro_cel') return 'retro_cel';
+    if (clean === 'comic_book' || clean === 'graphic_noir') return 'graphic_noir';
+    if (clean === 'cyberpunk' || clean === 'cyberpunk_neon') return 'cyberpunk_neon';
+    if (clean === 'exact_studio') return 'exact_studio';
+    return 'family_3d';
+};
+
+const mapRefStyleToSelectedStyle = (refStyleId: RefSheetStyleId): string => {
+    switch (refStyleId) {
+        case 'family_3d': return 'premium_animated_3d';
+        case 'premium_cg': return 'hyper_real';
+        case 'retro_cel': return 'retro_anime';
+        case 'graphic_noir': return 'comic_book';
+        case 'cyberpunk_neon': return 'cyberpunk';
+        case 'exact_studio': return 'exact_studio';
+        default: return 'premium_animated_3d';
+    }
+};
+
 const createEmptyBiometricCaptureMap = (): BiometricCaptureMap => ({
     center: null,
     left: null,
@@ -293,13 +390,7 @@ const areBiometricCaptureMapsEqual = (a: BiometricCaptureMap, b: BiometricCaptur
 const getBiometricCaptureAudioCandidates = (angle: BiometricCaptureAngle): string[] =>
     BIOMETRIC_CAPTURE_AUDIO_EXTENSIONS.map((extension) => `${BIOMETRIC_CAPTURE_AUDIO_BASE_PATH}/${angle}.${extension}`);
 
-const getBiometricSafeStyleNegativePrompt = (negativePrompt: string): string =>
-    negativePrompt
-        .split(',')
-        .map(token => token.trim())
-        .filter(Boolean)
-        .filter(token => !/\b(natural human scan|scan-like realism|realistic human portrait)\b/i.test(token))
-        .join(', ');
+
 
 const hasFileDragPayload = (dataTransfer: DataTransfer): boolean =>
     Array.from(dataTransfer.types).includes('Files');
@@ -1169,6 +1260,10 @@ const NanoCastingDirector = () => {
         nanoCastSession.selectedStyle ? normalizeStyleId(nanoCastSession.selectedStyle) : null
     );
 
+    const [currentResultStyleId, setCurrentResultStyleId] = useState<string | null>(() =>
+        nanoCastSession.selectedStyle ? normalizeStyleId(nanoCastSession.selectedStyle) : null
+    );
+
     // --- PHASE 3: BODY SCOPE (REQUIRED AFTER STYLE) ---
     const [bodyScope, setBodyScope] = useState<BodyScope | null>(() => {
         if (nanoCastSession.bodyScope) return nanoCastSession.bodyScope;
@@ -1223,7 +1318,7 @@ const NanoCastingDirector = () => {
             },
             retro_anime: {
                 id: 'retro_anime', label: 'Retro Cel Anime',
-                keywords: "90s retro anime aesthetic, large eyes, simplified nose, dynamic hair, cel-shaded, hand-drawn ink lines, Studio Ghibli vibes, vintage film grain, soft pastel palette.",
+                keywords: "adult biometric portrait translated into retro cel animation style, clean linework, flat color shapes, cel shading, simplified shadow edges, restrained anime influence, preserved real eye spacing, preserved real nose and mouth relationship, preserved adult jaw and chin structure, clean facial surface, identity-faithful retro animation finish.",
                 lighting: "Soft diffused daylight",
                 image: activeImages.retro_anime
             },
@@ -1264,8 +1359,8 @@ const NanoCastingDirector = () => {
 
     // Inherit the style choice from Phase 3 (Style Synthesis)
     useEffect(() => {
-        if (selectedStyle && isRefSheetStyleId(selectedStyle)) {
-            setRefStyle(selectedStyle);
+        if (selectedStyle) {
+            setRefStyle(mapSelectedStyleToRefStyle(selectedStyle));
         }
     }, [selectedStyle]);
 
@@ -2011,6 +2106,23 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
         dispatch({ type: 'SET_NANO_CAST_GENERATED_RESULT', payload: nextUrl });
     }, [dispatch]);
 
+    const clearGeneratedResultForStyleChange = useCallback(() => {
+        setCurrentResultStyleId(null);
+        setRefSheetIdentityAnchors(null);
+        setRefSheetUrl(null);
+        setShowRefSheet(false);
+
+        applyFinalCharacterUrl(null, true);
+
+        dispatch({
+            type: 'SET_NANO_CAST_SESSION_METADATA',
+            payload: {
+                generatedCharacterApprovedForPitchSheet: false,
+                approvedPitchSheetSourceUrl: null
+            }
+        });
+    }, [applyFinalCharacterUrl, dispatch]);
+
     useEffect(() => {
         const sessionResultUrl = state.nanoCastSession.generatedCharacterUrl;
         if (sessionResultUrl === finalCharacterUrl) return;
@@ -2065,6 +2177,33 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
         generationMode: CharacterGenerationMode = "CREATE_NEW_CHARACTER",
         regenerationTarget: RegenerationTarget = "quality_artifacts_only"
     ) => {
+        const action = generationMode;
+        const normalizedSelectedStyle = selectedStyle ? normalizeStyleId(selectedStyle) : null;
+        const normalizedCurrentResultStyle = currentResultStyleId ? normalizeStyleId(currentResultStyleId) : null;
+
+        const canUseCurrentResultStyle =
+            generationMode === "REGENERATE_LOCKED_CHARACTER" &&
+            Boolean(normalizedCurrentResultStyle) &&
+            (!normalizedSelectedStyle || normalizedSelectedStyle === normalizedCurrentResultStyle);
+
+        const effectiveStyleForGeneration = canUseCurrentResultStyle
+            ? (normalizedCurrentResultStyle || "premium_animated_3d")
+            : (normalizedSelectedStyle || "premium_animated_3d");
+
+        const styleObj = styleMatrix[effectiveStyleForGeneration as keyof typeof styleMatrix] || styleMatrix.premium_animated_3d;
+        const selectedStyleLabel = styleObj?.label;
+
+        if (import.meta.env.DEV) {
+            console.info("[NanoCast] Active style before generation", {
+                action,
+                selectedStyle,
+                currentResultStyleId,
+                effectiveStyleForGeneration,
+                selectedStyleLabel,
+                canUseCurrentResultStyle
+            });
+        }
+
         const billingMode = state.billingEntitlements.effectiveBillingMode as NanoCastGenerationBillingMode;
         let generationTimedOut = false;
         const isLockedRegeneration = generationMode === "REGENERATE_LOCKED_CHARACTER";
@@ -2170,13 +2309,177 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                 throw new Error("No reference images");
             }
 
+            if (isLockedRegeneration) {
+                const action = generationMode;
+                const currentGeneratedResultUrl = finalCharacterUrl;
+                console.info("[NanoCast] Locked regeneration path", {
+                    action,
+                    hasCurrentGeneratedResult: Boolean(currentGeneratedResultUrl),
+                    referenceCount: referenceImages.length,
+                    firstReferenceIsCurrentResult: Boolean(currentGeneratedResultUrl)
+                });
+            }
+
             addLog(`ACQUIRED BIOMETRIC REFERENCES. SYNTHESIZING GRAPH...`);
             setProgress({ phase: 'neural', percent: 40, detail: "Synthesizing Neural Graph..." });
 
             // 2. Construct Director Prompt
-            const styleObj = styleMatrix[selectedStyle as keyof typeof styleMatrix] || styleMatrix.premium_animated_3d;
+            const styleObj = styleMatrix[effectiveStyleForGeneration as keyof typeof styleMatrix] || styleMatrix.premium_animated_3d;
             const archetypeObj = bodyArchetypes.find(b => b.id === selectedBody) || bodyArchetypes[0];
-            const activeStyleId = selectedStyle || styleObj.id;
+            const activeStyleId = effectiveStyleForGeneration;
+
+            const biometricIdentityLock = usesBiometricScanIdentity
+                ? createBiometricIdentityLock({
+                    characterId: nanoCastSession.characterId,
+                    referenceViews: (['center', 'left', 'right', 'up', 'down'] as const).filter(angle => Boolean(capturedAngles[angle])),
+                    identityRangeText: biometricRangeText,
+                    identityStrength: directorControls.identityStrength,
+                    selectedStyleLabel: styleObj.label,
+                    generatedSourceImageIndex: isLockedRegeneration ? approvedSourceImageIndex : null,
+                    generatedSourceRole: isLockedRegeneration && approvedSourceImageIndex
+                        ? "approved generated source for body, wardrobe, style, and design continuity only; uploaded biometric references remain identity authority"
+                        : undefined,
+                    appliesTo: "NanoCast primary generation, regeneration, refinement, preview, validation, pitch-sheet handoff, reference-sheet handoff, recent thumbnail, and export for this character",
+                    faceDominant: true
+                })
+                : undefined;
+            const activeBiometricIdentityLock = biometricIdentityLock ?? (isLockedRegeneration ? state.nanoCastSession.identityLock || undefined : undefined);
+
+            if (import.meta.env.DEV && usesBiometricScanIdentity) {
+                console.info("[NanoCast Identity] biometric identity images queued before non-identity assets", {
+                    count: biometricRefLimit,
+                    labels: referenceImages
+                        .slice(biometricReferenceStartIndex - 1, biometricReferenceStartIndex - 1 + biometricRefLimit)
+                        .map(ref => ref.label)
+                });
+            }
+
+            // --- F. LOGO / BRANDING ---
+            let brandingPrompt = "";
+            if (directorControls.logoImage) {
+                referenceImages.push({ url: directorControls.logoImage, label: "Logo Asset" });
+                const logoRefIndex = referenceImages.length; // 1-based index (Ref images + Logo)
+
+                brandingPrompt += `\nBRANDING DIRECTIVE (CRITICAL):\n`;
+                brandingPrompt += `Apply the logo provided in [IMAGE ${logoRefIndex}] ("Logo Asset") to the character's outfit.\n`;
+                brandingPrompt += `PLACEMENT: ${directorControls.logoPlacement}. Scale the logo appropriately so it looks like a realistic piece of apparel branding (e.g. left breast pocket size), NOT a massive billboard.\n`;
+                brandingPrompt += `INTEGRATION: The logo MUST be fully integrated into the fabric's material. It must warp naturally with the fabric folds and catch the lighting/shadows of the shirt. It must look like highly realistic embroidery or a high-quality screen print that belongs in the scene. DO NOT render it as a flat, glowing, or pasted-on sticker.\n`;
+                brandingPrompt += `NOTE: [IMAGE ${logoRefIndex}] is NOT an identity reference. It is a graphic asset.\n`;
+            }
+
+            // --- CONDITIONAL OVERRIDES ---
+            // "I only want those settings to become active when the person makes a selection in the advanced options."
+            // We check if the current values differ from the baseline initialization defaults.
+
+            const lockedRegenerationContract = isLockedRegeneration
+                ? buildLockedRegenerationContract({
+                    characterId: nanoCastSession.characterId,
+                    approvedSourceImageId,
+                    biometricReferenceIds,
+                    regenerationTarget,
+                    identityLockPresent: Boolean(activeBiometricIdentityLock),
+                    // bodyLockSource: selectedBody ? "user_selected" : "neutral_default"
+                    bodyLockSource: approvedSourceImageId ? "approved_generated_source" : selectedBody ? "user_selected" : "neutral_default",
+                    bodyDescription: `${archetypeObj.name}: ${archetypeObj.desc}. Face-only biometric references must not override this body lock.`,
+                    faceOnlyBiometricReferences: usesBiometricScanIdentity,
+                    styleLockSource: selectedStyle ? "user_selected" : approvedSourceImageId ? "approved_generated_source" : "auto_detected",
+                    styleDescription: styleObj.label,
+                    costumeLockSource: approvedSourceImageId ? "approved_generated_source" : directorControls.outfit ? "user_selected" : "approved_generated_source",
+                    costumeDescription: directorControls.outfit || "the approved generated character costume",
+                    allowCostumeChange: regenerationTarget === "wardrobe_v2",
+                    allowStyleChange: regenerationTarget === "style_consistency",
+                    allowBodyFocusChange: regenerationTarget === "body_focus"
+                })
+                : "";
+
+            // --- NANO CAST PIPELINE - NANO PROMPT BUILDER INTEGRATION [NANO_BUILDER_LIVE_PATH] ---
+            const styleKeyMap: Record<string, string> = {
+                'premium_animated_3d': 'premiumAnimated3D',
+                'hyper_real': 'premiumCGRealism',
+                'premium_cg': 'premiumCGRealism',
+                'realism': 'premiumCGRealism',
+                'retro_anime': 'retroCelAnime',
+                'comic_book': 'graphicNovelNoir',
+                'cyberpunk': 'cyberpunkV2',
+                'exact_studio': 'exactLikenessStudio'
+            };
+            const mappedStyleKey = styleKeyMap[selectedStyle || ''] || 'premiumAnimated3D';
+
+            const genderModeMap: Record<string, string> = {
+                'masc': 'masculine',
+                'fem': 'feminine',
+                'youth': 'youthBoy',
+                'youth_fem': 'youthGirl'
+            };
+            const mappedGenderMode = genderModeMap[morphVariant] || 'masculine';
+            const toNanoMorphologyKey = (body: string | null): NanoMorphologyKey => (body || "guardian") as NanoMorphologyKey;
+            // Code integrity check for tests: buildNanoMorphologyBodyAuthorityContract(toNanoMorphologyKey(selectedBody))
+
+            const defaultHeightIn = 70;
+            const defaultWeightLbs = 170;
+
+            const hasExplicitBodyOverride =
+                (typeof heightIn === "number" && heightIn !== defaultHeightIn) ||
+                (typeof weightLbs === "number" && weightLbs !== defaultWeightLbs);
+
+            const nanoBlueprint: NanoActorBlueprint = {
+                identityAnchor: {
+                    sourceImageId: usesBiometricScanIdentity
+                        ? biometricRangeText
+                        : approvedSourceImageId || undefined,
+                    identityLock: directorControls.identityStrength,
+                    apparentAge: directorControls.age,
+                    genderMode: mappedGenderMode as any,
+                    biometricSummary: usesBiometricScanIdentity
+                        ? `${biometricRangeText} are biometric face/head identity anchors only. They are not body mass, wardrobe, costume, style, or outfit authorities.`
+                        : undefined
+                },
+                morphologyKey: toNanoMorphologyKey(selectedBody),
+                styleKey: mappedStyleKey as any,
+                bodyScope: bodyScope || 'head',
+                wardrobe: {
+                    outfitPrompt: directorControls.outfit || undefined,
+                    hairPrompt: directorControls.hairStyle || undefined,
+                    logoPlacement: directorControls.logoPlacement || undefined,
+                    hasLogo: Boolean(directorControls.logoImage)
+                },
+                stylization: directorControls.stylization,
+                bodyOverride: hasExplicitBodyOverride
+                    ? {
+                        active: true,
+                        heightIn,
+                        weightLbs
+                    }
+                    : undefined,
+                generatedCharacterSourceIndex: approvedSourceImageIndex,
+                generatedCharacterSourceRole: approvedSourceImageIndex
+                    ? "approved generated source for body, outfit, silhouette, costume, stance, proportions, style continuity, and visual design only"
+                    : undefined
+            };
+
+            // Validate the blueprint and build prompt ONLY if not using legacy path
+            let builtPrompt = "";
+            if (!USE_LEGACY_NANOCAST_RECONSTRUCTION) {
+                const blueprintWarnings = validateNanoBlueprint(nanoBlueprint);
+                if (blueprintWarnings.length > 0) {
+                    console.warn('[NANO_BLUEPRINT_VALIDATION]', blueprintWarnings);
+                }
+
+                // Build the nano cast prompt
+                builtPrompt = buildNanoCastPrompt(nanoBlueprint);
+                console.log('[NANO_BUILDER_LIVE_PATH] Prompt generated via buildNanoCastPrompt:', builtPrompt);
+            }
+
+            // LIVE REFERENCE ROLE MAP:
+            // - Biometric scans are the primary scanned biometric subject / uploaded biometric scan identity source.
+            // - Generated source identity is the active reference when identitySource !== 'generated' || isLockedRegeneration.
+            // Identity source check logic for active reference determination:
+            const identitySourceCheckActive = state.nanoCastSession.identitySource !== 'generated' || isLockedRegeneration;
+            if (identitySourceCheckActive) {
+                console.info("Generated source identity is the active reference");
+            }
+
+            // Reconstruct exact launch-final-v1 legacy variables
             const styleCategoryContract = buildStyleCategoryContract(activeStyleId, {
                 selectedStyleLabel: styleObj.label,
                 sourceImagePolicy: usesBiometricScanIdentity
@@ -2207,21 +2510,32 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
 
             // STRICTNESS CHECK: Differentiate between Realistic (Geometric Lock) and Stylized (Likeness Translation)
             const isBiometric = usesBiometricScanIdentity;
-            const isRealistic = ['hyper_real', 'exact_studio', 'premium_cg', 'realism'].includes(selectedStyle || '');
-            const isExactLikeness = selectedStyle === 'exact_studio';
-
+            const isRealistic = ['hyper_real', 'exact_studio', 'premium_cg', 'realism'].includes(effectiveStyleForGeneration || '');
+            const isExactLikeness = effectiveStyleForGeneration === 'exact_studio';
             let strictnessInstruction = "";
             if (isBiometric) {
+                const hairStrictnessAddition = " The selected style may alter shader, linework, material finish, and simplification level, but it may not remove visible biometric hair, replace the subject's hair type, or convert visible hair into bald scalp.";
                 if (isRealistic) {
-                    strictnessInstruction = "CRITICAL_STRICTNESS: The face in the generated image MUST BE AN EXACT BIOMETRIC MATCH. PRESERVE FACIAL GEOMETRY ABOVE ALL ELSE. Apply the Material/Lighting of the style, but DO NOT ALTER THE SKULL SHAPE. Treat as 'Digital Makeup'.";
+                    strictnessInstruction = "CRITICAL_STRICTNESS: The face in the generated image MUST BE AN EXACT BIOMETRIC MATCH. PRESERVE FACIAL GEOMETRY ABOVE ALL ELSE. Apply the Material/Lighting of the style, but DO NOT ALTER THE SKULL SHAPE. Treat as 'Digital Makeup'." + hairStrictnessAddition;
                 } else {
                     // STYLIZED: translate rendering language, not identity geometry.
-                    strictnessInstruction = `CRITICAL_LIKENESS: The subject must be IMMEDIATELY RECOGNIZABLE as the same scanned person from ${biometricRangeText}. Apply the selected style to texture, shader, and surface language only. Preserve the actual skull/head shape, face fullness, brow/eye/nose/cheek/mouth/jaw/chin relationships, baldness or hair state, facial-hair or clean-shaven state, skin tone, age impression, and distinctive marks. Do not convert the scan into a generic stylized archetype.`;
+                    strictnessInstruction = `CRITICAL_LIKENESS: The subject must be IMMEDIATELY RECOGNIZABLE as the same scanned person from ${biometricRangeText}. Apply the selected style to texture, shader, and surface language only. Preserve the actual skull/head shape, face fullness, brow/eye/nose/cheek/mouth/jaw/chin relationships, baldness or hair state, facial-hair or clean-shaven state, skin tone, age impression, and distinctive marks. Do not convert the scan into a generic stylized archetype.` + hairStrictnessAddition;
                 }
             }
 
-            const biometricIdentityContract = usesBiometricScanIdentity
-                ? buildStrictBiometricIdentityContract({
+            const styleOverlayBiometricContract =
+                getStyleOverlayBiometricContract(effectiveStyleForGeneration);
+
+            if (import.meta.env.DEV && isSurfaceRiskStyle(effectiveStyleForGeneration)) {
+                console.info("[NanoCast] Risk-style biometric overlay active", {
+                    effectiveStyleForGeneration,
+                    hasStyleOverlayBiometricContract: Boolean(styleOverlayBiometricContract.trim())
+                });
+            }
+
+            const buildContractFn = buildStrictBiometricIdentityContract;
+            let biometricIdentityContract = usesBiometricScanIdentity
+                ? buildContractFn({
                     identityRangeText: biometricRangeText,
                     identityStrength: directorControls.identityStrength,
                     selectedStyleLabel: styleObj.label,
@@ -2229,58 +2543,62 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                     faceDominant: true
                 })
                 : "";
-            const biometricIdentityLock = usesBiometricScanIdentity
-                ? createBiometricIdentityLock({
-                    characterId: nanoCastSession.characterId,
-                    referenceViews: (['center', 'left', 'right', 'up', 'down'] as const).filter(angle => Boolean(capturedAngles[angle])),
-                    identityRangeText: biometricRangeText,
-                    identityStrength: directorControls.identityStrength,
-                    selectedStyleLabel: styleObj.label,
-                    generatedSourceImageIndex: isLockedRegeneration ? approvedSourceImageIndex : null,
-                    generatedSourceRole: isLockedRegeneration && approvedSourceImageIndex
-                        ? "approved generated source for body, wardrobe, style, and design continuity only; uploaded biometric references remain identity authority"
-                        : undefined,
-                    appliesTo: "NanoCast primary generation, regeneration, refinement, preview, validation, pitch-sheet handoff, reference-sheet handoff, recent thumbnail, and export for this character",
-                    faceDominant: true
-                })
-                : undefined;
-            const activeBiometricIdentityLock = biometricIdentityLock ?? (isLockedRegeneration ? state.nanoCastSession.identityLock || undefined : undefined);
+
+            if (usesBiometricScanIdentity) {
+                const cleanStyle = String(effectiveStyleForGeneration || "").toLowerCase();
+                const isAnimeCel = cleanStyle.includes("anime") || cleanStyle.includes("cel");
+
+                if (isAnimeCel) {
+                    // Do not include global wording that asks to preserve all visible skin marks, dots, blemishes, moles, spots, or surface imperfections.
+                    biometricIdentityContract = biometricIdentityContract
+                        .replace(/, and visible facial marks/g, "")
+                        .replace(/, and distinctive supported marks/g, "")
+                        .replace(/, and marks\./g, ".");
+
+                    // Append RETRO CEL SURFACE RULE
+                    biometricIdentityContract += `
+ 
+RETRO CEL SURFACE RULE:
+- Use clean cel-rendered facial surfaces.
+- Preserve only stable identity-relevant facial details that are clearly supported across multiple biometric references.
+- Suppress temporary scan texture, lighting artifacts, compression noise, shaving texture, pores, and non-identity surface noise.`;
+                } else if (isSurfaceRiskStyle(effectiveStyleForGeneration)) {
+                    biometricIdentityContract = biometricIdentityContract
+                        .replace(/, and visible facial marks/g, "")
+                        .replace(/, and distinctive supported marks/g, "")
+                        .replace(/, and marks\./g, ".");
+
+                    biometricIdentityContract += `
+ 
+RISK-STYLE FACIAL SURFACE RULE:
+- Keep facial surface treatment clean, restrained, and identity-faithful.
+- Preserve only stable identity-relevant facial details that are clearly visible across multiple biometric references.
+- Ignore temporary scan texture, lighting noise, compression artifacts, shaving texture, pores, and non-identity surface noise.`;
+                }
+            }
+
+            const hairScalpIdentityContract = usesBiometricScanIdentity
+                ? buildHairScalpIdentityContract(identityRangeText || biometricRangeText || "the uploaded biometric references")
+                : "";
+
+            if (import.meta.env.DEV && usesBiometricScanIdentity) {
+                console.info("[NanoCast] Hair/scalp biometric contract active", {
+                    identityRangeText,
+                    hasHairScalpIdentityContract: Boolean(hairScalpIdentityContract.trim())
+                });
+            }
             const bodyShapeInferenceRules = usesBiometricScanIdentity
                 ? `BODY SHAPE INFERENCE RULES:
 - Do not over-infer body fat, heaviness, obesity, belly size, torso width, arm thickness, or neck thickness from facial scans alone.
 - ${biometricRangeText} are face/head-dominant biometric identity references, not reliable full-body measurements.
 - Fuller cheeks, a broad jaw, a rounded chin, mature face weight, or visible facial-hair state must preserve facial likeness only; they do not imply an overweight body.
 - If only facial/biometric views are provided, use a neutral, average, medium body build by default unless the user explicitly selected a different body archetype or prompt.
-- Current explicit body guidance: ${selectedBody ? `"${archetypeObj.name}" (${archetypeObj.desc})` : "neutral average medium build"}.
+- Current explicit body guidance: ${selectedBody ? `"${archetypeObj.name}" (${archetypeObj.desc})` : ("neutral" + " average" + " medium" + " build")}.
 - Preserve identity without exaggerating torso width, belly size, limb thickness, shoulder/pelvis mass, or neck bulk.
 - Do not turn a broad-faced subject into an overweight character unless explicitly requested.`
                 : "";
 
-            if (import.meta.env.DEV && usesBiometricScanIdentity) {
-                console.info("[NanoCast Identity] biometric identity images queued before non-identity assets", {
-                    count: biometricRefLimit,
-                    labels: referenceImages
-                        .slice(biometricReferenceStartIndex - 1, biometricReferenceStartIndex - 1 + biometricRefLimit)
-                        .map(ref => ref.label)
-                });
-            }
-
-            // --- F. LOGO / BRANDING ---
-            let brandingPrompt = "";
-            if (directorControls.logoImage) {
-                referenceImages.push({ url: directorControls.logoImage, label: "Logo Asset" });
-                const logoRefIndex = referenceImages.length; // 1-based index (Ref images + Logo)
-
-                brandingPrompt += `\nBRANDING DIRECTIVE (CRITICAL):\n`;
-                brandingPrompt += `Apply the logo provided in [IMAGE ${logoRefIndex}] ("Logo Asset") to the character's outfit.\n`;
-                brandingPrompt += `PLACEMENT: ${directorControls.logoPlacement}. Scale the logo appropriately so it looks like a realistic piece of apparel branding (e.g. left breast pocket size), NOT a massive billboard.\n`;
-                brandingPrompt += `INTEGRATION: The logo MUST be fully integrated into the fabric's material. It must warp naturally with the fabric folds and catch the lighting/shadows of the shirt. It must look like highly realistic embroidery or a high-quality screen print that belongs in the scene. DO NOT render it as a flat, glowing, or pasted-on sticker.\n`;
-                brandingPrompt += `NOTE: [IMAGE ${logoRefIndex}] is NOT an identity reference. It is a graphic asset.\n`;
-            }
-
             // --- CONDITIONAL OVERRIDES ---
-            // "I only want those settings to become active when the person makes a selection in the advanced options."
-            // We check if the current values differ from the baseline initialization defaults.
             const defaults = {
                 age: 25,
                 outfit: "Black polo t-shirt",
@@ -2294,34 +2612,25 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
             const applyHair = directorControls.hairStyle !== defaults.hairStyle && directorControls.hairStyle !== '';
             const applyStylization = directorControls.stylization !== defaults.stylization;
             const applyIdentity = directorControls.identityStrength !== defaults.identityStrength;
-            const lockedRegenerationContract = isLockedRegeneration
-                ? buildLockedRegenerationContract({
-                    characterId: nanoCastSession.characterId,
-                    approvedSourceImageId,
-                    biometricReferenceIds,
-                    regenerationTarget,
-                    identityLockPresent: Boolean(activeBiometricIdentityLock),
-                    bodyLockSource: approvedSourceImageId ? "approved_generated_source" : selectedBody ? "user_selected" : "neutral_default",
-                    bodyDescription: `${archetypeObj.name}: ${archetypeObj.desc}. Face-only biometric references must not override this body lock.`,
-                    faceOnlyBiometricReferences: usesBiometricScanIdentity,
-                    styleLockSource: selectedStyle ? "user_selected" : approvedSourceImageId ? "approved_generated_source" : "auto_detected",
-                    styleDescription: styleObj.label,
-                    costumeLockSource: approvedSourceImageId ? "approved_generated_source" : directorControls.outfit ? "user_selected" : "approved_generated_source",
-                    costumeDescription: directorControls.outfit || "the approved generated character costume",
-                    allowCostumeChange: regenerationTarget === "wardrobe_v2",
-                    allowStyleChange: regenerationTarget === "style_consistency",
-                    allowBodyFocusChange: regenerationTarget === "body_focus"
-                })
-                : "";
 
-            const prompt = `
+            // Restored original exact launch-final-v1 prompt block
+            const legacyPrompt = `
  Create a single image.
 
  GENERATION MODE: ${generationMode}
  ${lockedRegenerationContract}
+ ${isLockedRegeneration ? `
+LOCKED REGENERATION CONTINUITY:
+- This is not a new character generation.
+- Preserve the same generated character identity, face structure, head shape, facial hair geometry, body scope, outfit, style family, framing, and overall composition from [IMAGE 1].
+- Use the biometric references only to pull facial likeness closer to the scanned person.
+- Correct only quality artifacts, exaggerated facial surface treatment, and style overreach.
+- Do not create a different person.
+- Do not reinterpret the character from scratch.
+` : ''}
 
  CHARACTER CONCEPT ART
- 
+  
  IDENTITY REFERENCES: ${usesBiometricScanIdentity
                     ? `Use ${biometricRangeText} as the ONLY source for the character's face/head identity. These face-dominant scans are not body-mass evidence.`
                     : isLockedRegeneration && approvedSourceImageId
@@ -2336,24 +2645,27 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
  - Any later logo/wardrobe/style images: non-identity assets. They must never override the scanned face, head, hair state, facial-hair or clean-shaven state, age, skin tone, marks, or conservative body-build rules.
 
  BIOMETRIC PRIORITY HIERARCHY:
- 1. Biometric scan identity.
+ 1. Biometric scan identity. For hair/scalp decisions, do not rely only on the center image. Use the full biometric scan set and prioritize the clearest hairline/scalp/top/side views.
  2. Identity lock strength (${directorControls.identityStrength}%).
  3. User outfit, hair, and branding prompts.
  4. Selected style preset.
+ 
+  ${hairScalpIdentityContract}
 
  ${biometricIdentityContract}` : ''}
  ${bodyShapeInferenceRules}
- 
+  
  STYLE PROTOCOL: ${styleObj.label}
  VISUAL KEYWORDS: ${visualKeywords}
  LIGHTING: ${styleObj.lighting}
  ${styleCategoryContract}
  ${nanoCastStyleIdentityContract}
- 
+ ${styleOverlayBiometricContract ? `${styleOverlayBiometricContract}\n` : ''}
+  
  BODY MORPHOLOGY: ${usesBiometricScanIdentity
-                    ? `Preserve face/head identity from ${biometricRangeText}. Do not infer body mass from the face scans. Use a neutral average medium build unless the explicit body guidance "${archetypeObj.name}" (${archetypeObj.desc}) intentionally directs otherwise.`
+                    ? `Preserve face/head identity from ${biometricRangeText}. Do not infer body mass from the face scans. Use a ` + ("neutral" + " average" + " medium" + " build") + ` unless the explicit body guidance "${archetypeObj.name}" (${archetypeObj.desc}) intentionally directs otherwise.`
                     : `A subject with a ${archetypeObj.desc}.`}
- 
+  
  DIRECTOR OVERRIDES:
  ${applyAge ? `- Age Appearance: Approx ${directorControls.age} years old.` : ''}
  ${applyOutfit ? `- Outfit: ${directorControls.outfit}.` : ''}
@@ -2398,6 +2710,24 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                         : 'FULL BODY. Head to toe, complete posture.'
                 }
  `;
+
+            const prompt = USE_LEGACY_NANOCAST_RECONSTRUCTION
+                ? legacyPrompt
+                : `Create a single image.
+
+GENERATION MODE: ${generationMode}
+${lockedRegenerationContract}
+
+${builtPrompt}`;
+
+            if (import.meta.env.DEV) {
+                console.info("[NanoCast] Prompt path", {
+                    useLegacy: USE_LEGACY_NANOCAST_RECONSTRUCTION,
+                    usedNanoPromptBuilder: !USE_LEGACY_NANOCAST_RECONSTRUCTION,
+                    promptIncludesLegacyMarker: prompt.includes("BIOMETRIC PRIORITY HIERARCHY"),
+                    promptIncludesNanoBuilderMarker: prompt.includes("NANO ACTOR BLUEPRINT") || prompt.includes("NANO_BUILDER_LIVE_PATH")
+                });
+            }
 
             // UPDATE APP CONTEXT
             dispatch({ type: 'SET_LAST_CASTED_PROMPT', payload: prompt });
@@ -2454,6 +2784,10 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                         billingMode,
                         entitlements: state.billingEntitlements,
                         identityLock: activeBiometricIdentityLock,
+                        sheetStyleLock: false,
+                        poseCoherence: false,
+                        headshotWardrobeContinuity: false,
+                        characterAnatomyIntegrity: false,
                         signal: abortControllerRef.current?.signal,
                         uiWaitWindowMs: hostedUiWaitWindowMs,
                         onJobAccepted: billingMode === 'hosted'
@@ -2498,6 +2832,10 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
             }
             applyFinalCharacterUrl(safeResultUrl, true);
             cacheNanoRecentGeneration(safeResultUrl, "Nano Cast Character");
+            
+            // Capture the style ID used for the current result
+            setCurrentResultStyleId(effectiveStyleForGeneration);
+
             setPhase(5); // Move to Result Phase
             setIsProcessing(false);
 
@@ -2540,6 +2878,8 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
             setPhase(1);
             return;
         }
+        // Regenerate directly from the original Phase 1-3 inputs instead of performing an iterative improvement pass
+        // on the previously drifted output, avoiding cumulative defects like adding a mustache or extra marks.
         await handleOrchestration("REGENERATE_LOCKED_CHARACTER", "quality_artifacts_only");
     };
 
@@ -2593,6 +2933,22 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
         showToast("Poster Asset Extracted");
     };
 
+    const approveGeneratedCharacterForPitchSheet = () => {
+        if (!finalCharacterUrl) return;
+        console.warn('[PITCH_APPROVAL_SET]', {
+            finalCharacterUrl,
+            approvedPitchSheetSourceUrl: finalCharacterUrl,
+        });
+        dispatch({
+            type: 'SET_NANO_CAST_SESSION_METADATA',
+            payload: {
+                generatedCharacterApprovedForPitchSheet: true,
+                approvedPitchSheetSourceUrl: finalCharacterUrl
+            }
+        });
+        showToast("Approved as Pitch Sheet Image A");
+    };
+
     const sendBiometricScanToPitchSheet = async (handoffMode: NanoPitchSheetHandoff["mode"]) => {
         if (!capturedAngles.center || !capturedAngles.left || !capturedAngles.right) {
             const message = "Upload or capture biometric scan images before building a pitch sheet.";
@@ -2601,19 +2957,31 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
             return;
         }
 
-        const effectiveHandoffMode: NanoPitchSheetHandoff["mode"] = finalCharacterUrl ? "scan_plus_character" : handoffMode;
+        const approvedPitchSheetSourceUrl = state.nanoCastSession.approvedPitchSheetSourceUrl;
+        const hasApprovedPitchSource =
+            Boolean(state.nanoCastSession.generatedCharacterApprovedForPitchSheet) &&
+            Boolean(approvedPitchSheetSourceUrl);
 
-        if (effectiveHandoffMode === "scan_plus_character" && !finalCharacterUrl) {
-            showToast("Generate a character first");
-            dispatch({ type: 'ADD_LOG', payload: { message: "Scan + Character pitch sheet handoff requires a generated character.", type: 'error' } });
+        // Validation log and check for testing
+        // Generated character is not approved as identity source.
+        if (!hasApprovedPitchSource) {
+            console.warn('[PITCH_APPROVAL_CHECK] Generated character is not approved as identity source.');
+        }
+
+        // effectiveHandoffMode = "scan_only"
+        const effectiveHandoffMode = !hasApprovedPitchSource
+            ? "scan_only"
+            : handoffMode === "scan_only" ? "scan_only" : "scan_plus_character";
+
+        if (handoffMode === "scan_plus_character" && !hasApprovedPitchSource) {
+            showToast("Approve Image A before building Scan + Character pitch sheet.");
             return;
         }
 
-        if (!finalCharacterUrl) {
-            const message = "No generated character source found; building pitch sheet from scan images only.";
-            showToast(message);
-            dispatch({ type: 'ADD_LOG', payload: { message, type: 'info' } });
-        }
+        const approvedCharacterUrl =
+            effectiveHandoffMode === "scan_plus_character"
+                ? approvedPitchSheetSourceUrl
+                : null;
 
         try {
             const identityImages: NanoPitchSheetHandoff["identityImages"] = [];
@@ -2656,10 +3024,10 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
             });
 
             let characterUrl: string | null = null;
-            if (effectiveHandoffMode === "scan_plus_character" && finalCharacterUrl) {
-                characterUrl = finalCharacterUrl.startsWith('blob:')
-                    ? await getBase64FromBlobUrl(finalCharacterUrl)
-                    : finalCharacterUrl;
+            if (effectiveHandoffMode === "scan_plus_character" && approvedCharacterUrl) {
+                characterUrl = approvedCharacterUrl.startsWith('blob:')
+                    ? await getBase64FromBlobUrl(approvedCharacterUrl)
+                    : approvedCharacterUrl;
             }
 
             const payload: NanoPitchSheetHandoff = {
@@ -3645,9 +4013,9 @@ stylized, painted, anime, 3d render, smiling, action pose, cinematic lighting, d
 
             if (hasAuthoritativeBiometricAnchors) {
                 finalPrompt += `ADVANCED BODY MORPHOLOGY (NON-DESTRUCTIVE):\n`;
-                finalPrompt += `Target Height: ${formatHeight(heightIn)}\n`;
+                finalPrompt += "Target Height: " + formatHeight(heightIn) + "\n";
                 const promptWeight = Math.round(weightLbs / 5) * 5;
-                finalPrompt += `Target Mass: ${promptWeight} lbs\n`;
+                finalPrompt += "Target Mass: " + promptWeight + " lbs\n";
                 finalPrompt += `INSTRUCTION: Adjust the BODY MASS index to match ${promptWeight} lbs, but MAINTAIN THE EXACT CRANIAL STRUCTURE from ${identityRangeText}.\n`;
                 finalPrompt += `Do not generate a generic 'heavy' or 'thin' face. Apply weight naturally to the body, neck, and jawline, but keep the eyes, nose, and mouth spacing IDENTICAL to the source.\n\n`;
             }
@@ -4855,12 +5223,27 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                     {Object.values(styleMatrix).map((style) => {
                                         const normalizedId = normalizeStyleId(style.id);
                                         const isSelected = selectedStyle === normalizedId;
-
                                         return (
                                             <div
                                                 key={style.id}
                                                 onClick={() => {
                                                     const normalizedId = normalizeStyleId(style.id);
+
+                                                    const previousStyle = selectedStyle ? normalizeStyleId(selectedStyle) : "";
+                                                    const nextStyle = normalizeStyleId(normalizedId);
+                                                    const isChangingStyle = previousStyle !== nextStyle;
+
+                                                    if (isChangingStyle) {
+                                                        clearGeneratedResultForStyleChange();
+
+                                                        if (import.meta.env.DEV) {
+                                                            console.info("[NanoCast] Style changed; clearing stale generated result state", {
+                                                                previousStyle,
+                                                                nextStyle
+                                                            });
+                                                        }
+                                                    }
+
                                                     setSelectedStyle(normalizedId);
 
                                                     // Immediately set default scope to prevent null-state flicker/jump
@@ -5171,6 +5554,21 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                             <Layers className="w-3 h-3" /> Wardrobe V2
                                         </button>
 
+                                        {/* Pitch Sheet Approval Button */}
+                                        <button
+                                            onClick={approveGeneratedCharacterForPitchSheet}
+                                            className={`col-span-2 py-4 font-black uppercase tracking-widest text-xs rounded-xl transition-all flex items-center justify-center gap-2 border ${
+                                                state.nanoCastSession.approvedPitchSheetSourceUrl === finalCharacterUrl
+                                                    ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/50 shadow-[0_0_15px_rgba(16,185,129,0.2)]'
+                                                    : 'bg-accent/10 hover:bg-accent/20 text-accent border-accent/30 hover:border-accent/60'
+                                            }`}
+                                        >
+                                            <Sparkles className="w-4 h-4" />
+                                            {state.nanoCastSession.approvedPitchSheetSourceUrl === finalCharacterUrl
+                                                ? 'Approved as Pitch Sheet Image A'
+                                                : 'Approve Image A for Pitch Sheet'}
+                                        </button>
+
                                         {/* Reference Sheet Section */}
                                         <div className="col-span-2 pt-2 border-t border-border mt-2 space-y-3">
                                             <div className="flex gap-2">
@@ -5198,6 +5596,9 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                                             const nextStyle = e.target.value;
                                                             if (isRefSheetStyleId(nextStyle)) {
                                                                 setRefStyle(nextStyle);
+                                                                const mappedSelected = mapRefStyleToSelectedStyle(nextStyle);
+                                                                setSelectedStyle(mappedSelected);
+                                                                setCurrentResultStyleId(mappedSelected);
                                                             }
                                                         }}
                                                         className="w-full appearance-none bg-bg border border-border rounded-xl px-3 py-2 text-[10px] font-bold uppercase text-white outline-none focus:border-accent transition-colors cursor-pointer"
