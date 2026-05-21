@@ -35,7 +35,7 @@ import {
     sanitizeVisibleBoardLanguage,
     type CharacterPitchSheetInput
 } from "../../prompts/characterPitchSheetPrompts";
-import { PROMPT_PRIORITY_ORDER_LABEL } from "../../prompts/identityContracts";
+
 
 export type NanoRefSheetHandoff = PendingRefSheetHandoff;
 
@@ -1185,24 +1185,26 @@ export default function PortraitStudio() {
 
         try {
             const referenceImages = buildGenerationReferenceImages();
-            if (import.meta.env.DEV && isPitchSheetMode) {
-                const biometricSources = isBiometricPitchSheetSource(pitchSheetInput.identitySource)
-                    ? (pitchSheetInput.referenceImages || []).filter(ref => Boolean(ref.imageUrl)).length
-                    : 0;
-                console.info("[IdentityAnchor] biometricSources:", biometricSources);
-                console.info("[IdentityAnchor] generatedCharacterSourcePrimary:", pitchSheetInput.identitySource === "biometric_plus_character" && Boolean(pitchSheetInput.characterStyleReferenceUrl));
-                console.info("[PromptPriority]", PROMPT_PRIORITY_ORDER_LABEL);
-                console.info("[IdentityAnchor] renderStyle:", pitchSheetCharacterRenderStyle, "boardStyle:", pitchSheetBoardPresentationStyle);
-                console.info("[IdentityAnchor] referenceSources:", referenceImages.map((ref, index) => ({
+            if (isPitchSheetMode) {
+                const generatedCharacterSourceUrl = pitchSheetInput.characterStyleReferenceUrl;
+                const biometricReferenceCount = (pitchSheetInput.referenceImages || []).filter(ref => Boolean(ref.imageUrl)).length;
+                const characterRenderStyle = pitchSheetCharacterRenderStyle;
+                const boardPresentationStyle = pitchSheetBoardPresentationStyle;
+                const sourcePanelDisplay = pitchSheetInput.sourcePanelMode || "costume_matched";
+
+                console.info("[PitchSheet] Scan + Character source audit", {
+                    mode: "scan_plus_character",
+                    hasGeneratedCharacterSource: Boolean(generatedCharacterSourceUrl),
+                    generatedCharacterSourceFirst: true,
+                    biometricReferenceCount,
+                    characterRenderStyle,
+                    boardPresentationStyle,
+                    sourcePanelDisplay
+                });
+
+                console.info("[PitchSheet] Reference Images Ordering Labels:", referenceImages.map((ref, index) => ({
                     index: index + 1,
-                    label: ref.label,
-                    sourceType: ref.label.includes("Primary Generated Character Source")
-                        ? "primary_visual_design_source"
-                        : ref.label.includes("Biometric Scan Identity Reference")
-                            ? "biometric_identity_anchor"
-                            : ref.label.includes("Presentation Guide")
-                                ? "layout_reference"
-                                : "identity_anchor"
+                    label: ref.label
                 })));
             }
             const generationOptions = {

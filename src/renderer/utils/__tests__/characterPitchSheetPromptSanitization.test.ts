@@ -995,4 +995,71 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
     const labelsLayered = calloutsLayered.map(c => c.label);
     expect(labelsLayered).toContain('Layering System');
   });
+
+  it('injects Scan + Character explicit source authority, multi-view consistency, style lock, and costume matched behavior contracts', () => {
+    const prompt = buildCharacterPitchSheetPrompt(buildInput({
+      identitySource: 'biometric_plus_character',
+      characterStyleReferenceUrl: 'data:image/png;base64,character',
+      referenceImages: [
+        { angle: 'center', imageUrl: 'data:image/png;base64,center' },
+        { angle: 'left', imageUrl: 'data:image/png;base64,left' },
+      ],
+    }));
+
+    expect(prompt).toContain('SCAN + CHARACTER SOURCE AUTHORITY:');
+    expect(prompt).toContain('[IMAGE 1] is the locked generated character source.');
+    expect(prompt).toContain('Preserve [IMAGE 1] as the visual/design authority');
+    expect(prompt).toContain('BIOMETRIC BACKUP AUTHORITY:');
+    expect(prompt).toContain('[IMAGE 2+] are biometric identity backup references.');
+    expect(prompt).toContain('MULTI-VIEW CONSISTENCY:');
+    expect(prompt).toContain('All full-body and torso views must depict the same character from [IMAGE 1].');
+    expect(prompt).toContain('STYLE SOURCE LOCK:');
+    expect(prompt).toContain('Match the character render style of [IMAGE 1] unless the user explicitly selected');
+    expect(prompt).toContain('COSTUME MATCHED BEHAVIOR:');
+    expect(prompt).toContain('When Source Panel Display is "Costume Matched", use [IMAGE 1]\'s outfit/costume');
+  });
+
+  it('enforces wardrobe authority override and filters collar callouts correctly', () => {
+    const inputWithCollar = buildInput({
+      identitySource: 'biometric_plus_character',
+      characterStyleReferenceUrl: 'data:image/png;base64,character',
+      wardrobeDirection: 'Collared shirt, black polo, jacket.',
+    });
+    const promptWithCollar = buildCharacterPitchSheetPrompt(inputWithCollar);
+    expect(promptWithCollar).toContain('WARDROBE AUTHORITY OVERRIDE');
+    expect(promptWithCollar).toContain('Replace any default NanoCast black polo, collared shirt, source-photo shirt, or source-photo collar');
+
+    const calloutsWithCollar = buildPitchSheetCallouts(inputWithCollar);
+    expect(calloutsWithCollar.some(c => c.label === 'Shirt Collar' || c.label === 'Shirt Collar Construction')).toBe(true);
+
+    const inputWithoutCollar = buildInput({
+      identitySource: 'biometric_plus_character',
+      characterStyleReferenceUrl: 'data:image/png;base64,character',
+      wardrobeDirection: 'Sleeveless tank top, barefoot.',
+    });
+    const promptWithoutCollar = buildCharacterPitchSheetPrompt(inputWithoutCollar);
+    expect(promptWithoutCollar).toContain('WARDROBE AUTHORITY OVERRIDE');
+
+    const calloutsWithoutCollar = buildPitchSheetCallouts(inputWithoutCollar);
+    expect(calloutsWithoutCollar.some(c => c.label === 'Shirt Collar' || c.label === 'Shirt Collar Construction')).toBe(false);
+  });
+
+  it('enforces controlled labels, turnaround anatomy integrity, no signature rules, and performance scoping', () => {
+    const input = buildInput({
+      characterName: 'Test Character',
+      performanceDirection: 'active stance',
+    });
+    const prompt = buildCharacterPitchSheetPrompt(input);
+
+    expect(prompt).toContain('CONTROLLED TEXT AND LABEL CONTRACT');
+    expect(prompt).toContain('NO SIGNATURE / APPROVAL MARKS');
+    expect(prompt).toContain('TURNAROUND ANATOMY INTEGRITY');
+    expect(prompt).toContain('PERFORMANCE DIRECTION SCOPE FOR PITCH SHEET');
+    expect(prompt).toContain('CALLOUT ACCURACY CONTRACT');
+
+    // Negative constraints and approved examples verification
+    expect(prompt).toContain('NEUTRAL FRONT HEAD');
+    expect(prompt).toContain('jowoul-turn anatomy');
+    expect(prompt).toContain('The forbidden examples are negative examples only');
+  });
 });

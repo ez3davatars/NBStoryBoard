@@ -516,6 +516,9 @@ const buildGarmentCalloutCandidates = (input: CharacterPitchSheetInput): PitchSh
     const text = calloutText(input);
     const context = describeCalloutContext(input);
     const callouts: PitchSheetCallout[] = [];
+    const wardrobeText = input.wardrobeDirection || "";
+    const hasExplicit = Boolean(normalize(input.wardrobeDirection));
+    const supportsCollar = !hasExplicit || finalWardrobeSupportsCollar(wardrobeText);
 
     if (context === "robot/mech") {
         callouts.push(
@@ -535,7 +538,7 @@ const buildGarmentCalloutCandidates = (input: CharacterPitchSheetInput): PitchSh
     } else if (context === "modern/business") {
         callouts.push(
             makeCallout("Tailored Jacket", "garment", "visible jacket or blazer", { material: "tailored fabric", placementHint: "point to lapel, shoulder, or jacket body" }),
-            makeCallout("Shirt Collar Construction", "construction", "visible shirt collar", { material: "shirt fabric", placementHint: "point to collar edge or collar stand", visibleOnlyIf: "a shirt collar is visible" })
+            ...(supportsCollar ? [makeCallout("Shirt Collar Construction", "construction", "visible shirt collar", { material: "shirt fabric", placementHint: "point to collar edge or collar stand", visibleOnlyIf: "a shirt collar is visible" })] : [])
         );
     } else if (context === "fantasy/adventure") {
         callouts.push(
@@ -573,7 +576,7 @@ const buildGarmentCalloutCandidates = (input: CharacterPitchSheetInput): PitchSh
         callouts.unshift(makeCallout("Outer Garment Layer", "garment", "visible robe, cloak, or outer garment", { material: "fabric", placementHint: "point to the outer garment body" }));
     } else if (hasAnyTerm(text, ["dress", "gown"])) {
         callouts.unshift(makeCallout("Dress Silhouette", "garment", "visible dress or gown", { material: "fabric", placementHint: "point to the dress/gown body" }));
-    } else if (context !== "modern/business" && hasAnyTerm(text, ["shirt"])) {
+    } else if (context !== "modern/business" && hasAnyTerm(text, ["shirt"]) && supportsCollar) {
         callouts.unshift(makeCallout("Shirt Collar", "garment", "visible shirt collar, placket, or sleeve", { material: "shirt fabric", placementHint: "point to the shirt collar, placket, or sleeve" }));
     }
     if (hasAnyTerm(text, ["armor", "armour", "breastplate", "plate", "pauldron"])) {
@@ -731,6 +734,9 @@ const buildPerformanceCalloutCandidate = (input: CharacterPitchSheetInput): Pitc
 
 const buildConstructionCalloutCandidate = (input: CharacterPitchSheetInput): PitchSheetCallout | null => {
     const text = calloutText(input);
+    const wardrobeText = input.wardrobeDirection || "";
+    const hasExplicit = Boolean(normalize(input.wardrobeDirection));
+    const supportsCollar = !hasExplicit || finalWardrobeSupportsCollar(wardrobeText);
 
     if (hasAnyTerm(text, ["joint", "robot", "mech", "android", "panel"])) {
         return makeCallout("Joint Assembly", "construction", "visible joint, hinge, panel seam, or mechanical assembly", { material: "metal/composite", placementHint: "point to the actual joint or panel seam" });
@@ -748,7 +754,7 @@ const buildConstructionCalloutCandidate = (input: CharacterPitchSheetInput): Pit
         if (hasAnyTerm(text, ["jacket", "coat"])) {
             return makeCallout("Jacket Seam Detail", "construction", "visible jacket seam, stitching, lapel edge, or tailored construction", { placementHint: "point to the jacket seam or stitching" });
         }
-        if (hasAnyTerm(text, ["shirt", "collar"])) {
+        if (hasAnyTerm(text, ["shirt", "collar"]) && supportsCollar) {
             return makeCallout("Shirt Collar", "construction", "visible shirt collar, collar edge, or collar stand", { placementHint: "point to the shirt collar or collar stand" });
         }
         return makeCallout("Seam / Stitching", "construction", "visible seam, stitching, collar edge, or tailored construction", { placementHint: "point to seam or stitching" });
@@ -912,6 +918,138 @@ const inferProductionNotes = (input: CharacterPitchSheetInput): string => {
     if (supplied) return supplied;
 
     return "Design must be production-ready for casting, wardrobe, continuity, and later scene generation.";
+};
+
+const hasActorSourceForPitchSheet = (input: CharacterPitchSheetInput): boolean => {
+    return Boolean(
+        input.referenceImageUrl ||
+        input.referenceImages?.length ||
+        input.characterStyleReferenceUrl ||
+        input.identityLock ||
+        input.identitySource === "portrait_reference" ||
+        input.identitySource === "biometric_multiview" ||
+        input.identitySource === "biometric_plus_character"
+    );
+};
+
+const finalWardrobeSupportsCollar = (text: string): boolean => {
+    const clean = normalize(text).toLowerCase();
+    if (!clean) return true;
+    if (/\b(tank|tank-top|sleeveless|shirtless|bare chest|crop top|sports bra|singlet)\b/.test(clean)) return false;
+    return /\b(collar|collared|polo|button-up|dress shirt|jacket|coat|blazer|uniform|robe|tunic)\b/.test(clean);
+};
+
+const wrapFaceDetailsForPrompt = (
+    text: string,
+    hasActorSource: boolean
+): string => {
+    const supplied = normalize(text);
+
+    if (!supplied) {
+        return hasActorSource
+            ? "Use the hidden actor likeness lock as the face/head authority. The visible Face Details field is empty, but actor identity remains locked to the supplied source."
+            : "Distinct readable face design appropriate to the current character brief.";
+    }
+
+    if (!hasActorSource) return supplied;
+
+    return `Use the following user Face Details only as supplemental face/head rendering guidance. The supplied actor source remains the primary identity authority. Do not let these notes override source likeness unless the workflow explicitly requests identity transformation. User notes: "${supplied}"`;
+};
+
+const wrapPerformanceDirectionForPrompt = (
+    text: string,
+    hasActorSource: boolean
+): string => {
+    const supplied = normalize(text);
+
+    if (!supplied) {
+        return hasActorSource
+            ? "Neutral, controlled, readable presence matching the supplied actor source."
+            : "Neutral, controlled, readable presence matching the character brief.";
+    }
+
+    if (!hasActorSource) return supplied;
+
+    return `Apply the following user Performance Direction through pose, body language, attitude, gesture, expression, or action staging only. Do not change actor identity, face structure, skull geometry, hair, hairline, facial hair, grooming, skin tone, age impression, or core likeness. User direction: "${supplied}"`;
+};
+
+const wrapMaterialCostumeNotesForPrompt = (
+    text: string,
+    hasActorSource: boolean
+): string => {
+    const supplied = normalize(text);
+
+    if (!supplied) {
+        return "Render fabric, leather, metal, footwear, stitching, visible closures, garment edges, wear, and patina with production-ready clarity.";
+    }
+
+    if (!hasActorSource) return supplied;
+
+    return `Apply the following user Material / Costume Notes only to wardrobe, fabrics, materials, clothing construction, accessories, footwear, costume presentation, and visible costume details. Do not change actor identity, face/head likeness, hair, hairline, facial hair, grooming, skull geometry, skin tone, or age impression. User notes: "${supplied}"`;
+};
+
+const wrapProductionNotesForPrompt = (
+    text: string,
+    hasActorSource: boolean
+): string => {
+    const supplied = normalize(text);
+
+    if (!supplied) {
+        return "Design must be production-ready for casting, wardrobe, continuity, and later scene generation.";
+    }
+
+    if (!hasActorSource) return supplied;
+
+    return `Apply the following user Production Notes to board structure, production intent, presentation, sequencing, callouts, shot emphasis, and design-sheet communication only. Do not change actor identity, face/head likeness, hair, hairline, facial hair, grooming, skull geometry, skin tone, or age impression. User notes: "${supplied}"`;
+};
+
+const buildHiddenActorSourceIdentityLock = (
+    input: CharacterPitchSheetInput,
+    options: {
+        hasGeneratedCharacterSource: boolean;
+        hasPortraitReferenceSource: boolean;
+        characterName: string;
+        supportingPosePanelLabel: string;
+    }
+): string => {
+    if (!hasActorSourceForPitchSheet(input)) return "";
+
+    const identitySourceText = options.hasGeneratedCharacterSource
+        ? "the generated character source plus biometric actor likeness references"
+        : options.hasPortraitReferenceSource
+            ? "the approved portrait actor source"
+            : "the supplied actor likeness source";
+
+    const authoritySplit = options.hasGeneratedCharacterSource
+        ? `
+SOURCE AUTHORITY SPLIT:
+- Image A / [IMAGE 1] controls outfit, body presentation, render style, costume, silhouette, pose attitude, and approved character design.
+- Images B-F / biometric likeness references control face, head, hair, hairline, facial hair, grooming, skin tone, skull geometry, facial proportions, asymmetry, age impression, and actor identity.
+- Performance Direction controls pose, action, and body language only.
+- Material / Costume Notes control wardrobe and materials only.
+- No user freeform field can create a new actor.
+- Pitch Sheet Brief instructions control presentation, layout, pose ideas, callouts, labels, and production board structure only.`
+        : `
+SOURCE AUTHORITY:
+- The actor source controls face, head, hair, hairline, facial hair, grooming, skin tone, skull geometry, facial proportions, asymmetry, age impression, and actor identity.
+- Pitch Sheet Brief instructions control presentation, layout, pose ideas, costume notes, callouts, labels, and production board structure only.`;
+
+    return `
+HIDDEN STRICT ACTOR LIKENESS LOCK:
+- The supplied actor source is the strict actor likeness authority for ${options.characterName || "this character"}.
+- Preserve the same actor identity across hero portrait, head studies, turnaround views, expression study, ${options.supportingPosePanelLabel}, callout panels, and supporting poses.
+- Preserve hair, hairline, facial hair, grooming, skull geometry, facial proportions, asymmetry, skin tone, age impression, and emotional presence consistently across every view.
+- Do not reinterpret, redesign, replace, beautify, age-shift, youthify, slim, bulk, or substitute the actor.
+- Do not let pose, costume, material, performance, board style, production notes, body metadata, or layout instructions change the actor's face/head identity.
+- Apply all user customization as compatible guidance while preserving ${identitySourceText}.
+
+CONFLICT RESOLUTION:
+- If any user customization conflicts with actor likeness preservation, preserve actor likeness first.
+- Reinterpret the user customization in the closest compatible way without changing the actor's identity.
+- User text may direct pose, action, mood, costume, materials, board presentation, or callout emphasis, but may not implicitly replace the actor.
+
+${authoritySplit}
+`;
 };
 
 const isBiometricIdentitySource = (input: CharacterPitchSheetInput): boolean => {
@@ -1095,6 +1233,88 @@ const HEADSHOT_BACKGROUND_ISOLATION_RULE = `HEADSHOT / REFERENCE PORTRAIT BACKGR
 HEADSHOT BACKGROUND NEGATIVE EXCLUSIONS:
 - Exclude source image background, bedroom, hallway, door frame, wall corner, window, furniture, home interior, office background, uneven source lighting, cropped room details, original photo environment.`;
 
+const CONTROLLED_TEXT_AND_LABEL_CONTRACT = `CONTROLLED TEXT AND LABEL CONTRACT:
+- Use clean, readable production-board text only.
+- Do not invent fake technical labels, fake anatomy terms, fake metadata, pseudo-words, or corrupted text.
+- Do not write internal debug phrases, prompt fragments, or nonsensical labels.
+- Do not add handwritten signatures, artist signatures, approval signatures, stamps, signed-off marks, or decorative autograph marks.
+- Only use labels that describe visible elements accurately.
+- Keep labels short, direct, and tied to actual visible features.
+- Prefer fewer, accurate labels over many labels.
+- If a label would be small, crowded, or uncertain, omit it.
+- Do not fill empty space with decorative text.
+
+Approved label examples:
+- FRONT VIEW
+- 3/4 VIEW
+- LEFT PROFILE
+- RIGHT PROFILE
+- BACK VIEW
+- NEUTRAL FRONT HEAD
+- 3/4 LEFT HEAD
+- LEFT PROFILE HEAD
+- RIGHT PROFILE HEAD
+- EXPRESSION STUDY
+- SUPPORTING POSE
+- COSTUME LAYER
+- MAIN COSTUME TEXTILE
+- NECKLINE / COLLAR
+- ARMHOLE / SHOULDER SEAM
+- FOOTWEAR CONSTRUCTION
+- MATERIAL CALLOUTS
+- CHARACTER PALETTE
+- FABRIC TEXTURE
+- TURNAROUND VIEW
+
+Forbidden text examples:
+- Signed
+- signature
+- approved
+- sign-off
+- Global body axes
+- no oui anatomy
+- jowoul-turn anatomy
+- internal debug label
+- fake anatomy labels
+- unreadable pseudo-technical text
+
+The forbidden examples are negative examples only. Do not render them as visible board text anywhere in the image.
+
+Important:
+If the model cannot label something accurately, omit the label instead of inventing one.`;
+
+const NO_SIGNATURE_RULE_CONTRACT = `NO SIGNATURE / APPROVAL MARKS:
+- Do not add artist signatures, cursive signatures, approval marks, stamps, watermarks, handwritten sign-offs, or decorative autograph marks anywhere on the sheet.
+- This is a production design board, not a signed illustration.
+- The only branding allowed is the app’s intended board label or existing footer text if already part of the template.`;
+
+const TURNAROUND_ANATOMY_INTEGRITY_CONTRACT = `TURNAROUND ANATOMY INTEGRITY:
+- All full-body and torso views must depict the same anatomically coherent actor.
+- Preserve correct head-to-neck-to-torso alignment.
+- Preserve correct shoulder, elbow, wrist, hip, knee, ankle, and foot placement.
+- Do not twist the torso one direction while legs face the opposite direction unless the panel is explicitly a dynamic pose.
+- Do not reverse left/right limbs.
+- Do not swap front/back body anatomy.
+- Do not create extra limbs, missing limbs, fused fingers, broken shoulders, backward knees, backward feet, or impossible joints.
+- In side/profile views, body axis, head direction, nose direction, chest direction, pelvis, knees, and feet must agree.
+- Back view must show rear anatomy and rear clothing only, not a front-facing torso or front-facing feet.
+- Turnaround panels must be neutral and readable unless the panel is specifically labeled as a supporting pose.`;
+
+const PERFORMANCE_DIRECTION_SCOPE_CONTRACT = `PERFORMANCE DIRECTION SCOPE FOR PITCH SHEET:
+- Apply Performance Direction primarily to the supporting pose / action inset / expression study panel.
+- Keep neutral turnaround views anatomically neutral, readable, and production-safe.
+- Do not apply dynamic gym flexing poses to every front/side/back turnaround unless explicitly requested.
+- The turnaround row should remain useful for costume, body, and silhouette reference.`;
+
+const CALLOUT_ACCURACY_CONTRACT = `CALLOUT ACCURACY CONTRACT:
+- Callout arrows must point to the exact visible feature being labeled.
+- Do not label invisible features.
+- Do not point to the wrong body part, wrong costume part, or empty space.
+- Do not invent anatomy callouts.
+- If the final wardrobe has no collar, do not label a collar.
+- If the final wardrobe is a tank top, prefer labels such as neckline, armhole, shoulder seam, fabric stretch, garment fit, and material texture.
+- If uncertain, use fewer callouts rather than inaccurate callouts.`;
+
 export function buildCharacterPitchSheetPrompt(input: CharacterPitchSheetInput): string {
     console.warn('[PITCH_PROMPT_CONSTRUCTION]', {
       identitySource: input.identitySource,
@@ -1105,6 +1325,17 @@ export function buildCharacterPitchSheetPrompt(input: CharacterPitchSheetInput):
       generatedSourceImageIndex: input.identityLock?.generatedSourceImageIndex,
       generatedSourceRole: input.identityLock?.generatedSourceRole
     });
+
+    // @ts-ignore
+    if (typeof import.meta !== "undefined" && import.meta.env?.DEV) {
+        console.info("[PitchSheetBrief] Text/anatomy safety audit", {
+            controlledLabelsActive: true,
+            noSignatureRuleActive: true,
+            anatomyIntegrityActive: true,
+            calloutAccuracyActive: true,
+            performanceDirectionScopedToSupportingPose: true
+        });
+    }
 
     const visibleInput = sanitizeVisibleBoardLanguage(input);
     const characterName = valueOr(visibleInput.characterName, visibleInput.aliasCodename, "Unnamed lead character");
@@ -1128,10 +1359,10 @@ export function buildCharacterPitchSheetPrompt(input: CharacterPitchSheetInput):
     const lightingMood = valueOr(visibleInput.lightingMood, defaultCharacterPitchSheetInput.lightingMood);
     const sheetStyle = valueOr(visibleInput.sheetStyle, defaultCharacterPitchSheetInput.sheetStyle);
     const additionalNotes = valueOr(visibleInput.additionalNotes, "No extra notes supplied; infer tasteful cinematic details from the brief.");
-    const faceDesign = inferFaceDesign(visibleInput);
-    const performanceDirection = inferPerformance(visibleInput);
-    const materialNotes = inferMaterialNotes(visibleInput);
-    const productionNotes = inferProductionNotes(visibleInput);
+    const rawFaceDesign = inferFaceDesign(visibleInput);
+    const rawPerformanceDirection = inferPerformance(visibleInput);
+    const rawMaterialNotes = inferMaterialNotes(visibleInput);
+    const rawProductionNotes = inferProductionNotes(visibleInput);
     const sourcePanelMode = visibleInput.sourcePanelMode || defaultCharacterPitchSheetInput.sourcePanelMode || "costume_matched";
     const characterRenderStyle = normalizeCharacterRenderStyle(visibleInput.characterRenderStyle);
     const characterRenderFamily = resolveRenderFamily(characterRenderStyle);
@@ -1149,6 +1380,72 @@ export function buildCharacterPitchSheetPrompt(input: CharacterPitchSheetInput):
     const hasReferenceDrivenIdentity = Boolean(normalize(input.referenceImageUrl)) || isReferenceDrivenIdentitySource(input);
     const hasGeneratedCharacterSource = input.identitySource === "biometric_plus_character" && Boolean(normalize(input.characterStyleReferenceUrl));
     const hasPortraitReferenceSource = input.identitySource === "portrait_reference" && Boolean(normalize(input.referenceImageUrl));
+    const hasActorSource = hasActorSourceForPitchSheet(input);
+
+    const hasExplicitWardrobeDirection = Boolean(normalize(visibleInput.wardrobeDirection));
+
+    const wardrobeAuthorityMode = hasExplicitWardrobeDirection
+        ? "user_wardrobe_override"
+        : hasGeneratedCharacterSource || hasPortraitReferenceSource
+            ? "source_wardrobe"
+            : "text_defined_wardrobe";
+
+    const wardrobeAuthorityInstruction = hasExplicitWardrobeDirection
+        ? `
+WARDROBE AUTHORITY OVERRIDE:
+- The user supplied Wardrobe Direction is the wardrobe/costume authority for this pitch sheet.
+- Apply the user Wardrobe Direction consistently across hero portrait, full-body turnarounds, head studies, callouts, material panels, and supporting pose panels.
+- Replace any default NanoCast black polo, collared shirt, source-photo shirt, or source-photo collar if it conflicts with the user Wardrobe Direction.
+- Do not keep the collared shirt/polo merely because it appears in Image A.
+- Image A still controls actor body presentation, proportions, visual style, pose attitude, and approved character feel.
+- Biometric references still control face/head identity, hair, hairline, facial hair, grooming, skin tone, skull geometry, and age impression.
+- Wardrobe changes must not change actor identity or face/head likeness.
+- User Wardrobe Direction: "${wardrobe}"
+
+CALLOUT WARDROBE OVERRIDE:
+- If Wardrobe Direction replaces a collared shirt with non-collared clothing, do not label or point to a shirt collar.
+- Callouts must match the final wardrobe, not Image A's original clothing.
+`
+        : `
+WARDROBE SOURCE LOCK:
+- No explicit Wardrobe Direction was supplied.
+- Preserve the wardrobe/costume visible in the approved character source, including neckline, collar, shoulders, upper chest, outfit layers, materials, colors, footwear, accessories, and costume silhouette.
+`;
+
+    const faceDesign = wrapFaceDetailsForPrompt(rawFaceDesign, hasActorSource);
+    const performanceDirection = wrapPerformanceDirectionForPrompt(rawPerformanceDirection, hasActorSource);
+    const materialNotes = wrapMaterialCostumeNotesForPrompt(rawMaterialNotes, hasActorSource);
+    const productionNotes = wrapProductionNotesForPrompt(rawProductionNotes, hasActorSource);
+
+    const hiddenActorSourceIdentityLock = buildHiddenActorSourceIdentityLock(visibleInput, {
+        hasGeneratedCharacterSource,
+        hasPortraitReferenceSource,
+        characterName,
+        supportingPosePanelLabel
+    });
+
+    // @ts-ignore
+    if (typeof import.meta !== "undefined" && import.meta.env?.DEV) {
+        console.info("[PitchSheetBrief] Actor identity lock audit", {
+            identitySource: input.identitySource,
+            hasActorSource,
+            hasGeneratedCharacterSource,
+            hasPortraitReferenceSource,
+            injectedStrictActorLikenessLock: Boolean(hiddenActorSourceIdentityLock.trim()),
+            performanceDirectionScoped: Boolean(performanceDirection.trim()),
+            materialCostumeScoped: Boolean(materialNotes.trim()),
+            faceDetailsScoped: Boolean(faceDesign.trim()),
+            productionNotesScoped: Boolean(productionNotes.trim())
+        });
+        console.info("[PitchSheetBrief] Wardrobe authority audit", {
+            identitySource: input.identitySource,
+            hasGeneratedCharacterSource,
+            hasPortraitReferenceSource,
+            hasExplicitWardrobeDirection,
+            wardrobeAuthorityMode,
+            wardrobe
+        });
+    }
 
     const needsSurfaceMarkContract = isBiometricIdentitySource(input) || input.identitySource === "portrait_reference";
     const surfaceMarkFidelity = needsSurfaceMarkContract ? `\n${buildSurfaceMarkFidelityContract()}\n` : "";
@@ -1227,7 +1524,10 @@ export function buildCharacterPitchSheetPrompt(input: CharacterPitchSheetInput):
 - [IMAGE 1] / Image A is the generated character source image and the current approved character render.
 - The generated character source image is the primary visual design to convert into a pitch sheet.
 - Build the pitch sheet from this same generated character, not from scratch.
-- Preserve Image A's body, outfit, silhouette, costume package, material read, proportions, render style, footwear, accessories, pose attitude, grooming read, and overall character design.
+- ${hasExplicitWardrobeDirection
+    ? "Preserve Image A's body, silhouette, proportions, render style, pose attitude, grooming read, and overall character design. Because the user supplied Wardrobe Direction, Image A's clothing/outfit is not the final wardrobe authority where it conflicts with the user wardrobe request."
+    : "Preserve Image A's body, outfit, silhouette, costume package, material read, proportions, render style, footwear, accessories, pose attitude, grooming read, and overall character design."
+}
 - Use Images B-F / the biometric scan images only to preserve identity accuracy: face, skull/head shape, skin tone, age impression, hair state, facial hair, visible marks, and facial proportions.
 - Do not create a new character design.
 - Do not reinterpret the body, face, age, outfit, style category, or proportions away from the generated character source.
@@ -1272,11 +1572,13 @@ export function buildCharacterPitchSheetPrompt(input: CharacterPitchSheetInput):
         identitySource: hasReferenceDrivenIdentity
             ? "uploaded portrait/biometric identity references for face, head, skin tone, hairstyle, facial hair, and age impression only"
             : "the text-defined character identity",
-        wardrobeAuthority: hasGeneratedCharacterSource
-            ? `Image A / the generated character source image, especially the neckline, collar, shoulders, upper chest, outfit layers, materials, colors, footwear, accessories, and costume silhouette. Supplemental text wardrobe notes: ${wardrobe}`
-            : hasPortraitReferenceSource
-                ? `Image A / the approved character portrait, especially the neckline, collar, shoulders, upper chest, outfit layers, materials, colors, footwear, accessories, and costume silhouette. Supplemental text wardrobe notes: ${wardrobe}`
-                : `the final character wardrobe/costume defined by this sheet: ${wardrobe}`,
+        wardrobeAuthority: hasExplicitWardrobeDirection
+            ? `the explicit user Wardrobe Direction: ${wardrobe}. This user wardrobe request overrides Image A clothing if there is a conflict, including any default black polo, collared shirt, or source-photo collar. Preserve actor identity from the actor/biometric source.`
+            : hasGeneratedCharacterSource
+                ? `Image A / the generated character source image, especially the neckline, collar, shoulders, upper chest, outfit layers, materials, colors, footwear, accessories, and costume silhouette. Supplemental text wardrobe notes: ${wardrobe}`
+                : hasPortraitReferenceSource
+                    ? `Image A / the approved character portrait, especially the neckline, collar, shoulders, upper chest, outfit layers, materials, colors, footwear, accessories, and costume silhouette. Supplemental text wardrobe notes: ${wardrobe}`
+                    : `the final character wardrobe/costume defined by this sheet: ${wardrobe}`,
         finalLookReference: hasGeneratedCharacterSource || hasPortraitReferenceSource
             ? "Image A as the approved character source, then the hero portrait, full-body turnarounds, wardrobe breakdown, and controlled callout plan in this same board"
             : "the hero portrait, full-body turnarounds, wardrobe breakdown, and controlled callout plan in this same board",
@@ -1426,17 +1728,47 @@ Important distinction:
 ${PROMPT_PRIORITY_ORDER_BLOCK}
 
 ${globalInvariantContract}
+${hiddenActorSourceIdentityLock}
+${wardrobeAuthorityInstruction}
 
 ${BOARD_PRESENTATION_STYLE_BLOCKS[boardPresentationStyle]}
+
+${NO_SIGNATURE_RULE_CONTRACT}
+
 ${CHARACTER_RENDER_STYLE_BLOCKS[characterRenderStyle]}
 ${styleCategoryContract}
-${input.identitySource === "biometric_plus_character" && input.characterStyleReferenceUrl ? `\n[IMAGE 1] (Image A) is the authoritative, approved generated character source. It defines the character's exact costume, wardrobe, silhouette, height, body mass index, proportions, stylistic render language, and overall costume design.
+${input.identitySource === "biometric_plus_character" && input.characterStyleReferenceUrl ? `\nSCAN + CHARACTER SOURCE AUTHORITY:
+- [IMAGE 1] is the locked generated character source.
+- Preserve [IMAGE 1] as the visual/design authority for the entire pitch sheet.
+- ${hasExplicitWardrobeDirection
+    ? "[IMAGE 1] (Image A) is the authoritative approved generated character source for body presentation, silhouette, proportions, stylistic render language, and overall character feel. Because the user supplied Wardrobe Direction, Image A's clothing is not the final wardrobe authority where it conflicts with the user wardrobe request."
+    : "[IMAGE 1] (Image A) is the authoritative approved generated character source for exact costume, wardrobe, silhouette, body proportions, stylistic render language, and overall costume design."
+}
+- Do not replace, redesign, restyle, or reinterpret the character from scratch.
+- Do not create a new character based only on the biometric scans.
+- The pitch sheet must feel like a production board made from [IMAGE 1], not a new generation loosely inspired by it.
 
-Images B through F represent the biometric scans of the live subject's face and head.
+BIOMETRIC BACKUP AUTHORITY:
+- [IMAGE 2+] are biometric identity backup references.
+- Use [IMAGE 2+] only to preserve or correct face/head likeness, skull shape, facial proportions, hair/scalp/facial hair, skin tone, and age impression.
+- Do not use [IMAGE 2+] to change the outfit, body design, render style, or character concept established by [IMAGE 1].
 
-The generator must use the biometric scans ([IMAGE 2] to [IMAGE 6]) ONLY to map the subject's face, head shape, hairline/baldness pattern, age, and identity. It must NOT invent new body proportions, relocate surface marks, or ignore the design established by Image A.
+MULTI-VIEW CONSISTENCY:
+- All full-body and torso views must depict the same character from [IMAGE 1].
+- Preserve the same outfit, body build, silhouette, style, and face identity across front, three-quarter, side, and back views.
+- Back views may infer unseen details, but must remain consistent with [IMAGE 1].
+- Do not generate different actors, different costumes, different facial structures, or different body builds across panels.
 
-Image A is the primary design authority; biometric scans are the absolute face/head identity authority.\n` : ""}
+STYLE SOURCE LOCK:
+- Match the character render style of [IMAGE 1] unless the user explicitly selected a different Character Render Style.
+- If Character Render Style is set to match source, preserve [IMAGE 1]'s linework, shading, finish, and visual language across the sheet.
+- Do not silently convert Graphic Noir, CG Realism, Family 3D, Anime, or Cyberpunk into another style.
+
+COSTUME MATCHED BEHAVIOR:
+- When Source Panel Display is "Costume Matched", use [IMAGE 1]'s outfit/costume as the source of truth.
+- Do not substitute clothing from biometric scans.
+- Do not invent a different shirt, jacket, uniform, armor, or costume unless the user provided explicit wardrobe guidance.
+- The headshot/face panels must also use the generated character's costume/clothing style, not the raw skin clothing.\n` : ""}
 ${sheetStyleLockContract}
 ${strictRenderedFamilyLock}
 ${animated3dIdentityLock}
@@ -1461,6 +1793,7 @@ Body consistency: ${bodyAuthorityRule}
 Body guide: ${buildPromptGuide}.
 ${pitchSheetPoseCoherence}
 ${CHARACTER_ANATOMY_INTEGRITY_CONTRACT}
+${TURNAROUND_ANATOMY_INTEGRITY_CONTRACT}
 
 STRUCTURED CHARACTER DATA / BOARD METADATA:
 - Structured values are board metadata and subtle fit guidance only: ${structuredBodySourceOfTruth}.
@@ -1522,6 +1855,8 @@ VISIBLE BOARD LANGUAGE RULE:
 
 ${visibleVocabularyRule}
 
+${CONTROLLED_TEXT_AND_LABEL_CONTRACT}
+
 CALLOUT TARGET ACCURACY RULE:
 - A callout arrow must terminate inside the exact visible object named by the label.
 - Do not point a callout to a nearby garment if the label names a different garment.
@@ -1558,6 +1893,8 @@ VISIBLE-ONLY CALLOUT RULE:
 CALLOUT OMISSION RULE:
 - If the model cannot place a callout accurately, it should omit that callout.
 - It is better to have 4 correct callouts than 8 inaccurate ones.
+
+${CALLOUT_ACCURACY_CONTRACT}
 
 CALLOUT COUNT RULE:
 - Use 5 to 7 total visible callouts by default.
@@ -1633,12 +1970,16 @@ WEAPON / PROP SAFETY RULE:
 PERFORMANCE DIRECTION:
 - ${performanceDirection}
 ${performanceStudyRule}
+${PERFORMANCE_DIRECTION_SCOPE_CONTRACT}
 
 WARDROBE BREAKDOWN:
 - Direction: ${wardrobe}
 - Props and signature items: ${propsDisplay}
 - Show full outfit from head to toe, including footwear.
-- Preserve the approved costume package and visible silhouette consistently across the sheet.
+${hasExplicitWardrobeDirection
+    ? "- Use the explicit Wardrobe Direction as the final wardrobe/costume authority. Replace conflicting source clothing, including default collared polo/shirt, while preserving identity, body proportions, and render style."
+    : "- Preserve the approved costume package and visible silhouette consistently across the sheet."
+}
 - Define only visible and relevant garment layers, closures, accessories, and material details.
 - Do not invent armor, tactical harnesses, bags, straps, holsters, prop attachment points, or weapons unless they are explicitly requested or clearly present in the approved generated character source.
 
@@ -1649,6 +1990,7 @@ MATERIAL ACCURACY:
 STRICT TURNAROUND INSTRUCTIONS:
 - Include full-body front view, three-quarter view, clean side/profile view, and back view of the same character.
 - The turnaround must be costume-consistent without becoming a generic evenly spaced model-sheet row.
+${TURNAROUND_ANATOMY_INTEGRITY_CONTRACT}
 - Back view must resolve only the rear costume details that are actually visible or clearly implied by the approved character design.
 - Do not invent bags, armor plates, tactical harnesses, straps, or weapon rigs unless explicitly requested or clearly present in the approved generated character source.
 
