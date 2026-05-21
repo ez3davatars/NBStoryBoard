@@ -1,4 +1,4 @@
-export type CharacterGenerationMode = "CREATE_NEW_CHARACTER" | "REGENERATE_LOCKED_CHARACTER";
+export type CharacterGenerationMode = "CREATE_NEW_CHARACTER" | "REGENERATE_LOCKED_CHARACTER" | "REGENERATE_FROM_SETTINGS";
 
 export type RegenerationTarget =
     | "quality_artifacts_only"

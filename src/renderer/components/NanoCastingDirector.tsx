@@ -105,6 +105,14 @@ const CharacterPitchSheetPreviewPill = () => (
 
 
 
+const NANO_CAST_FINISHING_MESSAGES = [
+  "Finalizing character render...",
+  "Locking biometric likeness...",
+  "Preparing image output...",
+  "Running final visual pass...",
+  "Almost ready..."
+];
+
 const REF_SHEET_STYLES = {
     family_3d: {
         id: 'family_3d',
@@ -2366,6 +2374,28 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
 
     // New: Pack Mode State
     const [generatePackMode] = useState(true);
+    const [finishingMessageIndex, setFinishingMessageIndex] = useState(0);
+    const [activeGenerationMode, setActiveGenerationMode] = useState<CharacterGenerationMode>("CREATE_NEW_CHARACTER");
+
+    useEffect(() => {
+        const isFinishing =
+            isProcessing &&
+            progress.percent >= 95 &&
+            progress.percent < 100;
+
+        if (!isFinishing) {
+            setFinishingMessageIndex(0);
+            return;
+        }
+
+        const interval = window.setInterval(() => {
+            setFinishingMessageIndex((prev) =>
+                (prev + 1) % NANO_CAST_FINISHING_MESSAGES.length
+            );
+        }, 2200);
+
+        return () => window.clearInterval(interval);
+    }, [isProcessing, progress.percent]);
     const [selectedWardrobeItem, setSelectedWardrobeItem] = useState<WardrobeItem | null>(null);
 
     // --- TOAST NOTIFICATIONS ---
@@ -2379,6 +2409,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
         generationMode: CharacterGenerationMode = "CREATE_NEW_CHARACTER",
         regenerationTarget: RegenerationTarget = "quality_artifacts_only"
     ) => {
+        setActiveGenerationMode(generationMode);
         const action = generationMode;
         const normalizedSelectedStyle = selectedStyle ? normalizeStyleId(selectedStyle) : null;
         const normalizedCurrentResultStyle = currentResultStyleId ? normalizeStyleId(currentResultStyleId) : null;
@@ -2432,7 +2463,9 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
         const addLog = (msg: string) => setGenerationLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
 
         try {
-            setPhase(4);
+            if (generationMode !== "REGENERATE_FROM_SETTINGS") {
+                setPhase(4);
+            }
             setGenerationLogs([]);
             abortControllerRef.current = new AbortController();
 
@@ -2480,7 +2513,7 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
             }
 
             const biometricReferenceStartIndex = referenceImages.length + 1;
-            if (identitySource !== 'generated' || isLockedRegeneration) {
+            if (identitySource !== 'generated' || isLockedRegeneration || generationMode === "REGENERATE_FROM_SETTINGS") {
                 const angles: (keyof typeof capturedAngles)[] = ['center', 'left', 'right', 'up', 'down'];
                 for (const angle of angles) {
                     const blobUrl = capturedAngles[angle];
@@ -2520,6 +2553,23 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
                     referenceCount: referenceImages.length,
                     firstReferenceIsCurrentResult: Boolean(currentGeneratedResultUrl)
                 });
+            }
+
+            const includesCurrentGeneratedResult =
+                Boolean(finalCharacterUrl) &&
+                referenceImages.some(ref => ref.url === finalCharacterUrl || (ref as any) === finalCharacterUrl);
+
+            if (generationMode === "REGENERATE_FROM_SETTINGS" && includesCurrentGeneratedResult) {
+                console.warn("[NanoCast] Removing current generated result from regenerate references");
+                const filteredRefs = referenceImages.filter(ref => ref.url !== finalCharacterUrl && (ref as any) !== finalCharacterUrl);
+                referenceImages.length = 0;
+                referenceImages.push(...filteredRefs);
+            }
+
+            if (generationMode === "REGENERATE_FROM_SETTINGS") {
+                if (!referenceImages.length || referenceImages.length < 3) {
+                    throw new Error("Cannot regenerate from settings: biometric reference images are missing.");
+                }
             }
 
             addLog(`ACQUIRED BIOMETRIC REFERENCES. SYNTHESIZING GRAPH...`);
@@ -2815,6 +2865,7 @@ RISK-STYLE FACIAL SURFACE RULE:
             const applyStylization = directorControls.stylization !== defaults.stylization;
             const applyIdentity = directorControls.identityStrength !== defaults.identityStrength;
 
+            const isRegenerateFromSettings = generationMode === "REGENERATE_FROM_SETTINGS";
             // Restored original exact launch-final-v1 prompt block
             const legacyPrompt = `
  Create a single image.
@@ -2829,6 +2880,14 @@ LOCKED REGENERATION CONTINUITY:
 - Correct only quality artifacts, exaggerated facial surface treatment, and style overreach.
 - Do not create a different person.
 - Do not reinterpret the character from scratch.
+` : ''}
+ ${isRegenerateFromSettings ? `
+REGENERATE FROM SAVED BIOMETRIC SETTINGS:
+- Generate a fresh candidate using the same uploaded biometric scan references and same selected NanoCast settings.
+- Preserve biometric identity from the uploaded scan references with the same strictness as the first generation.
+- Preserve selected body, style, body scope, advanced controls, and optional guidance.
+- Do not use any previous generated output as the identity source.
+- Do not invent a new unrelated person.
 ` : ''}
 
  CHARACTER CONCEPT ART
@@ -2856,6 +2915,8 @@ LOCKED REGENERATION CONTINUITY:
 
  ${biometricIdentityContract}` : ''}
  ${bodyShapeInferenceRules}
+  
+
   
  STYLE PROTOCOL: ${styleObj.label}
  VISUAL KEYWORDS: ${visualKeywords}
@@ -2919,6 +2980,14 @@ LOCKED REGENERATION CONTINUITY:
 
 GENERATION MODE: ${generationMode}
 ${lockedRegenerationContract}
+${isRegenerateFromSettings ? `
+REGENERATE FROM SAVED BIOMETRIC SETTINGS:
+- Generate a fresh candidate using the same uploaded biometric scan references and same selected NanoCast settings.
+- Preserve biometric identity from the uploaded scan references with the same strictness as the first generation.
+- Preserve selected body, style, body scope, advanced controls, and optional guidance.
+- Do not use any previous generated output as the identity source.
+- Do not invent a new unrelated person.
+` : ''}
 
 ${builtPrompt}`;
 
@@ -2977,6 +3046,22 @@ ${builtPrompt}`;
             // Note: If GeminiService adds AbortSignal support, pass abortControllerRef.current.signal here
             let resultUrl: string;
             try {
+                console.info("[NanoCast] Generation source audit", {
+                    generationMode,
+                    selectedStyle,
+                    selectedBody,
+                    bodyScope,
+                    referenceCount: referenceImages.length,
+                    biometricRangeText,
+                    identityRangeText,
+                    hasFinalCharacterUrl: Boolean(finalCharacterUrl),
+                    includesCurrentGeneratedResult,
+                    usesLegacyPrompt: prompt.includes("BIOMETRIC PRIORITY HIERARCHY"),
+                    usesNanoBuilder: prompt.includes("NANO ACTOR BLUEPRINT") || prompt.includes("NANO_BUILDER_LIVE_PATH"),
+                    isRegenerateFromSettings: generationMode === "REGENERATE_FROM_SETTINGS"
+                });
+
+
                 const res = await Promise.race([
                     GeminiService.generateImage(prompt, state.apiKey, state.model, referenceImages, {
                         imageSize: state.imageResolution,
@@ -3070,19 +3155,33 @@ ${builtPrompt}`;
             return;
         }
 
-        console.log("Regenerating locked character...");
-        if (!finalCharacterUrl) {
-            showToast("Generate a character before regenerating.");
-            return;
-        }
-        if (state.nanoCastSession.identityLock && (!capturedAngles.center || !capturedAngles.left || !capturedAngles.right)) {
+        console.log("Regenerating character from settings...");
+        
+        // Validate that the required biometric captures and selected NanoCast settings are still present. Do not require finalCharacterUrl as a reference source.
+        const needsBiometrics = identitySource === 'biometric' || identitySource === 'hybrid' || Boolean(state.nanoCastSession.identityLock);
+        if (needsBiometrics && (!capturedAngles.center || !capturedAngles.left || !capturedAngles.right)) {
             showToast("Locked biometric references are missing. Please re-scan before regenerating.");
             setPhase(1);
             return;
         }
-        // Regenerate directly from the original Phase 1-3 inputs instead of performing an iterative improvement pass
-        // on the previously drifted output, avoiding cumulative defects like adding a mustache or extra marks.
-        await handleOrchestration("REGENERATE_LOCKED_CHARACTER", "quality_artifacts_only");
+
+        if (!selectedStyle) {
+            showToast("Selected style is missing. Please configure settings before regenerating.");
+            return;
+        }
+
+        // Clear approval state for pitch sheet when starting a new generation
+        dispatch({
+            type: 'SET_NANO_CAST_SESSION_METADATA',
+            payload: {
+                generatedCharacterApprovedForPitchSheet: false,
+                approvedPitchSheetSourceUrl: null
+            }
+        });
+
+        // Future: add a separate "Repair Current" action that uses the current generated image as a continuity lock.
+        // Regenerate intentionally creates a new candidate from the same saved settings.
+        await handleOrchestration("REGENERATE_FROM_SETTINGS");
     };
 
     const cancelGeneration = () => {
@@ -5592,7 +5691,7 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                         )}
 
                         {/* PHASE 4: NANO NEURAL LINK (Processing) */}
-                        {(phase === 4 || isProcessing) && (
+                        {((phase === 4) || (isProcessing && phase !== 5)) && (
                             <motion.div
                                 key="phase4"
                                 initial={{ opacity: 0 }}
@@ -5681,6 +5780,26 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                 <div className="h-full aspect-[2/3] relative rounded-xl overflow-hidden border-2 border-accent group">
                                     <img src={finalCharacterUrl} className="w-full h-full object-cover" />
                                     <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent opacity-80"></div>
+                                    {isProcessing && (
+                                        <div className="absolute inset-0 bg-black/70 backdrop-blur-sm flex flex-col items-center justify-center gap-4 z-10 animate-in fade-in duration-200">
+                                            <div className="relative w-16 h-16">
+                                                {/* Outer rotating ring */}
+                                                <div className="absolute inset-0 border-4 border-accent/20 rounded-full"></div>
+                                                <div className="absolute inset-0 border-4 border-t-accent rounded-full animate-spin"></div>
+                                            </div>
+                                            <div className="text-center font-mono">
+                                                <div className="text-xs font-black uppercase tracking-widest text-accent animate-pulse">
+                                                    {activeGenerationMode === "CREATE_NEW_CHARACTER" ? "Generating..." : "Regenerating..."}
+                                                </div>
+                                                <div className="text-[10px] text-muted mt-1">{progress.percent > 0 ? `${Math.round(progress.percent)}%` : "Initializing..."}</div>
+                                                {isProcessing && progress.percent >= 95 && progress.percent < 100 && (
+                                                    <div className="mt-2 text-[10px] uppercase tracking-[0.22em] text-zinc-300/80">
+                                                        {NANO_CAST_FINISHING_MESSAGES[finishingMessageIndex]}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
 
                                     {/* ID CARD */}
                                     <div className="absolute bottom-6 left-6 right-6 font-mono text-xs">
@@ -5712,7 +5831,8 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                     <div className="grid grid-cols-2 gap-3">
                                         <button
                                             onClick={() => addToCast(false)}
-                                            className="col-span-1 py-4 bg-surface-2 hover:bg-surface text-accent font-black uppercase tracking-widest text-xs rounded-xl transition-all -accent/10 border border-accent flex flex-col items-center gap-1 group-hover:scale-[1.02]"
+                                            disabled={isProcessing}
+                                            className={`col-span-1 py-4 bg-surface-2 text-accent font-black uppercase tracking-widest text-xs rounded-xl transition-all -accent/10 border border-accent flex flex-col items-center gap-1 group-hover:scale-[1.02] ${isProcessing ? 'opacity-50 cursor-not-allowed pointer-events-none' : 'hover:bg-surface'}`}
                                         >
                                             <UserPlus className="w-5 h-5" />
                                             {generatePackMode ? "Add Pack" : "Add Actor"}
@@ -5720,8 +5840,9 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
 
                                         <button
                                             onClick={() => handleOpenSaveModal('actor')}
+                                            disabled={isProcessing}
                                             title="Exports this selected image to your chosen Library folder."
-                                            className="col-span-1 py-4 bg-surface-2 hover:bg-surface text-purple-400 font-black uppercase tracking-widest text-xs rounded-xl transition-all border border-purple-500/30 hover:border-purple-500 flex flex-col items-center gap-1"
+                                            className={`col-span-1 py-4 bg-surface-2 text-purple-400 font-black uppercase tracking-widest text-xs rounded-xl transition-all border border-purple-500/30 flex flex-col items-center gap-1 ${isProcessing ? 'opacity-50 cursor-not-allowed pointer-events-none' : 'hover:bg-surface hover:border-purple-500'}`}
                                         >
                                             <FolderPlus className="w-5 h-5" />
                                             Export to Library
@@ -5730,7 +5851,8 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                         <button
                                             // Call distinct handler to ensure state preservation
                                             onClick={handleRegenerate}
-                                            className="col-span-1 py-4 bg-surface-2 hover:bg-surface text-fg font-bold uppercase tracking-widest text-xs rounded-xl transition-all border border-border hover:border-accent flex flex-col items-center gap-1"
+                                            disabled={isProcessing}
+                                            className={`col-span-1 py-4 bg-surface-2 text-fg font-bold uppercase tracking-widest text-xs rounded-xl transition-all border border-border flex flex-col items-center gap-1 ${isProcessing ? 'opacity-50 cursor-not-allowed pointer-events-none' : 'hover:bg-surface hover:border-accent'}`}
                                         >
                                             <RotateCcw className="w-5 h-5 text-accent-2" />
                                             Regenerate
@@ -5738,7 +5860,8 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
 
                                         <button
                                             onClick={downloadPoster}
-                                            className="col-span-1 py-3 bg-bg border border-border text-muted hover:text-fg hover:border-accent text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2"
+                                            disabled={isProcessing}
+                                            className={`col-span-1 py-3 bg-bg border border-border text-muted text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2 ${isProcessing ? 'opacity-50 cursor-not-allowed pointer-events-none' : 'hover:text-fg hover:border-accent'}`}
                                         >
                                             <Share2 className="w-3 h-3" /> Save Poster
                                         </button>
@@ -5747,7 +5870,8 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                                 setShowSettings(true);
                                                 setSidebarMode('wardrobe');
                                             }}
-                                            className="col-span-1 py-3 bg-bg border border-border text-muted hover:text-accent hover:border-accent/30 text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2"
+                                            disabled={isProcessing}
+                                            className={`col-span-1 py-3 bg-bg border border-border text-muted text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2 ${isProcessing ? 'opacity-50 cursor-not-allowed pointer-events-none' : 'hover:text-accent hover:border-accent/30'}`}
                                         >
                                             <Layers className="w-3 h-3" /> Wardrobe V2
                                         </button>
@@ -5755,7 +5879,8 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                         {/* Pitch Sheet Approval Button */}
                                         <button
                                             onClick={approveGeneratedCharacterForPitchSheet}
-                                            className={`col-span-2 py-4 font-black uppercase tracking-widest text-xs rounded-xl transition-all flex items-center justify-center gap-2 border ${
+                                            disabled={isProcessing}
+                                            className={`col-span-2 py-4 font-black uppercase tracking-widest text-xs rounded-xl transition-all flex items-center justify-center gap-2 border ${isProcessing ? 'opacity-50 cursor-not-allowed pointer-events-none border-accent/10' : ''} ${
                                                 state.nanoCastSession.approvedPitchSheetSourceUrl === finalCharacterUrl
                                                     ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/50 shadow-[0_0_15px_rgba(16,185,129,0.2)]'
                                                     : 'bg-accent/10 hover:bg-accent/20 text-accent border-accent/30 hover:border-accent/60'
@@ -5951,7 +6076,8 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                     <div className="mt-8 border-t border-border pt-4">
                                         <button
                                             onClick={resetScan}
-                                            className="w-full py-3 text-muted hover:text-danger text-xs font-bold uppercase tracking-widest transition-colors flex items-center justify-center gap-2"
+                                            disabled={isProcessing}
+                                            className={`w-full py-3 text-muted text-xs font-bold uppercase tracking-widest transition-colors flex items-center justify-center gap-2 ${isProcessing ? 'opacity-50 cursor-not-allowed pointer-events-none' : 'hover:text-danger'}`}
                                         >
                                             <RefreshCw className="w-3 h-3" />
                                             Initialize New Subject
