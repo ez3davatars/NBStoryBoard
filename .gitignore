@@ -58,3 +58,7 @@ best_*.tsx
 effect*.txt
 mask_logic.txt
 *_history.txt
+
+# Local comparison worktrees
+NBStoryBoard-launch-final-v1/
+src/renderer/NBStoryBoard-launch-final-v1/
