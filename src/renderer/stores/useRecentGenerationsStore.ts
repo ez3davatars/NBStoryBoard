@@ -31,6 +31,7 @@ type ManifestEntry = Omit<RecentGeneration, 'displayUrl'>;
 const MANIFEST_KEY = 'recent_generations_manifest';
 const MAX_PER_STUDIO = 20;
 const DEDUPE_WINDOW_MS = 2000;
+const TRANSIENT_CACHE_PATH_PREFIX = 'transient:';
 
 // --- MANIFEST PERSISTENCE ---
 
@@ -57,9 +58,9 @@ function loadManifest(): ManifestEntry[] {
 
 function saveManifest(generations: RecentGeneration[]) {
   try {
-    const entries: ManifestEntry[] = generations.map(
-      ({ displayUrl: _displayUrl, ...rest }) => rest
-    );
+    const entries: ManifestEntry[] = generations
+      .filter((generation) => !generation.localCachePath.startsWith(TRANSIENT_CACHE_PATH_PREFIX))
+      .map(({ displayUrl: _displayUrl, ...rest }) => rest);
     localStorage.setItem(MANIFEST_KEY, JSON.stringify(entries));
   } catch (e) {
     console.warn('[RecentGenerations] Failed to save manifest:', e);
@@ -71,6 +72,7 @@ function deleteRecentGenerationCacheFile(
   cacheDirPath: string | null
 ) {
   if (!cacheDirPath || !generation.localCachePath) return;
+  if (generation.localCachePath.startsWith(TRANSIENT_CACHE_PATH_PREFIX)) return;
 
   void RecentGenerationsCacheService.deleteFromCache(
     generation.localCachePath,

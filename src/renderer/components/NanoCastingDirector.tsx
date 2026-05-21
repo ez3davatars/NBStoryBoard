@@ -67,8 +67,8 @@ import spriteYouthFem from '../assets/archetypes/sprite_youth_fem.png';
 
 import ActorSaveModal from './ActorSaveModal';
 import { useRecentGenerationsStore } from '../stores/useRecentGenerationsStore';
+import type { RecentGeneration } from '../stores/useRecentGenerationsStore';
 import { RecentGenerationsCacheService } from '../services/RecentGenerationsCacheService';
-import RecentGenerationsStrip from './recent/RecentGenerationsStrip';
 
 import {
     saveAssetToDisk,
@@ -666,6 +666,178 @@ const formatHeight = (inches: number) => {
 };
 
 const isRecentReferenceSheet = (prompt?: string) => prompt?.toLowerCase().includes('reference sheet') ?? false;
+
+type NanoRecentGenerationsGalleryProps = {
+    onSelectGeneration: (generation: RecentGeneration) => void;
+    onExportGeneration: (generation: RecentGeneration) => void;
+};
+
+const NanoRecentGenerationsGallery = ({
+    onSelectGeneration,
+    onExportGeneration
+}: NanoRecentGenerationsGalleryProps) => {
+    const {
+        recentGenerations,
+        activeRecentGenerationIdByStudio,
+        setActiveRecentGeneration,
+        removeRecentGeneration,
+        clearRecentGenerationsForStudio,
+        initStore,
+        initialized
+    } = useRecentGenerationsStore();
+    const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false);
+
+    const nanoGenerations = recentGenerations.filter((generation) => generation.studio === 'nanocast');
+    const activeId = activeRecentGenerationIdByStudio.nanocast || null;
+
+    useEffect(() => {
+        if (!initialized) {
+            void initStore();
+        }
+    }, [initialized, initStore]);
+
+    const handleSelect = (generation: RecentGeneration) => {
+        setActiveRecentGeneration('nanocast', generation.id);
+        onSelectGeneration(generation);
+    };
+
+    const handleExport = (event: React.MouseEvent, generation: RecentGeneration) => {
+        event.stopPropagation();
+        onExportGeneration(generation);
+    };
+
+    const handleRemove = (event: React.MouseEvent, generationId: string) => {
+        event.stopPropagation();
+        removeRecentGeneration(generationId);
+    };
+
+    const handleClearAll = () => {
+        clearRecentGenerationsForStudio('nanocast');
+        setIsClearConfirmOpen(false);
+    };
+
+    return (
+        <>
+            <div className="flex min-h-0 flex-1 flex-col">
+                <div className="mb-3 flex shrink-0 items-center justify-between gap-3">
+                    <span className="rounded border border-accent/20 bg-accent/10 px-2 py-1 font-mono text-[9px] font-black text-accent">
+                        {nanoGenerations.length.toString().padStart(2, '0')}
+                    </span>
+                    {nanoGenerations.length > 0 && (
+                        <button
+                            onClick={() => setIsClearConfirmOpen(true)}
+                            className="inline-flex items-center gap-1 rounded-md border border-red-400/15 bg-red-500/[0.04] px-2 py-1 text-[8px] font-black uppercase tracking-[0.14em] text-red-300/70 transition-colors hover:border-red-400/35 hover:bg-red-500/10 hover:text-red-200"
+                            title="Clear this studio's recent generations"
+                            aria-label="Clear all Nano Cast recent generations"
+                        >
+                            <Trash2 className="h-3 w-3" />
+                            Clear
+                        </button>
+                    )}
+                </div>
+
+                {nanoGenerations.length === 0 ? (
+                    <div className="flex min-h-[240px] flex-1 items-center justify-center rounded-lg border border-dashed border-accent/20 bg-black/35 p-5 text-center">
+                        <div>
+                            <RefreshCw className="mx-auto mb-3 h-6 w-6 text-accent/50" />
+                            <div className="text-[10px] font-black uppercase tracking-[0.18em] text-accent/70">No Recent Generations</div>
+                            <div className="mt-2 text-[10px] leading-relaxed text-muted">
+                                New Nano Cast results and reference sheets will stack here.
+                            </div>
+                        </div>
+                    </div>
+                ) : (
+                    <div className="min-h-0 flex-1 overflow-y-auto pr-1 custom-scrollbar">
+                        <div className="grid grid-cols-[repeat(auto-fit,minmax(118px,1fr))] gap-3 pb-6">
+                            {nanoGenerations.map((generation) => {
+                                const isActive = generation.id === activeId;
+                                const isReferenceSheet = isRecentReferenceSheet(generation.prompt);
+
+                                return (
+                                    <div
+                                        key={generation.id}
+                                        className={`group relative aspect-square overflow-hidden rounded-lg border bg-black transition-all ${
+                                            isActive
+                                                ? 'border-accent shadow-[0_0_18px_rgba(234,179,8,0.28)]'
+                                                : 'border-white/10 hover:border-accent/70 hover:shadow-[0_0_18px_rgba(234,179,8,0.14)]'
+                                        }`}
+                                    >
+                                        <button
+                                            onClick={() => handleSelect(generation)}
+                                            className="absolute inset-0 !m-0 !min-h-0 !min-w-0 !border-0 !bg-transparent !p-0 text-left"
+                                            title={generation.prompt || 'Nano Cast recent generation'}
+                                            aria-label="Select Nano Cast recent generation"
+                                        >
+                                            <img
+                                                src={generation.displayUrl}
+                                                alt=""
+                                                className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+                                                loading="lazy"
+                                            />
+                                            <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/10 to-transparent opacity-80" />
+                                            <div className="absolute left-2 top-2 flex items-center gap-1">
+                                                {generation.exported && (
+                                                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500 text-white shadow-md">
+                                                        <CheckCircle2 className="h-3 w-3" />
+                                                    </span>
+                                                )}
+                                                {isReferenceSheet && (
+                                                    <span className="rounded bg-blue-500/80 px-1.5 py-0.5 text-[6px] font-black uppercase tracking-[0.12em] text-white">
+                                                        Sheet
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <div className="absolute bottom-2 left-2 right-2">
+                                                <div className="truncate text-[8px] font-black uppercase tracking-[0.12em] text-white">
+                                                    {isReferenceSheet ? 'Reference Sheet' : 'Character'}
+                                                </div>
+                                                <div className="mt-0.5 font-mono text-[8px] text-white/45">
+                                                    {new Date(generation.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                </div>
+                                            </div>
+                                        </button>
+
+                                        <div className="absolute right-2 top-2 z-10 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                                            {!generation.exported && (
+                                                <button
+                                                    onClick={(event) => handleExport(event, generation)}
+                                                    className="!m-0 flex !h-7 !w-7 !min-h-0 !min-w-0 items-center justify-center rounded-full !border !border-blue-300/20 !bg-blue-500/90 !p-0 text-white shadow-lg transition-colors hover:!bg-blue-400"
+                                                    title="Export to Library"
+                                                    aria-label="Export recent generation to library"
+                                                >
+                                                    <FolderPlus className="h-3.5 w-3.5" />
+                                                </button>
+                                            )}
+                                            <button
+                                                onClick={(event) => handleRemove(event, generation.id)}
+                                                className="!m-0 flex !h-7 !w-7 !min-h-0 !min-w-0 items-center justify-center rounded-full !border !border-red-300/20 !bg-red-500/85 !p-0 text-white shadow-lg transition-colors hover:!bg-red-500"
+                                                title="Remove from recent"
+                                                aria-label="Remove recent generation"
+                                            >
+                                                <X className="h-3.5 w-3.5" />
+                                            </button>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                )}
+            </div>
+
+            <ConfirmDialog
+                isOpen={isClearConfirmOpen}
+                onClose={() => setIsClearConfirmOpen(false)}
+                onConfirm={handleClearAll}
+                title="Clear Nano Cast Recents?"
+                message={`Clear ${nanoGenerations.length} Nano Cast recent generation${nanoGenerations.length === 1 ? '' : 's'}? This removes recent thumbnails and cache files only. Saved library assets are untouched.`}
+                confirmText="Clear"
+                cancelText="Cancel"
+                variant="danger"
+            />
+        </>
+    );
+};
 
 const nanoDataUrlToBlob = (dataUrl: string): Blob => {
     const [meta, data] = dataUrl.split(',');
@@ -2139,25 +2311,55 @@ identity drift, altered pose, changed framing, extra limbs, extra people, redesi
     }, [finalCharacterUrl, state.nanoCastSession.generatedCharacterUrl]);
 
     const cacheNanoRecentGeneration = (imageUrl: string, prompt: string, createdAt = Date.now()) => {
-        const recentStore = useRecentGenerationsStore.getState();
-        if (!recentStore.cacheDirPath || !imageUrl) return;
+        if (!imageUrl) return;
 
-        RecentGenerationsCacheService.cacheGeneration({
-            imageDataUrl: imageUrl,
-            studio: 'nanocast',
-            cacheDirPath: recentStore.cacheDirPath,
-        }).then((cacheResult) => {
+        const mode = (state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok') || 'byok';
+        const addTransientRecent = () => {
+            useRecentGenerationsStore.getState().addRecentGeneration({
+                studio: 'nanocast',
+                localCachePath: `transient:nanocast:${createdAt}`,
+                displayUrl: imageUrl,
+                createdAt,
+                prompt,
+                mode,
+            });
+        };
+
+        void (async () => {
+            let recentStore = useRecentGenerationsStore.getState();
+
+            if (!recentStore.initialized) {
+                await recentStore.initStore();
+                recentStore = useRecentGenerationsStore.getState();
+            }
+
+            if (!recentStore.cacheDirPath) {
+                addTransientRecent();
+                return;
+            }
+
+            const cacheResult = await RecentGenerationsCacheService.cacheGeneration({
+                imageDataUrl: imageUrl,
+                studio: 'nanocast',
+                cacheDirPath: recentStore.cacheDirPath,
+            });
+
             if (cacheResult.success && cacheResult.localCachePath && cacheResult.displayUrl) {
-                recentStore.addRecentGeneration({
+                useRecentGenerationsStore.getState().addRecentGeneration({
                     studio: 'nanocast',
                     localCachePath: cacheResult.localCachePath,
                     displayUrl: cacheResult.displayUrl,
                     createdAt,
                     prompt,
-                    mode: (state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok') || 'byok',
+                    mode,
                 });
+                return;
             }
-        }).catch((e) => {
+
+            addTransientRecent();
+            console.warn('[NanoCastingDirector] Recent generation cache unavailable:', cacheResult.error || 'unknown error');
+        })().catch((e) => {
+            addTransientRecent();
             console.warn('[NanoCastingDirector] Recent generation caching failed:', e);
         });
     };
@@ -3091,6 +3293,29 @@ ${builtPrompt}`;
             setNewActorName(promptSummary);
         }
         setShowSaveModal(true);
+    };
+
+    const handleSelectRecentNanoGeneration = (gen: RecentGeneration) => {
+        if (isRecentReferenceSheet(gen.prompt)) {
+            setRefSheetUrl(gen.displayUrl);
+            setShowRefSheet(true);
+            return;
+        }
+
+        setRefSheetIdentityAnchors(null);
+        applyFinalCharacterUrl(gen.displayUrl);
+    };
+
+    const handleExportRecentNanoGeneration = (gen: RecentGeneration) => {
+        if (isRecentReferenceSheet(gen.prompt)) {
+            setRefSheetUrl(gen.displayUrl);
+            handleOpenSaveModal('ref_sheet', gen.displayUrl, gen.id);
+            return;
+        }
+
+        setRefSheetIdentityAnchors(null);
+        applyFinalCharacterUrl(gen.displayUrl);
+        handleOpenSaveModal('actor', gen.displayUrl, gen.id);
     };
 
     const confirmSaveToLibrary = async (nameOverride?: string, categoryOverride?: string) => {
@@ -5481,35 +5706,8 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                         Reconstruction <span className="text-accent">Complete</span>
                                     </h3>
                                     <p className="text-xs text-muted mb-8 leading-relaxed">
-                                        Neural synthesis successful. Subject has been re-topologized and is ready for integration into the storyboard matrix.
-                                        {generatePackMode && " Full variation pack generated."}
+                                        Character reconstruction generated. Review likeness, style, and body before approving this image for pitch sheets, reference sheets, wardrobe, or library export.
                                     </p>
-
-                                    <RecentGenerationsStrip
-                                        studio="nanocast"
-                                        compact
-                                        showSingle
-                                        className="w-full bg-black/60 border border-white/10"
-                                        onSelectGeneration={(gen) => {
-                                            if (isRecentReferenceSheet(gen.prompt)) {
-                                                setRefSheetUrl(gen.displayUrl);
-                                                setShowRefSheet(true);
-                                            } else {
-                                                setRefSheetIdentityAnchors(null);
-                                                applyFinalCharacterUrl(gen.displayUrl);
-                                            }
-                                        }}
-                                        onExportGeneration={(gen) => {
-                                            if (isRecentReferenceSheet(gen.prompt)) {
-                                                setRefSheetUrl(gen.displayUrl);
-                                                handleOpenSaveModal('ref_sheet', gen.displayUrl, gen.id);
-                                            } else {
-                                                setRefSheetIdentityAnchors(null);
-                                                applyFinalCharacterUrl(gen.displayUrl);
-                                                handleOpenSaveModal('actor', gen.displayUrl, gen.id);
-                                            }
-                                        }}
-                                    />
 
                                     <div className="grid grid-cols-2 gap-3">
                                         <button
@@ -5759,6 +5957,19 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                             Initialize New Subject
                                         </button>
                                     </div>
+                                </div>
+
+                                <div className="flex w-72 2xl:w-80 h-full shrink-0 flex-col border-l-2 border-accent/60 pl-6">
+                                    <div className="mb-3 shrink-0 border-b border-border pb-3">
+                                        <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-accent">
+                                            <RefreshCw className="w-3.5 h-3.5" />
+                                            Recent Generations
+                                        </div>
+                                    </div>
+                                    <NanoRecentGenerationsGallery
+                                        onSelectGeneration={handleSelectRecentNanoGeneration}
+                                        onExportGeneration={handleExportRecentNanoGeneration}
+                                    />
                                 </div>
                             </motion.div>
                         )}
