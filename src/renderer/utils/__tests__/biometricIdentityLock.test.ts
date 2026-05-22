@@ -122,16 +122,16 @@ describe('biometric identity lock contract', () => {
     expect(combined).toContain('clean-shaven');
     expect(combined).toContain('translate the same scanned biometric person into family 3d / premium animated 3d');
     expect(combined).toContain('preserve the real head silhouette, scalp/bald shape, brow placement, eye spacing');
-    expect(combined).toContain('skin tone value, age impression, neck relationship, shoulder relationship');
-    expect(combined).toContain('distinctive supported marks');
+    expect(combined).toContain('skin tone, age impression, neck relationship, shoulder relationship');
+    expect(combined).toContain('distinctive identity traits');
     expect(combined).toContain('no generic friendly animated man');
     expect(combined).toContain('no generic friendly bald animated man');
     expect(combined).toContain('no broad smile unless explicitly requested');
     expect(combined).toContain('no default cute animated face template');
     expect(combined).toContain('no changed facial-hair silhouette');
     expect(combined).toContain('no altered bald/scalp shape');
-    expect(combined).toContain('no invented arm/body marks');
-    expect(combined).toContain('no full-body skin texture extrapolated from face scans');
+    expect(combined).toContain('no invented details on body or clothing');
+    expect(combined).toContain('no different actor likeness');
     expect(combined).toContain('no younger/slimmer/softer redesign');
     expect(combined).toContain('no generic family-animation protagonist');
     expect(combined).not.toContain('salt-and-pepper goatee');
@@ -150,8 +150,8 @@ describe('biometric identity lock contract', () => {
     expect(BIOMETRIC_IDENTITY_LOCK_NEGATIVE_TEXT).toContain('No cleanup into a smoother stock actor');
     expect(BIOMETRIC_IDENTITY_LOCK_NEGATIVE_TEXT).toContain('No changed hairline, baldness pattern, hairstyle');
     expect(source).toContain('SURFACE MARK FIDELITY CONTRACT');
-    expect(source).toContain('Do not relocate marks from the face/head/neck onto arms, hands, torso, clothing, or other body areas');
-    expect(source).toContain('Face/head/neck scans are identity references, not full-body skin texture maps');
+    expect(source).toContain('Keep facial surface treatment clean, restrained, and identity-faithful.');
+    expect(source).toContain('Ignore temporary texture, lighting noise, compression noise, shaving texture, and non-identity surface noise.');
   });
 
   it('keeps Nano Cast morphology subordinate to biometric identity', () => {
@@ -256,8 +256,27 @@ describe('biometric identity lock contract', () => {
     const identitySource = readFileSync('src/prompts/identityContracts.ts', 'utf8');
     expect(identitySource).toContain('Biometric identity remains the highest-priority instruction after all style, pose, morphology, wardrobe, sheet, layout, and quality contracts.');
     expect(identitySource).toContain('Do not replace the person with a generic style-template face.');
-    expect(identitySource).toContain('Do not invent, relocate, or multiply skin marks.');
+    expect(identitySource).toContain('Preserve skin tone, age impression, and general complexion.');
     expect(contractStackIndex).toBeGreaterThan(-1);
     expect(finalAuthorityIndex).toBeGreaterThan(contractStackIndex);
+  });
+
+  it('implements full-body identity reinforcement when bodyScope is full', () => {
+    const source = readFileSync('src/renderer/components/NanoCastingDirector.tsx', 'utf8');
+
+    expect(source).toContain('buildFullBodyIdentityReinforcement');
+    expect(source).toContain('FULL BODY BIOMETRIC IDENTITY REINFORCEMENT:');
+    expect(source).toContain('Do not let full-body pose, costume, body silhouette, render style, or composition replace');
+    expect(source).toContain('bodyScope === "full"');
+    expect(source).toContain('Full-body generation requires at least 3 biometric references.');
+  });
+
+  it('enforces strict biometric identity locking across NanoCast stylization dial ranges (0-100)', () => {
+    const source = readFileSync('src/renderer/components/NanoCastingDirector.tsx', 'utf8');
+
+    expect(source).toContain('buildNanoCastStyleIdentityContract');
+    expect(source).toContain('nanoCastStylizationIdentityContract');
+    expect(source).toContain('mapToNanoCastStyleKey(activeStyleId)');
+    expect(source).toContain('stylizationValue');
   });
 });

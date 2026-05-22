@@ -36,14 +36,32 @@ const NANO_CAST_STYLE_IDENTITY_CONFIGS: NanoCastStyleIdentityEnforcementConfig[]
         facialLandmarkStrictness: "strict",
         allowableStylizationRange: "stylize shaders, material finish, smooth CG surface response, and animation-film lighting only; preserve biometric identity geometry",
         positiveRules: [
+            "PREMIUM ANIMATED 3D BIOMETRIC TRANSLATION LOCK:",
+            "- Treat this as an adult biometric actor translation into premium animated 3D, not a new animated character design.",
+            "- Preserve the scanned person's adult identity, head shape, face width, cheek structure, jaw/chin relationship, brow placement, eye spacing, eye size relationship, nose shape, nose/mouth relationship, lips, hairline, hair presence, grooming, skin tone, and age impression.",
+            "- Do not youthify the subject.",
+            "- Do not beautify the subject into a generic animated protagonist.",
+            "- Do not enlarge eyes beyond the biometric source person's real proportions.",
+            "- Do not narrow the face, soften the jaw, shrink the nose, round the cheeks, or simplify the mouth into a generic cute animated face.",
+            "- Do not replace the actor with a different person who merely shares broad traits.",
+            "- Stylization may change shader, material finish, lighting, and simplified surface rendering, but must not change identity geometry.",
             "Translate the same scanned biometric person into Family 3D / Premium Animated 3D; do not create a new animated character inspired by them.",
-            "STRICT ADHERENCE TO BIOMETRIC SKIN DETAILS: Replicate ONLY the highly prominent, unmistakable biometric identity marks that are extremely obvious in the scan. If a blemish or spot is faint, small, or a minor skin shadow, you MUST omit it and render that skin area completely clean, smooth, and blemish-free. Any beauty mark must be flat, faint, light brown, soft, and naturally blended into the skin tone. Absolutely no giant tan splotches, brown circles, or high-contrast spots on the forehead or cheeks.",
-            "Preserve the real head silhouette, scalp/bald shape, brow placement, eye spacing, eye shape impression, nose length/width/profile, mouth width/shape, cheek structure, jaw width, chin shape, ears, facial-hair pattern, skin tone value, age impression, neck thickness, shoulder relationship, visible neck identity boundary, and distinctive marks.",
+            "Preserve skin tone, age impression, and general complexion.",
+            "Preserve the real head silhouette, scalp/bald shape, brow placement, eye spacing, eye shape impression, nose length/width/profile, mouth width/shape, cheek structure, jaw width, chin shape, ears, facial-hair pattern, neck thickness, shoulder relationship, visible neck identity boundary, and natural facial texture.",
             "Use smooth stylized CG skin/materials and animated-feature lighting around the real identity geometry.",
             "Style changes shader, material response, simplification, and lighting only; it must not replace the person with a default cute animated face template.",
             "Preserve the selected Morphological Matrix or explicit body guidance and never infer body mass from face, head, or neck scans."
         ],
         negativeRules: [
+            "PREMIUM ANIMATED 3D IDENTITY NEGATIVES:",
+            "- no generic animated protagonist",
+            "- no childlike or teen-like redesign",
+            "- no oversized eyes",
+            "- no narrowed face",
+            "- no softened jaw that changes identity",
+            "- no generic cute face",
+            "- no different actor with similar skin tone or hair",
+            "- no altered age impression",
             "do not make a generic animated person",
             "no generic friendly animated man",
             "no generic friendly bald animated man",
@@ -56,28 +74,10 @@ const NANO_CAST_STYLE_IDENTITY_CONFIGS: NanoCastStyleIdentityEnforcementConfig[]
             "do not soften the jaw/chin/grooming into a generic cartoon muzzle",
             "no changed facial-hair silhouette",
             "no altered bald/scalp shape",
-            "no invented arm/body marks",
-            "no scattered skin dots",
-            "no exaggerated skin marks",
-            "no amplified faint skin blemishes",
-            "no invented beauty marks",
-            "no extra freckles",
-            "no added skin spots",
-            "no multiplying of forehead beauty marks or cheek beauty marks",
-            "no multiple brown dots on the head or cheeks",
-            "no giant dark spheres or painted-on circles representing beauty marks",
-            "no giant tan circles on the forehead or cheeks",
-            "no brown splotches on the head or scalp",
-            "no raised dark moles",
-            "no bumpy brown spots",
-            "no extra spots near the forehead",
-            "do not draw any forehead spots or splotches unless they are extremely prominent",
+            "no exaggerated skin texture or artificially amplified details",
             "no mustache if upper lip is clean-shaven",
             "no upper lip stubble, no upper lip hair, no mustache shadow",
-            "no random skin dots on the cheeks, neck, mouth, chin, sleeves, or body",
-            "no relocation of facial marks onto body skin or clothing",
-            "no full-body skin texture extrapolated from face scans",
-            "not full-body skin texture maps",
+            "no invented details on body or clothing",
             "no different actor likeness",
             "no younger/slimmer/softer redesign",
             "no generic family-animation protagonist",
@@ -97,9 +97,14 @@ const NANO_CAST_STYLE_IDENTITY_CONFIGS: NanoCastStyleIdentityEnforcementConfig[]
         facialLandmarkStrictness: "exact",
         allowableStylizationRange: "lighting, lens, and studio finish only; zero identity geometry deviation",
         positiveRules: [
+            "EXACT LIKENESS STUDIO IDENTITY LOCK:",
+            "- This is the strictest identity mode.",
+            "- Preserve the biometric actor with maximum fidelity.",
+            "- Do not stylize, beautify, simplify, age-shift, or reinterpret identity.",
+            "- Any deviation from biometric face/head identity is a failure.",
             "Perform a direct biometric reconstruction of the same scanned person, not a cleaner stock actor or lookalike.",
-            "STRICT ADHERENCE TO BIOMETRIC SKIN DETAILS: Replicate ONLY the highly prominent, unmistakable biometric identity marks that are extremely obvious in the scan. If a blemish or spot is faint, small, or a minor skin shadow, you MUST omit it and render that skin area completely clean, smooth, and blemish-free. Any beauty mark must be flat, faint, light brown, soft, and naturally blended into the skin tone. Absolutely no giant tan splotches, brown circles, or high-contrast spots on the forehead or cheeks.",
-            "Replicate source head/scalp or hairline shape, brow placement, eye spacing, eye shape, nose length/width/profile, mouth width/shape, cheek structure, jaw width, chin shape, ears, skin tone value, age impression, facial marks, and visible asymmetries.",
+            "Preserve skin tone, age impression, general complexion, and natural facial texture. Avoid making minor reference texture more prominent than it appears in the source.",
+            "Replicate source head/scalp or hairline shape, brow placement, eye spacing, eye shape, nose length/width/profile, mouth width/shape, cheek structure, jaw width, chin shape, ears, skin tone value, age impression, general complexion, and visible asymmetries.",
             "Preserve grooming and facial-hair or clean-shaven state without idealization; keep facial-hair outline, length impression, density, placement, and dark/gray/color distribution exactly when visible.",
             "Preserve body and outfit from the generated character source or explicit body guidance without changing facial identity."
         ],
@@ -113,20 +118,10 @@ const NANO_CAST_STYLE_IDENTITY_CONFIGS: NanoCastStyleIdentityEnforcementConfig[]
             "no shortened or reshaped facial hair",
             "no changed scalp, baldness, or hairline shape",
             "no younger/slimmer/smoother face",
-            "no exaggerated skin marks",
-            "no amplified faint skin blemishes",
-            "no invented beauty marks",
-            "no raised dark moles",
-            "no bumpy brown spots",
-            "no giant dark circles or dark spheres representing beauty marks",
-            "no giant tan circles on the forehead or cheeks",
-            "no brown splotches on the head or scalp",
+            "no exaggerated skin texture or artificially amplified details",
             "no mustache if upper lip is clean-shaven",
             "no upper lip stubble, no upper lip hair, no mustache shadow",
-            "no extra freckles",
-            "no added skin spots",
-            "no random skin dots on the cheeks, neck, mouth, chin, sleeves, or body",
-            "no relocation of facial marks onto body skin or clothing"
+            "no invented details on body or clothing"
         ]
     },
     {
@@ -137,8 +132,13 @@ const NANO_CAST_STYLE_IDENTITY_CONFIGS: NanoCastStyleIdentityEnforcementConfig[]
         facialLandmarkStrictness: "exact",
         allowableStylizationRange: "material fidelity, lighting, and render polish only; facial geometry remains source-locked",
         positiveRules: [
+            "PREMIUM CG REALISM BIOMETRIC TRANSLATION LOCK:",
+            "- Preserve the biometric actor literally and realistically.",
+            "- Do not beautify, age-shift, slim, widen, or editorially recast the actor.",
+            "- CG polish may improve lighting and render quality only.",
+            "- Facial identity must remain source-faithful.",
             "Preserve source facial proportions and mature facial structure with high fidelity.",
-            "STRICT ADHERENCE TO BIOMETRIC SKIN DETAILS: Replicate ONLY the highly prominent, unmistakable biometric identity marks that are extremely obvious in the scan. If a blemish or spot is faint, small, or a minor skin shadow, you MUST omit it and render that skin area completely clean, smooth, and blemish-free. Any beauty mark must be flat, faint, light brown, soft, and naturally blended into the skin tone. Absolutely no giant tan splotches, brown circles, or high-contrast spots on the forehead or cheeks.",
+            "Preserve skin tone, age impression, general complexion, and natural facial texture. Avoid making minor reference texture more prominent than it appears in the source.",
             "Keep CG polish from turning the subject into an idealized generic actor.",
             "Preserve generated-source body, costume, and proportions when provided."
         ],
@@ -147,20 +147,10 @@ const NANO_CAST_STYLE_IDENTITY_CONFIGS: NanoCastStyleIdentityEnforcementConfig[]
             "no generic photoreal actor",
             "no beauty retouch identity drift",
             "no changed jaw, brow, nose, or mouth relationships",
-            "no exaggerated skin marks",
-            "no amplified faint skin blemishes",
-            "no invented beauty marks",
-            "no raised dark moles",
-            "no bumpy brown spots",
-            "no giant dark circles or dark spheres representing beauty marks",
-            "no giant tan circles on the forehead or cheeks",
-            "no brown splotches on the head or scalp",
+            "no exaggerated skin texture or artificially amplified details",
             "no mustache if upper lip is clean-shaven",
             "no upper lip stubble, no upper lip hair, no mustache shadow",
-            "no extra freckles",
-            "no added skin spots",
-            "no random skin dots on the cheeks, neck, mouth, chin, sleeves, or body",
-            "no relocation of facial marks onto body skin or clothing"
+            "no invented details on body or clothing"
         ]
     },
     {
@@ -171,8 +161,14 @@ const NANO_CAST_STYLE_IDENTITY_CONFIGS: NanoCastStyleIdentityEnforcementConfig[]
         facialLandmarkStrictness: "style_translated",
         allowableStylizationRange: "linework, cel shading, eye rendering language, and simplified planes only; identity landmarks remain mapped to source",
         positiveRules: [
+            "RETRO CEL ANIME BIOMETRIC TRANSLATION LOCK:",
+            "- Treat this as an adult biometric portrait translated into retro cel animation, not a generic anime archetype.",
+            "- Preserve adult face fullness, true eye spacing, brow shape, nose bridge, mouth relationship, jaw/chin shape, cheek volume, hairline, grooming, and age impression.",
+            "- Do not create a teenage anime face.",
+            "- Do not enlarge the eyes, shrink the nose, narrow the jaw, or simplify the face into a stock anime character.",
+            "- Cel styling may simplify linework and shadows only; it must not replace the actor identity.",
             "Translate the same person into anime/cel rendering while preserving head silhouette, brow/eye spacing, nose profile, mouth width, jaw/chin, ears, hairline, and facial-hair or clean-shaven state.",
-            "SURFACE MARK FIDELITY: Keep facial surface treatment clean, restrained, and identity-faithful. Ignore temporary texture, lighting noise, compression artifacts, shaving texture, and other non-identity surface noise. Preserve only stable identity-relevant facial details clearly visible across biometric references.",
+            "Preserve skin tone, age impression, and general complexion.",
             "Let eye design become anime-readable without changing the real eye spacing or brow relationship.",
             "Preserve generated-source body, wardrobe, and proportions when provided."
         ],
@@ -182,13 +178,12 @@ const NANO_CAST_STYLE_IDENTITY_CONFIGS: NanoCastStyleIdentityEnforcementConfig[]
             "no childlike/teenage anime face",
             "no oversized eyes",
             "no tiny generic anime nose",
-            "no invented beauty marks",
-            "no symbolic skin spots",
+            "no exaggerated skin texture or artificially amplified details",
             "no generic anime archetype",
             "no added, erased, or changed facial-hair silhouette",
             "no mustache if upper lip is clean-shaven",
             "no upper lip stubble, no upper lip hair, no mustache shadow",
-            "no relocation of facial marks onto body skin or clothing"
+            "no invented details on body or clothing"
         ]
     },
     {
@@ -199,8 +194,14 @@ const NANO_CAST_STYLE_IDENTITY_CONFIGS: NanoCastStyleIdentityEnforcementConfig[]
         facialLandmarkStrictness: "style_translated",
         allowableStylizationRange: "ink, line weight, halftone, and shadow design only; identity landmarks stay source-mapped",
         positiveRules: [
+            "GRAPHIC NOVEL NOIR BIOMETRIC TRANSLATION LOCK:",
+            "- Treat this as the same biometric actor rendered in graphic noir language.",
+            "- Preserve head shape, jaw/chin, facial proportions, eye/nose/mouth relationship, hairline, grooming, age impression, and body presence.",
+            "- Noir shadows, ink lines, and halftone treatment must follow the actor's actual structure.",
+            "- Do not turn facial shadows or graphic marks into a different face.",
+            "- Do not exaggerate features into a caricature unless explicitly requested.",
             "Use graphic linework to describe the source face, not to replace it with a comic archetype.",
-            "SURFACE MARK FIDELITY: Describe only stable, clearly visible identity-relevant facial details in linework. Keep facial surface treatment clean, restrained, and identity-faithful. Ignore temporary texture, lighting noise, compression artifacts, shaving texture, and other non-identity surface noise.",
+            "Preserve skin tone, age impression, and general complexion.",
             "Preserve nose silhouette, brow mass, eye spacing, jaw/chin, ears, facial-hair or clean-shaven edges, and body/costume proportions.",
             "Keep generated-source outfit and silhouette as the visual authority when provided."
         ],
@@ -210,13 +211,10 @@ const NANO_CAST_STYLE_IDENTITY_CONFIGS: NanoCastStyleIdentityEnforcementConfig[]
             "no exaggerated musculature unless requested",
             "no added, erased, or changed facial-hair outline",
             "no costume redesign",
-            "no fake facial dots",
-            "no fake mole clusters",
-            "no forehead/cheek symbolic marks",
-            "no exaggerated skin blobs",
+            "no exaggerated skin texture or artificially amplified details",
             "no mustache if upper lip is clean-shaven",
             "no upper lip stubble, no upper lip hair, no mustache shadow",
-            "no relocation of facial marks onto body skin or clothing"
+            "no invented details on body or clothing"
         ]
     },
     {
@@ -227,8 +225,13 @@ const NANO_CAST_STYLE_IDENTITY_CONFIGS: NanoCastStyleIdentityEnforcementConfig[]
         facialLandmarkStrictness: "style_translated",
         allowableStylizationRange: "lighting, techwear mood, material finish, and neon color response only; identity and body are not redesigned",
         positiveRules: [
+            "CYBERPUNK BIOMETRIC TRANSLATION LOCK:",
+            "- Treat cyberpunk as lighting, color, techwear, neon, atmosphere, and material treatment over the same biometric actor.",
+            "- Preserve face/head identity, hairline, grooming, skin tone, age impression, and facial proportions.",
+            "- Do not let cybernetic accents, neon lighting, makeup, tech markings, or futuristic styling replace the actor's face.",
+            "- Do not generate a different cyberpunk model with similar broad traits.",
             "Apply cyberpunk lighting and materials to the same source person.",
-            "STRICT ADHERENCE TO BIOMETRIC SKIN DETAILS: Map only the highly prominent, unmistakable biometric identity marks accurately under neon lighting. If a blemish or spot is faint, small, or a minor skin shadow, you MUST omit it and render that skin area completely clean, smooth, and blemish-free. Absolutely no giant tan splotches, brown circles, or high-contrast spots on the forehead or cheeks.",
+            "Preserve skin tone, age impression, general complexion, and natural facial texture. Avoid making minor reference texture more prominent than it appears in the source.",
             "Preserve face, head shape, brow, eye spacing, nose, mouth, jaw/chin, ears, hairline, facial-hair or clean-shaven state, and body proportions.",
             "Keep any generated-source costume silhouette and proportions unless a wardrobe override explicitly changes them."
         ],
@@ -238,20 +241,10 @@ const NANO_CAST_STYLE_IDENTITY_CONFIGS: NanoCastStyleIdentityEnforcementConfig[]
             "no visor or neon effects obscuring identity",
             "no altered grooming",
             "no body-type redesign",
-            "no exaggerated skin marks",
-            "no amplified faint skin blemishes",
-            "no invented beauty marks",
-            "no raised dark moles",
-            "no bumpy brown spots",
-            "no giant dark circles or dark spheres representing beauty marks",
-            "no giant tan circles on the forehead or cheeks",
-            "no brown splotches on the head or scalp",
+            "no exaggerated skin texture or artificially amplified details",
             "no mustache if upper lip is clean-shaven",
             "no upper lip stubble, no upper lip hair, no mustache shadow",
-            "no extra freckles",
-            "no added skin spots",
-            "no random skin dots on the cheeks, neck, mouth, chin, sleeves, or body",
-            "no relocation of facial marks onto body skin or clothing"
+            "no invented details on body or clothing"
         ]
     }
 ];
@@ -290,7 +283,7 @@ export const buildNanoCastStyleIdentityEnforcementContract = (
         ? Math.max(0, Math.min(100, Math.round(options.requestedIdentityStrength)))
         : undefined;
     const biometricRule = options.usesBiometricIdentity
-        ? `- Biometric source: ${identityRange} are the identity authority for face, skull/head shape, skin tone, age impression, hair state, hairline, facial-hair or clean-shaven state, visible marks, and facial proportions.`
+        ? `- Biometric source: ${identityRange} are the identity authority for face, skull/head shape, skin tone, age impression, hair state, hairline, facial-hair or clean-shaven state, and facial proportions.`
         : `- Identity source: ${identityRange} remains the identity authority.`;
     const bodyGuidance = options.bodyGuidance
         ? `- Body fidelity source: ${options.bodyGuidance}.`
@@ -300,13 +293,11 @@ export const buildNanoCastStyleIdentityEnforcementContract = (
         ? `
 UNIVERSAL SCAN-IDENTITY OVERRIDE:
 - The selected style, body archetype, outfit, logo, lighting, presentation, and regeneration target are all subordinate to the uploaded biometric identity.
-- SURFACE MARK FIDELITY:
+- SURFACE FIDELITY:
   - Keep facial surface treatment clean, restrained, and identity-faithful.
-  - Ignore temporary texture, lighting noise, compression artifacts, shaving texture, and other non-identity surface noise.
-  - Preserve only stable identity-relevant facial details clearly visible across biometric references.
+  - Ignore temporary texture, lighting noise, compression noise, shaving texture, and non-identity surface noise.
 - MUSTACHE AND UPPER LIP PROHIBITION: If the subject has facial hair on the chin (such as a goatee) but the upper lip is clean-shaven, you MUST keep the upper lip completely smooth, bald, and hairless. Absolutely do NOT draw a mustache, stubble, or shadow on the upper lip.
-- Preserve the same visible head/scalp or hairline shape, brow/eye/nose/mouth/jaw/chin relationships, ears, skin tone value, visible marks, age impression, and facial-hair or clean-shaven state from ${identityRange}.
-- Face/head/neck scans are identity references, not full-body skin texture maps; do not invent, relocate, or multiply skin marks on arms, hands, torso, clothing, or body skin.
+- Preserve the same visible head/scalp or hairline shape, brow/eye/nose/mouth/jaw/chin relationships, ears, skin tone value, age impression, and facial-hair or clean-shaven state from ${identityRange}.
 - Do not clean up, slim, smooth, beautify, youthify, average, or replace the scan with a generic style-template face.
 - If style language conflicts with biometric geometry, reduce style deformation and preserve the scanned person's identity geometry.`
         : "";
@@ -345,3 +336,214 @@ export const buildNanoCastStyleIdentityNegativePrompt = (styleId?: string | null
 
 export const getNanoCastStyleIdentityCustomBlockLabels = (): string[] =>
     NANO_CAST_STYLE_IDENTITY_CONFIGS.map(config => config.label);
+
+export type NanoCastStyleKey =
+  | 'premium_animated_3d'
+  | 'premium_cg_realism'
+  | 'retro_cel_anime'
+  | 'graphic_novel_noir'
+  | 'cyberpunk_v2'
+  | 'exact_likeness_studio';
+
+export type BodyScope = 'head' | 'torso' | 'full_body';
+
+export interface StylizationEnvelope {
+  sliderValue: number;          // 0–100 UI value
+  normalized: number;           // 0–1
+  tier:
+    | 'source_faithful'
+    | 'light'
+    | 'moderate'
+    | 'strong'
+    | 'high'
+    | 'max_safe';
+  styleSpecificCap: number;     // effective cap per style
+  proportionFlex: 'none' | 'minimal' | 'light' | 'moderate';
+  shadingFlex: 'minimal' | 'light' | 'moderate' | 'strong';
+  materialFlex: 'minimal' | 'light' | 'moderate' | 'strong';
+  abstractionFlex: 'minimal' | 'light' | 'moderate' | 'strong';
+}
+
+export function clampStylizationByStyle(
+  styleKey: NanoCastStyleKey,
+  sliderValue: number
+): number {
+  const capMap: Record<NanoCastStyleKey, number> = {
+    premium_animated_3d: 100,
+    graphic_novel_noir: 90,
+    retro_cel_anime: 85,
+    cyberpunk_v2: 75,
+    premium_cg_realism: 55,
+    exact_likeness_studio: 25,
+  };
+  const cap = capMap[styleKey] ?? 100;
+  return Math.max(0, Math.min(cap, sliderValue));
+}
+
+export function buildStylizationEnvelope(
+  styleKey: NanoCastStyleKey,
+  sliderValue: number
+): StylizationEnvelope {
+  const clamped = clampStylizationByStyle(styleKey, sliderValue);
+  const normalized = clamped / 100;
+  
+  let tier: StylizationEnvelope['tier'] = 'moderate';
+  if (clamped <= 10) tier = 'source_faithful';
+  else if (clamped <= 25) tier = 'light';
+  else if (clamped <= 45) tier = 'moderate';
+  else if (clamped <= 65) tier = 'strong';
+  else if (clamped <= 85) tier = 'high';
+  else tier = 'max_safe';
+
+  // Mapping rules based on tier
+  let proportionFlex: StylizationEnvelope['proportionFlex'] = 'light';
+  let shadingFlex: StylizationEnvelope['shadingFlex'] = 'moderate';
+  let materialFlex: StylizationEnvelope['materialFlex'] = 'moderate';
+  let abstractionFlex: StylizationEnvelope['abstractionFlex'] = 'moderate';
+
+  switch (tier) {
+    case 'source_faithful':
+      proportionFlex = 'none';
+      shadingFlex = 'minimal';
+      materialFlex = 'minimal';
+      abstractionFlex = 'minimal';
+      break;
+    case 'light':
+      proportionFlex = 'minimal';
+      shadingFlex = 'light';
+      materialFlex = 'light';
+      abstractionFlex = 'light';
+      break;
+    case 'moderate':
+      proportionFlex = 'light';
+      shadingFlex = 'moderate';
+      materialFlex = 'moderate';
+      abstractionFlex = 'moderate';
+      break;
+    case 'strong':
+      proportionFlex = 'light';
+      shadingFlex = 'strong';
+      materialFlex = 'strong';
+      abstractionFlex = 'strong';
+      break;
+    case 'high':
+      proportionFlex = 'moderate';
+      shadingFlex = 'strong';
+      materialFlex = 'strong';
+      abstractionFlex = 'strong';
+      break;
+    case 'max_safe':
+      proportionFlex = 'moderate';
+      shadingFlex = 'strong';
+      materialFlex = 'strong';
+      abstractionFlex = 'strong';
+      break;
+  }
+
+  return {
+    sliderValue,
+    normalized,
+    tier,
+    styleSpecificCap: clampStylizationByStyle(styleKey, 100),
+    proportionFlex,
+    shadingFlex,
+    materialFlex,
+    abstractionFlex,
+  };
+}
+
+export function buildNanoCastIdentityLockBlock(): string {
+  return `
+NANOCAST HIGH-PRIORITY IDENTITY LOCK:
+- Biometric Scan Authority: The uploaded biometric scan references are the absolute, immutable source of truth for the character's identity.
+- Preserve: facial structure, head shape, scalp outline, brow, eyes, nose, mouth, jawline, ears, skin tone, general complexion, and age impression across all generations.
+- Stylization dial increases only rendering treatment, shading, line-weight, material representation, and abstraction layers; it must NEVER loosen the biometric likeness or produce identity drift.
+- Do not swap the subject's gender, age band, or ethnicity.
+- Do not simplify or deform the eyes, nose, mouth, jaw, or ears into a generic style template or cartoon caricature that replaces the biometric likeness.
+- If there is any conflict between stylistic deformation and biometric identity preservation, biometric identity preservation wins.
+`;
+}
+
+export function buildStyleFamilyLockBlock(styleKey: NanoCastStyleKey): string {
+  const styleLabelMap: Record<NanoCastStyleKey, string> = {
+    premium_animated_3d: 'Premium Animated 3D / Family 3D',
+    premium_cg_realism: 'Premium CG Realism',
+    retro_cel_anime: 'Retro Cel Anime',
+    graphic_novel_noir: 'Graphic Novel Noir',
+    cyberpunk_v2: 'Cyberpunk V2',
+    exact_likeness_studio: 'Exact Likeness Studio',
+  };
+  const label = styleLabelMap[styleKey] ?? styleKey;
+  return `
+STYLE FAMILY LOCK:
+- Active Style: ${label}
+- Visual Family Constraint: The final render must conform strictly to the visual family of ${label}.
+- Stylization must not drift into other families: graphic novel must not drift into photo portrait; anime must not collapse into stylized 3D CG; CG realism must not simplify into cel shading.
+- Maintain style family consistency across all elements (hair rendering, garments, shading model, edge treatment, material response).
+`;
+}
+
+export function buildBodyScopeLockBlock(scope: BodyScope): string {
+  const bodyScopeMap: Record<BodyScope, string> = {
+    head: 'HEAD AND SHOULDERS ONLY. Portrait composition. Do not generate the torso, arms, legs, waist, feet, or full outfit silhouette. Focus entirely on facial features, scalp, hair, and neck.',
+    torso: 'UPPER BODY / HALF-BODY ONLY. Composition from head to waist. Include chest, upper arms, and shoulders. Do not generate legs, thighs, knees, feet, or complete lower-body garments.',
+    full_body: 'FULL BODY. Head-to-toe full composition. Include head, neck, entire torso, arms, hands, legs, knees, ankles, feet, and footwear. Do not crop to portrait or half-body format. The full outfit silhouette must be clearly visible.',
+  };
+  const directive = bodyScopeMap[scope] ?? 'Match requested body focus';
+  return `
+BODY-SCOPE LOCK (NON-NEGOTIABLE):
+- Active Focus: ${scope.toUpperCase()}
+- Framing Rule: ${directive}
+- Strict Constraint: Do not violate this framing to satisfy stylistic layouts, background scenery, or posing convenience.
+`;
+}
+
+export function buildStylizationBehaviorBlock(
+  styleKey: NanoCastStyleKey,
+  envelope: StylizationEnvelope
+): string {
+  return `
+STYLIZATION BEHAVIOR SPECIFICATION:
+- Slider Value: ${envelope.sliderValue}/100
+- Effective Internal Level: ${envelope.normalized * 100}% (Clamped at max ${envelope.styleSpecificCap}% for ${styleKey})
+- Stylization Tier: ${envelope.tier.toUpperCase()}
+- Permitted Variations:
+  * proportionFlex: ${envelope.proportionFlex.toUpperCase()} (Proportion envelope flex allowed within safe likeness bounds)
+  * shadingFlex: ${envelope.shadingFlex.toUpperCase()} (Lighting, contrast, linework, or rendering pass intensity)
+  * materialFlex: ${envelope.materialFlex.toUpperCase()} (Smooth surface, painterly brushstroke, cel-shading flat, or tech gloss treatment)
+  * abstractionFlex: ${envelope.abstractionFlex.toUpperCase()} (Plain simplification, comic outline, and rendering abstraction)
+- HARD INVARIANT: Do not scale identity deviation, age shift, ethnicity drift, body-scope drift, or hairstyle/grooming override. Stylization dial exclusively controls the artistic/shading treatment and simplification depth around the core biometric subject structure.
+`;
+}
+
+export function buildNanoCastStyleIdentityContract(args: {
+  styleKey: NanoCastStyleKey;
+  bodyScope: BodyScope;
+  stylizationValue: number;
+  includeHairLock?: boolean;
+}): string {
+  const envelope = buildStylizationEnvelope(args.styleKey, args.stylizationValue);
+  const identityLock = buildNanoCastIdentityLockBlock();
+  const styleLock = buildStyleFamilyLockBlock(args.styleKey);
+  const bodyLock = buildBodyScopeLockBlock(args.bodyScope);
+  const stylizationBehavior = buildStylizationBehaviorBlock(args.styleKey, envelope);
+  
+  const hairLockText = args.includeHairLock
+    ? `
+HAIR IDENTITY LOCK:
+- Preserve hair structure, scalp outline, hairline, density, and color pattern matching the biometric scan set. Do not modify the styling, color, or hair presence unless requested.
+`
+    : '';
+
+  return `
+=========================================
+NANOCAST STYLIZATION & IDENTITY CONTRACT:
+=========================================
+${identityLock}
+${styleLock}
+${bodyLock}
+${stylizationBehavior}
+${hairLockText}
+=========================================
+`;
+}

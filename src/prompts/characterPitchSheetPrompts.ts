@@ -970,7 +970,7 @@ const wrapPerformanceDirectionForPrompt = (
 
     if (!hasActorSource) return supplied;
 
-    return `Apply the following user Performance Direction through pose, body language, attitude, gesture, expression, or action staging only. Do not change actor identity, face structure, skull geometry, hair, hairline, facial hair, grooming, skin tone, age impression, or core likeness. User direction: "${supplied}"`;
+    return `Apply the following user Performance Direction through pose, body language, attitude, gesture, expression, or action staging only. Do not change actor identity, face structure, head shape, scalp outline, hair, hairline, facial hair, grooming, skin tone, age impression, or core likeness. User direction: "${supplied}"`;
 };
 
 const wrapMaterialCostumeNotesForPrompt = (
@@ -985,7 +985,7 @@ const wrapMaterialCostumeNotesForPrompt = (
 
     if (!hasActorSource) return supplied;
 
-    return `Apply the following user Material / Costume Notes only to wardrobe, fabrics, materials, clothing construction, accessories, footwear, costume presentation, and visible costume details. Do not change actor identity, face/head likeness, hair, hairline, facial hair, grooming, skull geometry, skin tone, or age impression. User notes: "${supplied}"`;
+    return `Apply the following user Material / Costume Notes only to wardrobe, fabrics, materials, clothing construction, accessories, footwear, costume presentation, and visible costume details. Do not change actor identity, face/head likeness, hair, hairline, facial hair, grooming, head shape, scalp outline, skin tone, or age impression. User notes: "${supplied}"`;
 };
 
 const wrapProductionNotesForPrompt = (
@@ -1000,7 +1000,7 @@ const wrapProductionNotesForPrompt = (
 
     if (!hasActorSource) return supplied;
 
-    return `Apply the following user Production Notes to board structure, production intent, presentation, sequencing, callouts, shot emphasis, and design-sheet communication only. Do not change actor identity, face/head likeness, hair, hairline, facial hair, grooming, skull geometry, skin tone, or age impression. User notes: "${supplied}"`;
+    return `Apply the following user Production Notes to board structure, production intent, presentation, sequencing, callouts, shot emphasis, and design-sheet communication only. Do not change actor identity, face/head likeness, hair, hairline, facial hair, grooming, head shape, scalp outline, skin tone, or age impression. User notes: "${supplied}"`;
 };
 
 const buildHiddenActorSourceIdentityLock = (
@@ -1024,24 +1024,39 @@ const buildHiddenActorSourceIdentityLock = (
         ? `
 SOURCE AUTHORITY SPLIT:
 - Image A / [IMAGE 1] controls outfit, body presentation, render style, costume, silhouette, pose attitude, and approved character design.
-- Images B-F / biometric likeness references control face, head, hair, hairline, facial hair, grooming, skin tone, skull geometry, facial proportions, asymmetry, age impression, and actor identity.
+- Images B-F / biometric likeness references control face, head, hair, hairline, facial hair, grooming, skin tone, head shape, scalp outline, facial proportions, asymmetry, age impression, and actor identity.
 - Performance Direction controls pose, action, and body language only.
 - Material / Costume Notes control wardrobe and materials only.
 - No user freeform field can create a new actor.
-- Pitch Sheet Brief instructions control presentation, layout, pose ideas, callouts, labels, and production board structure only.`
+- Pitch Sheet Brief instructions control presentation, layout, pose ideas, callouts, labels, and production board structure only.
+
+SCAN + CHARACTER AUTHORITY:
+- Image A / generated character source controls outfit, body presentation, render style, costume silhouette, color/material look, and approved character design.
+- Biometric actor references control face, head shape, hair, hairline, scalp coverage, facial hair, grooming, skin tone, facial proportions, asymmetry, age impression, and actor identity.
+- If Image A conflicts with biometric actor references on hair, hairline, facial identity, or grooming, the biometric actor references win.
+- Do not create a new actor.
+- Do not make the actor bald unless the biometric references or explicit user guidance support baldness.`
         : `
 SOURCE AUTHORITY:
-- The actor source controls face, head, hair, hairline, facial hair, grooming, skin tone, skull geometry, facial proportions, asymmetry, age impression, and actor identity.
+- The actor source controls face, head, hair, hairline, facial hair, grooming, skin tone, head shape, scalp outline, facial proportions, asymmetry, age impression, and actor identity.
 - Pitch Sheet Brief instructions control presentation, layout, pose ideas, costume notes, callouts, labels, and production board structure only.`;
 
     return `
 HIDDEN STRICT ACTOR LIKENESS LOCK:
 - The supplied actor source is the strict actor likeness authority for ${options.characterName || "this character"}.
 - Preserve the same actor identity across hero portrait, head studies, turnaround views, expression study, ${options.supportingPosePanelLabel}, callout panels, and supporting poses.
-- Preserve hair, hairline, facial hair, grooming, skull geometry, facial proportions, asymmetry, skin tone, age impression, and emotional presence consistently across every view.
+- Preserve hair, hairline, facial hair, grooming, head shape, scalp outline, facial proportions, asymmetry, skin tone, age impression, and emotional presence consistently across every view.
 - Do not reinterpret, redesign, replace, beautify, age-shift, youthify, slim, bulk, or substitute the actor.
 - Do not let pose, costume, material, performance, board style, production notes, body metadata, or layout instructions change the actor's face/head identity.
 - Apply all user customization as compatible guidance while preserving ${identitySourceText}.
+
+HAIR / SCALP SOURCE AUTHORITY:
+- Hair, hairline, scalp coverage, hair texture, hair density, and grooming are actor identity attributes.
+- Use the biometric actor references as the authority for hair and hairline.
+- If biometric references show visible hair, preserve visible hair.
+- Do not render the actor bald unless the biometric references clearly show baldness or the user explicitly requests bald/shaved hair.
+- If Image A / the generated character source appears bald but biometric actor references show hair, preserve the biometric hair and hairline while keeping Image A's outfit, body presentation, and render style.
+- Style may simplify hair rendering, but must not erase visible biometric hair.
 
 CONFLICT RESOLUTION:
 - If any user customization conflicts with actor likeness preservation, preserve actor likeness first.
@@ -1215,6 +1230,39 @@ const normalizeCharacterRenderStyle = (value?: CharacterPitchSheetRenderStyle | 
     return defaultCharacterPitchSheetInput.characterRenderStyle || "biometric_realism";
 };
 
+export const mapNanoCastStyleToPitchSheetRenderStyle = (
+    nanoStyle?: string | null
+): CharacterPitchSheetRenderStyle => {
+    const clean = String(nanoStyle || "").toLowerCase();
+
+    if (clean.includes("premium_animated") || clean.includes("family_3d") || clean.includes("animated")) {
+        return "premium_animated_3d";
+    }
+
+    if (clean.includes("exact")) {
+        return "exact_studio";
+    }
+
+    if (clean.includes("cg") || clean.includes("realism") || clean.includes("photo")) {
+        return "cinematic_photoreal";
+    }
+
+    if (clean.includes("anime") || clean.includes("cel")) {
+        return "retro_cel";
+    }
+
+    if (clean.includes("graphic") || clean.includes("noir") || clean.includes("comic")) {
+        return "graphic_noir";
+    }
+
+    if (clean.includes("cyber")) {
+        return "cyberpunk_neon";
+    }
+
+    return "premium_animated_3d";
+};
+
+
 const BOARD_PRESENTATION_STYLE_BLOCKS: Record<CharacterPitchSheetBoardPresentationStyle, string> = {
     premium_film_board: "Board presentation: premium film-development board with dominant hero portrait, asymmetrical hierarchy, turnarounds, head studies, material callouts, and selective labels.",
     clean_studio_sheet: "Board presentation: clean polished studio sheet with organized studies, readable views, and refined spacing.",
@@ -1238,22 +1286,58 @@ const CONTROLLED_TEXT_AND_LABEL_CONTRACT = `CONTROLLED TEXT AND LABEL CONTRACT:
 - Do not invent fake technical labels, fake anatomy terms, fake metadata, pseudo-words, or corrupted text.
 - Do not write internal debug phrases, prompt fragments, or nonsensical labels.
 - Do not add handwritten signatures, artist signatures, approval signatures, stamps, signed-off marks, or decorative autograph marks.
+- Text must be typed production-board labeling only.
+- Do not use cursive, handwritten, autograph-like, or decorative script text.
+- Do not add unlabeled decorative writing.
+- Do not create fake signatures to make the board look finished.
 - Only use labels that describe visible elements accurately.
 - Keep labels short, direct, and tied to actual visible features.
 - Prefer fewer, accurate labels over many labels.
 - If a label would be small, crowded, or uncertain, omit it.
 - Do not fill empty space with decorative text.
 
+VISIBLE TEXT LEAKAGE BAN:
+- Do not render internal instructions, hidden prompt rules, camera metadata, source-reference labels, debug notes, or process notes as visible board text.
+- Do not render phrases such as "NO MIRRORING CHEAT", "ORIGINAL CAMERA", "50MM Standard Portrait", "source image", "reference image", "identity lock", "Image A", "Image 1", "biometric", "scan", or "generated character source".
+- Do not render parenthetical instruction text like "(NO MIRRORING CHEAT)" anywhere on the board.
+- Visible board text must be limited to clean production labels, character metadata, wardrobe labels, material labels, pose labels, and approved view labels.
+- If an internal rule is needed, obey it silently. Do not write it on the board.
+
+APPROVED HEAD STUDY LABELS:
+- NEUTRAL FRONT HEAD
+- 3/4 LEFT-FACING HEAD
+- 3/4 RIGHT-FACING HEAD
+- LEFT-FACING PROFILE HEAD
+- RIGHT-FACING PROFILE HEAD
+
+APPROVED BODY VIEW LABELS:
+- FRONT VIEW
+- 3/4 VIEW
+- LEFT-FACING SIDE VIEW
+- RIGHT-FACING SIDE VIEW
+- BACK VIEW
+
+Forbidden visible label text:
+- LEFT PROFILE HEAD
+- RIGHT PROFILE HEAD
+when used ambiguously without "FACING"
+- NO MIRRORING CHEAT
+- ORIGINAL CAMERA
+- 50MM Standard Portrait
+- internal debug text
+- source/reference/internal process labels
+
 Approved label examples:
 - FRONT VIEW
 - 3/4 VIEW
-- LEFT PROFILE
-- RIGHT PROFILE
+- LEFT-FACING SIDE VIEW
+- RIGHT-FACING SIDE VIEW
 - BACK VIEW
 - NEUTRAL FRONT HEAD
-- 3/4 LEFT HEAD
-- LEFT PROFILE HEAD
-- RIGHT PROFILE HEAD
+- 3/4 LEFT-FACING HEAD
+- 3/4 RIGHT-FACING HEAD
+- LEFT-FACING PROFILE HEAD
+- RIGHT-FACING PROFILE HEAD
 - EXPRESSION STUDY
 - SUPPORTING POSE
 - COSTUME LAYER
@@ -1281,12 +1365,44 @@ Forbidden text examples:
 The forbidden examples are negative examples only. Do not render them as visible board text anywhere in the image.
 
 Important:
-If the model cannot label something accurately, omit the label instead of inventing one.`;
+If the model cannot label something accurately, omit the label instead of inventing one.
+- Do not create duplicate labels for the same panel.
+- Do not label two panels with the same profile direction unless the board intentionally asks for repeated views.`;
 
-const NO_SIGNATURE_RULE_CONTRACT = `NO SIGNATURE / APPROVAL MARKS:
-- Do not add artist signatures, cursive signatures, approval marks, stamps, watermarks, handwritten sign-offs, or decorative autograph marks anywhere on the sheet.
-- This is a production design board, not a signed illustration.
-- The only branding allowed is the app’s intended board label or existing footer text if already part of the template.`;
+const NO_SIGNATURE_RULE_CONTRACT = `NO SIGNATURE / ARTIST MARK CONTRACT:
+- Do not add artist signatures, cursive signatures, handwritten names, approval marks, sign-off marks, stamps, watermarks, autograph marks, decorative initials, or fake artist labels anywhere on the sheet.
+- Do not place signature-like marks inside head-study panels, portrait panels, detail panels, footer areas, or empty corners.
+- Do not add handwritten marks next to the face, neck, shoulders, or panel edges.
+- This is a clean production reference sheet, not a signed illustration or collector print.
+- The only allowed text is clean readable production-board labeling from the approved label vocabulary.
+- If a panel has empty space, leave it clean. Do not fill it with decorative writing.`;
+
+const HEAD_STUDY_PANEL_CLEANNESS = `HEAD STUDY PANEL CLEANNESS:
+- Head-study panels must contain only the actor head/face view and clean panel label text.
+- Do not add signatures, handwritten text, approval marks, decorative initials, sketch marks, stamps, or fake artist notes inside head-study panels.
+- Keep the area around the head clean and production-reference focused.`;
+
+const DETAIL_INSET_CLEANNESS = `DETAIL / INSET CLEANNESS:
+- Detail panels must not include signatures, autographs, approval marks, or decorative handwriting.
+- Detail panels should contain only the isolated detail and accurate label text.`;
+
+
+const HEAD_STUDY_VS_BODY_TURNAROUND_SEPARATION = `HEAD STUDY VS BODY TURNAROUND SEPARATION:
+- Head-study panels are close-up face/head references.
+- Body turnaround panels are full-body or torso references.
+- Do not use body turnaround labels to define head-study angles.
+- Do not allow a body side-view direction error to infect head-study labels.
+- Each head-study panel must be independently correct.`;
+
+const STRICT_BODY_VIEW_DIRECTION_MAP = `STRICT BODY VIEW DIRECTION MAP:
+- FRONT VIEW (0°): body faces viewer directly.
+- 3/4 VIEW (45°): body turned approximately 45°, not side profile.
+- LEFT PROFILE / SIDE PROFILE (90°): true side profile with head, chest, pelvis, knees, and feet aligned in the same side-facing direction.
+- BACK VIEW (180°): rear view only, showing back of head/body/clothing.
+- Do not duplicate side views and label them differently.
+- Do not show front-facing feet on a side-facing body.
+- Do not show a side-facing head on a front-facing torso unless explicitly posed.
+- Direction labels must match the visible anatomy.`;
 
 const TURNAROUND_ANATOMY_INTEGRITY_CONTRACT = `TURNAROUND ANATOMY INTEGRITY:
 - All full-body and torso views must depict the same anatomically coherent actor.
@@ -1298,13 +1414,21 @@ const TURNAROUND_ANATOMY_INTEGRITY_CONTRACT = `TURNAROUND ANATOMY INTEGRITY:
 - Do not create extra limbs, missing limbs, fused fingers, broken shoulders, backward knees, backward feet, or impossible joints.
 - In side/profile views, body axis, head direction, nose direction, chest direction, pelvis, knees, and feet must agree.
 - Back view must show rear anatomy and rear clothing only, not a front-facing torso or front-facing feet.
-- Turnaround panels must be neutral and readable unless the panel is specifically labeled as a supporting pose.`;
+- Turnaround panels must be neutral and readable unless the panel is specifically labeled as a supporting pose.
+- Neutral turnaround views must remain clean production references.
+- Do not use dynamic performance poses in front, 3/4, side, or back turnaround panels unless explicitly requested for the whole sheet.
+- Keep performance/action content separate from construction/detail panels.`;
 
 const PERFORMANCE_DIRECTION_SCOPE_CONTRACT = `PERFORMANCE DIRECTION SCOPE FOR PITCH SHEET:
 - Apply Performance Direction primarily to the supporting pose / action inset / expression study panel.
 - Keep neutral turnaround views anatomically neutral, readable, and production-safe.
 - Do not apply dynamic gym flexing poses to every front/side/back turnaround unless explicitly requested.
-- The turnaround row should remain useful for costume, body, and silhouette reference.`;
+- The turnaround row should remain useful for costume, body, and silhouette reference.
+- Performance Direction may affect the supporting pose/action inset only.
+- Performance Direction must not affect footwear detail panels, material detail panels, palette panels, construction callouts, or neutral turnaround views.
+- If the user asks for flexing, gym poses, action poses, or expressive body language, place that only in the supporting pose panel or expression/pose study area.
+- Performance Direction must not alter the neutral head-study direction map.
+- It must not alter neutral turnaround direction labels.`;
 
 const CALLOUT_ACCURACY_CONTRACT = `CALLOUT ACCURACY CONTRACT:
 - Callout arrows must point to the exact visible feature being labeled.
@@ -1314,6 +1438,38 @@ const CALLOUT_ACCURACY_CONTRACT = `CALLOUT ACCURACY CONTRACT:
 - If the final wardrobe has no collar, do not label a collar.
 - If the final wardrobe is a tank top, prefer labels such as neckline, armhole, shoulder seam, fabric stretch, garment fit, and material texture.
 - If uncertain, use fewer callouts rather than inaccurate callouts.`;
+
+const DETAIL_PANEL_ISOLATION_CONTRACT = `DETAIL PANEL ISOLATION CONTRACT:
+- Detail panels must show isolated, readable construction references only.
+- Do not mix actor pose panels with footwear, material, palette, or construction detail panels.
+- Do not place a full actor body, flexing pose, face portrait, or action pose inside footwear detail panels.
+- Do not attach a giant shoe, sole, prop, material swatch, or accessory to an actor's body inside a detail panel.
+- Footwear detail panels should show footwear only: shoe side view, sole tread, heel, toe box, laces, material, stitching, and construction.
+- Material detail panels should show material/fabric texture only, not body parts or full actor poses.
+- Palette panels should show color/material swatches only.
+- Supporting pose panels are the only panels that may show the actor performing the requested action.
+- Keep every inset panel visually independent and accurately labeled.`;
+
+const FOOTWEAR_DETAIL_PANEL_RULE = `FOOTWEAR DETAIL PANEL RULE:
+- A Footwear Detail or Footwear Construction panel must show the shoe/boot/sneaker as an isolated product detail.
+- Show the footwear at normal product-reference scale.
+- Do not show the actor holding the shoe.
+- Do not show a foot or leg thrust toward camera unless explicitly requested.
+- Do not merge the actor's body with the shoe.
+- Do not combine gym flexing, action poses, or portrait content with footwear detail.
+- If a sole view is included, it must be a clean isolated sole/tread reference, not attached to a distorted body.`;
+
+const PANEL_LABEL_ACCURACY = `PANEL LABEL ACCURACY:
+- A panel labeled "FOOTWEAR DETAIL" must contain footwear detail only.
+- A panel labeled "FABRIC TEXTURE" must contain fabric/material texture only.
+- A panel labeled "PERFORMANCE NOTE" or "SUPPORTING POSE" may contain the actor performing the user-requested pose.
+- Do not label a mixed or morphed scene as a construction detail.
+- If a clean detail cannot be shown, omit the inset rather than merging unrelated subjects.`;
+
+const AVOID_OVERPOPULATING_SHEET_CONTRACT = `AVOID OVERPOPULATING THE SHEET:
+- Prefer fewer clean detail panels over crowded or confusing insets.
+- Do not fill empty layout space with extra invented mini-scenes.
+- Every inset must have one clear purpose.`;
 
 export function buildCharacterPitchSheetPrompt(input: CharacterPitchSheetInput): string {
     console.warn('[PITCH_PROMPT_CONSTRUCTION]', {
@@ -1328,6 +1484,42 @@ export function buildCharacterPitchSheetPrompt(input: CharacterPitchSheetInput):
 
     // @ts-ignore
     if (typeof import.meta !== "undefined" && import.meta.env?.DEV) {
+        console.info("[PitchSheetBrief] Detail panel isolation active", {
+            detailPanelIsolationActive: true,
+            footwearDetailIsolationActive: true,
+            performanceScopedAwayFromDetails: true
+        });
+        console.info("[PitchSheetBrief] No-signature audit", {
+            noSignatureContractActive: true,
+            headStudyCleannessActive: true,
+            controlledTextContractActive: true
+        });
+        console.info("[PitchSheetBrief] View direction contract active", {
+            strictHeadViewDirectionMap: true,
+            headOrientationSanityCheck: true,
+            strictBodyViewDirectionMap: true
+        });
+        console.info("[PitchSheetBrief] Direction/inset coherence active", {
+            pageDirectionHeadViewLock: true,
+            supportingPoseInsetCoherence: true,
+            turnaroundPageDirectionRule: true
+        });
+        console.info("[PitchSheetBrief] Direction + garment segmentation rules active", {
+            headDirectionContract: true,
+            turnaroundOrientationLock: true,
+            garmentAnatomySeparationLock: true,
+            detailPanelSafetyRule: true
+        });
+        console.info("[PitchSheetBrief] Profile/text leakage safeguards active", {
+            pageFacingProfileLabels: true,
+            visibleTextLeakageBan: true,
+            rightProfileOptionalIfUnclear: true
+        });
+        console.info("[PitchSheetBrief] Hair/skull safety active", {
+            hairSourceAuthorityActive: true,
+            noSkullMedicalInsertRuleActive: true,
+            skullTriggerTermsRemoved: true
+        });
         console.info("[PitchSheetBrief] Text/anatomy safety audit", {
             controlledLabelsActive: true,
             noSignatureRuleActive: true,
@@ -1353,7 +1545,7 @@ export function buildCharacterPitchSheetPrompt(input: CharacterPitchSheetInput):
     const wardrobe = inferWardrobe(visibleInput);
     const props = inferProps(visibleInput);
     const hasExplicitProps = !!normalize(visibleInput.propsSignatureItems);
-    const propsDisplay = hasExplicitProps ? props : "No signature props specified.";
+    const propsDisplay = hasExplicitProps ? props : "No distinctive props specified.";
     const propOrFootwearInsetText = hasExplicitProps ? "selected prop and footwear insets" : "footwear and material-detail insets";
     const environment = inferEnvironment(visibleInput);
     const lightingMood = valueOr(visibleInput.lightingMood, defaultCharacterPitchSheetInput.lightingMood);
@@ -1367,9 +1559,13 @@ export function buildCharacterPitchSheetPrompt(input: CharacterPitchSheetInput):
     const characterRenderStyle = normalizeCharacterRenderStyle(visibleInput.characterRenderStyle);
     const characterRenderFamily = resolveRenderFamily(characterRenderStyle);
     const supportingPosePanelLabel = "supporting pose render";
-    const performanceStudyRule = `- Include one compact ${supportingPosePanelLabel} that preserves the same face, build, hairstyle, costume, props, body proportions, and emotional presence.
-- If the ${supportingPosePanelLabel} cannot be rendered in the exact same style family as the rest of the sheet, omit it instead of rendering a cartoon, flat illustration, vector, doodle, or off-style miniature.
-- Do not invent combat/action behavior unless explicitly requested.`;
+    const performanceStudyRule = `- Include at most one compact ${supportingPosePanelLabel} that preserves the same face, build, hairstyle, costume, props, body proportions, and emotional presence.
+- The ${supportingPosePanelLabel} must be a single coherent figure, not a duplicated crop and not a collage of body fragments.
+- Do not create a second performance inset, duplicate arm crop, floating limb crop, disconnected torso crop, isolated flexed bicep crop, or partial anatomy fragment.
+- If the ${supportingPosePanelLabel} is shown, it must be a readable complete figure or a coherent half-body figure with anatomically intact shoulders, arms, torso connection, and pose silhouette.
+- If the ${supportingPosePanelLabel} cannot be rendered cleanly in the exact same style family as the rest of the sheet, omit it instead of rendering a cartoon, flat illustration, vector, doodle, off-style miniature, or cropped anatomy fragment.
+- Do not invent combat/action behavior unless explicitly requested.
+- Use only one visible performance note block. Do not duplicate the same performance note text in multiple places.`;
     const boardPresentationStyle = visibleInput.boardPresentationStyle || defaultCharacterPitchSheetInput.boardPresentationStyle || "premium_film_board";
     const characterRenderStyleLabel = CHARACTER_RENDER_STYLE_BLOCKS[characterRenderStyle].split(":")[0] || characterRenderStyle;
     const debugVisibleLabels = visibleInput.debugVisibleLabels === true;
@@ -1398,7 +1594,7 @@ WARDROBE AUTHORITY OVERRIDE:
 - Replace any default NanoCast black polo, collared shirt, source-photo shirt, or source-photo collar if it conflicts with the user Wardrobe Direction.
 - Do not keep the collared shirt/polo merely because it appears in Image A.
 - Image A still controls actor body presentation, proportions, visual style, pose attitude, and approved character feel.
-- Biometric references still control face/head identity, hair, hairline, facial hair, grooming, skin tone, skull geometry, and age impression.
+- Biometric references still control face/head identity, hair, hairline, facial hair, grooming, skin tone, head shape, scalp outline, and age impression.
 - Wardrobe changes must not change actor identity or face/head likeness.
 - User Wardrobe Direction: "${wardrobe}"
 
@@ -1528,7 +1724,7 @@ WARDROBE SOURCE LOCK:
     ? "Preserve Image A's body, silhouette, proportions, render style, pose attitude, grooming read, and overall character design. Because the user supplied Wardrobe Direction, Image A's clothing/outfit is not the final wardrobe authority where it conflicts with the user wardrobe request."
     : "Preserve Image A's body, outfit, silhouette, costume package, material read, proportions, render style, footwear, accessories, pose attitude, grooming read, and overall character design."
 }
-- Use Images B-F / the biometric scan images only to preserve identity accuracy: face, skull/head shape, skin tone, age impression, hair state, facial hair, visible marks, and facial proportions.
+- Use Images B-F / the biometric scan images only to preserve identity accuracy: face, head shape, scalp outline, skin tone, age impression, hair state, facial hair, visible marks, and facial proportions.
 - Do not create a new character design.
 - Do not reinterpret the body, face, age, outfit, style category, or proportions away from the generated character source.
 - The pitch sheet should present this same generated character consistently across hero portrait, head studies, turnaround views, ${supportingPosePanelLabel}, expression study, and material/wardrobe detail panels.
@@ -1647,7 +1843,7 @@ WARDROBE SOURCE LOCK:
 
 Important distinction:
 - Allowed: smooth stylized animated 3D materials, premium animated lighting, simplified skin texture, clean CG surface.
-- Forbidden: changing the face design, changing expression, changing skull/head proportions, changing facial hair shape, changing age impression, changing body identity.`
+- Forbidden: changing the face design, changing expression, changing head/scalp proportions, changing facial hair shape, changing age impression, changing body identity.`
         : "";
     const animated3dPanelLock = animated3dStyles.has(characterRenderStyle)
         ? `PREMIUM ANIMATED 3D PANEL FAMILY LOCK:
@@ -1709,7 +1905,7 @@ Important distinction:
         ? `STYLIZED BIOMETRIC TRANSLATION RULE:
 - For stylized render styles, style changes the rendering/material language only.
 - Biometric identity geometry remains locked.
-- Do not use the selected style as permission to invent a new face, new skull shape, new expression, new facial hair pattern, new age impression, or new body identity.
+- Do not use the selected style as permission to invent a new face, new head shape, new scalp outline, new expression, new facial hair pattern, new age impression, or new body identity.
 - The output should look like the supplied biometric person translated into the selected style.`
         : "";
     const styleNegativePrompt = buildStyleNegativePrompt(characterRenderStyle);
@@ -1731,9 +1927,11 @@ ${globalInvariantContract}
 ${hiddenActorSourceIdentityLock}
 ${wardrobeAuthorityInstruction}
 
-${BOARD_PRESENTATION_STYLE_BLOCKS[boardPresentationStyle]}
+${CONTROLLED_TEXT_AND_LABEL_CONTRACT}
 
 ${NO_SIGNATURE_RULE_CONTRACT}
+
+${BOARD_PRESENTATION_STYLE_BLOCKS[boardPresentationStyle]}
 
 ${CHARACTER_RENDER_STYLE_BLOCKS[characterRenderStyle]}
 ${styleCategoryContract}
@@ -1750,7 +1948,7 @@ ${input.identitySource === "biometric_plus_character" && input.characterStyleRef
 
 BIOMETRIC BACKUP AUTHORITY:
 - [IMAGE 2+] are biometric identity backup references.
-- Use [IMAGE 2+] only to preserve or correct face/head likeness, skull shape, facial proportions, hair/scalp/facial hair, skin tone, and age impression.
+- Use [IMAGE 2+] only to preserve or correct face/head likeness, head shape, scalp outline, facial proportions, hair/scalp/facial hair, skin tone, and age impression.
 - Do not use [IMAGE 2+] to change the outfit, body design, render style, or character concept established by [IMAGE 1].
 
 MULTI-VIEW CONSISTENCY:
@@ -1810,7 +2008,7 @@ ${strictBodySpecsRule}
 
 UNIVERSAL STYLE CONSISTENCY CONTRACT:
 - Style affects rendering language only.
-- It must not change skull shape, face structure, hairline, eyes, brows, nose, mouth, jaw, facial asymmetry, age impression, body type, costume package, footwear, props, or world/era unless the user explicitly requests that.
+- It must not change head shape, scalp outline, face structure, hairline, eyes, brows, nose, mouth, jaw, facial asymmetry, age impression, body type, costume package, footwear, props, or world/era unless the user explicitly requests that.
 - Source images are the identity authority when supplied.
 - ${hasGeneratedCharacterSource ? "Generated character source Image A is the visual/design authority when supplied; biometric images remain identity authority only." : "If a generated character source is supplied, it is the visual/design authority while identity references remain likeness authority."}
 - If style and likeness conflict, likeness wins.
@@ -1835,7 +2033,7 @@ STYLE DRIFT NEGATIVE CONSTRAINTS:
 - ${hasGeneratedCharacterSource ? "Do not ignore Image A. Do not treat Image A as optional inspiration. Do not generate a generic board from the biometric scans alone. Do not change Image A's outfit, body type, proportions, style category, costume package, or character silhouette unless explicitly requested." : "Do not change body type or proportions unless explicitly requested. Do not over-infer body build from face scans."}
 - Do not recast the actor due to weight, build, height, or body metadata.
 - Do not generate a generic person matching the weight number.
-- Do not change face, skull, head, eyes, nose, mouth, jaw, skin tone, facial hair, age impression, or identity because of build/weight text.
+- Do not change face, head shape, scalp outline, eyes, nose, mouth, jaw, skin tone, facial hair, age impression, or identity because of build/weight text.
 - Do not treat "200 lb" or any numeric weight as a new casting specification.
 - Numeric body metadata must not override the supplied biometric references or generated character source.
 - ${SHEET_STYLE_LOCK_NEGATIVE_TEXT}
@@ -1854,8 +2052,6 @@ VISIBLE BOARD LANGUAGE RULE:
 - Use internal reference and likeness logic only to preserve identity; do not turn it into board titles, costume labels, material callouts, or world-building text.
 
 ${visibleVocabularyRule}
-
-${CONTROLLED_TEXT_AND_LABEL_CONTRACT}
 
 CALLOUT TARGET ACCURACY RULE:
 - A callout arrow must terminate inside the exact visible object named by the label.
@@ -1921,7 +2117,41 @@ RENDERED INSET ENFORCEMENT:
 - If the available space is too small to render the supporting pose in the selected family, omit that character inset rather than switching style families.
 - Material swatches may be simple samples only if they contain no character body, no face, no hands, no feet, no pose, and no costume-on-body silhouette.
 
+SUPPORTING POSE / DETAIL INSET COHERENCE RULE:
+- Supporting pose content may appear only once on the board unless the user explicitly requests multiple performance studies.
+- Do not generate a secondary pose crop, duplicate performance crop, isolated limb insert, floating arm, disconnected leg, cropped torso fragment, or ambiguous anatomy crop.
+- If a pose inset is included, it must remain anatomically coherent and visibly attached: no detached shoulders, no duplicated arms, no merged limbs, no floating hands, no floating feet.
+- If space is too tight for a clean pose inset, omit the supporting pose inset instead of inventing a cropped body fragment.
+- Footwear detail inset must contain only footwear, sole, tread, or shoe construction detail. It must not include face, torso, performance pose, or unrelated body parts.
+- Material texture inset must contain only fabric/material/garment-surface detail or a clean garment crop. It must not contain face, pose, or stray anatomy.
+- Expression study inset must contain only a coherent face/head crop of the same subject.
+- Never place a performance crop inside a footwear detail inset or a material inset.
+
+DETAIL PANEL SAFETY RULE:
+- Insets must contain only the content appropriate to that inset type.
+- Footwear detail inset: shoes/sole/tread only; no face, torso, or pose anatomy.
+- Material texture inset: material/fabric detail only; no body parts.
+- Supporting pose inset: one coherent whole-body or half-body pose only.
+- Do not create cropped anatomy fragments or accidental merged body/garment composites inside inset panels.
+- If an inset cannot be rendered cleanly, omit it rather than generating a malformed or blended result.
+
+NO MEDICAL / SKELETON / ANATOMY INSERTS:
+- Do not render skulls, skeletons, bones, x-rays, anatomical diagrams, medical cutaways, anatomy overlays, or anatomical study inserts unless explicitly requested by the user.
+- Do not interpret "head shape," "cranial silhouette," "face structure," or "identity preservation" as permission to draw a skull or skeleton.
+- Pitch Sheet Brief is a character production board, not a medical anatomy sheet.
+- If an inset is needed, use actor portrait, head study, footwear, fabric, material, palette, wardrobe, or performance pose panels only.
+
 ${claymationInsetRule}
+
+${DETAIL_PANEL_ISOLATION_CONTRACT}
+
+${FOOTWEAR_DETAIL_PANEL_RULE}
+
+${PANEL_LABEL_ACCURACY}
+
+${AVOID_OVERPOPULATING_SHEET_CONTRACT}
+
+${DETAIL_INSET_CLEANNESS}
 
 FORBIDDEN INTERNAL VISIBLE TERMS:
 - Do not show internal workflow/debug terms as visible board callouts unless debugVisibleLabels is true.
@@ -1983,6 +2213,32 @@ ${hasExplicitWardrobeDirection
 - Define only visible and relevant garment layers, closures, accessories, and material details.
 - Do not invent armor, tactical harnesses, bags, straps, holsters, prop attachment points, or weapons unless they are explicitly requested or clearly present in the approved generated character source.
 
+GARMENT-ANATOMY SEPARATION LOCK:
+- Garments must read as worn clothing, not pigment blended into the body.
+- Every wardrobe item must have a clean silhouette boundary where fabric ends and exposed skin begins.
+- Maintain visible separation at armholes, necklines, waistlines, hems, leg openings, sleeve openings, bra lines, waistband edges, shorts hems, leggings edges, and shoe openings.
+- Do not let costume color bleed into adjacent skin.
+- Do not let exposed skin inherit garment color, garment texture, or garment shading.
+- Do not let fabric appear fused, melted, airbrushed, or painted directly onto anatomy.
+- Preserve clear garment construction and edge readability even in small turnaround panels.
+- If the wardrobe includes shorts, the shorts must terminate clearly above the exposed leg with a visible edge or hem.
+- If the wardrobe includes leggings, the leggings must fully cover the intended leg region cleanly, without patchy fade into skin.
+- If the wardrobe includes a tank top or sleeveless top, the armhole boundaries must remain distinct and anatomically clean.
+- If the wardrobe includes a crop top, sports bra, or fitted training top, the garment edge under the bust / waist must remain clearly separated from exposed torso skin.
+- When the costume is tight athletic wear, show fitted fabric construction, not body-color blending.
+
+GARMENT EDGE NEGATIVE CONSTRAINTS:
+- no clothing fused into skin
+- no painted-on shorts
+- no blended leggings-to-skin transition
+- no garment color bleeding into thighs, hips, torso, or arms
+- no melted armhole
+- no disappearing hemline
+- no false skin-texture on clothing
+- no false clothing-texture on exposed skin
+- no ambiguous leg opening
+- no costume-to-anatomy merge
+
 MATERIAL ACCURACY:
 - ${materialNotes}
 - Include natural professional material callouts such as fabric weave, leather grain, metal patina, stitching, closure construction, and footwear details.
@@ -1994,49 +2250,63 @@ ${TURNAROUND_ANATOMY_INTEGRITY_CONTRACT}
 - Back view must resolve only the rear costume details that are actually visible or clearly implied by the approved character design.
 - Do not invent bags, armor plates, tactical harnesses, straps, or weapon rigs unless explicitly requested or clearly present in the approved generated character source.
 
+${STRICT_BODY_VIEW_DIRECTION_MAP}
+
 ${localBodyAxisLock}
-- Front view: face, chest, pelvis, knees, toes, and footwear fronts are all front-facing.
-- Three-quarter view: head, torso, pelvis, knees, and feet all share one 45-degree axis.
-- Side/profile view: shoulders, chest plane, pelvis, knees, feet, and footwear must all read as true side profile.
-- Back view: true rear axis with no visible front facial features.
-- Supporting pose render: one deliberate whole-body pose axis; no accidental upper/lower split.
 
-HEAD STUDY INSTRUCTIONS:
-- Include exactly four signed head studies unless the layout lacks space:
-  1. Neutral Front Head — true 0-degree front-facing head.
-  2. 3/4 Left Head — true 45-degree turn to the character's left.
-  3. Left Profile Head — true 90-degree left side profile.
-  4. Right Profile Head — true 90-degree right side profile.
-- Do not duplicate the same head angle under different labels.
-- Do not mirror one head study to fake the opposite side.
-- If space is tight, omit Right Profile Head before duplicating or mislabeling views.
-- Every head-study label must match the rendered craniofacial direction.
-- Head studies must match the same character and costume/world styling.
-- Head-study panels must use the sheet's clean neutral/studio background only; never preserve source-photo rooms, doors, walls, windows, furniture, shelves, lighting fixtures, or other environment details.
-- Any visible neckline, collar, shoulder, lapel, upper chest, jewelry, armor, robe, tunic, jacket, uniform, or accessory detail in head studies must match the final character wardrobe shown in the hero portrait and turnarounds. Never keep the source-photo shirt/collar.
+TURNAROUND ORIENTATION LOCK:
+- Every turnaround figure must follow a single coherent global axis from head through feet.
+- Front View (0°): chest, pelvis, knees, and toes face forward.
+- 3/4 View (45°): head, ribcage, pelvis, knees, and feet share one three-quarter axis.
+- Left Side Profile (90°): the face and full body point toward the LEFT side of the page.
+- Back View (180°): back-facing only; no front facial leakage.
+- If any body-view label contains a direction, the rendered figure must obey that exact page-facing direction.
+- Do not duplicate one side-facing body panel and relabel it as a different view.
 
-SIGNED HEAD VIEW LOCK:
-- Head-study labels are directional contracts, not decorative captions.
-- A Left Profile Head must show the character's left-side profile.
-- A Right Profile Head must show the character's right-side profile.
-- 3/4 Left Head must not become profile or front.
-- Do not repeat the same side profile twice.
-- Do not label a right-facing head as left profile or a left-facing head as right profile.
-- Ear visibility, nose direction, jaw contour, cheek plane, and neck attachment must agree with the label.
-- If the model cannot render a correct signed view, omit that head panel instead of duplicating or mislabeling it.
+TURNAROUND NEGATIVE CONSTRAINTS:
+- no duplicated body direction panels
+- no mirrored relabeling
+- no upper/lower body axis split
+- no torso facing one way and legs another
+- no contradictory foot direction
+- no profile/back confusion
 
-SIGNED HEAD VIEW NEGATIVE CONSTRAINTS:
-- no duplicate head viewpoints
-- no mirrored duplicate head
-- no mislabeled head direction
-- no repeated side profile
-- no left/right collapse
-- no profile-front ambiguity
-- no inconsistent ear / nose / jaw direction.
+HEAD STUDY ORIENTATION CONTRACT:
+- Use page-facing profile labels to avoid ambiguity.
+- NEUTRAL FRONT HEAD: face looks straight forward toward the viewer.
+- 3/4 LEFT-FACING HEAD: face turns approximately 45° toward the LEFT side of the page. This is not a full profile.
+- LEFT-FACING PROFILE HEAD: true 90° profile with the nose, lips, chin, and face silhouette pointing LEFT on the page.
+- RIGHT-FACING PROFILE HEAD: true 90° profile with the nose, lips, chin, and face silhouette pointing RIGHT on the page.
+- LEFT-FACING PROFILE HEAD and RIGHT-FACING PROFILE HEAD must face opposite directions.
+- Do not duplicate the same profile direction twice.
+- Do not use one mirrored or repeated head crop and label it as the opposite profile.
+- Do not label a left-facing head as right-facing.
+- Do not label a right-facing head as left-facing.
+- It is better to include one correct profile and omit the opposite profile than to duplicate or mislabel the same profile.
+- Do not force four head panels if doing so creates duplicate or mislabeled directions.
+- If a correct opposite-facing profile cannot be rendered, omit the weaker profile panel rather than duplicating the wrong direction.
+
+HEAD STUDY CONTENT RULE:
+- Head studies must show the actor's visible head/face/hair only.
+- Do not replace any head study with a skull, skeleton, anatomy diagram, x-ray, medical reference, or bone structure illustration.
+- Profile panels must show the actor's face/head profile, not skull anatomy.
+
+${HEAD_STUDY_PANEL_CLEANNESS}
+
+${HEAD_STUDY_VS_BODY_TURNAROUND_SEPARATION}
+
+HEAD VIEW NEGATIVE CONSTRAINTS:
+- no duplicate left/right head profile direction
+- no repeated side profile under different labels
+- no mislabeled page-facing direction
+- no profile duplication
+- no mirrored fake relabel
+- no front/profile ambiguity
+- no directionally inconsistent ear-nose-jaw relationship
 
 HEAD CALLOUT DIRECTION RULE:
-- If a visible callout refers to a head view, use direction-safe wording such as Specific Head Contour, Neutral Front Study, Signed 3/4 View, True Side Profile, Left Profile Head, or Right Profile Head.
-- Avoid loose head callout language that could blur signed direction, such as unspecific profile study, head contour, or side head without left/right wording.
+- If a visible callout refers to a head view, use direction-safe wording such as NEUTRAL FRONT HEAD, 3/4 LEFT-FACING HEAD, LEFT-FACING PROFILE HEAD, or RIGHT-FACING PROFILE HEAD.
+- Avoid loose head callout language that could blur direction, such as profile study, head contour, or side head without explicit left/right wording.
 
 CINEMATIC PORTRAIT INSTRUCTIONS:
 - Include one larger cinematic portrait of ${characterName} with ${lightingMood}.
@@ -2051,6 +2321,25 @@ PREMIUM ASYMMETRIC LAYOUT RULES:
 - Include the ${supportingPosePanelLabel} as a designed supporting element, not a separate redesign.
 - Avoid generic grid layouts, evenly spaced model-sheet rows, rigid contact-sheet spacing, and empty repeated boxes.
 - Use tasteful negative space, layered scale hierarchy, subtle labels if needed, and composition that feels designed rather than templated.
+
+FINAL VISUAL INTEGRITY CHECK:
+Before finalizing the pitch sheet, ensure:
+- head-study directions are correct and non-duplicated
+- Left Profile Head points left on the page
+- Right Profile Head points right on the page
+- 3/4 Left Head is not a duplicate profile
+- turnaround figures keep one coherent axis
+- garment boundaries remain clean and visibly separate from exposed skin
+- no clothing-to-skin blending occurs in shorts, leggings, tops, or armholes
+- no inset contains malformed anatomy or fused costume/body regions
+
+FINAL TEXT AND VIEW CHECK:
+Before finalizing the sheet:
+- Confirm LEFT-FACING PROFILE HEAD points left on the page.
+- Confirm RIGHT-FACING PROFILE HEAD points right on the page.
+- Confirm the two profile head panels are not duplicates.
+- Confirm no hidden instruction text, camera metadata, source metadata, debug labels, or parenthetical process notes appear as visible text.
+- Confirm all visible labels are clean production-board labels only.
 
 STRICT CONSISTENCY RULES:
 - No duplicated accessories unless requested.

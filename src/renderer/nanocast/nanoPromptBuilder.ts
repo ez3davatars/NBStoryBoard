@@ -116,6 +116,14 @@ const NEGATIVE_CONSTRAINTS = [
   "mannequin body replacing the scanned person"
 ];
 
+const NANOCAST_STYLE_IDENTITY_INVARIANT = `NANOCAST STYLE IDENTITY INVARIANT:
+- Every selected style is a rendering translation of the same biometric actor, not a new character.
+- Preserve the scanned person's adult identity, head shape, face width, cheek structure, jaw/chin relationship, brow placement, eye spacing, eye size relationship, nose shape, nose/mouth relationship, lips, hairline, hair presence, grooming, skin tone, age impression, and overall identity read.
+- The selected style may change shader, material finish, linework, color treatment, lighting, and stylized rendering language.
+- The selected style may not change biometric identity geometry.
+- Do not generate a different person who merely shares broad demographic traits.
+- Do not let costume, pose, body scope, or render style overpower the biometric actor source.`;
+
 export const buildNanoCastPrompt = (blueprint: NanoActorBlueprint): string => {
   const identityLock = clampPercent(blueprint.identityAnchor.identityLock);
   const stylization = clampPercent(blueprint.stylization);
@@ -135,7 +143,10 @@ export const buildNanoCastPrompt = (blueprint: NanoActorBlueprint): string => {
     ...styleConfig.negativeRules
   ];
 
-  return [
+  const selectedStyle = blueprint.styleKey;
+  const effectiveStyleForGeneration = selectedStyleId;
+
+  const prompt = [
     buildNanoIdentityContract({
       ...blueprint.identityAnchor,
       identityLock
@@ -160,6 +171,7 @@ ${ageLine}
 - Gender mode guides presentation only and must not override biometric identity.`,
     buildNanoMorphologyBodyAuthorityContract(blueprint.morphologyKey, blueprint.bodyOverride),
     buildNanoStyleProtocol(blueprint.styleKey, stylization),
+    NANOCAST_STYLE_IDENTITY_INVARIANT,
     buildNanoCastStyleIdentityEnforcementContract(selectedStyleId, {
       selectedStyleLabel,
       identityRangeText: source,
@@ -189,4 +201,15 @@ ${ageLine}
     `NEGATIVE CONSTRAINTS:
 - ${combinedNegatives.join(", ")}.`
   ].join("\n\n");
+
+  console.info("[NanoCast] Style identity contract audit", {
+    selectedStyle,
+    effectiveStyleForGeneration,
+    hasStyleIdentityInvariant: prompt.includes("NANOCAST STYLE IDENTITY INVARIANT"),
+    hasSelectedStyleLock:
+      prompt.includes("BIOMETRIC TRANSLATION LOCK") ||
+      prompt.includes("EXACT LIKENESS STUDIO IDENTITY LOCK")
+  });
+
+  return prompt;
 };

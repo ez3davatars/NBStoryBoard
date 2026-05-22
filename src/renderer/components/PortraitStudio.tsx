@@ -33,7 +33,9 @@ import {
     buildCharacterPitchSheetPrompt,
     defaultCharacterPitchSheetInput,
     sanitizeVisibleBoardLanguage,
-    type CharacterPitchSheetInput
+    mapNanoCastStyleToPitchSheetRenderStyle,
+    type CharacterPitchSheetInput,
+    type CharacterPitchSheetRenderStyle
 } from "../../prompts/characterPitchSheetPrompts";
 
 
@@ -230,28 +232,7 @@ const CHARACTER_RENDER_STYLE_OPTIONS: CharacterRenderStyleOption[] = [
 
 const LEGACY_PREMIUM_ANIMATED_3D_STYLE_ID = ["p", "i", "x", "a", "r"].join("");
 
-const mapNanoStyleToPitchSheetRenderStyle = (value: unknown): NonNullable<CharacterPitchSheetInput["characterRenderStyle"]> => {
-    const rawStyle = typeof value === "string" ? value.trim() : "";
-    if (rawStyle === "premium_animated_3d" || rawStyle === "family_3d") {
-        return "family_3d";
-    }
-    if (rawStyle === "premium_cg" || rawStyle === "hyper_real" || rawStyle === "realism") {
-        return "cinematic_photoreal";
-    }
-    if (rawStyle === "exact_studio") {
-        return "exact_studio";
-    }
-    if (rawStyle === "retro_cel" || rawStyle === "retro_anime") {
-        return "retro_cel";
-    }
-    if (rawStyle === "comic_book" || rawStyle === "graphic_novel") {
-        return "comic_book";
-    }
-    if (rawStyle === "cyberpunk" || rawStyle === "cyberpunk_neon") {
-        return "cyberpunk_neon";
-    }
-    return normalizePitchSheetRenderStyle(rawStyle);
-};
+
 
 const normalizePitchSheetRenderStyle = (value: unknown): NonNullable<CharacterPitchSheetInput["characterRenderStyle"]> => {
     const clean = typeof value === "string" ? value.trim() : "";
@@ -509,8 +490,8 @@ export default function PortraitStudio() {
     const generatedOutputFilename = isPitchSheetMode
         ? `character_pitch_sheet_${safeFilenameSegment(pitchSheetSubjectName)}.png`
         : `portrait_${dna.identity.sex.toLowerCase()}_${dna.identity.age}.png`;
-    const generateButtonLabel = isPitchSheetMode ? "Generate Character Pitch Sheet" : "Generate DNA Portrait";
-    const generatingButtonLabel = isPitchSheetMode ? "Synthesizing Sheet..." : "Synthesizing DNA...";
+    const generateButtonLabel = isPitchSheetMode ? "GENERATE CHARACTER PITCH SHEET" : "GENERATE PORTRAIT";
+    const generatingButtonLabel = isPitchSheetMode ? "GENERATING SHEET..." : "GENERATING PORTRAIT...";
     const isReferenceImageRequired = mode === "portrait" && dna.identityMode === "reference" && !dna.referenceImageUrl;
     const canBuildPitchSheetFromCharacter = mode === "portrait" && Boolean(generatedImage || state.lastCastedImage);
     const pitchSheetSourcePanelMode = pitchSheetInput.sourcePanelMode || defaultCharacterPitchSheetInput.sourcePanelMode || "costume_matched";
@@ -780,37 +761,51 @@ export default function PortraitStudio() {
                 : "Preserve hair, hairline, facial hair, and grooming consistently across every view.";
             const productionNote = "Maintain actor-based likeness continuity across hero portrait, head studies, turnaround views, and expression study.";
 
-            const mappedStyle = mapNanoStyleToPitchSheetRenderStyle(payload.selectedStyle);
             setMode("pitch_sheet");
             setGeneratedImage(null);
-            setPitchSheetInput(prev => ({
-                characterRenderStyle: mappedStyle,
-                ...prev,
-                referenceImageUrl: undefined,
-                referenceImages,
-                identityLock: payload.identityLock,
-                identitySource,
-                identityStrength: payload.identityStrength || 100,
-                characterStyleReferenceUrl: payload.mode === "scan_plus_character" ? payload.finalCharacterUrl || undefined : undefined,
-                sourcePanelMode: payload.mode === "scan_plus_character" ? "costume_matched" : prev.sourcePanelMode,
-                visualAge: "",
-                height: "",
-                heightIn: undefined,
-                weightLbs: undefined,
-                build: "",
-                designLanguage: styleText,
-                wardrobeDirection: removeNanoCastWardrobeDirectionAutofill(prev.wardrobeDirection, payload.outfit),
-                lightingMood: payload.mode === "scan_plus_character"
-                    ? prev.lightingMood || defaultCharacterPitchSheetInput.lightingMood
-                    : prev.lightingMood,
-                faceDetails: [
-                    "Actor likeness study supplied as the strict actor likeness source.",
-                    hairNotes,
-                    "Preserve exact skull geometry, facial proportions, asymmetry, skin tone, age impression, and emotional presence."
-                ].join(" "),
-                materialCostumeNotes: removeNanoCastWardrobeAutofillFromMaterialNotes(prev.materialCostumeNotes),
-                productionNotes: dedupeLines([prev.productionNotes, productionNote].filter(Boolean).join("\n"))
-            }));
+            setPitchSheetInput(prev => {
+                const resolvedMappedStyle =
+                    (payload.approvedPitchSheetRenderStyle as CharacterPitchSheetRenderStyle | undefined) ||
+                    mapNanoCastStyleToPitchSheetRenderStyle(
+                        payload.approvedNanoCastStyle ||
+                        payload.selectedStyle ||
+                        prev.characterRenderStyle
+                    );
+
+                console.info("[PortraitStudio] Received NanoCast render style handoff", {
+                    handoffRenderStyle: payload.approvedPitchSheetRenderStyle || payload.approvedNanoCastStyle || payload.selectedStyle,
+                    appliedCharacterRenderStyle: resolvedMappedStyle
+                });
+
+                return {
+                    ...prev,
+                    characterRenderStyle: resolvedMappedStyle,
+                    referenceImageUrl: undefined,
+                    referenceImages,
+                    identityLock: payload.identityLock,
+                    identitySource,
+                    identityStrength: payload.identityStrength || 100,
+                    characterStyleReferenceUrl: payload.mode === "scan_plus_character" ? payload.finalCharacterUrl || undefined : undefined,
+                    sourcePanelMode: payload.mode === "scan_plus_character" ? "costume_matched" : prev.sourcePanelMode,
+                    visualAge: "",
+                    height: "",
+                    heightIn: undefined,
+                    weightLbs: undefined,
+                    build: "",
+                    designLanguage: styleText,
+                    wardrobeDirection: removeNanoCastWardrobeDirectionAutofill(prev.wardrobeDirection, payload.outfit),
+                    lightingMood: payload.mode === "scan_plus_character"
+                        ? prev.lightingMood || defaultCharacterPitchSheetInput.lightingMood
+                        : prev.lightingMood,
+                    faceDetails: [
+                        "Actor likeness study supplied as the strict actor likeness source.",
+                        hairNotes,
+                        "Preserve exact skull geometry, facial proportions, asymmetry, skin tone, age impression, and emotional presence."
+                    ].join(" "),
+                    materialCostumeNotes: removeNanoCastWardrobeAutofillFromMaterialNotes(prev.materialCostumeNotes),
+                    productionNotes: dedupeLines([prev.productionNotes, productionNote].filter(Boolean).join("\n"))
+                };
+            });
 
             dispatch({ type: "CLEAR_PENDING_PITCH_SHEET_HANDOFF" });
             dispatch({ type: "ADD_LOG", payload: { message: "NanoCast biometric scan loaded into Character Pitch Sheet", type: "success" } });
@@ -1372,54 +1367,57 @@ export default function PortraitStudio() {
         dispatch({ type: "ADD_LOG", payload: { message: "Generated portrait loaded as pitch sheet identity reference", type: "success" } });
     };
 
-    const sendToNanoCast = () => {
-        console.log({ dna, pitchSheetInput, mode, compiledPrompt });
-        dispatch({ type: "SET_LAST_CASTED_PROMPT", payload: compiledPrompt });
-        dispatch({ type: "SET_VIEW", payload: "nano_cast" });
-        dispatch({ type: "ADD_LOG", payload: { message: isPitchSheetMode ? "Pitch sheet prompt transferred to NanoCast" : "DNA transferred to NanoCast", type: "success" } });
-    };
-
-    const sendToReferenceSheet = () => {
+    const handleLoadToCast = () => {
         const imageUrl = generatedImage || state.lastCastedImage;
 
         if (!imageUrl) {
             dispatch({
                 type: "ADD_LOG",
-                payload: { message: isPitchSheetMode ? "Generate a pitch sheet first before sending to NanoCast Ref Sheet." : "Generate a portrait first before sending to NanoCast Ref Sheet.", type: "error" }
+                payload: {
+                    message: "Generate an image before loading to Cast.",
+                    type: "error"
+                }
             });
             return;
         }
 
-        const identityImages = isPitchSheetMode && isBiometricPitchSheetSource(pitchSheetInput.identitySource)
-            ? (pitchSheetInput.referenceImages || [])
-                .filter(ref => Boolean(ref.imageUrl))
-                .map(ref => ({
-                    angle: ref.angle,
-                    imageUrl: ref.imageUrl,
-                    label: ref.label
-                }))
-            : undefined;
+        const alreadyInCast = state.cast.some((c: CastMember) => c.url === imageUrl || c.previewUrl === imageUrl);
+        if (alreadyInCast) {
+            dispatch({
+                type: "ADD_LOG",
+                payload: {
+                    message: "This character is already registered in the session Cast.",
+                    type: "info"
+                }
+            });
+            return;
+        }
 
-        const handoff: NanoRefSheetHandoff = {
-            imageUrl,
-            compiledPrompt,
-            weightLbs: Math.round(dna.morphology.weightKg / 0.453592),
-            heightIn: Math.round(dna.morphology.heightCm / 2.54),
-            age: dna.identity.age,
-            hairStyle: dna.hair.style || "",
-            source: "portrait_studio",
-            createdAt: Date.now(),
-            identityImages,
-            generatedSheetRole: identityImages?.length ? "layout_reference_only" : "identity_fallback"
+        const newCast: CastMember = {
+            id: `cast-port-${Date.now()}`,
+            url: imageUrl,
+            previewUrl: imageUrl,
+            sourceUrl: imageUrl,
+            tag: 'front',
+            name: isPitchSheetMode ? pitchSheetSubjectName : activeLibraryName,
+            identityLock: isPitchSheetMode ? pitchSheetInput.identityLock : undefined,
+            profile: {
+                identity: isPitchSheetMode ? pitchSheetSubjectName : dna.identity.ethnicity,
+                wardrobe: isPitchSheetMode ? pitchSheetInput.wardrobeDirection : '',
+                accessories: isPitchSheetMode ? pitchSheetInput.propsSignatureItems : '',
+                style: isPitchSheetMode ? 'Character Pitch Sheet Preview' : 'Portrait',
+                ...(isPitchSheetMode
+                    ? {
+                        generationStatus: 'preview' as const,
+                        featureSource: 'character_pitch_sheet' as const,
+                    }
+                    : {})
+            }
         };
 
-        dispatch({ type: "SET_PENDING_REF_SHEET_HANDOFF", payload: handoff });
-        localStorage.removeItem("nano_refsheet_handoff");
-
-        dispatch({ type: "SET_LAST_CASTED_IMAGE", payload: imageUrl });
-        dispatch({ type: "SET_LAST_CASTED_PROMPT", payload: compiledPrompt });
-        dispatch({ type: "SET_VIEW", payload: "nano_cast" });
-        dispatch({ type: "ADD_LOG", payload: { message: isPitchSheetMode ? "Pitch sheet transferred to NanoCast Ref Sheet workflow" : "Portrait transferred to NanoCast Ref Sheet workflow", type: "success" } });
+        dispatch({ type: 'ADD_CAST', payload: newCast });
+        dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: imageUrl });
+        dispatch({ type: "ADD_LOG", payload: { message: "Successfully loaded into session Cast and Forge!", type: "success" } });
     };
 
     return (
@@ -2467,93 +2465,55 @@ export default function PortraitStudio() {
 
                         {/* Controls */}
                         <div className="flex flex-col gap-4 mt-2">
-                            {/* Primary Action - Dominant */}
-                            {!generatedImage ? (
-                                <div className="flex flex-col gap-3">
-                                    <button
-                                        onClick={handleGenerate}
-                                        disabled={isGenerating || isReferenceImageRequired}
-                                        className={`w-full bg-gradient-to-r from-yellow-500 to-yellow-600 text-white font-semibold rounded-xl px-6 py-3 hover: hover:brightness-110 transition-all duration-200 ease-out flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:brightness-100 disabled:hover: group relative
- ${isReferenceImageRequired ? 'grayscale opacity-30 ' : ''}`}
-                                    >
-                                        {isGenerating ? (
-                                            <RefreshCw className="w-5 h-5 animate-spin relative z-10" />
-                                        ) : (
-                                            <Wand2 className="w-5 h-5 -[0_0_6px_rgba(255,215,0,0.35)] transition-transform duration-200 group-hover:-translate-y-px relative z-10" />
-                                        )}
-                                        <span className="relative z-10">{isGenerating ? generatingButtonLabel : generateButtonLabel}</span>
-                                        {isPitchSheetMode && <PitchSheetPreviewBadge className="relative z-10 border-white/25 bg-black/10 text-white shadow-none" />}
-                                    </button>
-
-                                    {/* Randomize row */}
-                                    {mode === "portrait" && (
-                                    <div className="flex items-center gap-2">
-                                        <button
-                                            onClick={handleRandomizeDNA}
-                                            disabled={isGenerating}
-                                            className="flex-1 bg-white/5 hover:bg-white/10 text-white border border-white/10 font-bold rounded-xl px-4 py-3 transition-all flex items-center justify-center gap-2 uppercase tracking-widest text-[10px] disabled:opacity-30"
-                                        >
-                                            <span>🎲 Randomize DNA</span>
-                                        </button>
-
-                                        {lastDnaSnapshot && (
-                                            <button
-                                                onClick={handleUndoRandomize}
-                                                className="bg-white/5 hover:bg-white/10 text-white border border-white/10 rounded-xl px-4 py-3 transition-all flex items-center justify-center gap-2 group"
-                                                title="Undo Randomize"
-                                            >
-                                                <RotateCcw className="w-3.5 h-3.5 text-gray-400 group-hover:text-white transition-colors" />
-                                                <span className="text-[10px] uppercase font-bold tracking-widest text-gray-400 group-hover:text-white">Undo</span>
-                                            </button>
-                                        )}
-
-                                        <div className="h-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 flex items-center gap-3">
-                                            <div className="flex flex-col">
-                                                <span className="text-[8px] text-gray-500 font-bold uppercase tracking-tight leading-none">Seed</span>
-                                                <span className="text-[10px] font-mono text-yellow-500/80 tracking-wider">
-                                                    {randomSeed.toString().slice(-6)}
-                                                </span>
-                                            </div>
-                                            <button
-                                                onClick={handleCopySeed}
-                                                className="text-gray-500 hover:text-white transition-colors"
-                                                title="Copy Full Seed"
-                                            >
-                                                <Copy className="w-3 h-3" />
-                                            </button>
-                                        </div>
-                                    </div>
+                            {/* Top section: Generate button (full width) */}
+                            <div className="flex flex-col gap-3">
+                                <button
+                                    onClick={handleGenerate}
+                                    disabled={isGenerating || isReferenceImageRequired}
+                                    className={`w-full bg-gradient-to-r from-yellow-500 to-yellow-600 text-white font-semibold rounded-xl px-6 py-3.5 hover:brightness-110 transition-all duration-200 ease-out flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:brightness-100 group relative ${isReferenceImageRequired ? 'grayscale opacity-30 ' : ''}`}
+                                >
+                                    {isGenerating ? (
+                                        <RefreshCw className="w-4 h-4 animate-spin relative z-10" />
+                                    ) : (
+                                        <Wand2 className="w-4 h-4 -[0_0_6px_rgba(255,215,0,0.35)] transition-transform duration-200 group-hover:-translate-y-px relative z-10" />
                                     )}
-
-                                    {isReferenceImageRequired && (
-                                        <p className="text-[10px] text-red-400 font-bold uppercase tracking-tight text-center animate-pulse">
-                                            Reference image required in Reference Mode.
-                                        </p>
+                                    <span className="relative z-10 font-bold uppercase tracking-wider text-xs whitespace-nowrap">
+                                        {isGenerating ? generatingButtonLabel : generateButtonLabel}
+                                    </span>
+                                    {isPitchSheetMode && (
+                                        <PitchSheetPreviewBadge className="relative z-10 border-white/25 bg-black/20 text-white shadow-none text-[8px] py-0.5 px-1.5 ml-2 uppercase font-black tracking-widest shrink-0" />
                                     )}
-                                </div>
-                            ) : (
-                                <div className="flex flex-col gap-3">
-                                    <div className="flex gap-3">
-                                        <button
-                                            onClick={handleGenerate}
-                                            disabled={isGenerating}
-                                            className="flex-1 bg-yellow-500/10 hover:bg-yellow-500/20 text-yellow-500 border border-yellow-500/50 font-semibold rounded-xl px-6 py-3 transition-all flex items-center justify-center gap-2 uppercase tracking-wide text-xs disabled:opacity-35 disabled:cursor-not-allowed"
-                                        >
-                                            <RefreshCw className="w-4 h-4" />
-                                            <span>{generateButtonLabel}</span>
-                                            {isPitchSheetMode && <PitchSheetPreviewBadge className="border-yellow-400/30 bg-yellow-500/10 text-yellow-200 shadow-none" />}
-                                        </button>
-                                        <button
-                                            onClick={handleStartNew}
-                                            className="flex-1 bg-white/5 hover:bg-white/10 text-white border border-white/10 font-semibold rounded-xl px-6 py-3 transition-all flex items-center justify-center gap-2 uppercase tracking-wide text-xs"
-                                        >
-                                            <Sparkles className="w-4 h-4" /> Start New Subject
-                                        </button>
-                                    </div>
-                                    {/* Removed redundant Download Button */}
-                                </div>
-                            )}
+                                </button>
 
+                                {isReferenceImageRequired && (
+                                    <p className="text-[10px] text-red-400 font-bold uppercase tracking-tight text-center animate-pulse">
+                                        Reference image required in Reference Mode.
+                                    </p>
+                                )}
+                            </div>
+
+                            {/* Below / secondary section: LOAD TO CAST & START NEW SUBJECT side-by-side */}
+                            <div className="grid grid-cols-2 gap-3">
+                                <button
+                                    onClick={handleLoadToCast}
+                                    disabled={isGenerating}
+                                    className="flex-1 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/30 font-bold rounded-xl px-4 py-3.5 transition-all flex items-center justify-center gap-2 uppercase tracking-wider text-[10px] disabled:opacity-35 disabled:cursor-not-allowed"
+                                    title="Load Generated Image to Cast State"
+                                >
+                                    <UserPlus className="w-3.5 h-3.5" />
+                                    <span>LOAD TO CAST</span>
+                                </button>
+                                <button
+                                    onClick={handleStartNew}
+                                    disabled={isGenerating}
+                                    className="flex-1 bg-white/5 hover:bg-white/10 text-white border border-white/10 font-bold rounded-xl px-4 py-3.5 transition-all flex items-center justify-center gap-2 uppercase tracking-wider text-[10px] disabled:opacity-35"
+                                >
+                                    <Sparkles className="w-3.5 h-3.5" />
+                                    <span>START NEW SUBJECT</span>
+                                </button>
+                            </div>
+
+                            {/* Build Pitch Sheet From Character option (if available) */}
                             {canBuildPitchSheetFromCharacter && (
                                 <button
                                     onClick={buildPitchSheetFromGeneratedPortrait}
@@ -2564,21 +2524,45 @@ export default function PortraitStudio() {
                                 </button>
                             )}
 
-                            {/* Integration Actions (Ghost) */}
-                            <div className="grid grid-cols-2 gap-3 pt-2">
-                                <button
-                                    onClick={sendToNanoCast}
-                                    className="text-[9px] font-bold text-blue-500/40 hover:text-blue-400 uppercase tracking-[0.2em] py-2 transition-colors text-center hover:bg-blue-500/10 rounded"
-                                >
-                                    Send to Casting
-                                </button>
-                                <button
-                                    onClick={sendToReferenceSheet}
-                                    className="text-[9px] font-bold text-emerald-500/40 hover:text-emerald-400 uppercase tracking-[0.2em] py-2 transition-colors text-center hover:bg-emerald-500/10 rounded"
-                                >
-                                    Send to Ref Sheet
-                                </button>
-                            </div>
+                            {/* Randomize row (if mode is portrait) */}
+                            {mode === "portrait" && !generatedImage && (
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        onClick={handleRandomizeDNA}
+                                        disabled={isGenerating}
+                                        className="flex-1 bg-white/5 hover:bg-white/10 text-white border border-white/10 font-bold rounded-xl px-4 py-3 transition-all flex items-center justify-center gap-2 uppercase tracking-widest text-[10px] disabled:opacity-30"
+                                    >
+                                        <span>🎲 Randomize DNA</span>
+                                    </button>
+
+                                    {lastDnaSnapshot && (
+                                        <button
+                                            onClick={handleUndoRandomize}
+                                            className="bg-white/5 hover:bg-white/10 text-white border border-white/10 rounded-xl px-4 py-3 transition-all flex items-center justify-center gap-2 group"
+                                            title="Undo Randomize"
+                                        >
+                                            <RotateCcw className="w-3.5 h-3.5 text-gray-400 group-hover:text-white transition-colors" />
+                                            <span className="text-[10px] uppercase font-bold tracking-widest text-gray-400 group-hover:text-white">Undo</span>
+                                        </button>
+                                    )}
+
+                                    <div className="h-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 flex items-center gap-3">
+                                        <div className="flex flex-col">
+                                            <span className="text-[8px] text-gray-500 font-bold uppercase tracking-tight leading-none">Seed</span>
+                                            <span className="text-[10px] font-mono text-yellow-500/80 tracking-wider">
+                                                {randomSeed.toString().slice(-6)}
+                                            </span>
+                                        </div>
+                                        <button
+                                            onClick={handleCopySeed}
+                                            className="text-gray-500 hover:text-white transition-colors"
+                                            title="Copy Full Seed"
+                                        >
+                                            <Copy className="w-3 h-3" />
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     </div>
                 </SolidPanel>

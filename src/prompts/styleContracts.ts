@@ -91,7 +91,7 @@ const STYLE_CONTRACTS: Record<StyleCategoryId, StyleCategoryContract> = {
         label: 'Premium Stylized Animated 3D',
         renderFamily: 'premium_animated_3d',
         category: 'non-photorealistic animated 3D character design',
-        identityTranslationRule: 'Translate the same biometric actor into premium animated 3D. Preserve biometric identity geometry: head silhouette, scalp/bald shape, brow placement, eye spacing, eye shape impression, nose/mouth/jaw/chin relationships, facial hair pattern, age impression, body presence, and costume continuity. Stylization may change surface shader, material response, and lighting, but must not recast the face.',
+        identityTranslationRule: 'PREMIUM ANIMATED 3D BIOMETRIC TRANSLATION LOCK:\n- Treat this as an adult biometric actor translation into premium animated 3D, not a new animated character design.\n- Preserve the scanned person\'s adult identity, head shape, face width, cheek structure, jaw/chin relationship, brow placement, eye spacing, eye size relationship, nose shape, nose/mouth relationship, lips, hairline, hair presence, grooming, skin tone, and age impression.\n- Do not youthify the subject.\n- Do not beautify the subject into a generic animated protagonist.\n- Do not enlarge eyes beyond the biometric source person\'s real proportions.\n- Do not narrow the face, soften the jaw, shrink the nose, round the cheeks, or simplify the mouth into a generic cute animated face.\n- Do not replace the actor with a different person who merely shares broad traits.\n- Stylization may change shader, material finish, lighting, and simplified surface rendering, but must not change identity geometry.',
         positivePrompt: [
             'premium Pixar-style animated 3D character rendering',
             'feature-quality stylized animated 3D finish',
@@ -142,6 +142,15 @@ const STYLE_CONTRACTS: Record<StyleCategoryId, StyleCategoryContract> = {
             'Use soft sculptural key/fill/rim behavior appropriate to animation-film assets.'
         ],
         negativePrompt: [
+            'PREMIUM ANIMATED 3D IDENTITY NEGATIVES:',
+            'no generic animated protagonist',
+            'no childlike or teen-like redesign',
+            'no oversized eyes',
+            'no narrowed face',
+            'no softened jaw that changes identity',
+            'no generic cute face',
+            'no different actor with similar skin tone or hair',
+            'no altered age impression',
             'different person',
             'new face',
             'generic stylized face',
@@ -173,7 +182,7 @@ const STYLE_CONTRACTS: Record<StyleCategoryId, StyleCategoryContract> = {
         label: 'Cinematic Realism',
         renderFamily: 'photoreal',
         category: 'realistic live-action / premium photographic character rendering',
-        identityTranslationRule: 'Preserve biometric identity literally and photographically.',
+        identityTranslationRule: 'PREMIUM CG REALISM BIOMETRIC TRANSLATION LOCK:\n- Preserve the biometric actor literally and realistically.\n- Do not beautify, age-shift, slim, widen, or editorially recast the actor.\n- CG polish may improve lighting and render quality only.\n- Facial identity must remain source-faithful.',
         positivePrompt: [
             'realistic live-action film character',
             'natural human proportions',
@@ -227,7 +236,7 @@ const STYLE_CONTRACTS: Record<StyleCategoryId, StyleCategoryContract> = {
         label: 'Anime / Cel-Stylized',
         renderFamily: 'anime_cel',
         category: 'anime-inspired stylized character rendering',
-        identityTranslationRule: 'Translate biometric identity into anime/cel style while preserving head silhouette, facial hair pattern, age impression, and key facial relationships.',
+        identityTranslationRule: 'RETRO CEL ANIME BIOMETRIC TRANSLATION LOCK:\n- Treat this as an adult biometric portrait translated into retro cel animation, not a generic anime archetype.\n- Preserve adult face fullness, true eye spacing, brow shape, nose bridge, mouth relationship, jaw/chin shape, cheek volume, hairline, grooming, and age impression.\n- Do not create a teenage anime face.\n- Do not enlarge the eyes, shrink the nose, narrow the jaw, or simplify the face into a stock anime character.\n- Cel styling may simplify linework and shadows only; it must not replace the actor identity.',
         positivePrompt: [
             'anime-inspired facial structure',
             'cel-stylized rendering',
@@ -319,7 +328,7 @@ const STYLE_CONTRACTS: Record<StyleCategoryId, StyleCategoryContract> = {
         label: 'Graphic Comic / Noir',
         renderFamily: 'graphic_comic',
         category: 'graphic novel or comic-book character rendering',
-        identityTranslationRule: 'Translate biometric identity into graphic/inked style while preserving key silhouette and facial structure.',
+        identityTranslationRule: 'GRAPHIC NOVEL NOIR BIOMETRIC TRANSLATION LOCK:\n- Treat this as the same biometric actor rendered in graphic noir language.\n- Preserve head shape, jaw/chin, facial proportions, eye/nose/mouth relationship, hairline, grooming, age impression, and body presence.\n- Noir shadows, ink lines, and halftone treatment must follow the actor\'s actual structure.\n- Do not turn facial shadows or graphic marks into a different face.\n- Do not exaggerate features into a caricature unless explicitly requested.',
         positivePrompt: [
             'graphic novel character rendering',
             'controlled ink/line language',
@@ -364,7 +373,7 @@ const STYLE_CONTRACTS: Record<StyleCategoryId, StyleCategoryContract> = {
         label: 'Stylized Sci-Fi / Cyberpunk',
         renderFamily: 'cyberpunk_stylized',
         category: 'stylized high-tech character rendering',
-        identityTranslationRule: 'Translate same biometric actor into cyberpunk/stylized sci-fi look without changing core face/head identity.',
+        identityTranslationRule: 'CYBERPUNK BIOMETRIC TRANSLATION LOCK:\n- Treat cyberpunk as lighting, color, techwear, neon, atmosphere, and material treatment over the same biometric actor.\n- Preserve face/head identity, hairline, grooming, skin tone, age impression, and facial proportions.\n- Do not let cybernetic accents, neon lighting, makeup, tech markings, or futuristic styling replace the actor\'s face.\n- Do not generate a different cyberpunk model with similar broad traits.',
         positivePrompt: [
             'stylized sci-fi character design',
             'high-tech material language',

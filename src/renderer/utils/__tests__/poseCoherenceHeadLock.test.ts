@@ -9,6 +9,7 @@ import {
   getTurnaroundPanelOrientations,
   parsePoseCoherenceValidation
 } from '../../../prompts/poseCoherence';
+import { buildBodyScopeLockBlock } from '../../../prompts/nanoCastStyleIdentityEnforcement';
 import {
   buildCharacterPitchSheetPrompt,
   defaultCharacterPitchSheetInput,
@@ -156,15 +157,23 @@ describe('pose coherence head-axis lock', () => {
       boardPresentationStyle: 'premium_film_board'
     }));
 
-    expect(prompt).toContain('HEAD STUDY INSTRUCTIONS:');
-    expect(prompt).toContain('SIGNED HEAD VIEW LOCK:');
-    expect(prompt).toContain('Neutral Front Head — true 0-degree front-facing head.');
-    expect(prompt).toContain("3/4 Left Head — true 45-degree turn to the character's left.");
-    expect(prompt).toContain("Left Profile Head — true 90-degree left side profile.");
-    expect(prompt).toContain("Right Profile Head — true 90-degree right side profile.");
-    expect(prompt).toContain('Do not mirror one head study to fake the opposite side.');
-    expect(prompt).toContain('no duplicate head viewpoints');
-    expect(prompt).toContain('no left/right collapse');
-    expect(prompt).not.toMatch(/\n-\s*Profile Head\b/);
+    expect(prompt).toContain('HEAD STUDY ORIENTATION CONTRACT:');
+    expect(prompt).toContain('NEUTRAL FRONT HEAD: face looks straight forward toward the viewer.');
+    expect(prompt).toContain("3/4 LEFT-FACING HEAD: face turns approximately 45° toward the LEFT side of the page.");
+    expect(prompt).toContain("LEFT-FACING PROFILE HEAD: true 90° profile with the nose, lips, chin, and face silhouette pointing LEFT on the page.");
+    expect(prompt).toContain("RIGHT-FACING PROFILE HEAD: true 90° profile with the nose, lips, chin, and face silhouette pointing RIGHT on the page.");
+    expect(prompt).toContain('Do not use one mirrored or repeated head crop and label it as the opposite profile.');
+    expect(prompt).toContain('no duplicate left/right head profile direction');
+    expect(prompt).toContain('no repeated side profile under different labels');
+  });
+
+  it('enforces local body-scope locks in the NanoCast stylization contract', () => {
+    const headBlock = buildBodyScopeLockBlock('head');
+    const torsoBlock = buildBodyScopeLockBlock('torso');
+    const fullBlock = buildBodyScopeLockBlock('full_body');
+
+    expect(headBlock).toContain('HEAD AND SHOULDERS ONLY');
+    expect(torsoBlock).toContain('UPPER BODY / HALF-BODY ONLY');
+    expect(fullBlock).toContain('FULL BODY');
   });
 });

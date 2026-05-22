@@ -24,6 +24,7 @@ export type RecentGeneration = {
   generationStatus?: 'preview';
   featureSource?: 'character_pitch_sheet' | string;
   exported: boolean;
+  settingsSnapshot?: { selectedStyle?: string | null } | null;
 };
 
 type ManifestEntry = Omit<RecentGeneration, 'displayUrl'>;

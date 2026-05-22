@@ -482,6 +482,8 @@ export type NanoCastSessionState = {
     weightLbs: number;
     directorControls: NanoCastSessionDirectorControls;
     updatedAt: number | null;
+    approvedNanoCastStyle?: string | null;
+    approvedPitchSheetRenderStyle?: string | null;
 };
 
 export type PendingPitchSheetHandoff = {
@@ -505,6 +507,8 @@ export type PendingPitchSheetHandoff = {
     characterStyleReferenceUrl?: string | null;
     generatedSourceImageIndex?: number | null;
     generatedSourceRole?: string | null;
+    approvedNanoCastStyle?: string | null;
+    approvedPitchSheetRenderStyle?: string | null;
 };
 
 export type PendingRefSheetHandoff = {
