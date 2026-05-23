@@ -5279,7 +5279,7 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                 <div className="flex-1 relative bg-black rounded-2xl overflow-hidden border border-border group flex flex-col">
                                     {/* TOGGLE HEADER */}
                                     {/* TOGGLE HEADER */}
-                                    <div className="absolute top-4 right-4 z-20 flex items-center gap-4">
+                                    <div className="absolute top-3 right-3 z-40 flex items-center gap-2">
 
                                         {/* Camera Toggle */}
                                         <HelpTooltip zone="nano" id="cameraControl">
@@ -5288,20 +5288,20 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                                     void ensureScanAudioContext();
                                                     setCameraEnabled(!cameraEnabled);
                                                 }}
-                                                className={`p-3 rounded-full border transition-all ${cameraEnabled ? 'bg-surface border-accent text-accent -[0_0_15px_rgba(250,204,21,0.3)]' : 'bg-black border-white/20 text-white/50 hover:text-white'}`}
+                                                className={`p-2.5 rounded-full border transition-all ${cameraEnabled ? 'bg-surface border-accent text-accent -[0_0_15px_rgba(250,204,21,0.3)]' : 'bg-black border-white/20 text-white/50 hover:text-white'}`}
                                                 title={cameraEnabled ? "Disable Camera" : "Enable Camera"}
                                             >
                                                 {cameraEnabled ? <CameraIcon className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
                                             </button>
                                         </HelpTooltip>
 
-                                        <div className="flex bg-black/90 backdrop-blur rounded-full border border-border p-2 gap-2 ">
+                                        <div className="flex bg-black/95 backdrop-blur rounded-full border border-border p-1 gap-1">
                                             <button
                                                 onClick={() => {
                                                     void ensureScanAudioContext();
                                                     setUploadMode(false);
                                                 }}
-                                                className={`px-5 py-2 rounded-full text-xs font-black uppercase tracking-wider transition-all border ${!uploadMode ? 'bg-surface border-accent text-accent -[0_0_15px_rgba(250,204,21,0.3)]' : 'border-transparent text-white hover:text-accent hover:bg-white/5'}`}
+                                                className={`px-3.5 py-1.5 rounded-full text-[10px] font-black uppercase tracking-wider transition-all border ${!uploadMode ? 'bg-surface border-accent text-accent -[0_0_15px_rgba(250,204,21,0.3)]' : 'border-transparent text-white hover:text-accent hover:bg-white/5'}`}
                                             >
                                                 Auto-Scan
                                             </button>
@@ -5310,7 +5310,7 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                                     void ensureScanAudioContext();
                                                     setUploadMode(true);
                                                 }}
-                                                className={`px-5 py-2 rounded-full text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 border ${uploadMode ? 'bg-surface border-accent text-accent -[0_0_15px_rgba(250,204,21,0.3)]' : 'border-transparent text-white hover:text-accent hover:bg-white/5'}`}
+                                                className={`px-3.5 py-1.5 rounded-full text-[10px] font-black uppercase tracking-wider transition-all flex items-center gap-1.5 border ${uploadMode ? 'bg-surface border-accent text-accent -[0_0_15px_rgba(250,204,21,0.3)]' : 'border-transparent text-white hover:text-accent hover:bg-white/5'}`}
                                             >
                                                 <Upload className="w-3 h-3" /> Upload
                                             </button>
@@ -5491,37 +5491,39 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                     )}
                                 </div>
 
-                                <div className="w-80 flex flex-col gap-4">
+                                <div className="w-80 flex flex-col gap-3 h-full overflow-y-auto pr-1 scrollbar-thin">
                                     <h3 className="text-xs font-bold text-accent uppercase tracking-[0.2em] mb-2 border-b border-border pb-2">Biometric Manifest</h3>
-                                    {(['center', 'left', 'right', 'up', 'down'] as const).map((label) => (
-                                        <div
-                                            key={label}
-                                            onClick={() => {
-                                                if (capturedAngles[label]) clearAngleForRetake(label);
-                                            }}
-                                            className={`border p-3 rounded-lg flex items-center justify-between group transition-all cursor-pointer hover:bg-surface-2 ${capturedAngles[label] ? 'bg-success/5 border-success/30' : 'bg-surface border-border'}`}
-                                        >
-                                            <div className="flex items-center gap-3">
-                                                <div className={`w-10 h-10 rounded-md flex items-center justify-center relative overflow-hidden bg-black`}>
-                                                    {capturedAngles[label] ? (
-                                                        <img src={capturedAngles[label]!} className="w-full h-full object-cover" />
-                                                    ) : (
-                                                        <User className="w-4 h-4 text-muted" />
-                                                    )}
+                                    <div className="flex flex-col gap-2">
+                                        {(['center', 'left', 'right', 'up', 'down'] as const).map((label) => (
+                                            <div
+                                                key={label}
+                                                onClick={() => {
+                                                    if (capturedAngles[label]) clearAngleForRetake(label);
+                                                }}
+                                                className={`border p-2 rounded-lg flex items-center justify-between group transition-all cursor-pointer hover:bg-surface-2 ${capturedAngles[label] ? 'bg-success/5 border-success/30' : 'bg-surface border-border'}`}
+                                            >
+                                                <div className="flex items-center gap-2.5">
+                                                    <div className="w-8 h-8 rounded-md flex items-center justify-center relative overflow-hidden bg-black shrink-0">
+                                                        {capturedAngles[label] ? (
+                                                            <img src={capturedAngles[label]!} className="w-full h-full object-cover" />
+                                                        ) : (
+                                                            <User className="w-4 h-4 text-muted" />
+                                                        )}
+                                                    </div>
+                                                    <div>
+                                                        <div className={`text-xs font-bold uppercase ${capturedAngles[label] ? 'text-success' : 'text-muted'}`}>{label}</div>
+                                                        <div className="text-[9px] text-muted opacity-70">{capturedAngles[label] ? 'READY (CLICK TO RETAKE)' : 'PENDING'}</div>
+                                                    </div>
                                                 </div>
-                                                <div>
-                                                    <div className={`text-xs font-bold uppercase ${capturedAngles[label] ? 'text-success' : 'text-muted'}`}>{label}</div>
-                                                    <div className="text-[9px] text-muted opacity-70">{capturedAngles[label] ? 'READY (CLICK TO RETAKE)' : 'PENDING'}</div>
-                                                </div>
+                                                {capturedAngles[label] && <CheckCircle2 className="w-4 h-4 text-success" />}
                                             </div>
-                                            {capturedAngles[label] && <CheckCircle2 className="w-4 h-4 text-success" />}
-                                        </div>
-                                    ))}
-                                    <div className="mt-auto flex flex-col gap-2">
+                                        ))}
+                                    </div>
+                                    <div className="mt-auto flex flex-col gap-1.5">
                                         <button
                                             disabled={!capturedAngles.center || !capturedAngles.left || !capturedAngles.right}
                                             onClick={generateLocalBiometricSheet}
-                                            className="w-full py-4 bg-surface-2 hover:bg-surface-3 text-white border border-border text-[10px] font-black uppercase tracking-widest rounded-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                            className="w-full py-2.5 bg-surface-2 hover:bg-surface-3 text-white border border-border text-[10px] font-black uppercase tracking-widest rounded-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                                         >
                                             <Scan className="w-4 h-4" /> FAST BIOMETRIC SHEET
                                         </button>
@@ -5529,7 +5531,7 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                         <button
                                             disabled={!capturedAngles.center || !capturedAngles.left || !capturedAngles.right || isProcessing}
                                             onClick={handleGeneratePremiumBiometricSheet}
-                                            className="w-full py-4 bg-[#1a1a24] hover:bg-[#252538] text-indigo-400 border border-indigo-500/30 hover:border-indigo-400 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                            className="w-full py-2.5 bg-[#1a1a24] hover:bg-[#252538] text-indigo-400 border border-indigo-500/30 hover:border-indigo-400 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                                             title="Uses 1 API Credit"
                                         >
                                             <Cpu className="w-4 h-4" /> PREMIUM FORENSIC BOARD
@@ -5538,7 +5540,7 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                         <button
                                             disabled={!capturedAngles.center || !capturedAngles.left || !capturedAngles.right || isProcessing}
                                             onClick={() => void sendBiometricScanToPitchSheet("scan_only")}
-                                            className="w-full py-4 bg-yellow-500/10 hover:bg-yellow-500/20 text-yellow-500 border border-yellow-500/30 hover:border-yellow-500/60 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                            className="w-full py-2.5 bg-yellow-500/10 hover:bg-yellow-500/20 text-yellow-500 border border-yellow-500/30 hover:border-yellow-500/60 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                                             title={CHARACTER_PITCH_SHEET_PREVIEW_HELP}
                                         >
                                             <LayoutTemplate className="w-4 h-4" /> Build Pitch Sheet From Scan
@@ -5549,7 +5551,7 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                             <button
                                                 disabled={!capturedAngles.center || !capturedAngles.left || !capturedAngles.right || isProcessing}
                                                 onClick={() => void sendBiometricScanToPitchSheet("scan_plus_character")}
-                                                className="w-full py-4 bg-accent/10 hover:bg-accent/20 text-accent border border-accent/30 hover:border-accent/60 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                                className="w-full py-2.5 bg-accent/10 hover:bg-accent/20 text-accent border border-accent/30 hover:border-accent/60 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                                                 title={CHARACTER_PITCH_SHEET_PREVIEW_HELP}
                                             >
                                                 <Sparkles className="w-4 h-4" /> Build Pitch Sheet From Scan + Character
@@ -5560,14 +5562,14 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                         <div className="flex gap-2">
                                             <button
                                                 onClick={resetScan}
-                                                className="flex-1 py-4 bg-danger/10 hover:bg-danger/20 text-danger border border-danger/20 font-black uppercase tracking-widest transition-all text-[10px] rounded-lg flex items-center justify-center gap-2"
+                                                className="flex-1 py-2.5 bg-danger/10 hover:bg-danger/20 text-danger border border-danger/20 font-black uppercase tracking-widest transition-all text-[10px] rounded-lg flex items-center justify-center gap-2"
                                             >
                                                 <RotateCcw className="w-3 h-3" /> RETAKE
                                             </button>
                                             <button
                                                 disabled={isPhaseLocked(2)}
                                                 onClick={() => setPhase(2)}
-                                                className={`flex-[2] py-4 font-black uppercase tracking-widest transition-all text-xs rounded-lg flex items-center justify-center gap-2 ${isPhaseLocked(2)
+                                                className={`flex-[2] py-2.5 font-black uppercase tracking-widest transition-all text-xs rounded-lg flex items-center justify-center gap-2 ${isPhaseLocked(2)
                                                     ? 'bg-surface-2 text-muted cursor-not-allowed'
                                                     : 'bg-accent hover:bg-cyan-400 text-blue-900 shadow-[0_0_15px_rgba(34,211,238,0.4)]'
                                                     }`}

@@ -21,6 +21,7 @@ import { RecentGenerationsCacheService } from '../services/RecentGenerationsCach
 import RecentGenerationsStrip from './recent/RecentGenerationsStrip';
 import { createUniqueDownloadFilename } from '../utils/downloadFilenames';
 import { PropMetadataService, type PropMetadataSidecar } from '../services/PropMetadataService';
+import propsLibraryPlaceholder from '../assets/Props.jpg';
 
 type PermissionAwareDirectoryHandle = FileSystemDirectoryHandle & {
     queryPermission?: (descriptor?: { mode?: 'read' | 'readwrite' }) => Promise<PermissionState>;
@@ -1093,59 +1094,80 @@ OUTPUT
                 </div>
 
                 <div className="flex-grow min-h-0 overflow-y-auto custom-scrollbar p-4 space-y-4">
-                    <div className="grid grid-cols-2 gap-2">
-                        {libraryLoading ? (
-                            Array.from({ length: 8 }).map((_, i) => (
-                                <PropLibrarySkeletonCard key={`prop-skeleton-${i}`} />
-                            ))
-                        ) : (
-                            state.propItems.map(item => (
-                                <div
-                                    key={item.id}
-                                    onClick={(e) => {
-                                        if (e.shiftKey) {
-                                            bindToFirstEmptyRefSlot(item.url, item.name || 'Prop');
-                                            return;
-                                        }
-                                        setSelectedProp(item);
-                                    }}
-                                    className={`aspect-square rounded-lg border overflow-hidden transition-all group relative cursor-pointer ${selectedProp?.id === item.id ? 'border-blue-500 border-2' : 'border-gray-800 hover:border-gray-600'}`}
-                                >
-                                    <img src={item.url} className="w-full h-full transition-transform group-hover:scale-110 object-contain" draggable={false} />
-                                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-                                        <button
-                                            onClick={(e) => {
-                                                e.preventDefault();
-                                                e.stopPropagation();
-                                                dispatch({ type: 'SET_INSPECT_IMAGE', payload: item.url });
-                                            }}
-                                            onKeyDown={(e) => {
-                                                if (e.key === 'Enter' || e.key === ' ') {
+                    {(!libraryLoading && state.propItems.length === 0) ? (
+                        <div className="w-full mt-0 animate-in fade-in duration-300">
+                            <div className="relative w-full overflow-hidden rounded-2xl border border-white/10 bg-black/30 shadow-[0_0_30px_rgba(0,0,0,0.35)]">
+                                <img
+                                    src={propsLibraryPlaceholder}
+                                    alt="Props design placeholder"
+                                    className="w-full max-h-[580px] object-cover opacity-95"
+                                />
+                                <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/85 via-transparent to-black/35" />
+                                <div className="absolute bottom-4 left-4 right-4">
+                                    <p className="text-[10px] font-bold uppercase tracking-[0.24em] text-blue-400">
+                                        Props Library
+                                    </p>
+                                    <p className="mt-1 text-xs text-zinc-300 leading-relaxed">
+                                        Upload or generate your first prop to begin building this library.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="grid grid-cols-2 gap-2">
+                            {libraryLoading ? (
+                                Array.from({ length: 8 }).map((_, i) => (
+                                    <PropLibrarySkeletonCard key={`prop-skeleton-${i}`} />
+                                ))
+                            ) : (
+                                state.propItems.map(item => (
+                                    <div
+                                        key={item.id}
+                                        onClick={(e) => {
+                                            if (e.shiftKey) {
+                                                bindToFirstEmptyRefSlot(item.url, item.name || 'Prop');
+                                                return;
+                                            }
+                                            setSelectedProp(item);
+                                        }}
+                                        className={`aspect-square rounded-lg border overflow-hidden transition-all group relative cursor-pointer ${selectedProp?.id === item.id ? 'border-blue-500 border-2' : 'border-gray-800 hover:border-gray-600'}`}
+                                    >
+                                        <img src={item.url} className="w-full h-full transition-transform group-hover:scale-110 object-contain" draggable={false} />
+                                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                                            <button
+                                                onClick={(e) => {
                                                     e.preventDefault();
                                                     e.stopPropagation();
                                                     dispatch({ type: 'SET_INSPECT_IMAGE', payload: item.url });
-                                                }
-                                            }}
-                                            className="bg-blue-500/80 hover:bg-blue-500 text-white p-1.5 rounded-full"
-                                            title="Inspect Large"
-                                        >
-                                            <Maximize className="w-3.5 h-3.5" />
-                                        </button>
+                                                }}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter' || e.key === ' ') {
+                                                        e.preventDefault();
+                                                        e.stopPropagation();
+                                                        dispatch({ type: 'SET_INSPECT_IMAGE', payload: item.url });
+                                                    }
+                                                }}
+                                                className="bg-blue-500/80 hover:bg-blue-500 text-white p-1.5 rounded-full"
+                                                title="Inspect Large"
+                                            >
+                                                <Maximize className="w-3.5 h-3.5" />
+                                            </button>
 
-                                        <button
-                                            onClick={(e) => { e.stopPropagation(); setConfirmDelete(item); }}
-                                            className="bg-red-500/80 hover:bg-red-500 text-white p-1.5 rounded-full transition-transform hover:scale-110"
-                                            title="Delete Prop"
-                                        >
-                                            <Trash2 className="w-3.5 h-3.5" />
-                                        </button>
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); setConfirmDelete(item); }}
+                                                className="bg-red-500/80 hover:bg-red-500 text-white p-1.5 rounded-full transition-transform hover:scale-110"
+                                                title="Delete Prop"
+                                            >
+                                                <Trash2 className="w-3.5 h-3.5" />
+                                            </button>
+                                        </div>
+
+                                        <span className="text-[8px] font-bold text-white uppercase truncate absolute bottom-2 left-2 right-2 text-center">{item.name}</span>
                                     </div>
-
-                                    <span className="text-[8px] font-bold text-white uppercase truncate absolute bottom-2 left-2 right-2 text-center">{item.name}</span>
-                                </div>
-                            ))
-                        )}
-                    </div>
+                                ))
+                            )}
+                        </div>
+                    )}
                 </div>
             </div>
 

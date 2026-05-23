@@ -15,6 +15,7 @@ import styleRealism from '../assets/cover-realism.png';
 import styleAnimation from '../assets/cover-anim.png';
 import styleIllustration from '../assets/cover-illustration.png';
 import styleScifi from '../assets/cover-scifi.png';
+import wardrobeLibraryPlaceholder from '../assets/Wardrobe.jpg';
 import ActorSaveModal from './ActorSaveModal';
 import HelpTooltip from './ui/HelpTooltip';
 import InlineHint from './ui/InlineHint';
@@ -3140,51 +3141,65 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                         </div>
                     )}
 
-                    <div className="grid grid-cols-2 gap-2">
-                        {libraryLoading ? (
-                            Array.from({ length: 8 }).map((_, i) => (
-                                <WardrobeLibrarySkeletonCard key={`wardrobe-skeleton-${i}`} />
-                            ))
-                        ) : (
-                            state.wardrobeItems.map(item => (
-                                <div
-                                    key={item.id}
-                                    onClick={() => setSelectedCostume(item)}
-                                    className={`aspect-square rounded-lg border overflow-hidden transition-all group relative cursor-pointer ${selectedCostume?.id === item.id ? 'border-yellow-500 border-2' : 'border-gray-800 hover:border-gray-600'}`}
-                                >
-                                    <img src={item.url} className="w-full h-full transition-transform group-hover:scale-110 object-contain" />
-                                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-                                        <button
-                                            onClick={(e) => {
-                                                e.preventDefault();
-                                                e.stopPropagation();
-                                                dispatch({ type: 'SET_INSPECT_IMAGE', payload: item.url });
-                                            }}
-                                            className="bg-blue-500/80 hover:bg-blue-500 text-white p-1.5 rounded-full cursor-pointer"
-                                            title="Inspect Large"
-                                        >
-                                            <Maximize className="w-3.5 h-3.5" />
-                                        </button>
-
-                                        <button
-                                            onClick={(e) => { e.stopPropagation(); setConfirmDelete(item); }}
-                                            className="bg-red-500/80 hover:bg-red-500 text-white p-1.5 rounded-full cursor-pointer transition-transform hover:scale-110"
-                                            title="Delete Costume"
-                                        >
-                                            <Trash2 className="w-3.5 h-3.5" />
-                                        </button>
-                                    </div>
-
-                                    <span className="text-[8px] font-bold text-white uppercase truncate absolute bottom-2 left-2 right-2 text-center">{item.name}</span>
+                    {(!libraryLoading && state.wardrobeItems.length === 0) ? (
+                        <div className="w-full mt-0">
+                            <div className="relative w-full overflow-hidden rounded-2xl border border-white/10 bg-black/30 shadow-[0_0_30px_rgba(0,0,0,0.35)]">
+                                <img
+                                    src={wardrobeLibraryPlaceholder}
+                                    alt="Wardrobe design placeholder"
+                                    className="w-full max-h-[580px] object-cover opacity-95"
+                                />
+                                <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/85 via-transparent to-black/35" />
+                                <div className="absolute bottom-4 left-4 right-4">
+                                    <p className="text-[10px] font-bold uppercase tracking-[0.24em] text-yellow-400">
+                                        Wardrobe Library
+                                    </p>
+                                    <p className="mt-1 text-xs text-zinc-300 leading-relaxed">
+                                        Upload or generate your first costume to begin building this library.
+                                    </p>
                                 </div>
-                            ))
-                        )}
-                    </div>
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="grid grid-cols-2 gap-2">
+                            {libraryLoading ? (
+                                Array.from({ length: 8 }).map((_, i) => (
+                                    <WardrobeLibrarySkeletonCard key={`wardrobe-skeleton-${i}`} />
+                                ))
+                            ) : (
+                                state.wardrobeItems.map(item => (
+                                    <div
+                                        key={item.id}
+                                        onClick={() => setSelectedCostume(item)}
+                                        className={`aspect-square rounded-lg border overflow-hidden transition-all group relative cursor-pointer ${selectedCostume?.id === item.id ? 'border-yellow-500 border-2' : 'border-gray-800 hover:border-gray-600'}`}
+                                    >
+                                        <img src={item.url} className="w-full h-full transition-transform group-hover:scale-110 object-contain" />
+                                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                                            <button
+                                                onClick={(e) => {
+                                                    e.preventDefault();
+                                                    e.stopPropagation();
+                                                    dispatch({ type: 'SET_INSPECT_IMAGE', payload: item.url });
+                                                }}
+                                                className="bg-blue-500/80 hover:bg-blue-500 text-white p-1.5 rounded-full cursor-pointer"
+                                                title="Inspect Large"
+                                            >
+                                                <Maximize className="w-3.5 h-3.5" />
+                                            </button>
 
-                    {state.wardrobeItems.length === 0 && (
-                        <div className="flex flex-col items-center justify-center py-10 opacity-30">
-                            <Shirt className="w-10 h-10 mb-2" />
-                            <span className="text-[10px] uppercase font-bold tracking-tighter">Library Empty</span>
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); setConfirmDelete(item); }}
+                                                className="bg-red-500/80 hover:bg-red-500 text-white p-1.5 rounded-full cursor-pointer transition-transform hover:scale-110"
+                                                title="Delete Costume"
+                                            >
+                                                <Trash2 className="w-3.5 h-3.5" />
+                                            </button>
+                                        </div>
+
+                                        <span className="text-[8px] font-bold text-white uppercase truncate absolute bottom-2 left-2 right-2 text-center">{item.name}</span>
+                                    </div>
+                                ))
+                            )}
                         </div>
                     )}
                 </div>

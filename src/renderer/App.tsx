@@ -1552,51 +1552,52 @@ const App = () => {
         <div className="flex min-h-screen h-[100dvh] min-w-0 flex-col overflow-hidden bg-[#0f0f11] text-gray-200 font-sans select-none">
 
           {/* Header */}
-          <header className="border-b border-white/5 bg-[#18181b] flex w-full items-center justify-between gap-4 px-3 sm:px-4 lg:px-6 py-3 z-50 relative [style='-webkit-app-region:drag;']">
-            {/* Left Logo & Title */}
-            <div className="flex-shrink-0 flex min-w-0 items-center gap-2.5 sm:gap-3.5">
-              <div className="relative flex h-11 w-11 sm:h-12 sm:w-12 lg:h-14 lg:w-14 items-center justify-center rounded-xl border border-white/5 bg-white/5 shrink-0">
-                <img
-                  src={`data:image/png;base64,${LOGO_BASE64}`}
-                  alt="Branding Logo"
-                  className="h-8 w-8 sm:h-9 sm:w-9 lg:h-10 lg:w-10 object-contain -[0_0_10px_rgba(234,179,8,0.45)] hover:scale-105 transition-all duration-300 cursor-pointer"
-                />
-              </div>
-
-              <div className="min-w-0 overflow-hidden">
-                <div className="flex items-center gap-1 sm:gap-1.5 overflow-hidden whitespace-nowrap font-black leading-none tracking-tight text-[clamp(1.15rem,1.85vw,2.3rem)]" role="heading" aria-level={1}>
-                  <span className="min-w-0 truncate text-white">CAST DIRECTOR</span>
-                  <span className="shrink-0 text-yellow-500">STUDIO</span>
+          <header className="relative z-[1000] h-[82px] w-full overflow-visible border-b border-white/10 bg-[#171719] px-2.5">
+            <div className="grid h-full w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-5">
+              {/* LEFT BRAND */}
+              <div className="flex shrink-0 items-center gap-3 overflow-visible justify-self-start">
+                <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/5">
+                  <img
+                    src={`data:image/png;base64,${LOGO_BASE64}`}
+                    alt="Cast Director Studio"
+                    className="h-10 w-10 object-contain drop-shadow-[0_0_10px_rgba(234,179,8,0.45)]"
+                  />
                 </div>
 
-                <div className="mt-0.5 flex justify-end min-w-0 overflow-hidden">
-                  <span className="shrink-0 whitespace-nowrap text-[8px] sm:text-[9px] font-bold uppercase tracking-[0.2em] text-zinc-600">
-                    powered by <span className="text-zinc-500">Cast Director Studio</span>
-                  </span>
+                <div className="min-w-0 overflow-visible">
+                  <div className="whitespace-nowrap text-[28px] font-black leading-none tracking-tight">
+                    <span className="text-white">CAST DIRECTOR </span>
+                    <span className="text-yellow-400">STUDIO</span>
+                  </div>
+
+                  <div className="mt-1 whitespace-nowrap text-[9px] font-bold uppercase tracking-[0.28em] text-zinc-500">
+                    POWERED BY NANOBANANA 2
+                  </div>
                 </div>
               </div>
-            </div>
 
-            {/* Center Navigation */}
-            <div className="flex-1 flex items-center justify-center min-w-0 [style='-webkit-app-region:no-drag;']">
-              <FramedPanel className="mx-auto" trackClassName="px-0.5 py-0.5 gap-0">
-                {(['casting', 'nano_cast', 'portrait', 'wardrobe', 'props', 'staging', 'veo'] as ViewMode[])
-                  .filter(mode => mode !== 'veo' || state.isStoryboardEnabled)
-                  .map(mode => (
-                    <button
-                      key={mode}
-                      onClick={() => dispatch({ type: 'SET_VIEW', payload: mode })}
-                      className={`bg-transparent border-none text-[11px] xl:text-[12px] font-semibold px-2 xl:px-2.5 py-1.5 rounded-md cursor-pointer transition-all duration-200 whitespace-nowrap ${state.view === mode ? 'text-white' : 'text-[#888] hover:text-[#ccc]'} focus:outline-none`}
-                    >
-                      {renderTabLabel(mode, state.view === mode)}
-                    </button>
-                  ))}
-              </FramedPanel>
-            </div>
+              {/* Center Navigation */}
+              <div className="flex min-w-0 justify-center justify-self-center px-4 [style='-webkit-app-region:no-drag;']">
+                <div className="max-w-full">
+                  <FramedPanel className="mx-auto" trackClassName="px-0.5 py-0.5 gap-0">
+                    {(['casting', 'nano_cast', 'portrait', 'wardrobe', 'props', 'staging', 'veo'] as ViewMode[])
+                      .filter(mode => mode !== 'veo' || state.isStoryboardEnabled)
+                      .map(mode => (
+                        <button
+                          key={mode}
+                          onClick={() => dispatch({ type: 'SET_VIEW', payload: mode })}
+                          className={`bg-transparent border-none text-[11px] xl:text-[12px] font-semibold px-2 xl:px-2.5 py-1.5 rounded-md cursor-pointer transition-all duration-200 whitespace-nowrap ${state.view === mode ? 'text-white' : 'text-[#888] hover:text-[#ccc]'} focus:outline-none`}
+                        >
+                          {renderTabLabel(mode, state.view === mode)}
+                        </button>
+                      ))}
+                  </FramedPanel>
+                </div>
+              </div>
 
-            {/* Right Settings & File Menu (Combined Unified Pill) */}
-            <div className="flex-shrink-0 flex items-center justify-end [style='-webkit-app-region:no-drag;']">
-              <FramedPanel className="scale-[0.80] origin-right lg:scale-90 pointer-events-auto">
+              {/* Right Settings & File Menu (Combined Unified Pill) */}
+              <div className="relative z-[1000] flex shrink-0 justify-end justify-self-end [style='-webkit-app-region:no-drag;']">
+                <FramedPanel className="scale-[0.80] origin-right lg:scale-90 pointer-events-auto shrink-0">
                 
                 {/* Credits Segment */}
                 <div
@@ -1632,7 +1633,7 @@ const App = () => {
                   </button>
 
                   {showCreditUsage && billingHeaderState.canOpenUsage && (
-                    <div className="absolute right-0 top-[calc(100%+12px)] z-[80] w-[340px] rounded-xl border border-white/10 bg-[#111113] shadow-2xl shadow-black/60 p-3 text-left">
+                    <div className="absolute right-0 top-[calc(100%+12px)] z-[9999] w-[340px] rounded-xl border border-white/10 bg-[#111113] shadow-2xl shadow-black/60 p-3 text-left">
                       <div className="flex items-start justify-between gap-4 border-b border-white/10 pb-2">
                         <div>
                           <div className="text-[10px] font-black uppercase tracking-[0.18em] text-blue-400">Hosted Usage</div>
@@ -1737,7 +1738,8 @@ const App = () => {
 
               </FramedPanel>
             </div>
-          </header>
+          </div>
+        </header>
 
           {shouldShowByokHostedSuggestion && (
             <div className="flex flex-col gap-3 border-b border-blue-400/20 bg-blue-500/10 px-4 py-3 text-blue-100 sm:flex-row sm:items-center sm:justify-between">
