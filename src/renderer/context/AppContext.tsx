@@ -82,6 +82,8 @@ export interface WhitelistProfile {
     featureSource?: 'character_pitch_sheet' | string;
 }
 
+import type { ProductionActorProfile } from '../types/ProductionActorProfile';
+
 export interface CastMember {
     id: string;
     url: string;
@@ -93,6 +95,7 @@ export interface CastMember {
     filename?: string;
     profile?: WhitelistProfile;
     identityLock?: BiometricIdentityLock;
+    productionProfile?: ProductionActorProfile;
 }
 
 export interface HostedSession {
@@ -488,7 +491,7 @@ export type NanoCastSessionState = {
 };
 
 export type PendingPitchSheetHandoff = {
-    source: 'nanocast_biometric_scan';
+    source: 'nanocast_biometric_scan' | 'production_actor_workflow';
     createdAt: number;
     characterId: string;
     identityLock: BiometricIdentityLock;
@@ -510,6 +513,7 @@ export type PendingPitchSheetHandoff = {
     generatedSourceRole?: string | null;
     approvedNanoCastStyle?: string | null;
     approvedPitchSheetRenderStyle?: string | null;
+    productionActorProfile?: import('../types/ProductionActorProfile').ProductionActorProfile;
 };
 
 export type PendingRefSheetHandoff = {
@@ -638,6 +642,7 @@ export interface AppState {
     hostedSession: HostedSession | null;
     hostedCredits: number | null;
     showCreditModal: boolean;
+    productionActorWorkflowSource: { imageUrl: string; suggestedName?: string } | null;
     creditModal: InsufficientCreditModalState | null;
 
     backgroundJobs: BackgroundJob[];
@@ -732,6 +737,7 @@ export type Action =
     | { type: 'SET_MODEL'; payload: AppState['model'] }
     | { type: 'ADD_CAST'; payload: CastMember }
     | { type: 'REMOVE_CAST'; payload: string }
+    | { type: 'REMOVE_FROM_AVAILABLE_CAST'; payload: { actorId: string } }
     | { type: 'CLEAR_CAST' }
     | { type: 'UPDATE_CAST'; payload: Partial<CastMember> & { id: string } }
     | { type: 'ADD_TOKEN'; payload: StageToken }
@@ -841,7 +847,8 @@ export type Action =
     | { type: 'REMOVE_BACKGROUND_JOB'; payload: string }
     | { type: 'COMPLETE_BACKGROUND_JOB'; payload: { id: string; assetUrl: string } }
     | { type: 'FAIL_BACKGROUND_JOB'; payload: { id: string; errorMessage?: string } }
-    | { type: 'SET_LIVE_STATUS'; payload: LiveStatusMessage | null };
+    | { type: 'SET_LIVE_STATUS'; payload: LiveStatusMessage | null }
+    | { type: 'SET_PRODUCTION_ACTOR_WORKFLOW_SOURCE'; payload: { imageUrl: string; suggestedName?: string } | null };
 
 // --- HELPERS ---
 
@@ -1260,6 +1267,7 @@ export const initialState: AppState = {
     hostedSession: null,
     hostedCredits: null,
     showCreditModal: false,
+    productionActorWorkflowSource: null,
     creditModal: null,
     liveStatus: null,
     pendingPitchSheetHandoff: null,
@@ -1525,6 +1533,7 @@ export const reducer = (state: AppState, action: Action): AppState => {
             return {
                 ...state,
                 showCreditModal: true,
+                productionActorWorkflowSource: null,
                 creditModal: {
                     ...action.payload,
                     openedAt: 'openedAt' in action.payload ? action.payload.openedAt : Date.now()
@@ -1532,8 +1541,10 @@ export const reducer = (state: AppState, action: Action): AppState => {
             };
         }
 
-        case 'ADD_CAST':
+        case 'ADD_CAST': {
+            if (state.cast.some(c => c.id === action.payload.id)) return state;
             return { ...state, cast: [...state.cast, action.payload] };
+        }
         case 'CLEAR_CAST':
             return { ...state, cast: [] };
         case 'UPDATE_CAST':
@@ -1543,6 +1554,10 @@ export const reducer = (state: AppState, action: Action): AppState => {
             const nextTokens = state.tokens.filter(t => t.castId !== action.payload);
             const nextSelection = state.selection && !nextTokens.find(t => t.id === state.selection) ? null : state.selection;
             return { ...state, cast: nextCast, tokens: nextTokens, selection: nextSelection };
+        }
+        case 'REMOVE_FROM_AVAILABLE_CAST': {
+            const nextCast = state.cast.filter(c => c.id !== action.payload.actorId);
+            return { ...state, cast: nextCast };
         }
 
         case 'ADD_TOKEN': {
@@ -1872,6 +1887,8 @@ export const reducer = (state: AppState, action: Action): AppState => {
         }
         case 'SET_LIVE_STATUS':
             return { ...state, liveStatus: action.payload };
+        case 'SET_PRODUCTION_ACTOR_WORKFLOW_SOURCE':
+            return { ...state, productionActorWorkflowSource: action.payload };
         case 'DISCARD_SESSION': {
             return {
                 ...state,

@@ -183,6 +183,14 @@ const PropAccessoryStudio = () => {
     const setAppliedImage = (val: string | null) => setPropState({ appliedImage: val });
     const setApplyNote = (val: string) => setPropState({ applyNote: val });
     const [showActorSaveModal, setShowActorSaveModal] = useState(false);
+
+    // Guard to clear selected character if it's removed from Available Cast
+    useEffect(() => {
+        if (selectedCharacter && !state.cast.find(c => c.id === selectedCharacter.id)) {
+            setSelectedCharacter(null);
+        }
+    }, [state.cast, selectedCharacter]);
+
     const [pendingActorSave, setPendingActorSave] = useState<{
         sourceUrl: string;
         initialName: string;
@@ -1233,11 +1241,30 @@ OUTPUT
                             <div className="w-80 shrink-0 flex flex-col space-y-4 h-full min-h-0 overflow-y-auto custom-scrollbar pr-1">
                                 {/* Card A: Clean Selections */}
                                 <div className="bg-[#18181b] p-4 lg:p-6 rounded-2xl border border-gray-800 shrink-0">
-                                    <h3 className="text-xs font-black text-gray-400 uppercase mb-4 tracking-widest">1. Subject</h3>
-                                    <div className="flex gap-1.5 mb-4 flex-wrap max-h-14 overflow-y-auto custom-scrollbar">
+                                    <h3 className="text-xs font-black text-gray-400 uppercase mb-2 tracking-widest flex-shrink-0">1. Selected Subject</h3>
+                                    <div className="grid grid-cols-4 gap-2 h-32 overflow-y-auto p-2 border border-gray-800/50 rounded-lg bg-black/20 mb-4">
                                         {state.cast.map(c => (
-                                            <button key={c.id} onClick={() => setSelectedCharacter(c)} className={`!p-0 !m-0 !min-w-0 !min-h-0 w-11 h-11 shrink-0 rounded-lg border-2 overflow-hidden transition-all ${selectedCharacter?.id === c.id ? 'border-green-500 ring-1 ring-green-500 scale-95' : 'border-gray-800 hover:border-gray-600'}`}><img src={c.previewUrl || c.url} className="w-full h-full object-cover" /></button>
+                                            <div
+                                                key={c.id}
+                                                className={`relative aspect-square rounded border transition-all overflow-hidden cursor-pointer group ${selectedCharacter?.id === c.id ? 'border-green-500 ring-1 ring-green-500' : 'border-gray-800 hover:border-gray-600'}`}
+                                            >
+                                                <img src={c.previewUrl || c.url} className="w-full h-full object-cover" onClick={() => setSelectedCharacter(c)} />
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        dispatch({ type: 'REMOVE_FROM_AVAILABLE_CAST', payload: { actorId: c.id } });
+                                                    }}
+                                                    title="Remove from available cast"
+                                                    aria-label="Remove from available cast"
+                                                    className="absolute top-1 right-1 !p-0 w-6 h-6 bg-black/80 hover:bg-red-500/90 text-gray-400 hover:text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity z-10 flex items-center justify-center"
+                                                >
+                                                    <X className="w-3 h-3" />
+                                                </button>
+                                            </div>
                                         ))}
+                                        {state.cast.length === 0 && (
+                                            <div className="col-span-4 py-8 text-center text-[10px] text-gray-600 uppercase font-bold">No Cast</div>
+                                        )}
                                     </div>
                                     <h3 className="text-xs font-black text-gray-400 uppercase mb-4 tracking-widest border-t border-gray-800 pt-5">2. Active Prop</h3>
                                     <div className="h-[clamp(7rem,22vh,12rem)] bg-[#09090b] rounded-xl border border-gray-800 flex items-center justify-center overflow-hidden relative group">

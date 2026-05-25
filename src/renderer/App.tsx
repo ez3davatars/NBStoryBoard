@@ -27,6 +27,7 @@ import { FileMenu } from './components/ui/FileMenu';
 import { AppCloseDialog } from './components/ui/AppCloseDialog';
 import { HelpCenterDrawer } from './components/ui/HelpCenterDrawer';
 import { WelcomeModal } from './components/ui/WelcomeModal';
+import { CreateProductionActorWorkflow } from './components/workflows/CreateProductionActorWorkflow';
 import { InsufficientCreditModal } from './components/ui/InsufficientCreditModal';
 import { useRecentGenerationsStore } from './stores/useRecentGenerationsStore';
 import {
@@ -1982,6 +1983,7 @@ const App = () => {
           <HelpCenterDrawer />
           <WelcomeModal />
           <InsufficientCreditModal />
+          <CreateProductionActorWorkflow />
 
           {showSignInRequiredModal && (
             <div

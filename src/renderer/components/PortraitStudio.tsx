@@ -1,6 +1,6 @@
 
 import { useState, useEffect, useMemo } from "react";
-import { RefreshCw, Terminal, Activity, Wand2, Sparkles, X, Download, UserPlus, Hammer, Fingerprint, Maximize2, Save, Calculator, ScanFace, Aperture, Check, RotateCcw, Copy, Lock, Unlock, FolderOutput, ChevronDown } from "lucide-react";
+import { RefreshCw, Terminal, Activity, Wand2, Sparkles, X, Download, UserPlus, Hammer, Fingerprint, Maximize2, Save, Calculator, ScanFace, Aperture, Check, RotateCcw, Copy, Lock, Unlock, FolderOutput, ChevronDown, ShieldCheck } from "lucide-react";
 // Remove GlassCard import
 import { Input } from "./ui/Input";
 import { Slider } from "./ui/Slider";
@@ -748,15 +748,17 @@ export default function PortraitStudio() {
         });
 
         try {
-            if (payload.source !== "nanocast_biometric_scan" || !Array.isArray(payload.identityImages) || payload.identityImages.length === 0) {
+            if ((payload.source !== "nanocast_biometric_scan" && payload.source !== "production_actor_workflow") || !Array.isArray(payload.identityImages) || payload.identityImages.length === 0) {
                 dispatch({ type: "ADD_LOG", payload: { message: "Pitch Sheet handoff was empty. Please send the NanoCast scan again.", type: "error" } });
                 dispatch({ type: "CLEAR_PENDING_PITCH_SHEET_HANDOFF" });
                 return;
             }
 
-            const identitySource = payload.mode === "scan_plus_character"
-                ? "biometric_plus_character"
-                : "biometric_multiview";
+            const identitySource = payload.source === "production_actor_workflow" 
+                ? "biometric_plus_character" 
+                : payload.mode === "scan_plus_character"
+                    ? "biometric_plus_character"
+                    : "biometric_multiview";
             const referenceImages = payload.identityImages.map(image => ({
                 angle: image.angle,
                 imageUrl: image.imageUrl,
@@ -808,7 +810,11 @@ export default function PortraitStudio() {
                     lightingMood: payload.mode === "scan_plus_character"
                         ? prev.lightingMood || defaultCharacterPitchSheetInput.lightingMood
                         : prev.lightingMood,
-                    faceDetails: [
+                    faceDetails: payload.source === "production_actor_workflow" && payload.productionActorProfile ? dedupeLines([
+                        `IDENTITY: ${payload.productionActorProfile.identitySummary}`,
+                        `PRESERVE: ${payload.productionActorProfile.preserveRules.join(", ")}`,
+                        `AVOID: ${payload.productionActorProfile.avoidRules.join(", ")}`
+                    ].join("\n")) : [
                         "Actor likeness study supplied as the strict actor likeness source.",
                         hairNotes,
                         "Preserve exact skull geometry, facial proportions, asymmetry, skin tone, age impression, and emotional presence."
@@ -1159,7 +1165,7 @@ export default function PortraitStudio() {
     };
 
     // --- ACTIONS ---
-    const [progress, setProgress] = useState<{ phase: string, percent: number, text?: string } | null>(null);
+    const [progress, setProgress] = useState<{ phase: string, percent: number, text?: string, subtext?: string } | null>(null);
 
     const handleGenerate = async () => {
         const billingMode = state.billingEntitlements.effectiveBillingMode;
@@ -1180,13 +1186,38 @@ export default function PortraitStudio() {
         // Simulated Progress for the UX Loader
         setProgress({ phase: 'initializing', percent: 0, text: 'Initializing neural link...' });
         let currentPercent = 0;
+        
+        const getPitchSheetProgressMessage = (progress: number, calloutsEnabled: boolean): string => {
+            if (progress < 10) return 'Preparing source actor and style target...';
+            if (progress < 22) return 'Locking identity traits and body proportions...';
+            if (progress < 35) return 'Preserving wardrobe, hairstyle, and key visual details...';
+            if (progress < 50) return 'Building the production reference sheet layout...';
+            if (progress < 65) return 'Composing front, side, back, and detail views...';
+            if (progress < 78) return 'Balancing consistency across all actor views...';
+            if (progress < 90) {
+                return calloutsEnabled
+                    ? 'Adding production-ready callout labels...'
+                    : 'Finalizing production sheet details...';
+            }
+            if (progress < 98) return 'Finalizing the pitch sheet render...';
+            return 'Preparing the finished sheet...';
+        };
+
         const progressInterval = setInterval(() => {
             currentPercent += (100 - currentPercent) * 0.05; // Asymptotic approach to 99%
             let text = 'Formulating prompt...';
-            if (currentPercent > 30) text = 'Synthesizing image data...';
-            if (currentPercent > 70) text = 'Refining output...';
-            if (currentPercent > 90) text = 'Finalizing render...';
-            setProgress({ phase: 'generating', percent: currentPercent, text });
+            let subtext: string | undefined = undefined;
+
+            if (isPitchSheetMode) {
+                text = getPitchSheetProgressMessage(currentPercent, true);
+                subtext = 'Reference sheets can take longer because multiple views and identity details are being composed together.';
+            } else {
+                if (currentPercent > 30) text = 'Synthesizing image data...';
+                if (currentPercent > 70) text = 'Refining output...';
+                if (currentPercent > 90) text = 'Finalizing render...';
+            }
+
+            setProgress({ phase: 'generating', percent: currentPercent, text, subtext });
         }, 800);
 
         try {
@@ -2503,24 +2534,33 @@ export default function PortraitStudio() {
                                 )}
                             </div>
 
-                            {/* Below / secondary section: LOAD TO CAST & START NEW SUBJECT side-by-side */}
-                            <div className="grid grid-cols-2 gap-3">
+                            {/* Below / secondary section: LOAD TO CAST, START NEW SUBJECT, PRODUCTION ACTOR side-by-side */}
+                            <div className="grid grid-cols-3 gap-3">
                                 <button
                                     onClick={handleLoadToCast}
                                     disabled={isGenerating}
-                                    className="flex-1 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/30 font-bold rounded-xl px-4 py-3.5 transition-all flex items-center justify-center gap-2 uppercase tracking-wider text-[10px] disabled:opacity-35 disabled:cursor-not-allowed"
+                                    className="flex-1 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/30 font-bold rounded-xl px-2 py-3.5 transition-all flex flex-col items-center justify-center gap-1 uppercase tracking-wider text-[9px] disabled:opacity-35 disabled:cursor-not-allowed text-center leading-tight"
                                     title="Load Generated Image to Cast State"
                                 >
-                                    <UserPlus className="w-3.5 h-3.5" />
+                                    <UserPlus className="w-3.5 h-3.5 mb-0.5" />
                                     <span>LOAD TO CAST</span>
+                                </button>
+                                <button
+                                    onClick={() => dispatch({ type: 'SET_PRODUCTION_ACTOR_WORKFLOW_SOURCE', payload: { imageUrl: generatedImage!, suggestedName: 'Portrait ' + Date.now() } })}
+                                    disabled={!generatedImage || isGenerating}
+                                    className="flex-1 bg-accent/10 hover:bg-accent/20 text-accent border border-accent/30 font-bold rounded-xl px-2 py-3.5 transition-all flex flex-col items-center justify-center gap-1 uppercase tracking-wider text-[9px] disabled:opacity-35 text-center leading-tight"
+                                    title="Convert this generation into a reusable Production Actor."
+                                >
+                                    <ShieldCheck className="w-3.5 h-3.5 mb-0.5" />
+                                    <span>PRODUCTION ACTOR</span>
                                 </button>
                                 <button
                                     onClick={handleStartNew}
                                     disabled={isGenerating}
-                                    className="flex-1 bg-white/5 hover:bg-white/10 text-white border border-white/10 font-bold rounded-xl px-4 py-3.5 transition-all flex items-center justify-center gap-2 uppercase tracking-wider text-[10px] disabled:opacity-35"
+                                    className="flex-1 bg-white/5 hover:bg-white/10 text-white border border-white/10 font-bold rounded-xl px-2 py-3.5 transition-all flex flex-col items-center justify-center gap-1 uppercase tracking-wider text-[9px] disabled:opacity-35 text-center leading-tight"
                                 >
-                                    <Sparkles className="w-3.5 h-3.5" />
-                                    <span>START NEW SUBJECT</span>
+                                    <Sparkles className="w-3.5 h-3.5 mb-0.5" />
+                                    <span>START NEW</span>
                                 </button>
                             </div>
 
@@ -2661,6 +2701,17 @@ export default function PortraitStudio() {
                                 ) : (
                                     <UserPlus className="w-6 h-6 stroke-[2.5]" />
                                 )}
+                            </button>
+
+                            <button
+                                onClick={() => {
+                                    dispatch({ type: 'SET_PRODUCTION_ACTOR_WORKFLOW_SOURCE', payload: { imageUrl: generatedImage!, suggestedName: 'Portrait ' + Date.now() } });
+                                    setIsInspecting(false);
+                                }}
+                                className="w-14 h-14 bg-accent/20 hover:bg-accent text-accent hover:text-white rounded-xl transition-all transform hover:scale-110 flex items-center justify-center border border-accent/30"
+                                title="Create Production Actor"
+                            >
+                                <ShieldCheck className="w-6 h-6 stroke-[2.5]" />
                             </button>
 
                             <button

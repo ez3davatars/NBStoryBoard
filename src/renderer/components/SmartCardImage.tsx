@@ -16,10 +16,18 @@ export function SmartCardImage({
   fallbackToPlaceholder = true,
 }: SmartCardImageProps) {
   const [loaded, setLoaded] = useState(false);
+  const imgRef = React.useRef<HTMLImageElement>(null);
 
   // Reset loaded status if src changes
   useEffect(() => {
     setLoaded(false);
+  }, [src]);
+
+  // Check if image is already loaded from cache
+  useEffect(() => {
+    if (imgRef.current?.complete) {
+      setLoaded(true);
+    }
   }, [src]);
 
   return (
@@ -30,14 +38,15 @@ export function SmartCardImage({
 
       {src ? (
         <img
+          ref={imgRef}
           src={src}
           alt={alt}
           loading="eager"
           decoding="async"
-          className={`smart-card-image w-full h-full object-cover transition-opacity duration-220 ease-in-out ${className}`}
+          className={`smart-card-image w-full h-full object-cover transition-opacity duration-220 ease-in-out ${className} ${loaded ? 'opacity-100' : 'opacity-0'}`}
           data-loaded={loaded ? 'true' : 'false'}
           onLoad={() => setLoaded(true)}
-          style={{ opacity: loaded ? 1 : 0 }}
+          onError={() => setLoaded(true)}
         />
       ) : null}
     </div>

@@ -8,7 +8,7 @@ import {
   Search, Calendar, Type, Layers, Folder, HelpCircle,
   Maximize, LayoutTemplate, Share2, Info, CheckCircle2,
   ArrowDownUp, Edit2, FolderInput, Hammer, Lock,
-  Zap, Clapperboard
+  Zap, Clapperboard, ShieldCheck, ChevronDown, ChevronUp, History
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
@@ -705,6 +705,9 @@ const CastingForge = () => {
   const { state, dispatch } = useAppContext();
   
   const [libraryViewLoading, setLibraryViewLoading] = useState(false);
+  const [isRecentGenerationsOpen, setIsRecentGenerationsOpen] = useState(true);
+  const recentStoreGenerations = useRecentGenerationsStore(state => state.recentGenerations);
+  const hasRecentGenerations = recentStoreGenerations.filter(g => g.studio === 'general').length > 0;
   const withLibraryTransition = (next: () => void, delay = 180) => {
     setLibraryViewLoading(true);
     window.setTimeout(() => {
@@ -3264,36 +3267,68 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
             <div className="flex items-center gap-4">
               {state.lastCastedImage && (
                 <div className="flex items-center gap-3 pr-4 border-r border-white/10">
+                  {!isRecentGenerationsOpen && hasRecentGenerations && (
+                    <HelpTooltip zone="cast" id="showRecentGenerationsButton">
+                      <button
+                        onClick={() => setIsRecentGenerationsOpen(true)}
+                        aria-label="Show recent generations"
+                        title="Show recent generations"
+                        className="!p-0 bg-gray-500/10 hover:bg-gray-500 text-gray-400 hover:text-white w-9 h-9 rounded-full flex items-center justify-center transition-all active:scale-95 border border-gray-500/20"
+                      >
+                        <History className="w-4 h-4" />
+                      </button>
+                    </HelpTooltip>
+                  )}
                   <HelpTooltip zone="cast" id="addToLibraryButton">
                     <button
                       onClick={() => setShowSaveModal(true)}
-                      className="bg-emerald-500/10 hover:bg-emerald-500 text-emerald-500 hover:text-white px-4 py-1.5 rounded-full text-[9px] font-black flex items-center gap-2 transition-all uppercase tracking-widest active:scale-95 border border-emerald-500/20"
+                      aria-label="Add to Library"
+                      title="Add to Library"
+                      className="!p-0 bg-emerald-500/10 hover:bg-emerald-500 text-emerald-500 hover:text-white w-9 h-9 rounded-full flex items-center justify-center transition-all active:scale-95 border border-emerald-500/20"
                     >
-                      <UserPlus className="w-4 h-4" /> Add to Library
+                      <UserPlus className="w-5 h-5" />
                     </button>
                   </HelpTooltip>
-                  <button
-                    onClick={handleAddToCast}
-                    className="bg-blue-500/10 hover:bg-blue-500 text-blue-400 hover:text-white px-4 py-1.5 rounded-full text-[9px] font-black flex items-center gap-2 transition-all uppercase tracking-widest active:scale-95 border border-blue-500/20"
-                    title="Add to Session Cast"
-                  >
-                    <UserPlus className="w-4 h-4" /> Add to Cast
-                  </button>
-                  <button
-                    onClick={handleClearForgeCanvas}
-                    className="bg-red-500/10 hover:bg-red-500 text-red-400 hover:text-white px-3 py-1.5 rounded-full text-[9px] font-black flex items-center gap-2 transition-all uppercase tracking-widest active:scale-95 border border-red-500/20"
-                    title="Clear Canvas"
-                    aria-label="Clear canvas and return to Forge UI"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={handleDownload}
-                    className="text-gray-500 hover:text-white transition-all transform hover:scale-110 active:scale-90"
-                    title="Download PNG"
-                  >
-                    <Download className="w-3.5 h-3.5" strokeWidth={3} />
-                  </button>
+                  <HelpTooltip zone="cast" id="addToCastButton">
+                    <button
+                      onClick={handleAddToCast}
+                      aria-label="Add to Cast"
+                      title="Add to Cast"
+                      className="!p-0 bg-blue-500/10 hover:bg-blue-500 text-blue-400 hover:text-white w-9 h-9 rounded-full flex items-center justify-center transition-all active:scale-95 border border-blue-500/20"
+                    >
+                      <UserPlus className="w-5 h-5" />
+                    </button>
+                  </HelpTooltip>
+                  <HelpTooltip zone="cast" id="createProductionActorButton">
+                    <button
+                      onClick={() => dispatch({ type: 'SET_PRODUCTION_ACTOR_WORKFLOW_SOURCE', payload: { imageUrl: state.lastCastedImage!, suggestedName: 'Forge ' + Date.now() } })}
+                      aria-label="Create Production Actor"
+                      title="Create Production Actor"
+                      className="!p-0 bg-accent/10 hover:bg-accent/20 text-accent hover:text-accent-2 w-9 h-9 rounded-full flex items-center justify-center transition-all active:scale-95 border border-accent/20"
+                    >
+                      <ShieldCheck className="w-5 h-5" />
+                    </button>
+                  </HelpTooltip>
+                  <HelpTooltip zone="cast" id="deleteCurrentImageButton">
+                    <button
+                      onClick={handleClearForgeCanvas}
+                      aria-label="Delete Current Image"
+                      title="Delete Current Image"
+                      className="!p-0 bg-red-500/10 hover:bg-red-500 text-red-400 hover:text-white w-9 h-9 rounded-full flex items-center justify-center transition-all active:scale-95 border border-red-500/20"
+                    >
+                      <Trash2 className="w-5 h-5" />
+                    </button>
+                  </HelpTooltip>
+                  <HelpTooltip zone="cast" id="downloadImageButton">
+                    <button
+                      onClick={handleDownload}
+                      aria-label="Download Image"
+                      title="Download Image"
+                      className="!p-0 text-gray-500 hover:text-white w-9 h-9 rounded-full flex items-center justify-center transition-all transform hover:scale-110 active:scale-90"
+                    >
+                      <Download className="w-[18px] h-[18px]" strokeWidth={3} />
+                    </button>
+                  </HelpTooltip>
                 </div>
               )}
               <button
@@ -3360,31 +3395,49 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
                   />
 
                   {/* RECENT GENERATIONS STRIP */}
-                  <div className="absolute bottom-2 left-0 right-0 z-50 pointer-events-auto flex justify-center px-4">
-                      <RecentGenerationsStrip
-                          studio="general"
-                          showSingle
-                          className="w-full max-w-3xl bg-black/80 backdrop-blur-md rounded-2xl border border-white/10"
-                          onSelectGeneration={(gen) => {
-                              if (isRecentReferenceSheet(gen.prompt)) {
-                                  setRefSheetUrl(gen.displayUrl);
-                                  setShowRefSheet(true);
-                              } else {
-                                  dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: gen.displayUrl });
-                              }
-                          }}
-                          onExportGeneration={(gen) => {
-                              if (isRecentReferenceSheet(gen.prompt)) {
-                                  setPendingRefSheet(gen.displayUrl);
-                              } else {
-                                  dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: gen.displayUrl });
-                                  setPendingRefSheet(null);
-                              }
-                              setShowSaveModal(true);
-                              useRecentGenerationsStore.getState().markExported(gen.id);
-                          }}
-                      />
-                  </div>
+                  {isRecentGenerationsOpen && hasRecentGenerations && (
+                    <div 
+                      className={`absolute bottom-2 left-0 right-0 z-50 pointer-events-none flex justify-center px-4 transition-all duration-200 ease-out opacity-100 translate-y-0`}
+                    >
+                      <div className="relative w-full max-w-3xl pointer-events-auto">
+                        <button
+                          type="button"
+                          className="absolute -top-3.5 left-1/2 -translate-x-1/2 z-[60] bg-[#1a1a1c]/90 border border-white/10 rounded-full p-0.5 text-gray-400 hover:text-white hover:bg-black transition-colors shadow-lg"
+                          aria-label="Hide recent generations"
+                          title="Hide recent generations"
+                          onClick={() => setIsRecentGenerationsOpen(false)}
+                        >
+                          <ChevronDown className="w-4 h-4" />
+                        </button>
+
+                        <div className="transition-all duration-200 ease-out opacity-100 scale-100">
+                          <RecentGenerationsStrip
+                              studio="general"
+                              showSingle
+                              className="w-full bg-black/80 backdrop-blur-md rounded-2xl border border-white/10"
+                              onSelectGeneration={(gen) => {
+                                  if (isRecentReferenceSheet(gen.prompt)) {
+                                      setRefSheetUrl(gen.displayUrl);
+                                      setShowRefSheet(true);
+                                  } else {
+                                      dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: gen.displayUrl });
+                                  }
+                              }}
+                              onExportGeneration={(gen) => {
+                                  if (isRecentReferenceSheet(gen.prompt)) {
+                                      setPendingRefSheet(gen.displayUrl);
+                                  } else {
+                                      dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: gen.displayUrl });
+                                      setPendingRefSheet(null);
+                                  }
+                                  setShowSaveModal(true);
+                                  useRecentGenerationsStore.getState().markExported(gen.id);
+                              }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </>
               ) : (
                 <div className="flex flex-col items-center justify-center p-2 w-full h-full max-w-4xl mx-auto animate-in fade-in duration-700 font-sans">

@@ -1,5 +1,5 @@
 import { SidebarPanel } from '../ui/SidebarPanel';
-import { Sparkles, RefreshCcw } from 'lucide-react';
+import { Sparkles, RefreshCcw, ShieldCheck } from 'lucide-react';
 import { GeminiService } from '../../services/GeminiService';
 import { ensureAuthenticatedForGeneration } from '../../services/AuthGenerationGate';
 import type { Action, AppState, GroundingAudit } from '../../context/AppContext';
@@ -250,6 +250,19 @@ export const ActorIntelligencePanel = ({
                                 >
                                     {analyzingTokenId === token.id ? <RefreshCcw className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
                                     Auto Analyze
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        const imageUrl = token.sourceImageUrl || token.cutoutUrl || token.url;
+                                        if (imageUrl) {
+                                            dispatch({ type: 'SET_PRODUCTION_ACTOR_WORKFLOW_SOURCE', payload: { imageUrl, suggestedName: token.tag } });
+                                        }
+                                    }}
+                                    className="text-[11px] text-accent hover:text-accent-2 font-bold uppercase flex items-center gap-1"
+                                    title="Convert this token into a reusable Production Actor."
+                                >
+                                    <ShieldCheck className="w-3 h-3" />
+                                    Prod Actor
                                 </button>
                             </div>
                             <div className="flex flex-col gap-2">

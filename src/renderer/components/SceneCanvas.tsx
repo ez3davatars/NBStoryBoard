@@ -5047,6 +5047,17 @@ Output: environment plate only.
                                         <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
                                             <span className="text-[8px] font-bold text-white uppercase px-1 text-center leading-tight truncate w-full">{c.tag}</span>
                                         </div>
+                                        <button
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                dispatch({ type: 'REMOVE_FROM_AVAILABLE_CAST', payload: { actorId: c.id } });
+                                            }}
+                                            title="Remove from available cast"
+                                            aria-label="Remove from available cast"
+                                            className="absolute top-1 right-1 !p-0 w-6 h-6 bg-black/80 hover:bg-red-500/90 text-gray-400 hover:text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity z-10 flex items-center justify-center"
+                                        >
+                                            <X className="w-3 h-3" />
+                                        </button>
                                     </div>
                                 ))}
                             </div>

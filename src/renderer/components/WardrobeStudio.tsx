@@ -589,6 +589,13 @@ const WardrobeStudio = () => {
     const [selectedCostume, setSelectedCostume] = useState<WardrobeItem | null>(null);
     const [selectedCharacter, setSelectedCharacter] = useState<CastMember | null>(null);
 
+    // Guard to clear selected character if it's removed from Available Cast
+    useEffect(() => {
+        if (selectedCharacter && !state.cast.find(c => c.id === selectedCharacter.id)) {
+            setSelectedCharacter(null);
+        }
+    }, [state.cast, selectedCharacter]);
+
     // --- TRY-ON OUTPUT & TURNAROUND (2-SHEET MODE) ---
     type TryOnView = 'front' | 'back' | 'left' | 'right';
     type TryOnDisplay = TryOnView | 'sheetFB' | 'sheetLR';
@@ -3539,13 +3546,23 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                             <h3 className="text-xs font-black text-gray-400 uppercase mb-2 tracking-widest flex-shrink-0">1. Selected Subject</h3>
                                             <div className="grid grid-cols-4 gap-2 h-32 overflow-y-auto p-2 border border-gray-800/50 rounded-lg bg-black/20">
                                                 {state.cast.map(c => (
-                                                    <button
+                                                    <div
                                                         key={c.id}
-                                                        onClick={() => setSelectedCharacter(c)}
-                                                        className={`aspect-square rounded border transition-all overflow-hidden ${selectedCharacter?.id === c.id ? 'border-green-500 ring-1 ring-green-500' : 'border-gray-800 hover:border-gray-600'}`}
+                                                        className={`relative aspect-square rounded border transition-all overflow-hidden cursor-pointer group ${selectedCharacter?.id === c.id ? 'border-green-500 ring-1 ring-green-500' : 'border-gray-800 hover:border-gray-600'}`}
                                                     >
-                                                        <img src={c.previewUrl || c.url} className="w-full h-full object-cover" />
-                                                    </button>
+                                                        <img src={c.previewUrl || c.url} className="w-full h-full object-cover" onClick={() => setSelectedCharacter(c)} />
+                                                        <button
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                dispatch({ type: 'REMOVE_FROM_AVAILABLE_CAST', payload: { actorId: c.id } });
+                                                            }}
+                                                            title="Remove from available cast"
+                                                            aria-label="Remove from available cast"
+                                                            className="absolute top-1 right-1 !p-0 w-6 h-6 bg-black/80 hover:bg-red-500/90 text-gray-400 hover:text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity z-10 flex items-center justify-center"
+                                                        >
+                                                            <X className="w-3 h-3" />
+                                                        </button>
+                                                    </div>
                                                 ))}
                                                 {state.cast.length === 0 && (
                                                     <div className="col-span-4 py-8 text-center text-[10px] text-gray-600 uppercase font-bold">No Cast</div>

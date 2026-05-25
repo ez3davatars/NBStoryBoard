@@ -5,6 +5,7 @@ interface ProgressData {
  phase: string;
  percent: number;
  text?: string;
+ subtext?: string;
 }
 
 export const CastDirectorThinking = ({ progress: localProgress }: { progress?: ProgressData | null }) => {
@@ -33,6 +34,11 @@ export const CastDirectorThinking = ({ progress: localProgress }: { progress?: P
  draggable={false}
  />
  </div>
+ {progress && 'subtext' in progress && progress.subtext && (
+ <p className="text-gray-400 text-[9px] mt-2 italic tracking-wide max-w-[280px] text-center leading-tight">
+ {progress.subtext}
+ </p>
+ )}
  </div>
 
  {/* Text Terminal Indicator */}

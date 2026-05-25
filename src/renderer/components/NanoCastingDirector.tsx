@@ -8,7 +8,7 @@ import {
     ChevronRight, RefreshCw, Cpu, CheckCircle2, UserPlus, Upload, Sliders,
     Swords, Zap, Shield, Ghost, Camera as CameraIcon, Ban, RotateCcw,
     EyeOff, Shirt, Sparkles, LayoutTemplate, Download, X, ChevronDown, Pencil,
-    Trash2, Maximize, RefreshCcw, FolderPlus, AlertTriangle
+    Trash2, Maximize, RefreshCcw, FolderPlus, AlertTriangle, ShieldCheck
 } from 'lucide-react';
 import { nativeJoinPath, nativeListFiles, nativeReadFile } from '../utils/NativeFileAssets';
 import { nativeSelectFolder } from '../utils/NativeFileAssets';
@@ -458,6 +458,7 @@ const useImageDropZone = <TSlot extends string>({
 }: ImageDropZoneOptions<TSlot>) => {
     const [isDraggingOver, setIsDraggingOver] = useState(false);
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
+    const [isProcessing, setIsProcessing] = useState(false);
     const dragDepthRef = useRef(0);
     const errorTimerRef = useRef<number | null>(null);
     const hasImage = Boolean(currentImage);
@@ -466,6 +467,12 @@ const useImageDropZone = <TSlot extends string>({
         dragDepthRef.current = 0;
         setIsDraggingOver(false);
     }, []);
+
+    useEffect(() => {
+        if (currentImage) {
+            setIsProcessing(false);
+        }
+    }, [currentImage]);
 
     const showDropError = useCallback((message: string) => {
         setErrorMessage(message);
@@ -481,15 +488,21 @@ const useImageDropZone = <TSlot extends string>({
 
         if (!isAcceptedBiometricImageFile(file)) {
             showDropError(BIOMETRIC_IMAGE_DROP_ERROR);
+            setIsProcessing(false);
             return;
         }
 
+        setIsProcessing(true);
         setErrorMessage(null);
         if (errorTimerRef.current !== null) {
             window.clearTimeout(errorTimerRef.current);
             errorTimerRef.current = null;
         }
-        onImageSelected(slotId, file);
+        
+        // Defer actual processing so UI can paint the loader
+        setTimeout(() => {
+            onImageSelected(slotId, file);
+        }, 10);
     }, [onImageSelected, showDropError, slotId]);
 
     const handleDragEnter = useCallback((event: DragEvent<HTMLElement>) => {
@@ -535,6 +548,7 @@ const useImageDropZone = <TSlot extends string>({
 
     return {
         isDraggingOver,
+        isProcessing,
         errorMessage,
         selectImageFile,
         dropZoneProps: {
@@ -563,7 +577,7 @@ const BiometricDropPanel = ({
     onRetake,
     onUploadIntent
 }: BiometricDropPanelProps) => {
-    const { isDraggingOver, errorMessage, selectImageFile, dropZoneProps } = useImageDropZone({
+    const { isDraggingOver, isProcessing, errorMessage, selectImageFile, dropZoneProps } = useImageDropZone({
         slotId: angle,
         currentImage: imageUrl,
         onImageSelected
@@ -578,6 +592,13 @@ const BiometricDropPanel = ({
                     : 'border-border hover:border-accent/50'
             }`}
         >
+            {isProcessing ? (
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 backdrop-blur-sm z-20">
+                    <div className="w-6 h-6 border-2 border-yellow-500/30 border-t-yellow-500 rounded-full animate-spin mb-2"></div>
+                    <span className="text-[10px] font-black uppercase tracking-widest text-yellow-500 animate-pulse">Processing...</span>
+                </div>
+            ) : null}
+            
             {imageUrl ? (
                 <>
                     <img src={imageUrl} className="w-full h-full object-cover opacity-80" />
@@ -807,9 +828,10 @@ const NanoRecentGenerationsGallery = ({
                                             title={generation.prompt || 'Nano Cast recent generation'}
                                             aria-label="Select Nano Cast recent generation"
                                         >
-                                            <SmartCardImage
+                                            <img
                                                 src={generation.displayUrl}
                                                 alt={generation.prompt || ''}
+                                                loading="lazy"
                                                 className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
                                             />
                                             <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/10 to-transparent opacity-80" />
@@ -5206,6 +5228,14 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                                 >
                                                     <UserPlus className="w-4 h-4 text-emerald-500" /> Export Character
                                                 </button>
+                                                <button
+                                                    onClick={() => dispatch({ type: 'SET_PRODUCTION_ACTOR_WORKFLOW_SOURCE', payload: { imageUrl: finalCharacterUrl!, suggestedName: 'NanoCast ' + Date.now() } })}
+                                                    disabled={!finalCharacterUrl}
+                                                    title="Convert this generation into a reusable Production Actor."
+                                                    className="w-full bg-accent/10 hover:bg-accent/20 text-accent py-3 rounded-lg text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 border border-accent/20 transition-all hover:scale-[1.02]"
+                                                >
+                                                    <ShieldCheck className="w-4 h-4" /> Create Production Actor
+                                                </button>
                                             </div>
                                         </div>
                                     ) : (
@@ -5608,12 +5638,16 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                             <button
                                                 disabled={isPhaseLocked(2)}
                                                 onClick={() => setPhase(2)}
-                                                className={`flex-[2] py-2.5 font-black uppercase tracking-widest transition-all text-xs rounded-lg flex items-center justify-center gap-2 ${isPhaseLocked(2)
-                                                    ? 'bg-surface-2 text-muted cursor-not-allowed'
-                                                    : 'bg-accent hover:bg-cyan-400 text-blue-900 shadow-[0_0_15px_rgba(34,211,238,0.4)]'
+                                                className={`flex-[2] py-2.5 font-black uppercase tracking-[0.2em] transition-all text-xs rounded-lg flex items-center justify-center gap-2 relative group border overflow-hidden ${isPhaseLocked(2)
+                                                    ? 'bg-surface-2 text-muted border-border cursor-not-allowed'
+                                                    : 'bg-gradient-to-b from-[#18181b] to-black hover:from-[#27272a] hover:to-[#18181b] border-white/10 hover:border-white/30'
                                                     }`}
                                             >
-                                                Proceed <ChevronRight className="w-4 h-4" />
+                                                {!isPhaseLocked(2) && <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent -translate-x-full group-hover:translate-x-full duration-1000 transition-transform ease-in-out" />}
+                                                <span className={isPhaseLocked(2) ? "" : "bg-clip-text text-transparent bg-gradient-to-r from-[#d4af37] via-[#fff8dc] to-[#d4af37] bg-[length:200%_auto] animate-[shimmer_3s_linear_infinite]"}>
+                                                    Proceed
+                                                </span>
+                                                <ChevronRight className={`w-4 h-4 ${isPhaseLocked(2) ? '' : 'text-[#d4af37] group-hover:translate-x-1 transition-transform'}`} />
                                             </button>
                                         </div>
                                     </div>

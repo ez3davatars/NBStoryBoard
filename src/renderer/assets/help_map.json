@@ -29,7 +29,7 @@
                 "type": "tooltip",
                 "text": "Defines the global visual aesthetic for character generation."
             },
-            "addToLibraryButton": {
+            "addToCastButton": { "type": "tooltip", "text": "Saves this generation as an unapproved cast asset." }, "createProductionActorButton": { "type": "tooltip", "text": "Opens the Production Actor workflow to analyze identity and approve this actor." }, "deleteCurrentImageButton": { "type": "tooltip", "text": "Removes the current generated image from the canvas." }, "downloadImageButton": { "type": "tooltip", "text": "Downloads the raw image file to your local computer." }, "addToLibraryButton": {
                 "type": "tooltip",
                 "text": "Saves the actor using a collision-safe filename with metadata stored separately."
             },
@@ -168,3 +168,4 @@
         }
     }
 }
+
