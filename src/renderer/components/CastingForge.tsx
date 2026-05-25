@@ -8,7 +8,7 @@ import {
   Search, Calendar, Type, Layers, Folder, HelpCircle,
   Maximize, LayoutTemplate, Share2, Info, CheckCircle2,
   ArrowDownUp, Edit2, FolderInput, Hammer, Lock,
-  Zap, Clapperboard, ShieldCheck, ChevronDown, ChevronUp, History
+  Zap, Clapperboard, ShieldCheck, ChevronDown, History
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
