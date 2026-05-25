@@ -47,7 +47,8 @@ import {
   HelpCircle,
   CreditCard,
   ExternalLink,
-  KeyRound
+  KeyRound,
+  RefreshCw
 } from 'lucide-react';
 
 // --- 1. TYPES & INTERFACES ---
@@ -170,6 +171,56 @@ const triggerImageDownload = (url: string, filename: string): void => {
 const ImageInspector = () => {
   const { state, dispatch } = useAppContext();
   const [resolvedDisplay, setResolvedDisplay] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [isAdding, setIsAdding] = useState(false);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => {
+      setToast(null);
+    }, 2500);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
+  const handleInspectAddToCast = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isAdding) return;
+
+    setIsAdding(true);
+    try {
+      const sourceFallback = state.inspectImageSourceUrl || state.inspectImage!;
+
+      // Materialize
+      const mat = await LibraryAssetMaterializer.materializeCastAsset({
+        sourceUrl: sourceFallback,
+        saveDirectoryPath: state.saveDirectoryPath,
+        actorName: 'New Cast Member',
+        category: 'Uncategorized'
+      });
+
+      const newCast: CastMember = {
+        id: `cast-insp-${Date.now()}`,
+        url: mat.previewUrl,
+        localPath: mat.localPath || undefined,
+        previewUrl: mat.previewUrl,
+        sourceUrl: mat.sourceUrl,
+        tag: 'front',
+        name: 'New Cast Member',
+        filename: mat.filename,
+        profile: { identity: 'Unknown', wardrobe: '', accessories: '', style: '' }
+      };
+
+      dispatch({ type: 'ADD_CAST', payload: newCast });
+      dispatch({ type: 'ADD_LOG', payload: { message: "Added to Cast", type: 'success' } });
+      setToast({ message: "Added to Cast", type: 'success' });
+    } catch (err: unknown) {
+      console.error("Inspector add to cast failed", err);
+      dispatch({ type: 'ADD_LOG', payload: { message: `Could not add to Cast: ${getErrorMessage(err)}`, type: 'error' } });
+      setToast({ message: "Could not add to Cast", type: 'error' });
+    } finally {
+      setIsAdding(false);
+    }
+  };
 
   useEffect(() => {
     if (!state.inspectImage) {
@@ -275,37 +326,31 @@ const ImageInspector = () => {
         </div>
 
         <div className="fixed bottom-4 sm:bottom-12 left-1/2 -translate-x-1/2 flex flex-wrap justify-center gap-2 sm:gap-4 z-[2001] max-w-[calc(100vw-1.5rem)] bg-black/40 backdrop-blur-2xl border border-white/10 p-2 rounded-2xl ">
+          {toast && (
+            <div 
+              className="inspect-large-action-message absolute bottom-[calc(100%+12px)] left-1/2"
+              style={toast.type === 'error' ? { 
+                borderColor: 'rgba(239, 68, 68, 0.35)', 
+                boxShadow: '0 0 0 1px rgba(0, 0, 0, 0.65), 0 10px 26px rgba(0, 0, 0, 0.42), 0 0 22px rgba(239, 68, 68, 0.16)' 
+              } : {}}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {toast.message}
+            </div>
+          )}
           <button
-            onClick={async (e) => {
-              e.stopPropagation();
-              const sourceFallback = state.inspectImageSourceUrl || state.inspectImage!;
-
-              // Materialize
-              const mat = await LibraryAssetMaterializer.materializeCastAsset({
-                sourceUrl: sourceFallback,
-                saveDirectoryPath: state.saveDirectoryPath,
-                actorName: 'New Cast Member',
-                category: 'Uncategorized'
-              });
-
-              const newCast: CastMember = {
-                id: `cast-insp-${Date.now()}`,
-                url: mat.previewUrl,
-                localPath: mat.localPath || undefined,
-                previewUrl: mat.previewUrl,
-                sourceUrl: mat.sourceUrl,
-                tag: 'front',
-                name: 'New Cast Member',
-                filename: mat.filename,
-                profile: { identity: 'Unknown', wardrobe: '', accessories: '', style: '' }
-              };
-              dispatch({ type: 'ADD_CAST', payload: newCast });
-              dispatch({ type: 'ADD_LOG', payload: { message: "Added to Cast", type: 'success' } });
-            }}
-            className="w-12 h-12 sm:w-14 sm:h-14 bg-emerald-500/20 hover:bg-emerald-500 text-emerald-500 hover:text-white rounded-xl transition-all transform hover:scale-110 flex items-center justify-center border border-emerald-500/30"
+            onClick={handleInspectAddToCast}
+            disabled={isAdding}
+            className={`w-12 h-12 sm:w-14 sm:h-14 bg-emerald-500/20 hover:bg-emerald-500 text-emerald-500 hover:text-white rounded-xl transition-all transform hover:scale-110 flex items-center justify-center border border-emerald-500/30 ${
+              isAdding ? 'opacity-60 cursor-not-allowed scale-95' : ''
+            }`}
             title="Add to Cast"
           >
-            <UserPlus className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.5]" />
+            {isAdding ? (
+              <RefreshCw className="w-5 h-5 sm:w-6 sm:h-6 animate-spin stroke-[2.5]" />
+            ) : (
+              <UserPlus className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.5]" />
+            )}
           </button>
           <button
             onClick={(e) => {
@@ -400,29 +445,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boole
 
 // --- 5. MAIN APP SHELL ---
 
-const renderTabLabel = (mode: string, isActive: boolean) => {
-  switch (mode) {
-    case 'veo': return (
-      <div className="flex items-center gap-1 lg:gap-1.5">
-        <span>STORYBOARD</span>
-        <span className="text-[7px] font-black bg-yellow-500 text-black px-1 py-0.5 rounded-sm leading-none tracking-widest -[0_0_5px_rgba(234,179,8,0.4)]">EXP</span>
-        <Clapperboard className={`hidden md:block w-3.5 h-3.5 ${isActive ? 'text-yellow-500' : 'text-yellow-600/50'}`} />
-      </div>
-    );
-    case 'staging': return (
-      <div className="flex flex-row items-center gap-1.5">
-        <span>STAGING</span>
-        <span className="text-[7px] font-black text-blue-300 bg-blue-500/10 border border-blue-500/20 px-1 py-0.5 rounded uppercase tracking-widest flex items-center justify-center">PREVIEW</span>
-      </div>
-    );
-    case 'casting': return 'CAST';
-    case 'nano_cast': return 'NANO CAST';
-    case 'portrait': return 'PORTRAIT';
-    case 'wardrobe': return 'WARDROBE';
-    case 'props': return 'PROPS';
-    default: return mode.toUpperCase();
-  }
-};
+
 const FramedPanel = ({ children, className = '', trackClassName = 'px-3 py-1 gap-1' }: { children: React.ReactNode, className?: string, trackClassName?: string }) => {
   return (
     <div className={`inline-flex bg-[#2a2a2c] rounded-xl p-[4px] border border-[#111] shadow-[0_1px_1px_rgba(255,255,255,0.05)] ${className}`}>
@@ -436,6 +459,93 @@ const FramedPanel = ({ children, className = '', trackClassName = 'px-3 py-1 gap
 const App = () => {
   const { state, dispatch } = useAppContext();
   const [postLaunchBackgroundWorkReady, setPostLaunchBackgroundWorkReady] = useState(false);
+
+  const [visitedViews, setVisitedViews] = useState<Record<string, boolean>>({
+    casting: true,
+  });
+  const [navPressedTab, setNavPressedTab] = useState<ViewMode | null>(null);
+
+  useEffect(() => {
+    if (state.view && (state.view === 'casting' || state.view === 'nano_cast')) {
+      if (!visitedViews[state.view]) {
+        setVisitedViews((prev) => ({ ...prev, [state.view]: true }));
+      }
+    }
+  }, [state.view, visitedViews]);
+
+  const handleNavSelect = (mode: ViewMode) => {
+    if (import.meta.env.DEV) {
+      console.time(`[NAV] switch to ${mode}`);
+    }
+    dispatch({ type: 'SET_VIEW', payload: mode });
+    if (import.meta.env.DEV) {
+      requestAnimationFrame(() => {
+        console.timeEnd(`[NAV] switch to ${mode}`);
+      });
+    }
+  };
+
+  const navViewportRef = useRef<HTMLDivElement | null>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+
+  const updateNavScrollState = useCallback(() => {
+    const el = navViewportRef.current;
+    if (!el) return;
+
+    setCanScrollLeft(el.scrollLeft > 4);
+    setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 4);
+  }, []);
+
+  const scrollHeaderNav = (direction: 'left' | 'right') => {
+    const el = navViewportRef.current;
+    if (!el) return;
+
+    el.scrollBy({
+      left: direction === 'left' ? -220 : 220,
+      behavior: 'smooth',
+    });
+  };
+
+  const handleHeaderNavWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    const el = event.currentTarget;
+    if (el.scrollWidth <= el.clientWidth) return;
+
+    if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) {
+      event.preventDefault();
+      el.scrollLeft += event.deltaY;
+      requestAnimationFrame(updateNavScrollState);
+    }
+  };
+
+  const activeTabRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    if (activeTabRef.current) {
+      activeTabRef.current.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+        inline: 'center',
+      });
+    }
+    updateNavScrollState();
+    const timer = setTimeout(updateNavScrollState, 400);
+    return () => clearTimeout(timer);
+  }, [state.view, updateNavScrollState]);
+
+  useEffect(() => {
+    updateNavScrollState();
+    window.addEventListener('resize', updateNavScrollState);
+    return () => {
+      window.removeEventListener('resize', updateNavScrollState);
+    };
+  }, [updateNavScrollState]);
+
+  useEffect(() => {
+    updateNavScrollState();
+    const timer = setTimeout(updateNavScrollState, 100);
+    return () => clearTimeout(timer);
+  }, [state.isStoryboardEnabled, updateNavScrollState]);
 
   // Track previous credits locally for debug metrics without breaking useEffect dependencies
   const prevCreditsRef = useRef(state.hostedCredits);
@@ -1552,192 +1662,248 @@ const App = () => {
         <div className="flex min-h-screen h-[100dvh] min-w-0 flex-col overflow-hidden bg-[#0f0f11] text-gray-200 font-sans select-none">
 
           {/* Header */}
-          <header className="relative z-[1000] h-[82px] w-full overflow-visible border-b border-white/10 bg-[#171719] px-2.5">
-            <div className="grid h-full w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-5">
-              {/* LEFT BRAND */}
-              <div className="flex shrink-0 items-center gap-3 overflow-visible justify-self-start">
-                <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/5">
-                  <img
-                    src={`data:image/png;base64,${LOGO_BASE64}`}
-                    alt="Cast Director Studio"
-                    className="h-10 w-10 object-contain drop-shadow-[0_0_10px_rgba(234,179,8,0.45)]"
-                  />
-                </div>
-
-                <div className="min-w-0 overflow-visible">
-                  <div className="whitespace-nowrap text-[28px] font-black leading-none tracking-tight">
-                    <span className="text-white">CAST DIRECTOR </span>
-                    <span className="text-yellow-400">STUDIO</span>
-                  </div>
-
-                  <div className="mt-1 whitespace-nowrap text-[9px] font-bold uppercase tracking-[0.28em] text-zinc-500">
-                    POWERED BY NANOBANANA 2
-                  </div>
-                </div>
+          <header className="app-header relative z-[1000] h-[124px] w-full border-b border-white/10 bg-[#171719] px-2.5">
+            {/* LEFT BRAND */}
+            <div className="app-header-brand flex shrink-0 items-center gap-3 overflow-visible justify-self-start">
+              <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/5">
+                <img
+                  src={`data:image/png;base64,${LOGO_BASE64}`}
+                  alt="Cast Director Studio"
+                  className="h-10 w-10 object-contain drop-shadow-[0_0_10px_rgba(234,179,8,0.45)]"
+                />
               </div>
 
-              {/* Center Navigation */}
-              <div className="flex min-w-0 justify-center justify-self-center px-4 [style='-webkit-app-region:no-drag;']">
-                <div className="max-w-full">
-                  <FramedPanel className="mx-auto" trackClassName="px-0.5 py-0.5 gap-0">
+              <div className="app-header-brand-title min-w-0 overflow-visible">
+                <div className="whitespace-nowrap text-[28px] font-black leading-none tracking-tight">
+                  <span className="text-white">CAST DIRECTOR </span>
+                  <span className="text-yellow-400">STUDIO</span>
+                </div>
+
+                <div className="mt-1 whitespace-nowrap text-[9px] font-bold uppercase tracking-[0.28em] text-zinc-500">
+                  POWERED BY NANOBANANA 2
+                </div>
+              </div>
+            </div>
+
+            {/* Center Navigation */}
+            <div className="app-header-nav-zone">
+              <nav className="app-header-nav-frame" aria-label="Main navigation">
+                <button
+                  type="button"
+                  className="app-header-nav-nudge app-header-nav-nudge-left"
+                  disabled={!canScrollLeft}
+                  onClick={() => scrollHeaderNav('left')}
+                  aria-label="Scroll navigation left"
+                >
+                  ‹
+                </button>
+
+                <div
+                  ref={navViewportRef}
+                  className="app-header-nav-viewport"
+                  onScroll={updateNavScrollState}
+                  onWheel={handleHeaderNavWheel}
+                >
+                  <div className="app-header-nav-track">
                     {(['casting', 'nano_cast', 'portrait', 'wardrobe', 'props', 'staging', 'veo'] as ViewMode[])
                       .filter(mode => mode !== 'veo' || state.isStoryboardEnabled)
-                      .map(mode => (
-                        <button
-                          key={mode}
-                          onClick={() => dispatch({ type: 'SET_VIEW', payload: mode })}
-                          className={`bg-transparent border-none text-[11px] xl:text-[12px] font-semibold px-2 xl:px-2.5 py-1.5 rounded-md cursor-pointer transition-all duration-200 whitespace-nowrap ${state.view === mode ? 'text-white' : 'text-[#888] hover:text-[#ccc]'} focus:outline-none`}
-                        >
-                          {renderTabLabel(mode, state.view === mode)}
-                        </button>
-                      ))}
-                  </FramedPanel>
+                      .map(mode => {
+                        const isPreview = mode === 'staging';
+                        const isExperimental = mode === 'veo';
+                        const labelMap: Record<string, string> = {
+                          casting: 'CAST',
+                          nano_cast: 'NANO CAST',
+                          portrait: 'PORTRAIT',
+                          wardrobe: 'WARDROBE',
+                          props: 'PROPS',
+                          staging: 'STAGING',
+                          veo: 'STORYBOARD'
+                        };
+                        const label = labelMap[mode] || mode.toUpperCase();
+                        const isActive = state.view === mode;
+
+                        return (
+                          <button
+                            ref={isActive ? activeTabRef : null}
+                            key={mode}
+                            type="button"
+                            className="app-header-nav-tab"
+                            data-active={isActive ? "true" : "false"}
+                            data-pressed={navPressedTab === mode ? "true" : "false"}
+                            onMouseDown={() => setNavPressedTab(mode)}
+                            onMouseUp={() => setNavPressedTab(null)}
+                            onMouseLeave={() => setNavPressedTab(null)}
+                            onClick={() => handleNavSelect(mode)}
+                          >
+                            <span>{label}</span>
+
+                            {isPreview && (
+                              <span className="nav-preview-badge">PREVIEW</span>
+                            )}
+
+                            {isExperimental && (
+                              <span className="nav-exp-badge">EXP</span>
+                            )}
+                          </button>
+                        );
+                      })}
+                  </div>
                 </div>
-              </div>
 
-              {/* Right Settings & File Menu (Combined Unified Pill) */}
-              <div className="relative z-[1000] flex shrink-0 justify-end justify-self-end [style='-webkit-app-region:no-drag;']">
-                <FramedPanel className="scale-[0.80] origin-right lg:scale-90 pointer-events-auto shrink-0">
-                
-                {/* Credits Segment */}
-                <div
-                  ref={creditUsagePopoverRef}
-                  className="relative"
-                  onMouseEnter={() => {
-                    if (billingHeaderState.canOpenUsage) setShowCreditUsage(true);
-                  }}
+                <button
+                  type="button"
+                  className="app-header-nav-nudge app-header-nav-nudge-right"
+                  disabled={!canScrollRight}
+                  onClick={() => scrollHeaderNav('right')}
+                  aria-label="Scroll navigation right"
                 >
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (billingHeaderState.canOpenUsage) {
-                        setShowCreditUsage(prev => !prev);
-                      } else if (billingHeaderState.needsAttention) {
-                        setShowSettings(true);
-                      }
-                    }}
-                    className={`flex items-center gap-3 px-1 opacity-90 hover:opacity-100 transition-opacity focus:outline-none ${billingHeaderState.canOpenUsage ? 'cursor-help' : 'cursor-pointer'}`}
-                    title={billingHeaderState.title}
-                  >
-                  <span className="text-[#888] text-[12px] font-semibold tracking-[0.5px]">
-                    {billingHeaderState.modeLabel}
-                  </span>
-                  <div className="w-px h-[18px] bg-[#333]" />
-                  <span className={`font-semibold flex items-center justify-center ${billingHeaderState.needsAttention ? 'min-w-[52px] text-[10px] tracking-[0.12em] text-yellow-300' : 'min-w-[24px] text-[18px] text-white'}`}>
-                    {billingHeaderState.isLoading ? (
-                      <div className="w-[18px] h-[18px] border-[2.5px] border-white/20 border-t-white rounded-full animate-spin" title="Loading credits..."></div>
-                    ) : (
-                      billingHeaderState.valueLabel
-                    )}
-                  </span>
-                  </button>
+                  ›
+                </button>
+              </nav>
+            </div>
 
-                  {showCreditUsage && billingHeaderState.canOpenUsage && (
-                    <div className="absolute right-0 top-[calc(100%+12px)] z-[9999] w-[340px] rounded-xl border border-white/10 bg-[#111113] shadow-2xl shadow-black/60 p-3 text-left">
-                      <div className="flex items-start justify-between gap-4 border-b border-white/10 pb-2">
-                        <div>
-                          <div className="text-[10px] font-black uppercase tracking-[0.18em] text-blue-400">Hosted Usage</div>
-                          <div className="text-xs text-gray-400 mt-1">
-                            {creditUsageResetAt ? `Since reload: ${formatHostedUsageDate(creditUsageResetAt)}` : 'Current credit spend ledger'}
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <div className="text-[10px] text-gray-500 uppercase font-bold">{creditUsageResetAt ? 'Batch Spend' : 'Known Total'}</div>
-                          <div className="text-lg font-black text-white">{creditUsageTotal}</div>
+            {/* Right Settings & File Menu (Combined Unified Pill) */}
+            <div className="app-header-actions relative z-[1000] flex shrink-0 justify-end justify-self-end [style='-webkit-app-region:no-drag;']">
+              <FramedPanel className="scale-[0.80] origin-right lg:scale-90 pointer-events-auto shrink-0">
+              
+              {/* Credits Segment */}
+              <div
+                ref={creditUsagePopoverRef}
+                className="relative"
+                onMouseEnter={() => {
+                  if (billingHeaderState.canOpenUsage) setShowCreditUsage(true);
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (billingHeaderState.canOpenUsage) {
+                      setShowCreditUsage(prev => !prev);
+                    } else if (billingHeaderState.needsAttention) {
+                      setShowSettings(true);
+                    }
+                  }}
+                  className={`flex items-center gap-3 px-1 opacity-90 hover:opacity-100 transition-opacity focus:outline-none ${billingHeaderState.canOpenUsage ? 'cursor-help' : 'cursor-pointer'}`}
+                  title={billingHeaderState.title}
+                >
+                <span className="text-[#888] text-[12px] font-semibold tracking-[0.5px]">
+                  {billingHeaderState.modeLabel}
+                </span>
+                <div className="w-px h-[18px] bg-[#333]" />
+                <span className={`font-semibold flex items-center justify-center ${billingHeaderState.needsAttention ? 'min-w-[52px] text-[10px] tracking-[0.12em] text-yellow-300' : 'min-w-[24px] text-[18px] text-white'}`}>
+                  {billingHeaderState.isLoading ? (
+                    <div className="w-[18px] h-[18px] border-[2.5px] border-white/20 border-t-white rounded-full animate-spin" title="Loading credits..."></div>
+                  ) : (
+                    billingHeaderState.valueLabel
+                  )}
+                </span>
+                </button>
+
+                {showCreditUsage && billingHeaderState.canOpenUsage && (
+                  <div className="absolute right-0 top-[calc(100%+12px)] z-[9999] w-[340px] rounded-xl border border-white/10 bg-[#111113] shadow-2xl shadow-black/60 p-3 text-left">
+                    <div className="flex items-start justify-between gap-4 border-b border-white/10 pb-2">
+                      <div>
+                        <div className="text-[10px] font-black uppercase tracking-[0.18em] text-blue-400">Hosted Usage</div>
+                        <div className="text-xs text-gray-400 mt-1">
+                          {creditUsageResetAt ? `Since reload: ${formatHostedUsageDate(creditUsageResetAt)}` : 'Current credit spend ledger'}
                         </div>
                       </div>
+                      <div className="text-right">
+                        <div className="text-[10px] text-gray-500 uppercase font-bold">{creditUsageResetAt ? 'Batch Spend' : 'Known Total'}</div>
+                        <div className="text-lg font-black text-white">{creditUsageTotal}</div>
+                      </div>
+                    </div>
 
-                      {creditUsageWarning && !creditUsageLoading && !creditUsageError && (
-                        <div className="mt-2 rounded-lg border border-yellow-500/20 bg-yellow-500/10 px-3 py-2 text-[11px] leading-snug text-yellow-100">
-                          {creditUsageWarning}
+                    {creditUsageWarning && !creditUsageLoading && !creditUsageError && (
+                      <div className="mt-2 rounded-lg border border-yellow-500/20 bg-yellow-500/10 px-3 py-2 text-[11px] leading-snug text-yellow-100">
+                        {creditUsageWarning}
+                      </div>
+                    )}
+
+                    <div className="mt-2 max-h-[300px] overflow-y-auto pr-1 space-y-1">
+                      {creditUsageLoading ? (
+                        <div className="py-6 flex items-center justify-center">
+                          <div className="w-5 h-5 border-[2.5px] border-white/20 border-t-white rounded-full animate-spin" />
                         </div>
-                      )}
+                      ) : creditUsageError ? (
+                        <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-[11px] text-red-200">
+                          Usage history unavailable: {creditUsageError}
+                        </div>
+                      ) : creditUsageRows.length === 0 ? (
+                        <div className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-4 text-[11px] text-gray-400">
+                          {creditUsageResetAt ? 'No hosted generation charges since the last credit reload.' : 'No hosted generation charges found yet.'}
+                        </div>
+                      ) : (
+                        creditUsageRows.map((row) => {
+                          const credits = getHostedUsageCredits(row);
+                          const hasKnownCredits = credits > 0;
+                          const status = String(row.status || 'UNKNOWN').toUpperCase();
+                          const statusClass = status === 'COMPLETED'
+                            ? 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20'
+                            : status === 'FAILED' || status === 'CANCELED' || status === 'EXPIRED'
+                              ? 'text-red-300 bg-red-500/10 border-red-500/20'
+                              : 'text-yellow-300 bg-yellow-500/10 border-yellow-500/20';
 
-                      <div className="mt-2 max-h-[300px] overflow-y-auto pr-1 space-y-1">
-                        {creditUsageLoading ? (
-                          <div className="py-6 flex items-center justify-center">
-                            <div className="w-5 h-5 border-[2.5px] border-white/20 border-t-white rounded-full animate-spin" />
-                          </div>
-                        ) : creditUsageError ? (
-                          <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-[11px] text-red-200">
-                            Usage history unavailable: {creditUsageError}
-                          </div>
-                        ) : creditUsageRows.length === 0 ? (
-                          <div className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-4 text-[11px] text-gray-400">
-                            {creditUsageResetAt ? 'No hosted generation charges since the last credit reload.' : 'No hosted generation charges found yet.'}
-                          </div>
-                        ) : (
-                          creditUsageRows.map((row) => {
-                            const credits = getHostedUsageCredits(row);
-                            const hasKnownCredits = credits > 0;
-                            const status = String(row.status || 'UNKNOWN').toUpperCase();
-                            const statusClass = status === 'COMPLETED'
-                              ? 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20'
-                              : status === 'FAILED' || status === 'CANCELED' || status === 'EXPIRED'
-                                ? 'text-red-300 bg-red-500/10 border-red-500/20'
-                                : 'text-yellow-300 bg-yellow-500/10 border-yellow-500/20';
-
-                            return (
-                              <div key={row.id} className="rounded-lg bg-black/30 border border-white/5 px-3 py-2">
-                                <div className="flex items-start justify-between gap-3">
-                                  <div className="min-w-0">
-                                    <div className="text-xs font-bold text-gray-200 truncate">{formatHostedUsageKind(row)}</div>
-                                    <div className="text-[10px] text-gray-500 mt-0.5">{formatHostedUsageDate(row.created_at)}</div>
-                                  </div>
-                                  <div className="text-right shrink-0">
-                                    <div className="text-sm font-black text-white">{hasKnownCredits ? credits : '--'}</div>
-                                    <div className="text-[9px] uppercase text-gray-500">{hasKnownCredits ? 'credits' : 'cost n/a'}</div>
-                                  </div>
+                          return (
+                            <div key={row.id} className="rounded-lg bg-black/30 border border-white/5 px-3 py-2">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="text-xs font-bold text-gray-200 truncate">{formatHostedUsageKind(row)}</div>
+                                  <div className="text-[10px] text-gray-500 mt-0.5">{formatHostedUsageDate(row.created_at)}</div>
                                 </div>
-                                <div className="flex items-center justify-between gap-2 mt-2">
-                                  <span className={`text-[9px] uppercase font-black tracking-wider border rounded px-1.5 py-0.5 ${statusClass}`}>{status}</span>
-                                  <span className="text-[9px] text-gray-600 font-mono">{row.id.slice(0, 8)}</span>
+                                <div className="text-right shrink-0">
+                                  <div className="text-sm font-black text-white">{hasKnownCredits ? credits : '--'}</div>
+                                  <div className="text-[9px] uppercase text-gray-500">{hasKnownCredits ? 'credits' : 'cost n/a'}</div>
                                 </div>
                               </div>
-                            );
-                          })
-                        )}
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => void refreshHostedUsage()}
-                        className="mt-2 w-full rounded-lg border border-white/10 bg-white/[0.03] hover:bg-white/[0.06] text-[10px] font-bold uppercase tracking-wider text-gray-300 py-2 transition-colors"
-                      >
-                        Refresh Usage
-                      </button>
+                              <div className="flex items-center justify-between gap-2 mt-2">
+                                <span className={`text-[9px] uppercase font-black tracking-wider border rounded px-1.5 py-0.5 ${statusClass}`}>{status}</span>
+                                <span className="text-[9px] text-gray-600 font-mono">{row.id.slice(0, 8)}</span>
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
                     </div>
-                  )}
-                </div>
 
-                <div className="w-px h-[18px] bg-[#333] mx-3" />
+                    <button
+                      type="button"
+                      onClick={() => void refreshHostedUsage()}
+                      className="mt-2 w-full rounded-lg border border-white/10 bg-white/[0.03] hover:bg-white/[0.06] text-[10px] font-bold uppercase tracking-wider text-gray-300 py-2 transition-colors"
+                    >
+                      Refresh Usage
+                    </button>
+                  </div>
+                )}
+              </div>
 
-                {/* Navigation Segment */}
-                <div className="flex items-center gap-1.5 h-full">
-                  <FileMenu />
-                  
-                  <button
-                    onClick={() => {
-                      dispatch({ type: 'SET_HELP_SECTION', payload: 'start' });
-                      dispatch({ type: 'TOGGLE_HELP', payload: true });
-                    }}
-                    className="flex items-center justify-center w-8 h-8 rounded-md text-[#888] hover:text-white hover:bg-white/5 transition-colors focus:outline-none"
-                    title="Help & Guides"
-                  >
-                    <HelpCircle className="w-[18px] h-[18px] shrink-0" />
-                  </button>
-                  
-                  <button
-                    onClick={() => setShowSettings(true)}
-                    className="flex items-center justify-center w-8 h-8 rounded-md text-[#888] hover:text-white hover:bg-white/5 transition-colors focus:outline-none"
-                    title="Settings"
-                  >
-                    <Settings className="w-[18px] h-[18px] shrink-0" />
-                  </button>
-                </div>
+              <div className="w-px h-[18px] bg-[#333] mx-3" />
 
-              </FramedPanel>
-            </div>
+              {/* Navigation Segment */}
+              <div className="flex items-center gap-1.5 h-full">
+                <FileMenu />
+                
+                <button
+                  onClick={() => {
+                    dispatch({ type: 'SET_HELP_SECTION', payload: 'start' });
+                    dispatch({ type: 'TOGGLE_HELP', payload: true });
+                  }}
+                  className="flex items-center justify-center w-8 h-8 rounded-md text-[#888] hover:text-white hover:bg-white/5 transition-colors focus:outline-none"
+                  title="Help & Guides"
+                >
+                  <HelpCircle className="w-[18px] h-[18px] shrink-0" />
+                </button>
+                
+                <button
+                  onClick={() => setShowSettings(true)}
+                  className="flex items-center justify-center w-8 h-8 rounded-md text-[#888] hover:text-white hover:bg-white/5 transition-colors focus:outline-none"
+                  title="Settings"
+                >
+                  <Settings className="w-[18px] h-[18px] shrink-0" />
+                </button>
+              </div>
+
+            </FramedPanel>
           </div>
         </header>
 
@@ -1784,13 +1950,19 @@ const App = () => {
               </div>
             ) : (
               <>
-            {state.view === 'casting' && <CastingForge />}
-            {state.view === 'nano_cast' && <NanoCastingDirector />}
-            {state.view === 'portrait' && <PortraitStudio />}
-            {state.view === 'wardrobe' && <WardrobeStudio />}
-            {state.view === 'props' && <PropAccessoryStudio />}
-            {state.view === 'staging' && <SceneCanvas />}
-            {state.view === 'veo' && <VeoPromptStudio />}
+                <div hidden={state.view !== 'casting'} className="flex-1 min-h-0 w-full flex flex-col">
+                  <CastingForge />
+                </div>
+                {visitedViews.nano_cast && (
+                  <div hidden={state.view !== 'nano_cast'} className="flex-1 min-h-0 w-full flex flex-col">
+                    <NanoCastingDirector />
+                  </div>
+                )}
+                {state.view === 'portrait' && <PortraitStudio />}
+                {state.view === 'wardrobe' && <WardrobeStudio />}
+                {state.view === 'props' && <PropAccessoryStudio />}
+                {state.view === 'staging' && <SceneCanvas />}
+                {state.view === 'veo' && <VeoPromptStudio />}
               </>
             )}
           </main>

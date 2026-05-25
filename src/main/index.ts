@@ -525,6 +525,22 @@ app.whenReady().then(() => {
     });
   });
 
+  // Handle camera & media permissions
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+    if (permission === 'media') {
+      callback(true);
+    } else {
+      callback(false);
+    }
+  });
+
+  session.defaultSession.setPermissionCheckHandler((_webContents, permission, _requestingOrigin, _details) => {
+    if (permission === 'media') {
+      return true;
+    }
+    return false;
+  });
+
   registerWorkerIpcHandlers();
   registerAppCloseIpcHandlers();
   registerFileIpcHandlers();

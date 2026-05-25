@@ -46,7 +46,7 @@ export default function BodyScopeSelector({
  Body Scope (Required)
  </div>
 
- <div className="flex gap-6">
+ <div className="nano-body-scope-options flex gap-6">
  {OPTIONS.map(({ id, label, hint, Icon }) => {
  const selected = value === id;
  const locked = allowedScopes && !allowedScopes.includes(id);
@@ -73,7 +73,7 @@ export default function BodyScopeSelector({
  }
  }}
  className={`
- relative w-24 h-24 rounded-full border group
+ nano-body-scope-option relative rounded-full border group
  flex flex-col items-center justify-center gap-2
  transition-all duration-300 outline-none
  ${locked

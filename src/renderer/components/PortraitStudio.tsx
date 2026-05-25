@@ -468,6 +468,17 @@ export default function PortraitStudio() {
     const [isGenerating, setIsGenerating] = useState(false);
     const [isCompiling, setIsCompiling] = useState(false);
     const [isInspecting, setIsInspecting] = useState(false);
+    const [isAddingCast, setIsAddingCast] = useState(false);
+    const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+
+    useEffect(() => {
+        if (!toast) return;
+        const timer = setTimeout(() => {
+            setToast(null);
+        }, 2500);
+        return () => clearTimeout(timer);
+    }, [toast]);
+
     const [showActorSaveModal, setShowActorSaveModal] = useState(false);
     const [pendingActorSave, setPendingActorSave] = useState<{
         sourceUrl: string;
@@ -2574,99 +2585,130 @@ export default function PortraitStudio() {
             </div>
 
             {/* LIGHTBOX INSPECTOR */}
+            {/* LIGHTBOX INSPECTOR */}
             {isInspecting && generatedImage && (
                 <div
-                    className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-xl flex items-center justify-center p-8 animate-in fade-in duration-200"
+                    className={`inspect-large-overlay ${mode === "pitch_sheet" ? "inspect-large-overlay--pitch-sheet" : ""} animate-in fade-in duration-200`}
                     onClick={() => setIsInspecting(false)}
                 >
-                    <div className="relative w-full h-full flex items-center justify-center pointer-events-none">
+                    <div className="inspect-large-safe-stage">
                         <img
                             src={generatedImage}
                             alt={generatedOutputAlt}
-                            className="max-w-full max-h-[85vh] object-contain rounded-lg ring-1 ring-white/10 pointer-events-auto"
+                            className={`inspect-large-image ${mode === "pitch_sheet" ? "inspect-large-image--pitch-sheet" : ""}`}
                             onClick={(e) => e.stopPropagation()}
                         />
                     </div>
 
                     {/* Floating Action Bar */}
-                    <div className="fixed bottom-12 left-1/2 -translate-x-1/2 flex gap-4 z-[2001] bg-black/40 backdrop-blur-2xl border border-white/10 p-2 rounded-2xl " onClick={(e) => e.stopPropagation()}>
-                        <button
-                            onClick={() => {
-                                const newCast: CastMember = {
-                                    id: `cast-insp-${Date.now()}`,
-                                    url: generatedImage,
-                                    previewUrl: generatedImage,
-                                    sourceUrl: generatedImage,
-                                    tag: 'front',
-                                    name: activeLibraryName,
-                                    identityLock: isPitchSheetMode ? pitchSheetInput.identityLock : undefined,
-                                    profile: {
-                                        identity: isPitchSheetMode ? pitchSheetSubjectName : dna.identity.ethnicity,
-                                        wardrobe: isPitchSheetMode ? pitchSheetInput.wardrobeDirection : '',
-                                        accessories: isPitchSheetMode ? pitchSheetInput.propsSignatureItems : '',
-                                        style: isPitchSheetMode ? 'Character Pitch Sheet Preview' : 'Portrait',
-                                        ...(isPitchSheetMode
-                                            ? {
-                                                generationStatus: 'preview' as const,
-                                                featureSource: 'character_pitch_sheet' as const,
+                    <div className="inspect-large-actions-wrap" onClick={(e) => e.stopPropagation()}>
+                        {toast && (
+                            <div 
+                                className="inspect-large-action-message absolute bottom-[calc(100%+12px)] left-1/2"
+                                style={toast.type === 'error' ? { 
+                                    borderColor: 'rgba(239, 68, 68, 0.35)', 
+                                    boxShadow: '0 0 0 1px rgba(0, 0, 0, 0.65), 0 10px 26px rgba(0, 0, 0, 0.42), 0 0 22px rgba(239, 68, 68, 0.16)' 
+                                } : {}}
+                                onClick={(e) => e.stopPropagation()}
+                            >
+                                {toast.message}
+                            </div>
+                        )}
+                        <div className="inspect-large-actions flex gap-4 bg-black/40 backdrop-blur-2xl border border-white/10 p-2 rounded-2xl">
+                            <button
+                                onClick={async () => {
+                                    if (isAddingCast) return;
+                                    setIsAddingCast(true);
+                                    try {
+                                        const newCast: CastMember = {
+                                            id: `cast-insp-${Date.now()}`,
+                                            url: generatedImage,
+                                            previewUrl: generatedImage,
+                                            sourceUrl: generatedImage,
+                                            tag: 'front',
+                                            name: activeLibraryName,
+                                            identityLock: isPitchSheetMode ? pitchSheetInput.identityLock : undefined,
+                                            profile: {
+                                                identity: isPitchSheetMode ? pitchSheetSubjectName : dna.identity.ethnicity,
+                                                wardrobe: isPitchSheetMode ? pitchSheetInput.wardrobeDirection : '',
+                                                accessories: isPitchSheetMode ? pitchSheetInput.propsSignatureItems : '',
+                                                style: isPitchSheetMode ? 'Character Pitch Sheet Preview' : 'Portrait',
+                                                ...(isPitchSheetMode
+                                                    ? {
+                                                        generationStatus: 'preview' as const,
+                                                        featureSource: 'character_pitch_sheet' as const,
+                                                    }
+                                                    : {})
                                             }
-                                            : {})
+                                        };
+                                        dispatch({ type: 'ADD_CAST', payload: newCast });
+                                        dispatch({ type: 'ADD_LOG', payload: { message: "Added to Cast", type: 'success' } });
+                                        setToast({ message: "Added to Cast", type: 'success' });
+                                    } catch (err: unknown) {
+                                        setToast({ message: "Could not add to Cast", type: 'error' });
+                                    } finally {
+                                        setIsAddingCast(false);
                                     }
-                                };
-                                dispatch({ type: 'ADD_CAST', payload: newCast });
-                                dispatch({ type: 'ADD_LOG', payload: { message: "Added to Cast", type: 'success' } });
-                            }}
-                            className="w-14 h-14 bg-emerald-500/20 hover:bg-emerald-500 text-emerald-500 hover:text-white rounded-xl transition-all transform hover:scale-110 flex items-center justify-center border border-emerald-500/30"
-                            title="Add to Cast Assets"
-                        >
-                            <UserPlus className="w-6 h-6 stroke-[2.5]" />
-                        </button>
+                                }}
+                                disabled={isAddingCast}
+                                className={`w-14 h-14 bg-emerald-500/20 hover:bg-emerald-500 text-emerald-500 hover:text-white rounded-xl transition-all transform hover:scale-110 flex items-center justify-center border border-emerald-500/30 ${
+                                    isAddingCast ? 'opacity-60 cursor-not-allowed scale-95' : ''
+                                }`}
+                                title="Add to Cast Assets"
+                            >
+                                {isAddingCast ? (
+                                    <RefreshCw className="w-6 h-6 animate-spin stroke-[2.5]" />
+                                ) : (
+                                    <UserPlus className="w-6 h-6 stroke-[2.5]" />
+                                )}
+                            </button>
 
-                        <button
-                            onClick={() => {
-                                dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: generatedImage });
-                                dispatch({ type: 'SET_VIEW', payload: 'casting' });
-                                setIsInspecting(false);
-                                dispatch({ type: 'ADD_LOG', payload: { message: "Loaded into Forge", type: 'success' } });
-                            }}
-                            className="w-14 h-14 bg-blue-500/20 hover:bg-blue-500 text-blue-500 hover:text-white rounded-xl transition-all transform hover:scale-110 flex items-center justify-center border border-blue-500/30"
-                            title="Send to Casting Forge"
-                        >
-                            <Hammer className="w-6 h-6 stroke-[2.5]" />
-                        </button>
+                            <button
+                                onClick={() => {
+                                    dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: generatedImage });
+                                    dispatch({ type: 'SET_VIEW', payload: 'casting' });
+                                    setIsInspecting(false);
+                                    dispatch({ type: 'ADD_LOG', payload: { message: "Loaded into Forge", type: 'success' } });
+                                }}
+                                className="w-14 h-14 bg-blue-500/20 hover:bg-blue-500 text-blue-500 hover:text-white rounded-xl transition-all transform hover:scale-110 flex items-center justify-center border border-blue-500/30"
+                                title="Send to Casting Forge"
+                            >
+                                <Hammer className="w-6 h-6 stroke-[2.5]" />
+                            </button>
 
-                        {/* Export to Library (Inspector) */}
-                        <button
-                            onClick={() => openActorSaveModal(generatedImage!, activeLibraryName)}
-                            className="w-14 h-14 bg-blue-500/20 hover:bg-blue-500 text-blue-400 hover:text-white rounded-xl transition-all transform hover:scale-110 flex items-center justify-center border border-blue-500/30"
-                            title="Export to Library"
-                        >
-                            <FolderOutput className="w-6 h-6 stroke-[2.5]" />
-                        </button>
+                            {/* Export to Library (Inspector) */}
+                            <button
+                                onClick={() => openActorSaveModal(generatedImage!, activeLibraryName)}
+                                className="w-14 h-14 bg-blue-500/20 hover:bg-blue-500 text-blue-400 hover:text-white rounded-xl transition-all transform hover:scale-110 flex items-center justify-center border border-blue-500/30"
+                                title="Export to Library"
+                            >
+                                <FolderOutput className="w-6 h-6 stroke-[2.5]" />
+                            </button>
 
-                        <div className="w-px h-10 bg-white/10 my-auto mx-2" />
+                            <div className="w-px h-10 bg-white/10 my-auto mx-2" />
 
-                        <button
-                            onClick={() => {
-                                const link = document.createElement("a");
-                                link.href = generatedImage;
-                                link.download = createUniqueDownloadFilename(generatedOutputFilename);
-                                link.click();
-                                dispatch({ type: 'ADD_LOG', payload: { message: "Image Saved", type: 'success' } });
-                            }}
-                            className="w-14 h-14 bg-white/5 hover:bg-white/20 text-white rounded-xl transition-all transform hover:scale-110 flex items-center justify-center border border-white/10"
-                            title="Download Original"
-                        >
-                            <Download className="w-6 h-6 stroke-[2.5]" />
-                        </button>
+                            <button
+                                onClick={() => {
+                                    const link = document.createElement("a");
+                                    link.href = generatedImage;
+                                    link.download = createUniqueDownloadFilename(generatedOutputFilename);
+                                    link.click();
+                                    dispatch({ type: 'ADD_LOG', payload: { message: "Image Saved", type: 'success' } });
+                                }}
+                                className="w-14 h-14 bg-white/5 hover:bg-white/20 text-white rounded-xl transition-all transform hover:scale-110 flex items-center justify-center border border-white/10"
+                                title="Download Original"
+                            >
+                                <Download className="w-6 h-6 stroke-[2.5]" />
+                            </button>
 
-                        <button
-                            onClick={() => setIsInspecting(false)}
-                            className="w-14 h-14 bg-red-500/20 hover:bg-red-500 text-red-500 hover:text-white rounded-xl transition-all transform hover:scale-110 flex items-center justify-center border border-red-500/30"
-                            title="Close Inspector"
-                        >
-                            <X className="w-6 h-6 stroke-[3]" />
-                        </button>
+                            <button
+                                onClick={() => setIsInspecting(false)}
+                                className="w-14 h-14 bg-red-500/20 hover:bg-red-500 text-red-500 hover:text-white rounded-xl transition-all transform hover:scale-110 flex items-center justify-center border border-red-500/30"
+                                title="Close Inspector"
+                            >
+                                <X className="w-6 h-6 stroke-[3]" />
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}

@@ -17,6 +17,7 @@ import HelpTooltip from './ui/HelpTooltip';
 import InlineHint from './ui/InlineHint';
 import ActorSaveModal from './ActorSaveModal';
 import ConfirmDialog from './ui/ConfirmDialog';
+import { SmartCardImage } from './SmartCardImage';
 
 // Types are exported from AppContext
 import type { CastMember } from '../context/AppContext';
@@ -679,19 +680,17 @@ async function materializeDisplayUrl(url: string | null | undefined): Promise<st
 }
 
 const LibraryActorSkeleton = () => (
-  <div className="relative aspect-square rounded-xl overflow-hidden bg-black/40 border border-[#27272a]">
-    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent animate-shimmer" />
-    <div className="absolute inset-0 flex items-center justify-center">
-      <div className="w-8 h-8 rounded-lg bg-white/5 border border-white/10" />
-    </div>
-    <div className="absolute bottom-0 inset-x-0 h-8 bg-black/50 border-t border-white/5" />
+  <div className="actor-card-skeleton relative aspect-square !h-auto w-full">
+    <div className="actor-card-skeleton-shine" />
+    <div className="actor-card-skeleton-title !left-4 !bottom-10 !w-24 !h-3" />
+    <div className="actor-card-skeleton-line !left-4 !bottom-4 !w-32 !h-2" />
   </div>
 );
 
 const LibraryStudioSkeleton = () => (
-  <div className="relative h-48 w-full rounded-3xl overflow-hidden border border-white/10 bg-black/30">
-    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent animate-shimmer" />
-    <div className="absolute inset-0 bg-gradient-to-r from-black/40 via-black/15 to-transparent" />
+  <div className="actor-card-skeleton relative !h-48 w-full !rounded-3xl">
+    <div className="actor-card-skeleton-shine" />
+    <div className="absolute inset-0 bg-gradient-to-r from-black/50 via-black/20 to-transparent" />
     <div className="absolute left-6 bottom-6 right-6 space-y-3">
       <div className="h-6 w-40 rounded bg-white/10" />
       <div className="flex items-center gap-3">
@@ -3436,9 +3435,10 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
                                   : 'border-white/8 opacity-70 hover:opacity-100 hover:border-white/20'
                                 }`}
                             >
-                              <img
+                              <SmartCardImage
                                 src={style.img}
-                                className={`absolute inset-0 w-full h-full object-cover transition-all duration-500 group-hover/card:scale-105 ${active ? 'opacity-100' : 'opacity-78'
+                                alt={style.label}
+                                className={`absolute inset-0 transition-all duration-500 group-hover/card:scale-105 ${active ? 'opacity-100' : 'opacity-78'
                                   }`}
                               />
                               <div className={`absolute inset-0 transition-all duration-300 ${active
@@ -3728,7 +3728,11 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
                     <div key={folder.id} className="group relative h-48 w-full rounded-3xl overflow-hidden border border-white/10 transition-all hover:scale-[1.02] hover:border-white/30 cursor-pointer" onClick={() => withLibraryTransition(() => setActiveFolder(folder.id))}>
                       {/* Background Image */}
                       {activeImage ? (
-                        <img src={activeImage} className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
+                        <SmartCardImage
+                          src={activeImage}
+                          alt={folder.label}
+                          className="absolute inset-0 transition-transform duration-700 group-hover:scale-110"
+                        />
                       ) : (
                         <div className="absolute inset-0 bg-gradient-to-br from-gray-800 to-black flex items-center justify-center">
                           <HelpCircle className="w-12 h-12 text-white/20" />
@@ -3783,8 +3787,9 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
                   return (
                     <div key={actor.id} className="group relative aspect-square rounded-xl overflow-hidden bg-black/40 border border-[#27272a] hover:border-yellow-500/50 transition-all hover:">
                       {safeDisplayUrl ? (
-                        <img
+                        <SmartCardImage
                           src={safeDisplayUrl}
+                          alt={actor.name}
                           className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-500"
                         />
                       ) : (
@@ -3967,7 +3972,11 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
                       >
                         {/* Background Image */}
                         {activeImage ? (
-                          <img src={activeImage} className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-110 opacity-60 group-hover:opacity-100" />
+                          <SmartCardImage
+                            src={activeImage}
+                            alt={folder.label}
+                            className="absolute inset-0 transition-transform duration-700 group-hover:scale-110 opacity-60 group-hover:opacity-100"
+                          />
                         ) : (
                           <div className="absolute inset-0 bg-gradient-to-br from-gray-800 to-black flex items-center justify-center">
                             <HelpCircle className="w-8 h-8 text-white/20" />

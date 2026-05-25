@@ -5,7 +5,7 @@ import { FaceMesh } from '@mediapipe/face_mesh';
 import { Camera } from '@mediapipe/camera_utils';
 import {
     Scan, Target, User, Layers, Share2,
-    ChevronRight, RefreshCw, Cpu, Aperture, CheckCircle2, UserPlus, Upload, Sliders,
+    ChevronRight, RefreshCw, Cpu, CheckCircle2, UserPlus, Upload, Sliders,
     Swords, Zap, Shield, Ghost, Camera as CameraIcon, Ban, RotateCcw,
     EyeOff, Shirt, Sparkles, LayoutTemplate, Download, X, ChevronDown, Pencil,
     Trash2, Maximize, RefreshCcw, FolderPlus, AlertTriangle
@@ -22,6 +22,7 @@ import { createUniqueDownloadFilename } from '../utils/downloadFilenames';
 import HelpTooltip from './ui/HelpTooltip';
 import InlineHint from './ui/InlineHint';
 import ConfirmDialog from './ui/ConfirmDialog';
+import { SmartCardImage } from './SmartCardImage';
 import {
     PROMPT_PRIORITY_ORDER_BLOCK,
     PROMPT_PRIORITY_ORDER_LABEL,
@@ -806,11 +807,10 @@ const NanoRecentGenerationsGallery = ({
                                             title={generation.prompt || 'Nano Cast recent generation'}
                                             aria-label="Select Nano Cast recent generation"
                                         >
-                                            <img
+                                            <SmartCardImage
                                                 src={generation.displayUrl}
-                                                alt=""
+                                                alt={generation.prompt || ''}
                                                 className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-                                                loading="lazy"
                                             />
                                             <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/10 to-transparent opacity-80" />
                                             <div className="absolute left-2 top-2 flex items-center gap-1">
@@ -1068,6 +1068,45 @@ const NanoCastingDirector = () => {
     const { state, dispatch } = useAppContext();
     const nanoCastSession = state.nanoCastSession;
     const [phase, setPhase] = useState<Phase>(() => nanoCastSession.generatedCharacterUrl ? 5 : 1);
+
+    const phase3ScrollRef = useRef<HTMLDivElement | null>(null);
+    const bodyScopeRef = useRef<HTMLDivElement | null>(null);
+    const [attentionActive, setAttentionActive] = useState(false);
+
+    const scrollBodyScopeIntoViewIfNeeded = () => {
+        const scrollContainer = phase3ScrollRef.current;
+        const bodyScope = bodyScopeRef.current;
+
+        if (!scrollContainer || !bodyScope) return;
+
+        const hasScrollableContent =
+            scrollContainer.scrollHeight > scrollContainer.clientHeight + 8;
+
+        if (!hasScrollableContent) return;
+
+        const containerRect = scrollContainer.getBoundingClientRect();
+        const bodyRect = bodyScope.getBoundingClientRect();
+
+        const isBodyScopeVisible =
+            bodyRect.top >= containerRect.top + 24 &&
+            bodyRect.bottom <= containerRect.bottom - 24;
+
+        if (isBodyScopeVisible) return;
+
+        const prefersReducedMotion = window.matchMedia(
+            "(prefers-reduced-motion: reduce)"
+        ).matches;
+
+        bodyScope.scrollIntoView({
+            behavior: prefersReducedMotion ? "auto" : "smooth",
+            block: "center",
+        });
+
+        setAttentionActive(true);
+        setTimeout(() => {
+            setAttentionActive(false);
+        }, 1000);
+    };
 
     // --- WARDROBE LIBRARY HANDLERS ---
     const [confirmDelete, setConfirmDelete] = useState<WardrobeItem | null>(null);
@@ -5224,7 +5263,7 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                                             className={`aspect-square rounded-lg border overflow-hidden transition-all group relative cursor-pointer ${selectedWardrobeItem?.id === item.id ? 'border-2 ' : 'border-border hover:border-gray-600'}`}
                                                             style={selectedWardrobeItem?.id === item.id ? { borderColor: '#eab308', boxShadow: '0 0 20px rgba(234, 179, 8, 0.3)' } : {}}
                                                         >
-                                                            <img src={item.url} className="w-full h-full transition-transform group-hover:scale-110 object-cover" />
+                                                            <SmartCardImage src={item.url} alt={item.name || ''} className="w-full h-full transition-transform group-hover:scale-110 object-cover" />
                                                             <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
                                                                 <button
                                                                     onClick={(e) => {
@@ -5589,118 +5628,116 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                 initial={{ opacity: 0, x: 20 }}
                                 animate={{ opacity: 1, x: 0 }}
                                 exit={{ opacity: 0, x: -20 }}
-                                className="h-full flex flex-col items-center justify-center p-12"
+                                className="nano-phase-container"
                             >
-                                <div className="text-center mb-12">
-                                    <h2 className="text-4xl font-black text-fg uppercase tracking-tighter mb-4 flex justify-center items-center gap-4">
-                                        <Layers className="w-8 h-8 text-accent animate-bounce" />
-                                        Morphological Matrix
-                                    </h2>
-                                    <p className="text-muted uppercase tracking-widest text-sm max-w-2xl mx-auto">
-                                        Select physical substrate for neural projection mapping.
-                                    </p>
+                                <div className="nano-phase-scroll">
+                                    <div className="text-center mb-8">
+                                        <p className="text-muted uppercase tracking-widest text-xs font-semibold max-w-2xl mx-auto mb-6">
+                                            Select physical substrate for neural projection mapping.
+                                        </p>
 
-                                    {/* VARIANT SELECTOR */}
-                                    <div className="flex justify-center gap-4 mt-8">
-                                        {MORPH_VARIANTS.map((v) => (
-                                            <button
-                                                key={v.id}
-                                                onClick={() => setMorphVariant(v.id)}
-                                                className={`px-6 py-2 rounded-full text-xs font-bold uppercase tracking-widest transition-all ${morphVariant === v.id
-                                                    ? 'bg-yellow-500/10 text-yellow-500 border border-yellow-500 -[0_0_20px_rgba(234,179,8,0.4)] scale-105'
-                                                    : 'bg-surface border border-border text-muted hover:text-white hover:border-accent/50'
-                                                    }`}
-                                            >
-                                                {v.label}
-                                            </button>
-                                        ))}
+                                        {/* VARIANT SELECTOR */}
+                                        <div className="flex justify-center gap-4">
+                                            {MORPH_VARIANTS.map((v) => (
+                                                <button
+                                                    key={v.id}
+                                                    onClick={() => setMorphVariant(v.id)}
+                                                    className={`px-6 py-2 rounded-full text-xs font-bold uppercase tracking-widest transition-all ${morphVariant === v.id
+                                                        ? 'bg-yellow-500/10 text-yellow-500 border border-yellow-500 -[0_0_20px_rgba(234,179,8,0.4)] scale-105'
+                                                        : 'bg-surface border border-border text-muted hover:text-white hover:border-accent/50'
+                                                        }`}
+                                                >
+                                                    {v.label}
+                                                </button>
+                                            ))}
+                                        </div>
                                     </div>
-                                </div>
-                                <div className="grid grid-cols-2 lg:grid-cols-4 gap-6 w-full max-w-6xl">
-                                    {bodyArchetypes.map((type) => {
-                                        const Icon = type.icon;
-                                        // Scope cover by variant so 'titan' (masc) is different from 'titan' (fem)
-                                        const storageKey = `${morphVariant}_${type.id}`;
-                                        const customCover = customArchetypeCovers[storageKey];
-                                        const coverImage = customCover || type.defaultImage;
+                                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-6 w-full max-w-6xl mx-auto">
+                                        {bodyArchetypes.map((type) => {
+                                            const Icon = type.icon;
+                                            // Scope cover by variant so 'titan' (masc) is different from 'titan' (fem)
+                                            const storageKey = `${morphVariant}_${type.id}`;
+                                            const customCover = customArchetypeCovers[storageKey];
+                                            const coverImage = customCover || type.defaultImage;
 
-                                        return (
-                                            <div key={type.id} className="relative group h-96 w-full rounded-2xl overflow-hidden border border-white/10 transition-all hover:scale-[1.02] hover:border-white/30 cursor-pointer" onClick={() => setSelectedBody(type.id)}>
-                                                {/* Hidden File Input for Editing */}
-                                                <input
-                                                    type="file"
-                                                    id={`upload-${type.id}`}
-                                                    className="hidden"
-                                                    accept="image/*"
-                                                    onClick={(e) => { (e.target as HTMLInputElement).value = ''; e.stopPropagation(); }} // Reset value for re-upload + prevent card selection
-                                                    onChange={(e) => {
-                                                        const file = e.target.files?.[0];
-                                                        if (file) handleArchetypeCoverUpload(storageKey, file);
-                                                    }}
-                                                />
+                                            return (
+                                                <div key={type.id} className="relative group nano-morph-card rounded-2xl overflow-hidden border border-white/10 transition-all hover:scale-[1.02] hover:border-white/30 cursor-pointer" onClick={() => setSelectedBody(type.id)}>
+                                                    {/* Hidden File Input for Editing */}
+                                                    <input
+                                                        type="file"
+                                                        id={`upload-${type.id}`}
+                                                        className="hidden"
+                                                        accept="image/*"
+                                                        onClick={(e) => { (e.target as HTMLInputElement).value = ''; e.stopPropagation(); }} // Reset value for re-upload + prevent card selection
+                                                        onChange={(e) => {
+                                                            const file = e.target.files?.[0];
+                                                            if (file) handleArchetypeCoverUpload(storageKey, file);
+                                                        }}
+                                                    />
 
-                                                {/* Edit Button (Top Right) */}
-                                                <div className="absolute top-3 right-3 z-30 flex gap-2 opacity-0 group-hover:opacity-100 transition-all">
-                                                    {/* Reset Button (Only if custom cover exists) */}
-                                                    {customCover && (
-                                                        <button
-                                                            className="p-2 bg-red-500/80 hover:bg-red-600 text-white rounded-full border border-white/10 "
-                                                            onClick={(e) => handleArchetypeCoverDelete(storageKey, e)}
-                                                            title="Reset to Default"
+                                                    {/* Edit Button (Top Right) */}
+                                                    <div className="absolute top-3 right-3 z-30 flex gap-2 opacity-0 group-hover:opacity-100 transition-all">
+                                                        {/* Reset Button (Only if custom cover exists) */}
+                                                        {customCover && (
+                                                            <button
+                                                                className="p-2 bg-red-500/80 hover:bg-red-600 text-white rounded-full border border-white/10 "
+                                                                onClick={(e) => handleArchetypeCoverDelete(storageKey, e)}
+                                                                title="Reset to Default"
+                                                            >
+                                                                <X className="w-3 h-3" />
+                                                            </button>
+                                                        )}
+
+                                                        {/* Upload Button */}
+                                                        <label
+                                                            htmlFor={`upload-${type.id}`}
+                                                            className="p-2 bg-black/60 hover:bg-black/90 text-white/50 hover:text-white rounded-full border border-white/10 hover:border-white/30 cursor-pointer"
+                                                            onClick={(e) => e.stopPropagation()}
+                                                            title="Change Cover Image"
                                                         >
-                                                            <X className="w-3 h-3" />
-                                                        </button>
+                                                            <Pencil className="w-3 h-3" />
+                                                        </label>
+                                                    </div>
+
+                                                    {/* Background Image */}
+                                                    {coverImage ? (
+                                                        <SmartCardImage src={coverImage} alt={type.name} className="absolute inset-0 transition-transform duration-700 group-hover:scale-110" />
+                                                    ) : (
+                                                        <div className={`absolute inset-0 bg-gradient-to-br transition-all duration-300 ${selectedBody === type.id ? 'from-gray-800 to-black' : 'from-gray-900 to-black'}`}>
+                                                            {/* Fallback pattern if no image */}
+                                                            <div className="absolute inset-0 opacity-10"
+                                                                style={{ backgroundImage: 'radial-gradient(circle at center, white 1px, transparent 1px)', backgroundSize: '20px 20px' }}>
+                                                            </div>
+                                                        </div>
                                                     )}
 
-                                                    {/* Upload Button */}
-                                                    <label
-                                                        htmlFor={`upload-${type.id}`}
-                                                        className="p-2 bg-black/60 hover:bg-black/90 text-white/50 hover:text-white rounded-full border border-white/10 hover:border-white/30 cursor-pointer"
-                                                        onClick={(e) => e.stopPropagation()}
-                                                        title="Change Cover Image"
-                                                    >
-                                                        <Pencil className="w-3 h-3" />
-                                                    </label>
-                                                </div>
+                                                    {/* Selection Border Overlay */}
+                                                    {selectedBody === type.id && (
+                                                        <div className="absolute inset-0 border-2 border-accent z-20 pointer-events-none rounded-2xl -[inset_0_0_30px_rgba(250,204,21,0.2)]"></div>
+                                                    )}
 
-                                                {/* Background Image */}
-                                                {coverImage ? (
-                                                    <img src={coverImage} className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
-                                                ) : (
-                                                    <div className={`absolute inset-0 bg-gradient-to-br transition-all duration-300 ${selectedBody === type.id ? 'from-gray-800 to-black' : 'from-gray-900 to-black'}`}>
-                                                        {/* Fallback pattern if no image */}
-                                                        <div className="absolute inset-0 opacity-10"
-                                                            style={{ backgroundImage: 'radial-gradient(circle at center, white 1px, transparent 1px)', backgroundSize: '20px 20px' }}>
+                                                    {/* Cinematic Filter Overlay */}
+                                                    <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent z-10 flex flex-col justify-end px-6 pb-6">
+                                                        <div>
+                                                            <div className="flex items-center gap-2 mb-1">
+                                                                {/* Small Icon next to title */}
+                                                                <Icon className={`w-4 h-4 ${selectedBody === type.id ? 'text-accent' : 'text-white/70'}`} />
+                                                                <span className="text-[9px] font-mono text-white/50 uppercase tracking-widest">{type.id} CLASS</span>
+                                                            </div>
+                                                            <h3 className={`text-2xl font-black italic tracking-tighter uppercase transition-colors leading-none ${selectedBody === type.id ? 'text-yellow-500' : 'text-white group-hover:text-yellow-500'}`}>
+                                                                {type.name}
+                                                            </h3>
+                                                            <p className="text-xs text-gray-400 mt-2 line-clamp-2 leading-relaxed opacity-80 group-hover:opacity-100 transition-opacity">
+                                                                {type.desc}
+                                                            </p>
                                                         </div>
                                                     </div>
-                                                )}
-
-                                                {/* Selection Border Overlay */}
-                                                {selectedBody === type.id && (
-                                                    <div className="absolute inset-0 border-2 border-accent z-20 pointer-events-none rounded-2xl -[inset_0_0_30px_rgba(250,204,21,0.2)]"></div>
-                                                )}
-
-                                                {/* Cinematic Filter Overlay */}
-                                                <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent z-10 flex flex-col justify-end px-6 pb-6">
-                                                    <div>
-                                                        <div className="flex items-center gap-2 mb-1">
-                                                            {/* Small Icon next to title */}
-                                                            <Icon className={`w-4 h-4 ${selectedBody === type.id ? 'text-accent' : 'text-white/70'}`} />
-                                                            <span className="text-[9px] font-mono text-white/50 uppercase tracking-widest">{type.id} CLASS</span>
-                                                        </div>
-                                                        <h3 className={`text-2xl font-black italic tracking-tighter uppercase transition-colors leading-none ${selectedBody === type.id ? 'text-yellow-500' : 'text-white group-hover:text-yellow-500'}`}>
-                                                            {type.name}
-                                                        </h3>
-                                                        <p className="text-xs text-gray-400 mt-2 line-clamp-2 leading-relaxed opacity-80 group-hover:opacity-100 transition-opacity">
-                                                            {type.desc}
-                                                        </p>
-                                                    </div>
                                                 </div>
-                                            </div>
-                                        );
-                                    })}
+                                            );
+                                        })}
+                                    </div>
                                 </div>
-                                <div className="mt-16 flex justify-between w-full max-w-6xl">
+                                <div className="nano-phase-footer">
                                     <button onClick={() => setPhase(1)} className="text-muted hover:text-fg text-xs font-bold uppercase tracking-widest flex items-center gap-2">
                                         &larr; Return to Scan
                                     </button>
@@ -5725,152 +5762,158 @@ NANOCAST HYBRID DUPLICATE PROFILE CORRECTION PASS:
                                 initial={{ opacity: 0, y: 20 }}
                                 animate={{ opacity: 1, y: 0 }}
                                 exit={{ opacity: 0, y: -20 }}
-                                className="h-full flex flex-col items-center justify-center p-12"
+                                className="nano-phase-container nano-style-phase"
                             >
-                                <div className="text-center mb-12">
-                                    <h2 className="text-4xl font-black text-fg uppercase tracking-tighter mb-4 flex justify-center items-center gap-4">
-                                        <Aperture className="w-8 h-8 text-accent animate-spin-slow" />
-                                        Style Synthesis Engine
-                                    </h2>
-                                    <p className="text-muted uppercase tracking-widest text-sm max-w-2xl mx-auto">
-                                        Select rendering protocol for universe instantiation.
-                                    </p>
-                                </div>
-                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 w-full max-w-5xl">
-                                    {Object.values(styleMatrix).map((style) => {
-                                        const normalizedId = normalizeStyleId(style.id);
-                                        const isSelected = selectedStyle === normalizedId;
-                                        return (
-                                            <div
-                                                key={style.id}
-                                                onClick={() => {
-                                                    const normalizedId = normalizeStyleId(style.id);
+                                <div ref={phase3ScrollRef} className="nano-phase-scroll">
+                                    <div className="text-center mb-8">
+                                        <p className="text-muted uppercase tracking-widest text-xs font-semibold max-w-2xl mx-auto">
+                                            Select rendering protocol for universe instantiation.
+                                        </p>
+                                    </div>
+                                    <div className="nano-style-grid">
+                                        {Object.values(styleMatrix).map((style) => {
+                                            const normalizedId = normalizeStyleId(style.id);
+                                            const isSelected = selectedStyle === normalizedId;
+                                            return (
+                                                <div
+                                                    key={style.id}
+                                                    onClick={() => {
+                                                        const normalizedId = normalizeStyleId(style.id);
 
-                                                    const previousStyle = selectedStyle ? normalizeStyleId(selectedStyle) : "";
-                                                    const nextStyle = normalizeStyleId(normalizedId);
-                                                    const isChangingStyle = previousStyle !== nextStyle;
+                                                        const previousStyle = selectedStyle ? normalizeStyleId(selectedStyle) : "";
+                                                        const nextStyle = normalizeStyleId(normalizedId);
+                                                        const isChangingStyle = previousStyle !== nextStyle;
 
-                                                    if (isChangingStyle) {
-                                                        setCurrentResultStyleId(null);
-                                                         setCurrentGenerationSettingsSnapshot(null);
-                                                         applyFinalCharacterUrl(null, true);
+                                                        if (isChangingStyle) {
+                                                            setCurrentResultStyleId(null);
+                                                             setCurrentGenerationSettingsSnapshot(null);
+                                                             applyFinalCharacterUrl(null, true);
 
-                                                         dispatch({
-                                                             type: 'SET_NANO_CAST_SESSION_METADATA',
-                                                             payload: {
-                                                                 generatedCharacterApprovedForPitchSheet: false,
-                                                                 approvedPitchSheetSourceUrl: null,
-                                                                 approvedNanoCastStyle: null,
-                                                                 approvedPitchSheetRenderStyle: null
-                                                             }
-                                                         });
+                                                             dispatch({
+                                                                 type: 'SET_NANO_CAST_SESSION_METADATA',
+                                                                 payload: {
+                                                                     generatedCharacterApprovedForPitchSheet: false,
+                                                                     approvedPitchSheetSourceUrl: null,
+                                                                     approvedNanoCastStyle: null,
+                                                                     approvedPitchSheetRenderStyle: null
+                                                                 }
+                                                             });
 
-                                                        if (import.meta.env.DEV) {
-                                                            console.info("[NanoCast] Style changed; cleared generated-result state", {
-                                                                previousStyle,
-                                                                nextStyle
-                                                            });
+                                                            if (import.meta.env.DEV) {
+                                                                console.info("[NanoCast] Style changed; cleared generated-result state", {
+                                                                    previousStyle,
+                                                                    nextStyle
+                                                                });
+                                                            }
                                                         }
-                                                    }
 
-                                                    setSelectedStyle(normalizedId);
+                                                        setSelectedStyle(normalizedId);
 
-                                                    // Immediately set default scope to prevent null-state flicker/jump
-                                                    const rules = STYLE_SCOPE_RULES[normalizedId] || STYLE_SCOPE_RULES.default;
-                                                    setBodyScope(rules.default);
+                                                        // Immediately set default scope to prevent null-state flicker/jump
+                                                        const rules = STYLE_SCOPE_RULES[normalizedId] || STYLE_SCOPE_RULES.default;
+                                                        setBodyScope(rules.default);
 
-                                                    // AUTO-SETTINGS for Exact Likeness
-                                                    if (normalizedId === 'exact_studio') {
-                                                        setDirectorControls(prev => ({
-                                                            ...prev,
-                                                            identityStrength: 100,
-                                                            stylization: 0
-                                                        }));
-                                                        showToast("Exact Likeness: Auto-locked Identity to 100%");
-                                                    }
-                                                }}
-                                                className={`group relative h-56 border rounded-xl transition-all duration-300 overflow-hidden flex flex-col justify-end cursor-pointer ${isSelected
-                                                    ? 'bg-surface border-blue-500 -[0_0_20px_rgba(59,130,246,0.3)] scale-[1.02] z-10'
-                                                    : 'bg-surface border-border hover:border-accent hover: hover:scale-[1.01]'
-                                                    }`}
-                                            >
-                                                {/* Background Image */}
-                                                <img
-                                                    src={style.image}
-                                                    className={`absolute inset-0 w-full h-full object-cover transition-transform duration-700 ${isSelected ? 'scale-110' : 'group-hover:scale-105'}`}
-                                                />
+                                                        // AUTO-SETTINGS for Exact Likeness
+                                                        if (normalizedId === 'exact_studio') {
+                                                            setDirectorControls(prev => ({
+                                                                ...prev,
+                                                                identityStrength: 100,
+                                                                stylization: 0
+                                                            }));
+                                                            showToast("Exact Likeness: Auto-locked Identity to 100%");
+                                                        }
 
-                                                {/* Selection Border Overlay */}
-                                                {isSelected && (
-                                                    <div className="absolute inset-0 border-2 border-blue-500 z-20 pointer-events-none rounded-xl -[inset_0_0_30px_rgba(59,130,246,0.2)]"></div>
-                                                )}
+                                                        // Auto-scroll to Body Scope
+                                                        requestAnimationFrame(() => {
+                                                            requestAnimationFrame(() => {
+                                                                scrollBodyScopeIntoViewIfNeeded();
+                                                            });
+                                                        });
+                                                    }}
+                                                    className={`group relative nano-style-card border rounded-xl transition-all duration-300 overflow-hidden flex flex-col justify-end cursor-pointer ${isSelected
+                                                        ? 'bg-surface border-blue-500 -[0_0_20px_rgba(59,130,246,0.3)] scale-[1.02] z-10'
+                                                        : 'bg-surface border-border hover:border-accent hover: hover:scale-[1.01]'
+                                                        }`}
+                                                >
+                                                    {/* Background Image */}
+                                                    <SmartCardImage
+                                                        src={style.image}
+                                                        alt={style.label}
+                                                        className={`absolute inset-0 transition-transform duration-700 ${isSelected ? 'scale-110' : 'group-hover:scale-105'}`}
+                                                    />
 
-                                                {/* Cinematic Filter Overlay */}
-                                                <div className={`absolute inset-0 z-10 flex flex-col justify-end px-6 pb-2.5 transition-all duration-300 ${isSelected
-                                                    ? 'bg-gradient-to-t from-black/90 via-black/20 to-transparent'
-                                                    : 'bg-gradient-to-t from-black/90 via-black/30 to-transparent group-hover:via-black/20'
-                                                    }`}>
-                                                    <div className="transform transition-transform duration-300 group-hover:-translate-y-1">
-                                                        <div className="flex items-center gap-2 mb-1">
-                                                            <Target className={`w-3 h-3 ${isSelected ? 'text-blue-400' : 'text-white/70'}`} />
-                                                            <span className="text-[9px] font-mono text-white/50 uppercase tracking-widest">PROTOCOL</span>
-                                                        </div>
-                                                        <div className="flex justify-between items-end mb-1">
-                                                            <h3 className={`text-lg font-black italic tracking-tighter uppercase transition-colors leading-none ${isSelected ? 'text-blue-400' : 'text-white group-hover:text-blue-400'}`}>
-                                                                {style.label}
-                                                            </h3>
-                                                        </div>
-                                                        <p className={`text-[10px] font-medium leading-tight line-clamp-2 mb-2 ${isSelected ? 'text-blue-100/80' : 'text-gray-300/80'}`}>
-                                                            {style.keywords.split(',').slice(0, 4).join(', ')}...
-                                                        </p>
+                                                    {/* Selection Border Overlay */}
+                                                    {isSelected && (
+                                                        <div className="absolute inset-0 border-2 border-blue-500 z-20 pointer-events-none rounded-xl -[inset_0_0_30px_rgba(59,130,246,0.2)]"></div>
+                                                    )}
 
-                                                        {/* Tech Specs Micro-UI */}
-                                                        <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                            <div className="px-1.5 py-0.5 bg-black/50 backdrop-blur-md rounded text-[7px] font-mono text-white/70 border border-white/10 uppercase tracking-wider">
-                                                                8K RES
+                                                    {/* Cinematic Filter Overlay */}
+                                                    <div className={`absolute inset-0 z-10 flex flex-col justify-end px-6 pb-2.5 transition-all duration-300 ${isSelected
+                                                        ? 'bg-gradient-to-t from-black/90 via-black/20 to-transparent'
+                                                        : 'bg-gradient-to-t from-black/90 via-black/30 to-transparent group-hover:via-black/20'
+                                                        }`}>
+                                                        <div className="transform transition-transform duration-300 group-hover:-translate-y-1">
+                                                            <div className="flex items-center gap-2 mb-1">
+                                                                <Target className={`w-3 h-3 ${isSelected ? 'text-blue-400' : 'text-white/70'}`} />
+                                                                <span className="text-[9px] font-mono text-white/50 uppercase tracking-widest">PROTOCOL</span>
                                                             </div>
-                                                            <div className="px-1.5 py-0.5 bg-black/50 backdrop-blur-md rounded text-[7px] font-mono text-white/70 border border-white/10 uppercase tracking-wider">
-                                                                AUTO-LIGHT
+                                                            <div className="flex justify-between items-end mb-1">
+                                                                <h3 className={`text-lg font-black italic tracking-tighter uppercase transition-colors leading-none ${isSelected ? 'text-blue-400' : 'text-white group-hover:text-blue-400'}`}>
+                                                                    {style.label}
+                                                                </h3>
+                                                            </div>
+                                                            <p className={`text-[10px] font-medium leading-tight line-clamp-2 mb-2 ${isSelected ? 'text-blue-100/80' : 'text-gray-300/80'}`}>
+                                                                {style.keywords.split(',').slice(0, 4).join(', ')}...
+                                                            </p>
+
+                                                            {/* Tech Specs Micro-UI */}
+                                                            <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                                <div className="px-1.5 py-0.5 bg-black/50 backdrop-blur-md rounded text-[7px] font-mono text-white/70 border border-white/10 uppercase tracking-wider">
+                                                                    8K RES
+                                                                </div>
+                                                                <div className="px-1.5 py-0.5 bg-black/50 backdrop-blur-md rounded text-[7px] font-mono text-white/70 border border-white/10 uppercase tracking-wider">
+                                                                    AUTO-LIGHT
+                                                                </div>
                                                             </div>
                                                         </div>
                                                     </div>
                                                 </div>
-                                            </div>
-                                        );
-                                    })}
+                                            );
+                                        })}
+                                    </div>
+                                    <div ref={bodyScopeRef} className="nano-body-scope-section" data-attention={attentionActive ? "true" : "false"}>
+                                        <AnimatePresence mode="wait">
+                                            {selectedStyle && (
+                                                <motion.div
+                                                    key="body-scope"
+                                                    initial={{ opacity: 0, y: -8 }}
+                                                    animate={{ opacity: 1, y: 0 }}
+                                                    exit={{ opacity: 0, y: -8 }}
+                                                    transition={{ duration: 0.2, ease: 'easeOut' }}
+                                                    className="flex flex-col items-center gap-6"
+                                                >
+                                                    <BodyScopeSelector
+                                                        value={bodyScope}
+                                                        onChange={setBodyScope}
+                                                        allowedScopes={STYLE_SCOPE_RULES[selectedStyle]?.allowed ?? STYLE_SCOPE_RULES.default.allowed}
+                                                        defaultScope={STYLE_SCOPE_RULES[selectedStyle]?.default ?? STYLE_SCOPE_RULES.default.default}
+                                                    />
+                                                    <div className={`h-6 text-[9px] text-muted flex items-center gap-2 transition-all duration-300 ${bodyScope ? 'opacity-100' : 'opacity-0'}`}>
+                                                        {bodyScope ? (
+                                                            <>
+                                                                <span className={`w-1.5 h-1.5 rounded-full ${SCOPE_COST[bodyScope].gpu === 'low' ? 'bg-emerald-500' : SCOPE_COST[bodyScope].gpu === 'medium' ? 'bg-yellow-500' : 'bg-red-500'}`}></span>
+                                                                <span className="uppercase tracking-widest">{SCOPE_COST[bodyScope].gpu} COMPUTE: {SCOPE_COST[bodyScope].note}</span>
+                                                            </>
+                                                        ) : (
+                                                            <span className="uppercase tracking-widest text-transparent">Computing...</span>
+                                                        )}
+                                                    </div>
+                                                </motion.div>
+                                            )}
+                                        </AnimatePresence>
+                                    </div>
                                 </div>
-                                <div className="mt-6 w-full max-w-5xl flex justify-center min-h-[140px]">
-                                    <AnimatePresence mode="wait">
-                                        {selectedStyle && (
-                                            <motion.div
-                                                key="body-scope"
-                                                initial={{ opacity: 0, y: -8 }}
-                                                animate={{ opacity: 1, y: 0 }}
-                                                exit={{ opacity: 0, y: -8 }}
-                                                transition={{ duration: 0.2, ease: 'easeOut' }}
-                                                className="flex flex-col items-center gap-6"
-                                            >
-                                                <BodyScopeSelector
-                                                    value={bodyScope}
-                                                    onChange={setBodyScope}
-                                                    allowedScopes={STYLE_SCOPE_RULES[selectedStyle]?.allowed ?? STYLE_SCOPE_RULES.default.allowed}
-                                                    defaultScope={STYLE_SCOPE_RULES[selectedStyle]?.default ?? STYLE_SCOPE_RULES.default.default}
-                                                />
-                                                <div className={`h-6 text-[9px] text-muted flex items-center gap-2 transition-all duration-300 ${bodyScope ? 'opacity-100' : 'opacity-0'}`}>
-                                                    {bodyScope ? (
-                                                        <>
-                                                            <span className={`w-1.5 h-1.5 rounded-full ${SCOPE_COST[bodyScope].gpu === 'low' ? 'bg-emerald-500' : SCOPE_COST[bodyScope].gpu === 'medium' ? 'bg-yellow-500' : 'bg-red-500'}`}></span>
-                                                            <span className="uppercase tracking-widest">{SCOPE_COST[bodyScope].gpu} COMPUTE: {SCOPE_COST[bodyScope].note}</span>
-                                                        </>
-                                                    ) : (
-                                                        <span className="uppercase tracking-widest text-transparent">Computing...</span>
-                                                    )}
-                                                </div>
-                                            </motion.div>
-                                        )}
-                                    </AnimatePresence>
-                                </div>
-                                <div className="mt-16 flex justify-between w-full max-w-5xl">
+                                <div className="nano-phase-footer">
                                     <button onClick={() => setPhase(2)} className="text-muted hover:text-fg text-xs font-bold uppercase tracking-widest flex items-center gap-2">
                                         &larr; Return to Body
                                     </button>

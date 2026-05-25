@@ -33,7 +33,6 @@ import { SidebarPanel } from './ui/SidebarPanel';
 import { useAppContext, getShotsActorOptionsForScene } from '../context/AppContext';
 import type {
     Action,
-    DirectorAspectRatio,
     ReferenceSlot,
     RegionEditLayer,
     RegionEditState,
@@ -74,6 +73,7 @@ import { sanitizeStyleForStrictIdentity } from '../utils/analysisSanitizers';
 import { LibraryAssetMaterializer } from '../services/LibraryAssetMaterializer';
 import { useProductionExports } from '../hooks/useProductionExports';
 import { useAdvancedRender } from '../hooks/useAdvancedRender';
+import { useStableElementSize } from '../hooks/useStableElementSize';
 import { buildPlacementIntentsFromAnnotations, buildAnchorSurfaceFromZone, buildAllowanceMaskFromAnchor, buildForegroundProtectMaskFromDepth } from '../utils/spatialHelpers';
 import { NANO_BANANA_2_IMAGE_MODEL } from '../constants/generationModels';
 import { createUniqueDownloadFilename } from '../utils/downloadFilenames';
@@ -323,26 +323,85 @@ Preserve all unmasked areas of Image A exactly.
 Layer instruction: ${instruction}
 `;
 
-// B. Scene Blocking Component
+function fitToAspect(
+  containerWidth: number,
+  containerHeight: number,
+  aspectRatio: number,
+  padding = 24
+) {
+  const availableWidth = Math.max(0, containerWidth - padding * 2);
+  const availableHeight = Math.max(0, containerHeight - padding * 2);
+
+  let width = availableWidth;
+  let height = width / aspectRatio;
+
+  if (height > availableHeight) {
+    height = availableHeight;
+    width = height * aspectRatio;
+  }
+
+  return {
+    width: Math.floor(width),
+    height: Math.floor(height),
+  };
+}
 
 const SceneCanvas = () => {
 
 
 
     const { state, dispatch } = useAppContext();
-    const stageRef = useRef<HTMLDivElement>(null);
+    const { ref: stageViewportRef, size: stageViewportSize } = useStableElementSize<HTMLDivElement>();
+    const stageRef = stageViewportRef;
     const viewportRef = useRef<HTMLDivElement>(null);
     const centerPaneRef = useRef<HTMLDivElement>(null);
 
     // Camera Gate: an inner viewport that always matches the selected aspect ratio.
     const [centerPaneWidth, setCenterPaneWidth] = useState(0);
-    // All staging (tokens, notes, masks) must live inside this gate to guarantee WYSIWYG export.
-    const [viewportBox, setViewportBox] = useState<{ x: number; y: number; w: number; h: number }>({
-        x: 0,
-        y: 0,
-        w: 1,
-        h: 1
-    });
+
+    const selectedAspectRatio = useMemo(() => {
+        const raw = String(state.director.aspectRatio || '16:9');
+        const parts = raw.split(':').map((p) => Number(p));
+        if (parts.length === 2 && Number.isFinite(parts[0]) && Number.isFinite(parts[1]) && parts[1] !== 0) {
+            return parts[0] / parts[1];
+        }
+        return 16 / 9;
+    }, [state.director.aspectRatio]);
+
+    const previewSize = useMemo(() => {
+        return fitToAspect(
+            stageViewportSize.width,
+            stageViewportSize.height,
+            selectedAspectRatio,
+            24
+        );
+    }, [stageViewportSize.width, stageViewportSize.height, selectedAspectRatio]);
+
+    const viewportBox = useMemo(() => {
+        const cw = stageViewportSize.width || 1;
+        const ch = stageViewportSize.height || 1;
+        const w = previewSize.width || 1;
+        const h = previewSize.height || 1;
+        const x = Math.floor((cw - w) / 2);
+        const y = Math.floor((ch - h) / 2);
+        return { x, y, w, h };
+    }, [stageViewportSize.width, stageViewportSize.height, previewSize]);
+
+    useEffect(() => {
+        if (!import.meta.env.DEV) return;
+
+        console.log("[STAGE LAYOUT]", {
+            viewportWidth: stageViewportSize.width,
+            viewportHeight: stageViewportSize.height,
+            previewWidth: previewSize.width,
+            previewHeight: previewSize.height,
+        });
+    }, [
+        stageViewportSize.width,
+        stageViewportSize.height,
+        previewSize.width,
+        previewSize.height,
+    ]);
 
     // --- MANUAL DOWNLOADS ---
     const downloadStageImage = async () => {
@@ -384,24 +443,6 @@ const SceneCanvas = () => {
         }
     };
 
-    const downloadDepthMap = () => {
-        if (!state.depthMapUrl) {
-            if (import.meta.env.DEV) {
-                dispatch({ type: 'ADD_LOG', payload: { message: 'No internal spatial hint available to capture.', type: 'error' } });
-            }
-            return;
-        }
-        if (import.meta.env.DEV) {
-            dispatch({ type: 'ADD_LOG', payload: { message: 'Capturing internal spatial hint...', type: 'info' } });
-        }
-        const depthLink = document.createElement('a');
-        depthLink.href = state.depthMapUrl;
-        depthLink.download = createUniqueDownloadFilename('NB_Internal_Spatial_Hint.png');
-        depthLink.click();
-        if (import.meta.env.DEV) {
-            dispatch({ type: 'ADD_LOG', payload: { message: 'Internal spatial hint captured successfully.', type: 'success' } });
-        }
-    };
 
     const ensureStagingAiAccess = useCallback(async (featureLabel: string): Promise<boolean> => {
         const billingMode = state.billingEntitlements?.effectiveBillingMode || state.billingMode;
@@ -1062,6 +1103,9 @@ Output: environment plate only.
     const lastGroundingKeyRef = useRef<string>('');
 
     useEffect(() => {
+        // Avoid heavy work and state updates while dragging, resizing, or rotating
+        if (dragItem || resizeItem || rotateItem) return;
+
         // BAILOUT: If there is no depth map or no background, we cannot compute grounding.
         if (groundDepth === null || !state.depthMapUrl || !state.backgroundUrl || viewportBox.w <= 1 || viewportBox.h <= 1) {
             // If we previously had a key and now don't, reset so we don't loop on re-entry
@@ -1106,7 +1150,7 @@ Output: environment plate only.
                 });
             }
         });
-    }, [state.depthMapUrl, state.backgroundUrl, groundDepth, viewportBox.h, viewportBox.w, state.tokens, dispatch]);
+    }, [state.depthMapUrl, state.backgroundUrl, groundDepth, viewportBox.h, viewportBox.w, state.tokens, dragItem, resizeItem, rotateItem, dispatch]);
 
     /**
     * OCCLUSION MASKS (PER-TOKEN)
@@ -1114,8 +1158,8 @@ Output: environment plate only.
     * Mask semantics: alpha=255 means token pixel is visible; alpha=0 means occluded by a nearer background pixel.
     */
     useEffect(() => {
-        // Avoid heavy work while dragging (masks will refresh on drag end)
-        if (dragItem) return;
+        // Avoid heavy work while dragging, resizing, or rotating (masks will refresh on manipulation end)
+        if (dragItem || resizeItem || rotateItem) return;
 
         // Nothing to do until we have a real viewport + depth map
         if (!state.depthMapUrl || viewportBox.w <= 1 || viewportBox.h <= 1) {
@@ -1239,71 +1283,11 @@ Output: environment plate only.
             cancelled = true;
             window.clearTimeout(timer);
         };
-    }, [state.depthMapUrl, state.tokens, viewportBox.w, viewportBox.h, dragItem]);
+    }, [state.depthMapUrl, state.tokens, viewportBox.w, viewportBox.h, dragItem, resizeItem, rotateItem]);
 
 
-    const parseAspectRatioToNumber = (ar: DirectorAspectRatio | string | undefined): number => {
-        const raw = String(ar || '16:9');
-        const parts = raw.split(':').map((p) => Number(p));
-        if (parts.length === 2 && Number.isFinite(parts[0]) && Number.isFinite(parts[1]) && parts[1] !== 0) {
-            return parts[0] / parts[1];
-        }
-        return 16 / 9;
-    };
 
-    // Keep the camera gate centered and sized correctly even when the stage container changes.
-    useEffect(() => {
-        if (viewMode === 'shots') return;
 
-        // Ensure we catch the layout after the current render cycle using a short timeout or RAF
-        // especially important if new elements (like the command header) shifted the layout just before mount
-        let reqId: number;
-        let obs: ResizeObserver;
-
-        const attachAndMeasure = () => {
-            const stage = stageRef.current;
-            if (!stage) return;
-
-            const update = () => {
-                if (!stageRef.current) return;
-                const cw = Math.max(1, stageRef.current.clientWidth);
-                const ch = Math.max(1, stageRef.current.clientHeight);
-                // If the container has zero height (e.g. display none or flex collapsed), do not commit tiny box
-                if (cw <= 1 || ch <= 1) return;
-
-                const ratio = parseAspectRatioToNumber(state.director.aspectRatio);
-
-                const gutter = 24;
-                const w = Math.max(10, cw - gutter);
-                const h = w / ratio;
-                const x = (cw - w) / 2;
-                const y = h <= ch ? (ch - h) / 2 : 0;
-
-                setViewportBox((prev) => {
-                    const changed =
-                        prev.x !== x || prev.y !== y || prev.w !== w || prev.h !== h;
-                    return changed ? { x, y, w, h } : prev;
-                });
-            };
-
-            update();
-            obs = new ResizeObserver(() => {
-                cancelAnimationFrame(reqId);
-                reqId = requestAnimationFrame(update);
-            });
-            obs.observe(stage);
-        };
-
-        // Wait a frame to let flex containers calculate `flex-1` bounds before attaching observer
-        reqId = requestAnimationFrame(() => {
-            attachAndMeasure();
-        });
-
-        return () => {
-            cancelAnimationFrame(reqId);
-            if (obs) obs.disconnect();
-        };
-    }, [state.director.aspectRatio, viewMode]);
 
     // analyzeWhitelistProfile was moved to useAdvancedRender
     const resolveTokenImageUrl = (token: StageToken): string | null => (
@@ -4613,25 +4597,6 @@ Output: environment plate only.
                         <Download className="w-3 h-3" />
                         <span className="hidden sm:inline">Image</span>
                     </button>
-                    {showInternalDepthControls && (
-                        <button
-                            onClick={() => {
-                                if (state.depthMapUrl) {
-                                    downloadDepthMap();
-                                } else {
-                                    refreshSpatialData();
-                                }
-                            }}
-                            disabled={state.isDepthProcessing || (!state.depthMapUrl && !state.backgroundUrl)}
-                            className={`bg-black/80 hover:bg-black border border-white/10 text-purple-500 px-1 py-1 rounded-md flex items-center gap-1 text-[6.5px] font-bold uppercase transition-all whitespace-nowrap shrink-0 ${
-                                !state.isDepthProcessing && (state.depthMapUrl || state.backgroundUrl) ? 'hover:text-purple-400 active:scale-95' : 'opacity-50 cursor-not-allowed'
-                            }`}
-                            title={state.depthMapUrl ? "Download internal spatial hint" : "Generate internal spatial hint"}
-                        >
-                            {state.isDepthProcessing ? <RefreshCcw className="w-3 h-3 animate-spin" /> : state.depthMapUrl ? <Download className="w-3 h-3" /> : <RefreshCcw className="w-3 h-3" />}
-                            <span className="hidden sm:inline">{state.isDepthProcessing ? 'Hint...' : 'Hint'}</span>
-                        </button>
-                    )}
                 </>
             );
         };
@@ -4661,9 +4626,9 @@ Output: environment plate only.
             <div className={`flex flex-col h-full overflow-hidden`}>
                 {state.isProcessing && <CastDirectorThinking />}
 
-            <div className="flex h-full gap-4 p-4 overflow-hidden select-none">
+            <div className="staging-layout p-4 select-none">
                 {/* 1. LEFT SIDEBAR: ACTIVE ACTOR INTELLIGENCE & PROPERTIES */}
-                <div className={`${isCompactStageToolbar ? 'w-72' : 'w-96'} flex flex-col gap-4 overflow-y-auto pr-2 custom-scrollbar shrink-0 transition-[width] duration-200`}>
+                <div className="staging-left staging-left-inner flex flex-col gap-4 pr-2 custom-scrollbar">
 
 
 
@@ -5370,7 +5335,7 @@ Output: environment plate only.
                 {/* 2. CENTER AREA: THE STAGE */}
                 <div
                     ref={centerPaneRef}
-                    className="flex-1 flex flex-col gap-2 min-w-0 min-h-0"
+                    className="staging-center flex flex-col gap-2"
                 >
                     {renderCommandHeader()}
                     {/* --- END COMMAND HEADER --- */}
@@ -5434,7 +5399,7 @@ Output: environment plate only.
                     })() : (
                     <div
                         ref={stageRef}
-                        className="flex-1 min-h-0 bg-[#09090b] border border-[#27272a] rounded-xl relative overflow-auto custom-scrollbar overscroll-contain group"
+                        className="stage-viewport flex-1 min-h-0 bg-[#09090b] border border-[#27272a] rounded-xl relative overflow-hidden overscroll-contain group"
                         onDragOver={handleDragOver}
                         onDrop={handleDrop}
                         onMouseMove={handleStageMouseMove}
@@ -5444,18 +5409,18 @@ Output: environment plate only.
                         {/* Stage Matte (outside the camera gate) */}
                         <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_#111111_0%,_#000000_100%)]" />
 
-                        {/* Camera Gate / Viewport (this is the actual rendered frame) */}
-                        <div
-                            ref={viewportRef}
-                            className="absolute bg-black overflow-hidden rounded-xl ring-1 ring-white/10 shadow-[0_0_50px_rgba(0,0,0,0.5)]"
-                            style={{
-                                left: `${viewportBox.x}px`,
-                                top: `${viewportBox.y}px`,
-                                width: `${Math.max(10, viewportBox.w)}px`,
-                                height: `${Math.max(10, viewportBox.h)}px`,
-                                zIndex: 10
-                            }}
-                        >
+                        {/* Center wrapper */}
+                        <div className="stage-preview-centerer">
+                            {/* Camera Gate / Viewport (this is the actual rendered frame) */}
+                            <div
+                                ref={viewportRef}
+                                className="stage-preview-frame bg-black overflow-hidden rounded-xl ring-1 ring-white/10 shadow-[0_0_50px_rgba(0,0,0,0.5)]"
+                                style={{
+                                    width: `${Math.max(10, viewportBox.w)}px`,
+                                    height: `${Math.max(10, viewportBox.h)}px`,
+                                    zIndex: 10
+                                }}
+                            >
                             {viewMode === 'result' && (state.resultImage || (activeShot && activeShot.latestCompositeResultUrl)) ? (
                                 <img
                                     src={state.resultImage || activeShot?.latestCompositeResultUrl || undefined}
@@ -5939,6 +5904,7 @@ Output: environment plate only.
                             </>
                             )}
                         </div>
+                        </div> {/* stage-preview-centerer */}
                     </div>
                 )}
 
@@ -5947,7 +5913,7 @@ Output: environment plate only.
                 </div>
 
                 {/* 3. RIGHT SIDEBAR: GLOBAL SPECS, ANCHOR, & REFERENCES */}
-                <div className={`${isCompactStageToolbar ? 'w-[320px]' : 'w-[400px]'} flex flex-col gap-0 h-full overflow-hidden shrink-0 transition-[width] duration-200 bg-[#18181b] border-l border-white/5`}>
+                <div className="staging-right flex flex-col gap-0 bg-[#18181b] border-l border-white/5">
                     <div className="px-4 py-4 border-b border-white/5 flex justify-between items-center bg-black/20 shrink-0">
                         <h2 className="text-[10px] font-black text-gray-400 tracking-widest uppercase flex items-center gap-2">
                             <Clapperboard className="w-3.5 h-3.5 text-red-400" /> Stage Controls
@@ -5965,7 +5931,7 @@ Output: environment plate only.
                     </div>
 
                     {/* DYNAMIC SIDEBAR PANELS */}
-                    <div className="flex-1 overflow-y-auto pl-2 custom-scrollbar flex flex-col gap-3 pb-4 pt-4">
+                    <div className="staging-right-inner flex-1 pl-2 custom-scrollbar flex flex-col gap-3 pb-4 pt-4">
                         {
                             panelOrder.filter(id => id !== 'shots' || state.isStoryboardEnabled).map(panelId => {
                                 if (panelId === 'shots') {
