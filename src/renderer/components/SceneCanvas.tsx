@@ -50,6 +50,7 @@ import type { ShotVariant } from '../types/shots';
 import { GeminiService, type ExtractedStyle, type SceneIntent } from '../services/GeminiService';
 import { ensureAuthenticatedForGeneration } from '../services/AuthGenerationGate';
 import { DepthService } from '../services/DepthService';
+import { DEPTH_FEATURE_ENABLED } from '../config/featureFlags';
 import {
     compileV3DirectorPrompt,
     buildPlacementPrompt,
@@ -73,6 +74,7 @@ import { sanitizeStyleForStrictIdentity } from '../utils/analysisSanitizers';
 import { LibraryAssetMaterializer } from '../services/LibraryAssetMaterializer';
 import { useProductionExports } from '../hooks/useProductionExports';
 import { useAdvancedRender } from '../hooks/useAdvancedRender';
+import { getCompactActorLabel } from '../utils/nameHelpers';
 import { useStableElementSize } from '../hooks/useStableElementSize';
 import { buildPlacementIntentsFromAnnotations, buildAnchorSurfaceFromZone, buildAllowanceMaskFromAnchor, buildForegroundProtectMaskFromDepth } from '../utils/spatialHelpers';
 import { NANO_BANANA_2_IMAGE_MODEL } from '../constants/generationModels';
@@ -588,7 +590,7 @@ const SceneCanvas = () => {
     const [showDebugVolumes, setShowDebugVolumes] = useState(false);
     const [showDebugBands, setShowDebugBands] = useState(false);
     const [showDebugActorOverlay, setShowDebugActorOverlay] = useState(false);
-    const showInternalDepthControls = import.meta.env.DEV;
+    const showInternalDepthControls = DEPTH_FEATURE_ENABLED;
 
     // SPATIAL INTELLIGENCE AUTHORITY DERIVATION
     const authorityStatus = useMemo<SpatialAuthorityStatus>(() => {
@@ -702,7 +704,7 @@ const SceneCanvas = () => {
             sceneLock: state.director.sceneLock,
             replaceAnchorSubjects: state.director.replaceAnchorSubjects,
             globalReplaceTarget: state.director.globalReplaceTarget,
-            hasDepthMap: !!state.depthMapUrl,
+            hasDepthMap: DEPTH_FEATURE_ENABLED && !!state.depthMapUrl,
             activeRefs: activeReferences,
             actorIdentitySets: promptIdentitySets,
             tokens: state.tokens,
@@ -778,6 +780,7 @@ const SceneCanvas = () => {
 
 
     const refreshSpatialData = useCallback(async () => {
+        if (!DEPTH_FEATURE_ENABLED) return;
         if (!state.backgroundUrl) {
             if (import.meta.env.DEV) {
                 dispatch({ type: 'ADD_LOG', payload: { message: 'Add or generate a stage background before building a spatial hint.', type: 'info' } });
@@ -1076,8 +1079,8 @@ Output: environment plate only.
     * to the current floor authority whenever the floor plane changes or is recalculated.
     */
     // Compute Ground Depth (ONCE per depth map)
-    // Compute Ground Depth (ONCE per depth map)
     useEffect(() => {
+        if (!DEPTH_FEATURE_ENABLED) return;
         // 1. Clear old caches to prevent memory creep
         DepthService.clearCacheExcept(state.depthMapUrl);
 
@@ -1103,6 +1106,7 @@ Output: environment plate only.
     const lastGroundingKeyRef = useRef<string>('');
 
     useEffect(() => {
+        if (!DEPTH_FEATURE_ENABLED) return;
         // Avoid heavy work and state updates while dragging, resizing, or rotating
         if (dragItem || resizeItem || rotateItem) return;
 
@@ -1243,11 +1247,11 @@ Output: environment plate only.
                             const stageYClamped = Math.min(Math.max(stageY, 0), viewportBox.h - 1);
 
                             // Depth map convention: White=Near, Black=Far (near is higher).
-                            const sceneDepth = DepthService.getDepthAtPointSync(
+                            const sceneDepth = DEPTH_FEATURE_ENABLED ? DepthService.getDepthAtPointSync(
                                 state.depthMapUrl,
                                 stageXClamped / viewportBox.w,
                                 stageYClamped / viewportBox.h
-                            );
+                            ) : 255;
 
                             const occluded = token.occlusionMode === 'front'
                                 ? false
@@ -2086,7 +2090,7 @@ Output: environment plate only.
                             sceneLock: state.director.sceneLock,
                             replaceAnchorSubjects: true,
                             globalReplaceTarget: state.director.globalReplaceTarget,
-                            hasDepthMap: !!state.depthMapUrl,
+                            hasDepthMap: DEPTH_FEATURE_ENABLED && !!state.depthMapUrl,
                             activeRefs: [passReference],
                             actorIdentitySets: passIdentitySet ? [passIdentitySet] : undefined,
                             tokens: [pass.regionEntry.token],
@@ -4096,7 +4100,7 @@ Output: environment plate only.
             const ny = Math.min(1, Math.max(0, t.y / viewportH));
             
             // Fast synchronous sample from pre-cached depth data via DepthService
-            const anchorDepth = DepthService.getDepthAtPointSync(state.depthMapUrl, nx, ny);
+            const anchorDepth = DEPTH_FEATURE_ENABLED ? DepthService.getDepthAtPointSync(state.depthMapUrl, nx, ny) : 255;
             
             // 1. Check Grounding against floor plane (if available)
             if (state.floorPlane && state.floorPlane.depth !== undefined) {
@@ -4628,7 +4632,7 @@ Output: environment plate only.
 
             <div className="staging-layout p-4 select-none">
                 {/* 1. LEFT SIDEBAR: ACTIVE ACTOR INTELLIGENCE & PROPERTIES */}
-                <div className="staging-left staging-left-inner flex flex-col gap-4 pr-2 custom-scrollbar">
+                <div className="staging-left staging-left-inner stage-left-panel flex flex-col gap-4 pr-2 custom-scrollbar">
 
 
 
@@ -4701,9 +4705,9 @@ Output: environment plate only.
                                 {/* SELECTION INFO */}
                                 <div className="bg-[#09090b] px-3 py-2 rounded border border-gray-800">
                                     <span className="text-[9px] text-gray-500 font-bold uppercase tracking-tighter block mb-1">Selected Token</span>
-                                    <div className="flex items-center justify-between">
-                                        <span className="font-mono text-[10px] text-yellow-500 truncate">{selectedToken.tag}</span>
-                                        <div className="flex gap-1.5">
+                                    <div className="flex items-center justify-between token-properties-selected-token">
+                                        <span className="token-label font-mono text-[10px] text-yellow-500" title={selectedToken.tag}>{getCompactActorLabel(selectedToken.tag)}</span>
+                                        <div className="flex gap-1.5 shrink-0">
                                             <button
                                                 onClick={() => {
                                                     if (viewportRef.current && selectedToken) {
@@ -5714,8 +5718,8 @@ Output: environment plate only.
                                     )}
 
                                     {/* Label */}
-                                    <div className={`absolute -bottom-6 left-1/2 -translate-x-1/2 bg-black/60 px-2 py-0.5 rounded text-[8px] text-white uppercase font-bold tracking-wider pointer-events-none transition-opacity ${state.selection === token.id ? 'opacity-100' : 'opacity-0 group-hover/token:opacity-100'}`}>
-                                        {token.tag}
+                                    <div className={`canvas-token-label absolute -bottom-6 left-1/2 -translate-x-1/2 bg-black/60 px-2 py-0.5 rounded text-[8px] text-white uppercase font-bold tracking-wider pointer-events-none transition-opacity ${state.selection === token.id ? 'opacity-100' : 'opacity-0 group-hover/token:opacity-100'}`}>
+                                        {getCompactActorLabel(token.tag)}
                                     </div>
 
                                     {/* DEVELOPER DEBUG HUD (DEV ONLY) */}

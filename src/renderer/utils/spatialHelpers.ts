@@ -4,6 +4,7 @@
  * No async, no ML, no side effects.
  */
 import type { StageAnnotation, StageToken } from '../context/AppContext';
+import { DEPTH_FEATURE_ENABLED } from '../config/featureFlags';
 
 export type DepthLayer = 'foreground' | 'midground' | 'background';
 const toPlacementAction = (value: string | undefined): PlacementIntent['action'] => {
@@ -28,6 +29,7 @@ interface CanvasMinimal {
  * using ONLY the provided actor and canvas properties.
  */
 export function computeDepthScore(actor: ActorMinimal, canvas: CanvasMinimal): number {
+    if (!DEPTH_FEATURE_ENABLED) return 0;
     // 1. scaleNormalized: 0.0 (large/near) -> 1.0 (small/far)
     // Assume scale range [0.2, 2.0]
     const sBase = Math.max(0, Math.min(1, (actor.scale - 0.2) / 1.8));
@@ -217,6 +219,7 @@ export const buildForegroundProtectMaskFromDepth = async (
     viewportBox: { w: number, h: number },
     getDepthAtSync: (url: string, nx: number, ny: number) => number
 ): Promise<string | null> => {
+    if (!DEPTH_FEATURE_ENABLED) return null;
     if (!depthMapUrl) return null; // graceful degradation
 
     const MAX_MASK_DIM = 256;

@@ -5,6 +5,7 @@ import { StorageService } from '../services/StorageService';
 import { isNativeParams, nativeJoinPath } from '../utils/NativeFileAssets';
 import { computeDepthScore } from '../utils/spatialHelpers';
 import { resolveDisplayUrl } from '../utils/assetUrlResolver';
+import { DEPTH_FEATURE_ENABLED } from '../config/featureFlags';
 
 import type { VeoFivePartDraft, VeoAudioBlock, VeoTimestampBeat } from '../promptEngine/veoFivePart';
 import type { ShotSession, ShotActorReferenceInput } from '../types/shots';
@@ -1815,6 +1816,7 @@ export const reducer = (state: AppState, action: Action): AppState => {
             };
         }
         case 'SET_DEPTH_MAP': {
+            if (!DEPTH_FEATURE_ENABLED) return state;
             const { url, hash, sourceHash } = typeof action.payload === 'string' || action.payload === null
                 ? { url: action.payload, hash: null, sourceHash: null }
                 : action.payload;
@@ -1829,8 +1831,10 @@ export const reducer = (state: AppState, action: Action): AppState => {
             };
         }
         case 'SET_FLOOR_PLANE':
+            if (!DEPTH_FEATURE_ENABLED) return state;
             return { ...state, floorPlane: action.payload };
         case 'SET_OCCUPIED_VOLUMES':
+            if (!DEPTH_FEATURE_ENABLED) return state;
             return { ...state, occupiedVolumes: action.payload };
         case 'SET_RESULT_IMAGE':
             return { ...state, resultImage: action.payload };
@@ -1849,6 +1853,7 @@ export const reducer = (state: AppState, action: Action): AppState => {
         case 'SET_GLOBAL_PROGRESS':
             return { ...state, globalProgress: action.payload || undefined };
         case 'SET_DEPTH_PROCESSING':
+            if (!DEPTH_FEATURE_ENABLED) return state;
             return { ...state, isDepthProcessing: action.payload };
         case 'SET_GLOBAL_VEO_DRAFT':
             return { ...state, veoPromptDraft: action.payload };

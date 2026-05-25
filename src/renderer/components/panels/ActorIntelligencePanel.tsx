@@ -4,6 +4,8 @@ import { GeminiService } from '../../services/GeminiService';
 import { ensureAuthenticatedForGeneration } from '../../services/AuthGenerationGate';
 import type { Action, AppState, GroundingAudit } from '../../context/AppContext';
 import { DebouncedTextarea } from '../ui/DebouncedTextarea';
+import { DEPTH_FEATURE_ENABLED } from '../../config/featureFlags';
+import { getCompactActorLabel } from '../../utils/nameHelpers';
 
 const getErrorMessage = (error: unknown): string => {
     if (error instanceof Error) return error.message;
@@ -60,7 +62,7 @@ export const ActorIntelligencePanel = ({
     onRefreshSpatialData,
     style
 }: ActorIntelligencePanelProps) => {
-    const showInternalDepthControls = import.meta.env.DEV;
+    const showInternalDepthControls = DEPTH_FEATURE_ENABLED;
     const isDepthOff = !state.depthMapUrl && !state.isDepthProcessing;
     const headerColor = !showInternalDepthControls
         ? 'text-purple-400'
@@ -188,8 +190,8 @@ export const ActorIntelligencePanel = ({
                 ) : (
                     state.tokens.map((token) => (
                         <div key={token.id} className="bg-[#18181b] border border-[#27272a] rounded-lg p-3 group">
-                            <div className="flex items-center justify-between mb-2">
-                                <span className="text-[11px] font-bold text-white uppercase">{token.tag}</span>
+                            <div className="actor-intelligence-selected-token flex items-center justify-between mb-2">
+                                <span className="token-label text-[11px] font-bold text-white uppercase" title={token.tag}>{getCompactActorLabel(token.tag)}</span>
                                 <button
                                     onClick={async () => {
                                         if (state.billingEntitlements.effectiveBillingMode === 'byok' && !state.apiKey) {

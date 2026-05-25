@@ -1,4 +1,5 @@
 import type { FloorPlane, OccupiedVolume } from '../context/AppContext';
+import { DEPTH_FEATURE_ENABLED } from '../config/featureFlags';
 
 // Basic cache to avoid re-loading the same depth map image repeatedly
 const depthCanvasCache: Record<string, HTMLCanvasElement> = {};
@@ -22,6 +23,7 @@ export function clearDepthCacheExcept(activeUrl?: string | null) {
 }
 
 export async function getDepthImageData(url: string): Promise<ImageData | null> {
+    if (!DEPTH_FEATURE_ENABLED) return null;
     if (depthImageCache.has(url)) {
         return depthImageCache.get(url)!;
     }
@@ -38,6 +40,7 @@ export async function getDepthImageData(url: string): Promise<ImageData | null> 
 }
 
 async function getCachedCanvas(url: string | null): Promise<HTMLCanvasElement | null> {
+    if (!DEPTH_FEATURE_ENABLED) return null;
     if (!url) return null; // Handle null URL early
     if (depthCanvasCache[url]) return depthCanvasCache[url];
 
@@ -164,6 +167,7 @@ class DepthServiceBase {
      * clamp = Math.min(d, ground);
      */
     clampDepthToGround(depth: number, ground: number): number {
+        if (!DEPTH_FEATURE_ENABLED) return depth;
         return this.DEPTH_NEAR_IS_HIGH
             ? Math.min(depth, ground)
             : Math.max(depth, ground);
@@ -174,10 +178,12 @@ class DepthServiceBase {
      * Prevents memory leaks in long-running sessions.
      */
     clearCacheExcept(activeUrl?: string | null) {
+        if (!DEPTH_FEATURE_ENABLED) return;
         clearDepthCacheExcept(activeUrl);
     }
 
     async computeGroundDepth(depthMapUrl: string): Promise<number> {
+        if (!DEPTH_FEATURE_ENABLED) return 0.5;
         const imageData = await getDepthImageData(depthMapUrl);
         if (!imageData) return 0.5;
 
@@ -206,6 +212,7 @@ class DepthServiceBase {
      * Returns a value from 0.0 (Far) to 1.0 (Near).
      */
     async getDepthAtPoint(depthMapUrl: string, x: number, y: number): Promise<number> {
+        if (!DEPTH_FEATURE_ENABLED) return 0.5;
         const data = depthDataCache[depthMapUrl];
         const canvas = depthCanvasCache[depthMapUrl];
         if (data && canvas) {
@@ -243,6 +250,7 @@ class DepthServiceBase {
      * Synchronous depth sampling for collision detection (Requires pre-cached data).
      */
     getDepthAtPointSync(depthMapUrl: string | null, x: number, y: number): number {
+        if (!DEPTH_FEATURE_ENABLED) return 0.5;
         if (!depthMapUrl) return 0.5;
         const data = depthDataCache[depthMapUrl];
         const canvas = depthCanvasCache[depthMapUrl];
@@ -264,6 +272,7 @@ class DepthServiceBase {
         targetHeight: number,
         tokenRect?: { x: number; y: number; w: number; h: number }
     ): Promise<{ maskUrl: string; visibilityRatio: number }> {
+        if (!DEPTH_FEATURE_ENABLED) return { maskUrl: '', visibilityRatio: 1.0 };
         const depthCanvas = await getCachedCanvas(depthMapUrl);
         if (!depthCanvas) return { maskUrl: '', visibilityRatio: 1.0 };
 
@@ -330,6 +339,7 @@ class DepthServiceBase {
      * V2+ Consideration: Support for multi-plane floor detection (stairs, platforms).
      */
     async detectFloorPlane(depthMapUrl: string): Promise<FloorPlane | null> {
+        if (!DEPTH_FEATURE_ENABLED) return null;
         const canvas = await getCachedCanvas(depthMapUrl);
         if (!canvas) return null;
 
@@ -402,6 +412,7 @@ class DepthServiceBase {
      * V2+ Consideration: Semantic object labeling and AI-driven segmentation.
      */
     async detectOccupiedVolumes(depthMapUrl: string, floorDepth: number): Promise<OccupiedVolume[]> {
+        if (!DEPTH_FEATURE_ENABLED) return [];
         const canvas = await getCachedCanvas(depthMapUrl);
         if (!canvas) return [];
 
@@ -523,7 +534,7 @@ try {
     }
 } catch (e) {
     console.error("CRITICAL: DepthService Immutability Guard Failed!", e);
-    if (isDevMode) {
+    if (DEPTH_FEATURE_ENABLED && isDevMode) {
         throw new Error("FATAL: DepthService could not be locked for immutability. This is required for architectural safety.");
     }
 }
