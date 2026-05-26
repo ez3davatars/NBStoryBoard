@@ -1499,6 +1499,12 @@ export function buildCharacterPitchSheetPrompt(input: CharacterPitchSheetInput):
       environment: input.environment,
     });
 
+    console.debug('[PitchSheet Style Purity]', {
+      characterRenderStyle: input.characterRenderStyle,
+      sheetStyle: input.sheetStyle,
+      identitySource: input.identitySource,
+    });
+
     // @ts-ignore
     if (typeof import.meta !== "undefined" && import.meta.env?.DEV) {
         console.info("[PitchSheetBrief] Detail panel isolation active", {
@@ -2064,6 +2070,61 @@ If World / Era is provided but Wardrobe Direction is blank, apply the world/era 
 
 Do not treat user fields as decorative text only.
 Do not ignore World / Era, Build, Design Language, Lighting Mood, Sheet Style, Personality, Props, Wardrobe Direction, or Environment when they are provided.
+
+ACTOR PANEL STYLE PURITY LOCK:
+The selected Character Render Style (Selected Style: "${input.characterRenderStyle || 'N/A'}") is the only permitted rendering style for every panel that depicts the actor as a person.
+
+This applies to:
+- hero portrait
+- full-body turnaround views
+- 3/4 body views
+- back view
+- supporting pose
+- neutral front head
+- 3/4 left-facing head
+- 3/4 right-facing head
+- left-facing profile head
+- right-facing profile head
+- expression study panels
+- any inset where the actor’s face, head, or body appears
+
+Every actor depiction must look like it was rendered by the same visual pipeline in the same selected Character Render Style.
+
+Do not mix rendering styles.
+Do not let head-study panels become realistic if the selected Character Render Style is stylized.
+Do not let profile heads become photographic while body views remain stylized.
+Do not render any actor panel as a raw biometric/photo-derived image unless the selected Character Render Style is explicitly photoreal.
+Do not combine photographic realism with Premium Animated 3D.
+Do not allow semi-realistic profile heads, realistic skin texture, camera-photo lighting, pores, or raw scan texture to appear in stylized character panels.
+
+BIOMETRIC STYLE BARRIER:
+Biometric source images are geometry and likeness references only.
+They are not style references.
+They must not contribute photographic rendering, skin texture, camera lighting, photo realism, lens distortion, or raw scan appearance.
+Translate biometric facial structure into the selected Character Render Style.
+
+STYLE RESPONSIBILITY MAP:
+- Character Render Style controls the rendering language of every actor depiction panel.
+- Sheet Style (Selected Style: "${input.sheetStyle || 'N/A'}") controls only layout, board design, typography feel, panel structure, and presentation format.
+- Biometric images control only likeness, facial geometry, head shape, skin tone consistency, hair/facial-hair placement, and angle-specific structure.
+- Image A controls approved actor identity, wardrobe/body design, and approved character design.
+
+HEAD STUDY STYLE LOCK:
+All head-study and profile panels must be stylized translations of the biometric geometry into the selected Character Render Style.
+They must not appear more realistic than the hero portrait, turnarounds, or supporting pose.
+The front head, 3/4 heads, profile heads, and expression studies must all share the same rendering language.
+
+If the selected Character Render Style is Premium Animated 3D:
+- all actor panels must be Premium Animated 3D
+- all head-study panels must be Premium Animated 3D
+- all profile panels must be Premium Animated 3D
+- no photo-real head panels
+- no realistic skin texture
+- no photographic skin rendering
+- no realism leakage
+
+STYLE CONSISTENCY REQUIREMENT:
+The final sheet must read as one cohesive production board from one visual style system. Likeness may come from biometric structure, but the visible rendering style must come only from the selected Character Render Style.
 
 ${sheetStyleLockContract}
 ${strictRenderedFamilyLock}
