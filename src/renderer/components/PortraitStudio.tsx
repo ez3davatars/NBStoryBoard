@@ -1068,36 +1068,21 @@ export default function PortraitStudio() {
             return referenceImages.map(img => ({ url: img.url, label: img.label }));
         }
 
-        const hasGeneratedCharacterSource =
-            safePitchSheetInput.identitySource === "biometric_plus_character" &&
-            Boolean(safePitchSheetInput.characterStyleReferenceUrl);
-
         const originalIdentityAnchors = (safePitchSheetInput.referenceImages || []).map((ref, index) => ({
             url: ref.imageUrl,
-            label: hasGeneratedCharacterSource
-                ? `Image ${String.fromCharCode(66 + index)} - Biometric Scan Identity Reference (${getPitchSheetAngleLabel(ref.angle, index)}): identity authority for face, skull, skin tone, age, hair state, facial hair, and marks only.`
-                : `Image ${String.fromCharCode(65 + index)} - Biometric Scan Identity Reference (${getPitchSheetAngleLabel(ref.angle, index)}): identity authority for face, skull, skin tone, age, hair state, facial hair, and marks.`
+            label: `Image ${String.fromCharCode(65 + index)} - Biometric Scan Identity Reference (${getPitchSheetAngleLabel(ref.angle, index)}): identity authority for face, skull, skin tone, age, hair state, facial hair, and marks.`
         }));
-
-        const primaryGeneratedCharacterSource = hasGeneratedCharacterSource && safePitchSheetInput.characterStyleReferenceUrl
-            ? [{
-                url: safePitchSheetInput.characterStyleReferenceUrl,
-                label: "Image A - Primary Generated Character Source / Current Approved Character Render: preserve this character's body, outfit, silhouette, proportions, render style, costume, and overall design."
-            }]
-            : [];
 
         const portraitIdentityReference = safePitchSheetInput.referenceImageUrl
             ? [{
                 url: safePitchSheetInput.referenceImageUrl,
                 label: safePitchSheetInput.identitySource === "portrait_reference"
                     ? "Image A - Primary Approved Character Portrait: preserve this character's body, outfit, silhouette, proportions, render style, costume, and overall design."
-                    : hasGeneratedCharacterSource
-                    ? "Additional Portrait Identity Guide - secondary to Image A design and biometric identity anchors."
                     : "Actor Likeness Guide"
             }]
             : [];
 
-        const looseStyleReference = !hasGeneratedCharacterSource && safePitchSheetInput.characterStyleReferenceUrl
+        const looseStyleReference = safePitchSheetInput.characterStyleReferenceUrl
             ? [{
                 url: safePitchSheetInput.characterStyleReferenceUrl,
                 label: "Board Presentation Guide Only - Not Actor Likeness"
@@ -1105,7 +1090,6 @@ export default function PortraitStudio() {
             : [];
 
         return [
-            ...primaryGeneratedCharacterSource,
             ...originalIdentityAnchors,
             ...portraitIdentityReference,
             ...looseStyleReference
