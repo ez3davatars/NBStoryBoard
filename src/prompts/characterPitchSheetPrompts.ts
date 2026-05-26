@@ -1482,6 +1482,23 @@ export function buildCharacterPitchSheetPrompt(input: CharacterPitchSheetInput):
       generatedSourceRole: input.identityLock?.generatedSourceRole
     });
 
+    console.debug('[PitchSheet User Directives]', {
+      characterName: input.characterName,
+      alias: input.aliasCodename,
+      visualAge: input.visualAge,
+      height: input.height,
+      build: input.build,
+      designLanguage: input.designLanguage,
+      worldEra: input.worldEra,
+      lightingMood: input.lightingMood,
+      sheetStyle: input.sheetStyle,
+      corePersonality: input.corePersonality,
+      internalConflict: input.internalConflict,
+      wardrobeDirection: input.wardrobeDirection,
+      propsSignatureItems: input.propsSignatureItems,
+      environment: input.environment,
+    });
+
     // @ts-ignore
     if (typeof import.meta !== "undefined" && import.meta.env?.DEV) {
         console.info("[PitchSheetBrief] Detail panel isolation active", {
@@ -1935,38 +1952,119 @@ ${BOARD_PRESENTATION_STYLE_BLOCKS[boardPresentationStyle]}
 
 ${CHARACTER_RENDER_STYLE_BLOCKS[characterRenderStyle]}
 ${styleCategoryContract}
-${input.identitySource === "biometric_plus_character" && input.characterStyleReferenceUrl ? `\nSCAN + CHARACTER SOURCE AUTHORITY:
-- [IMAGE 1] is the locked generated character source.
-- Preserve [IMAGE 1] as the visual/design authority for the entire pitch sheet.
-- ${hasExplicitWardrobeDirection
-    ? "[IMAGE 1] (Image A) is the authoritative approved generated character source for body presentation, silhouette, proportions, stylistic render language, and overall character feel. Because the user supplied Wardrobe Direction, Image A's clothing is not the final wardrobe authority where it conflicts with the user wardrobe request."
-    : "[IMAGE 1] (Image A) is the authoritative approved generated character source for exact costume, wardrobe, silhouette, body proportions, stylistic render language, and overall costume design."
-}
-- Do not replace, redesign, restyle, or reinterpret the character from scratch.
-- Do not create a new character based only on the biometric scans.
-- The pitch sheet must feel like a production board made from [IMAGE 1], not a new generation loosely inspired by it.
+${input.identitySource === "biometric_plus_character" && input.characterStyleReferenceUrl ? `\nSCAN + CHARACTER SOURCE CONTRACT:
+Image A is the approved actor. The pitch sheet must expand Image A into a production character board.
+Do not create a new actor.
+Do not reinterpret the actor from scratch.
+Do not average Image A with biometric scans.
+Do not blend Images B-F into a new person.
 
-BIOMETRIC BACKUP AUTHORITY:
-- [IMAGE 2+] are biometric identity backup references.
-- Use [IMAGE 2+] only to preserve or correct face/head likeness, head shape, scalp outline, facial proportions, hair/scalp/facial hair, skin tone, and age impression.
-- Do not use [IMAGE 2+] to change the outfit, body design, render style, or character concept established by [IMAGE 1].
+Images B-F are not alternate character references.
+Images B-F are view-specific biometric geometry references for the same person represented by Image A.
 
-MULTI-VIEW CONSISTENCY:
-- All full-body and torso views must depict the same character from [IMAGE 1].
-- Preserve the same outfit, body build, silhouette, style, and face identity across front, three-quarter, side, and back views.
-- Back views may infer unseen details, but must remain consistent with [IMAGE 1].
-- Do not generate different actors, different costumes, different facial structures, or different body builds across panels.
+Image A controls:
+- approved actor design
+- stylized face interpretation
+- wardrobe
+- costume
+- body silhouette
+- render style
+- overall character language
 
-STYLE SOURCE LOCK:
-- Match the character render style of [IMAGE 1] unless the user explicitly selected a different Character Render Style.
-- If Character Render Style is set to match source, preserve [IMAGE 1]'s linework, shading, finish, and visual language across the sheet.
-- Do not silently convert Graphic Noir, CG Realism, Family 3D, Anime, or Cyberpunk into another style.
+Images B-F control only:
+- facial structure by matching angle
+- head shape
+- nose/jaw/mouth/eye geometry
+- scalp/crown/chin structure
+- skin tone and facial hair consistency when visible
 
-COSTUME MATCHED BEHAVIOR:
-- When Source Panel Display is "Costume Matched", use [IMAGE 1]'s outfit/costume as the source of truth.
-- Do not substitute clothing from biometric scans.
-- Do not invent a different shirt, jacket, uniform, armor, or costume unless the user provided explicit wardrobe guidance.
-- The headshot/face panels must also use the generated character's costume/clothing style, not the raw skin clothing.\n` : ""}
+Images B-F must not control:
+- render style
+- wardrobe
+- costume
+- body design
+- age shift
+- new face creation
+- alternate actor identity
+
+VIEW MATCHING RULE:
+Use Image B for front-facing head views.
+Use Image C for left-facing views.
+Use Image D for right-facing views.
+Use Image E only for upward/lower-face structural support.
+Use Image F only for downward/upper-head structural support.
+
+PROMPT PRIORITY:
+1. Expand Image A as the approved actor.
+2. Use Images B-F only as angle-specific facial geometry constraints.
+3. Preserve Image A’s render style unless the user explicitly selected another render style.
+4. Apply user options only if they do not conflict with Image A or the angle-specific geometry references.
+
+If any instruction conflicts with Image A, Image A wins for actor design.
+If any biometric scan conflicts with Image A’s design, use the scan only to correct facial geometry, not to create a new actor.\n` : ""}
+USER PRODUCTION DIRECTIVES:
+The following user-entered fields are intentional production design directives, not loose metadata.
+Apply them visibly in the pitch sheet wherever appropriate, while preserving the approved actor identity from Image A.
+
+Field application rules & current values:
+
+- Character Name (Current Value: "${input.characterName || 'N/A'}"):
+  Use as the visible character name/title where the sheet design allows.
+
+- Alias / Codename (Current Value: "${input.aliasCodename || 'N/A'}"):
+  Include as secondary character identification if provided.
+
+- Visual Age (Current Value: "${input.visualAge || 'N/A'}"):
+  Reflect in age presentation only if it does not conflict with the approved actor likeness.
+
+- Height (Current Value: "${input.height || 'N/A'}"):
+  Use for body proportion notes and board metadata.
+
+- Build (Current Value: "${input.build || 'N/A'}"):
+  Reflect in body silhouette, costume fit, posture, and build metadata.
+  Do not change facial identity.
+
+- Design Language (Current Value: "${input.designLanguage || 'N/A'}"):
+  Apply to the overall visual design, genre treatment, material callouts, and board language.
+
+- World / Era (Current Value: "${input.worldEra || 'N/A'}"):
+  Apply visibly through wardrobe influence, props, material notes, environmental motifs, background/context cues, typography/ornament where appropriate, and board annotations.
+  If a world or era is provided, the sheet should clearly feel connected to that world/era.
+  Do not ignore this field.
+  Do not change the actor into a different person.
+
+- Lighting Mood (Current Value: "${input.lightingMood || 'N/A'}"):
+  Apply to the hero portrait, sheet lighting language, and mood presentation.
+
+- Sheet Style (Current Value: "${input.sheetStyle || 'N/A'}"):
+  Apply to layout, hierarchy, graphic presentation, and board formatting.
+
+- Core Personality (Current Value: "${input.corePersonality || 'N/A'}"):
+  Reflect through expression, supporting pose, posture, performance note, and character notes.
+
+- Internal Conflict (Current Value: "${input.internalConflict || 'N/A'}"):
+  Reflect through subtle pose/expression/story notes if provided.
+
+- Wardrobe Direction (Current Value: "${input.wardrobeDirection || 'N/A'}"):
+  If provided, this is a strong wardrobe directive.
+  Apply it to costume, garment callouts, material notes, and turnaround views.
+  If not provided, preserve Image A wardrobe.
+
+- Props / Signature Items (Current Value: "${input.propsSignatureItems || 'N/A'}"):
+  If provided, include them as visible prop/detail callouts when layout permits.
+
+- Environment (Current Value: "${input.environment || 'N/A'}"):
+  If provided, reflect through background motifs, world context notes, floor/wall/background language, and visual atmosphere.
+
+USER DIRECTIVE PRIORITY:
+User fields must be applied visibly when provided.
+If a user directive conflicts with Image A’s facial identity, preserve Image A.
+If a user directive conflicts with Image A’s wardrobe and the user provided explicit Wardrobe Direction, follow the user wardrobe directive while preserving actor identity.
+If World / Era is provided but Wardrobe Direction is blank, apply the world/era through design motifs, accessories, props, background, materials, and annotations without fully replacing Image A’s wardrobe unless the prompt clearly asks for era-specific wardrobe.
+
+Do not treat user fields as decorative text only.
+Do not ignore World / Era, Build, Design Language, Lighting Mood, Sheet Style, Personality, Props, Wardrobe Direction, or Environment when they are provided.
+
 ${sheetStyleLockContract}
 ${strictRenderedFamilyLock}
 ${animated3dIdentityLock}

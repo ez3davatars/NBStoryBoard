@@ -1001,6 +1001,41 @@ export default function PortraitStudio() {
         return buildPortraitPrompt(dna);
     }, [dna, mode, pitchSheetInput]);
 
+    const buildScanPlusCharacterPitchSheetReferences = (safePitchSheetInput: CharacterPitchSheetInput) => {
+        const referenceImages: Array<{ url: string; label: string; role: string }> = [];
+
+        // Image A - Approved Generated Character Source
+        if (safePitchSheetInput.characterStyleReferenceUrl) {
+            referenceImages.push({
+                url: safePitchSheetInput.characterStyleReferenceUrl,
+                label: "Image A - Approved Generated Character Source: primary actor design authority. Expand this exact actor into the pitch sheet.",
+                role: "approved_generated_character_source"
+            });
+        }
+
+        // Biometric views mapping
+        const views = [
+            { angle: 'center', label: "Image B - Center Biometric Geometry Reference: front-facing facial structure only. Do not override Image A.", role: "center_biometric_geometry_reference" },
+            { angle: 'left', label: "Image C - Left Biometric Geometry Reference: left-facing facial structure only. Do not override Image A.", role: "left_biometric_geometry_reference" },
+            { angle: 'right', label: "Image D - Right Biometric Geometry Reference: right-facing facial structure only. Do not override Image A.", role: "right_biometric_geometry_reference" },
+            { angle: 'up', label: "Image E - Upward Biometric Geometry Reference: chin, jaw underside, nostril, and lower-face geometry support only. Do not override Image A.", role: "upward_biometric_geometry_reference" },
+            { angle: 'down', label: "Image F - Downward Biometric Geometry Reference: crown, scalp, forehead, and upper-head geometry support only. Do not override Image A.", role: "downward_biometric_geometry_reference" }
+        ];
+
+        for (const view of views) {
+            const ref = safePitchSheetInput.referenceImages?.find(r => r.angle === view.angle);
+            if (ref && ref.imageUrl) {
+                referenceImages.push({
+                    url: ref.imageUrl,
+                    label: view.label,
+                    role: view.role
+                });
+            }
+        }
+
+        return referenceImages;
+    };
+
     const buildGenerationReferenceImages = () => {
         if (mode === "portrait" && dna.identityMode === "reference" && dna.referenceImageUrl) {
             return [{ url: dna.referenceImageUrl, label: "Identity Reference" }];
@@ -1011,6 +1046,27 @@ export default function PortraitStudio() {
         }
 
         const safePitchSheetInput = sanitizeVisibleBoardLanguage(pitchSheetInput);
+
+        if (safePitchSheetInput.identitySource === "biometric_plus_character") {
+            const referenceImages = buildScanPlusCharacterPitchSheetReferences(safePitchSheetInput);
+            const approvedGeneratedCharacterSource = safePitchSheetInput.characterStyleReferenceUrl;
+            const biometricCount = referenceImages.filter(img => img.role !== "approved_generated_character_source").length;
+
+            console.debug('[ScanPlusCharacterInput]', {
+                mode: 'scan_plus_character',
+                referenceCount: referenceImages.length,
+                references: referenceImages.map((image, index) => ({
+                    index: index + 1,
+                    label: image.label,
+                    role: image.role,
+                    hasImage: Boolean(image.url),
+                })),
+                hasApprovedCharacterSource: Boolean(approvedGeneratedCharacterSource),
+                biometricCount,
+            });
+
+            return referenceImages.map(img => ({ url: img.url, label: img.label }));
+        }
 
         const hasGeneratedCharacterSource =
             safePitchSheetInput.identitySource === "biometric_plus_character" &&
@@ -1168,6 +1224,17 @@ export default function PortraitStudio() {
     const [progress, setProgress] = useState<{ phase: string, percent: number, text?: string, subtext?: string } | null>(null);
 
     const handleGenerate = async () => {
+        if (isPitchSheetMode && pitchSheetInput.identitySource === "biometric_plus_character") {
+            const hasApprovedCharacterSource = Boolean(pitchSheetInput.characterStyleReferenceUrl);
+            if (!hasApprovedCharacterSource) {
+                dispatch({
+                    type: "ADD_LOG",
+                    payload: { message: "Approve a generated character before building a pitch sheet from scan + character.", type: "error" }
+                });
+                return;
+            }
+        }
+
         const billingMode = state.billingEntitlements.effectiveBillingMode;
         if (billingMode === "byok" && !state.apiKey) {
             dispatch({
