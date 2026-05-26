@@ -233,10 +233,12 @@ export const HelpCenterDrawer: React.FC = () => {
                                 <div>
                                     <h4 className="font-bold text-yellow-500 uppercase text-xs tracking-wider mb-2">Hosted vs BYOK</h4>
                                     <p className="text-xs text-gray-300 hover:text-white transition-colors">Your generation credits and behavior depend on your Active Billing Mode in Settings. Always check whether you are running in Hosted Mode (using credits) or BYOK Mode (Bring Your Own Key).</p>
+                                    <p className="text-xs text-gray-300 hover:text-white transition-colors mt-2"><strong className="text-white">Hosted Usage:</strong> If you are in Hosted mode, you can click on your credit balance in the top right to view a detailed ledger of your recent generations and monitor your token spend.</p>
                                 </div>
                                 <div className="border-t border-white/5 pt-4">
                                     <h4 className="font-bold text-yellow-500 uppercase text-xs tracking-wider mb-2">Recent Generations: Save It or Lose It</h4>
                                     <p className="text-xs text-gray-300 hover:text-white transition-colors">The Recent Generations strip is a local cache, so images and reference sheets can survive app restarts and still appear days later. They are not permanent library assets until you export or save them. Click a thumbnail to restore it, then use Export to Library, Add to Library, or the save action before clearing anything.</p>
+                                    <p className="text-xs text-gray-300 hover:text-white transition-colors mt-2"><strong className="text-white">History Toggle:</strong> You can quickly hide or reveal the Recent Generations tray by clicking the History (clock) icon on the viewport toolbar.</p>
                                     <button
                                         onClick={() => openGuide('recent-generations-save-it-or-lose-it')}
                                         className="mt-3 flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-yellow-500 hover:text-yellow-400 transition-colors"
@@ -250,6 +252,7 @@ export const HelpCenterDrawer: React.FC = () => {
                                 <h4 className="font-bold text-white uppercase text-xs tracking-wider mb-3 flex items-center gap-2"><BookOpen className="w-3 h-3 text-yellow-500" /> Latest Feature Guides</h4>
                                 <div className="grid grid-cols-1 gap-2">
                                     {[
+                                        { label: 'Production Actor Workflow', anchor: 'create-a-production-actor-identity-lock--routing' },
                                         { label: 'Pitch Sheet Preview', anchor: 'character-pitch-sheet-preview' },
                                         { label: 'Callout Reference Sheets', anchor: 'generate-accurate-callout-reference-sheets' },
                                         { label: 'Stage Height Notes', anchor: 'build-a-height-relationship-in-staging' },

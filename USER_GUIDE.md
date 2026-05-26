@@ -114,6 +114,15 @@ The image filename may stay generic while the JSON stores the real actor name, c
 4. After saving, use the library **Scan** or **Refresh** button if the card does not appear immediately.
 5. Avoid clearing a workspace until the asset you care about has been saved.
 
+### Monitor Hosted Usage
+
+1. Look at the top-right header group where your Hosted credit balance is displayed.
+2. If you are in Hosted mode and signed in, hover over or click the credit balance to open the **Hosted Usage** panel.
+3. The panel displays a ledger of your recent generations, including status, cost, and timestamps.
+4. Review this panel to monitor token spend per action and to detect any failed or expired generation requests.
+5. Click **Refresh Usage** at the bottom of the dropdown to pull the latest ledger from the cloud.
+6. A batch spend summary will appear at the top if you have run multiple requests in your current session.
+
 ---
 
 ## 3. App Shell and Shared Workflows
@@ -166,6 +175,7 @@ The image filename may stay generic while the JSON stores the real actor name, c
 ### Recent Generations: Save It or Lose It
 
 1. Look for the **Recent Generations** strip near the bottom or output area in CAST, PORTRAIT, WARDROBE, and PROPS.
+2. You can manually collapse or expand the tray using the **History** (clock) icon on the viewport toolbar. When collapsed, the tray completely hides to maximize your canvas space.
 2. Remember that Recent Generations is a local cache, not a permanent library.
 3. Expect Recent Generations to survive app restarts; seeing images from a previous session is normal.
 4. Cached recent images are eligible for cleanup after about 30 days, and each studio keeps only a limited recent history.
@@ -189,10 +199,11 @@ The image filename may stay generic while the JSON stores the real actor name, c
 
 1. Connect a save folder before building scenes that depend on uploaded references.
 2. When you upload a reference into STAGING, Reference Stacks, or a related workflow, the app can keep a lighter display copy in memory while preserving the source file on disk.
-3. If the workflow saves reference files, look for a `References` folder inside your save folder.
-4. Keep the saved project folder together when moving a session to another machine.
-5. If a reference preview appears missing after reopening, reconnect the same save folder and reload or rescan the session.
-6. Re-upload the source image only if the original reference file is no longer available.
+3. During large file uploads, look for the visual loading spinner that confirms the file is processing before it appears in your viewport.
+4. If the workflow saves reference files, look for a `References` folder inside your save folder.
+5. Keep the saved project folder together when moving a session to another machine.
+6. If a reference preview appears missing after reopening, reconnect the same save folder and reload or rescan the session.
+7. Re-upload the source image only if the original reference file is no longer available.
 
 ---
 
@@ -219,6 +230,22 @@ The image filename may stay generic while the JSON stores the real actor name, c
 6. Review identity quality.
 7. Export the actor or a reference sheet to the library.
 8. To load Nano Cast biometric data into a Character Pitch Sheet, use **Build Pitch Sheet From Scan** or **Build Pitch Sheet From Scan + Character** in NANO CAST; see [Build a Pitch Sheet From NANO CAST](#build-a-pitch-sheet-from-nano-cast).
+
+### Create a Production Actor (Identity Lock & Routing)
+
+When you generate an actor in CAST, NANO CAST, or PORTRAIT that you want to serve as a strict, reusable identity anchor for a project, you can promote them to a Production Actor.
+
+1. Generate or load the desired character in **CAST**, **NANO CAST**, or **PORTRAIT**.
+2. Click the **Create Production Actor** button (often marked with a shield icon) to open the Identity Lock & Routing Workflow.
+3. **Step 1: Initialize Profile** - Enter a clear designation name for the actor (e.g., "Lead Protagonist", "Sci-Fi Soldier"). Click Next.
+4. **Step 2: Intelligence** - Click **Auto-Analyze Identity** to have the AI scan the character and automatically extract their facial structure, style, wardrobe, and preservation rules. If analysis fails or you prefer to write it yourself, click **Manual Entry**.
+5. **Step 3: Review & Adjust** - Review the AI's generated metadata. You can edit the Identity Summary, Style Summary, and Wardrobe Summary. Carefully check the **Preservation Rules** (traits the AI must strictly preserve) and **Avoidance Rules** (traits or errors it must avoid) and adjust them if needed. Click **Confirm Identity Lock**.
+6. **Step 4: Routing** - The actor's biometric identity is now locked and saved to your Cast list with a special profile. Choose where to send them next:
+   - **Send to Stage:** Places the actor directly onto the Scene Canvas in STAGING.
+   - **Wardrobe Studio:** Routes the actor into WARDROBE so you can design and fit costumes for this locked identity.
+   - **Props & Accessories:** Routes the actor into PROPS.
+   - **Create Pitch Sheet:** Sends the approved identity directly to PORTRAIT's Pitch Sheet workflow to build a reference board.
+   - **Save to Cast Only:** Closes the workflow while keeping the actor in your active cast list.
 
 ### Refine a Face
 

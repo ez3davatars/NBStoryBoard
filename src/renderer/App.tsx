@@ -1,5 +1,6 @@
 import { useEffect, useState, Component, useCallback, useRef, useMemo } from 'react';
 import type { ReactNode, ErrorInfo } from 'react';
+import { createPortal } from 'react-dom';
 import SceneCanvas from './components/SceneCanvas';
 import WardrobeStudio from './components/WardrobeStudio';
 import PropAccessoryStudio from './components/PropAccessoryStudio';
@@ -1800,8 +1801,14 @@ const App = () => {
                 </span>
                 </button>
 
-                {showCreditUsage && billingHeaderState.canOpenUsage && (
-                  <div className="absolute right-0 top-[calc(100%+12px)] z-[9999] w-[340px] rounded-xl border border-white/10 bg-[#111113] shadow-2xl shadow-black/60 p-3 text-left">
+                {showCreditUsage && billingHeaderState.canOpenUsage && createPortal(
+                  <div 
+                    className="fixed z-[9999] w-[340px] rounded-xl border border-white/10 bg-[#111113] shadow-2xl shadow-black/60 p-3 text-left"
+                    style={{
+                      top: creditUsagePopoverRef.current ? creditUsagePopoverRef.current.getBoundingClientRect().bottom + 12 : 0,
+                      right: creditUsagePopoverRef.current ? window.innerWidth - creditUsagePopoverRef.current.getBoundingClientRect().right : 0,
+                    }}
+                  >
                     <div className="flex items-start justify-between gap-4 border-b border-white/10 pb-2">
                       <div>
                         <div className="text-[10px] font-black uppercase tracking-[0.18em] text-blue-400">Hosted Usage</div>
@@ -1874,7 +1881,8 @@ const App = () => {
                     >
                       Refresh Usage
                     </button>
-                  </div>
+                  </div>,
+                  document.body
                 )}
               </div>
 
