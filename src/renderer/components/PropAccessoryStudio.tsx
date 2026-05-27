@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
     Package, RefreshCcw, Maximize, Sparkles,
-    Download, X, Save, Upload, Trash2, ArrowRight, FolderOutput
+    Download, X, Save, Upload, Trash2, ArrowRight, FolderOutput,
+    ChevronDown, History
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
@@ -159,6 +160,9 @@ const PropLibrarySkeletonCard = () => (
 );
 
 const PropAccessoryStudio = () => {
+    const [isRecentGenerationsOpen, setIsRecentGenerationsOpen] = useState(true);
+    const recentStoreGenerations = useRecentGenerationsStore(state => state.recentGenerations);
+    const hasRecentGenerations = recentStoreGenerations.filter(g => g.studio === 'props').length > 0;
     const [libraryLoading, setLibraryLoading] = useState(false);
     const { state, dispatch } = useAppContext();
     const {
@@ -1219,18 +1223,50 @@ OUTPUT
                                 )}
 
                                 {/* RECENT GENERATIONS STRIP (Prop Designer viewport) */}
-                                <div className="absolute bottom-2 left-0 right-0 z-50 pointer-events-auto flex justify-center px-4">
-                                    <RecentGenerationsStrip
-                                        studio="props"
-                                        className="w-full max-w-3xl bg-black/80 backdrop-blur-md rounded-2xl border border-white/10"
-                                        onSelectGeneration={(gen) => {
-                                            setDesignerImage(gen.displayUrl);
-                                        }}
-                                        onExportGeneration={(gen) => {
-                                            saveToProps(gen.displayUrl, gen.prompt || designerPrompt);
-                                            useRecentGenerationsStore.getState().markExported(gen.id);
-                                        }}
-                                    />
+                                {isRecentGenerationsOpen && hasRecentGenerations && (
+                                    <div className="absolute bottom-2 left-0 right-0 z-50 pointer-events-none flex justify-center px-4 transition-all duration-200 ease-out opacity-100 translate-y-0">
+                                        <div className="relative w-full max-w-3xl pointer-events-auto">
+                                            <button
+                                                type="button"
+                                                className="absolute -top-3.5 left-1/2 -translate-x-1/2 z-[60] bg-[#1a1a1c]/90 border border-white/10 rounded-full p-0.5 text-gray-400 hover:text-white hover:bg-black transition-colors shadow-lg"
+                                                aria-label="Hide recent generations"
+                                                title="Hide recent generations"
+                                                onClick={() => setIsRecentGenerationsOpen(false)}
+                                            >
+                                                <ChevronDown className="w-4 h-4" />
+                                            </button>
+                                            <div className="transition-all duration-200 ease-out opacity-100 scale-100">
+                                                <RecentGenerationsStrip
+                                                    studio="props"
+                                                    className="w-full bg-black/80 backdrop-blur-md rounded-2xl border border-white/10"
+                                                    onSelectGeneration={(gen) => {
+                                                        setDesignerImage(gen.displayUrl);
+                                                    }}
+                                                    onExportGeneration={(gen) => {
+                                                        saveToProps(gen.displayUrl, gen.prompt || designerPrompt);
+                                                        useRecentGenerationsStore.getState().markExported(gen.id);
+                                                    }}
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                <div className="absolute top-4 right-4 flex items-center gap-2 z-20">
+                                    {!isRecentGenerationsOpen && hasRecentGenerations && (
+                                        <button
+                                            onClick={() => setIsRecentGenerationsOpen(true)}
+                                            aria-label="Show recent generations"
+                                            title="Show recent generations"
+                                            className="!p-0 bg-gray-500/10 hover:bg-gray-500 text-gray-400 hover:text-white w-9 h-9 rounded-full flex items-center justify-center transition-all active:scale-95 border border-gray-500/20"
+                                        >
+                                            <History className="w-4 h-4" />
+                                        </button>
+                                    )}
+
+                                    <div className="bg-black/60 px-3 py-1.5 rounded-full border border-white/10 text-[9px] font-black text-gray-400 uppercase tracking-[0.2em] backdrop-blur-sm">
+                                        Prop Designer
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -1309,6 +1345,17 @@ OUTPUT
                                         <div className="flex min-w-0 items-center gap-3">
                                             <div className={`w-2 h-2 rounded-full ${appliedImage ? 'bg-emerald-500 -[0_0_8px_rgba(16,185,129,0.6)]' : 'bg-gray-600'}`} />
                                             <span className="min-w-0 truncate text-xs font-black uppercase tracking-widest text-gray-400">Preview Stage</span>
+
+                                            {!isRecentGenerationsOpen && hasRecentGenerations && (
+                                                <button
+                                                    onClick={() => setIsRecentGenerationsOpen(true)}
+                                                    aria-label="Show recent generations"
+                                                    title="Show recent generations"
+                                                    className="!p-0 bg-gray-500/10 hover:bg-gray-500 text-gray-400 hover:text-white w-9 h-9 rounded-full flex items-center justify-center transition-all active:scale-95 border border-gray-500/20 ml-2"
+                                                >
+                                                    <History className="w-4 h-4" />
+                                                </button>
+                                            )}
                                         </div>
 
                                         {/* Header Actions */}
@@ -1346,19 +1393,34 @@ OUTPUT
                                         )}
                                     </div>
                                     {/* RECENT GENERATIONS STRIP (Application Room) */}
-                                    <div className="absolute bottom-2 left-0 right-0 z-50 pointer-events-auto flex justify-center px-4">
-                                        <RecentGenerationsStrip
-                                            studio="props"
-                                            className="w-full max-w-3xl bg-black/80 backdrop-blur-md rounded-2xl border border-white/10"
-                                            onSelectGeneration={(gen) => {
-                                                setAppliedImage(gen.displayUrl);
-                                            }}
-                                            onExportGeneration={(gen) => {
-                                                setAppliedImage(gen.displayUrl);
-                                                openActorSaveModal(gen.displayUrl, gen.id);
-                                            }}
-                                        />
-                                    </div>
+                                    {isRecentGenerationsOpen && hasRecentGenerations && (
+                                        <div className="absolute bottom-2 left-0 right-0 z-50 pointer-events-none flex justify-center px-4 transition-all duration-200 ease-out opacity-100 translate-y-0">
+                                            <div className="relative w-full max-w-3xl pointer-events-auto">
+                                                <button
+                                                    type="button"
+                                                    className="absolute -top-3.5 left-1/2 -translate-x-1/2 z-[60] bg-[#1a1a1c]/90 border border-white/10 rounded-full p-0.5 text-gray-400 hover:text-white hover:bg-black transition-colors shadow-lg"
+                                                    aria-label="Hide recent generations"
+                                                    title="Hide recent generations"
+                                                    onClick={() => setIsRecentGenerationsOpen(false)}
+                                                >
+                                                    <ChevronDown className="w-4 h-4" />
+                                                </button>
+                                                <div className="transition-all duration-200 ease-out opacity-100 scale-100">
+                                                    <RecentGenerationsStrip
+                                                        studio="props"
+                                                        className="w-full bg-black/80 backdrop-blur-md rounded-2xl border border-white/10"
+                                                        onSelectGeneration={(gen) => {
+                                                            setAppliedImage(gen.displayUrl);
+                                                        }}
+                                                        onExportGeneration={(gen) => {
+                                                            setAppliedImage(gen.displayUrl);
+                                                            openActorSaveModal(gen.displayUrl, gen.id);
+                                                        }}
+                                                    />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         </div>

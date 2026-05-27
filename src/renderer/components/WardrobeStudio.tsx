@@ -3,7 +3,8 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Upload, RefreshCcw, Maximize, Shirt, Sparkles, Download,
-    UserPlus, X, Trash2, CheckCircle2, FolderPlus, Zap, HelpCircle
+    UserPlus, X, Trash2, CheckCircle2, FolderPlus, Zap, HelpCircle,
+    ChevronDown, History
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
@@ -516,6 +517,9 @@ const WardrobeLibrarySkeletonCard = () => (
 
 // --- WARDROBE STUDIO COMPONENT ---
 const WardrobeStudio = () => {
+    const [isRecentGenerationsOpen, setIsRecentGenerationsOpen] = useState(true);
+    const recentStoreGenerations = useRecentGenerationsStore(state => state.recentGenerations);
+    const hasRecentGenerations = recentStoreGenerations.filter(g => g.studio === 'wardrobe').length > 0;
     const [libraryLoading, setLibraryLoading] = useState(false);
     const { state, dispatch } = useAppContext();
     const [activeTab, setActiveTab] = useState<'designer' | 'library'>('designer');
@@ -3499,23 +3503,51 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                 )}
 
                                 {/* RECENT GENERATIONS STRIP (Costume Designer viewport) */}
-                                <div className="absolute bottom-2 left-0 right-0 z-50 pointer-events-auto flex justify-center px-4">
-                                    <RecentGenerationsStrip
-                                        studio="wardrobe"
-                                        showSingle
-                                        className="w-full max-w-3xl bg-black/80 backdrop-blur-md rounded-2xl border border-white/10"
-                                        onSelectGeneration={(gen) => {
-                                            setDesignerImage(gen.displayUrl);
-                                        }}
-                                        onExportGeneration={async (gen) => {
-                                            setDesignerImage(gen.displayUrl);
-                                            await saveToWardrobe(gen.displayUrl, gen.prompt || designerPrompt || 'Generated Costume');
-                                            useRecentGenerationsStore.getState().markExported(gen.id);
-                                        }}
-                                    />
-                                </div>
+                                {isRecentGenerationsOpen && hasRecentGenerations && (
+                                    <div className="absolute bottom-2 left-0 right-0 z-50 pointer-events-none flex justify-center px-4 transition-all duration-200 ease-out opacity-100 translate-y-0">
+                                        <div className="relative w-full max-w-3xl pointer-events-auto">
+                                            <button
+                                                type="button"
+                                                className="absolute -top-3.5 left-1/2 -translate-x-1/2 z-[60] bg-[#1a1a1c]/90 border border-white/10 rounded-full p-0.5 text-gray-400 hover:text-white hover:bg-black transition-colors shadow-lg"
+                                                aria-label="Hide recent generations"
+                                                title="Hide recent generations"
+                                                onClick={() => setIsRecentGenerationsOpen(false)}
+                                            >
+                                                <ChevronDown className="w-4 h-4" />
+                                            </button>
+                                            <div className="transition-all duration-200 ease-out opacity-100 scale-100">
+                                                <RecentGenerationsStrip
+                                                    studio="wardrobe"
+                                                    showSingle
+                                                    className="w-full bg-black/80 backdrop-blur-md rounded-2xl border border-white/10"
+                                                    onSelectGeneration={(gen) => {
+                                                        setDesignerImage(gen.displayUrl);
+                                                    }}
+                                                    onExportGeneration={async (gen) => {
+                                                        setDesignerImage(gen.displayUrl);
+                                                        await saveToWardrobe(gen.displayUrl, gen.prompt || designerPrompt || 'Generated Costume');
+                                                        useRecentGenerationsStore.getState().markExported(gen.id);
+                                                    }}
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
 
                                 <div className="absolute top-4 right-4 flex items-center gap-2">
+                                    {!isRecentGenerationsOpen && hasRecentGenerations && (
+                                        <HelpTooltip zone="wardrobe" id="showRecentGenerationsButton">
+                                            <button
+                                                onClick={() => setIsRecentGenerationsOpen(true)}
+                                                aria-label="Show recent generations"
+                                                title="Show recent generations"
+                                                className="!p-0 bg-gray-500/10 hover:bg-gray-500 text-gray-400 hover:text-white w-9 h-9 rounded-full flex items-center justify-center transition-all active:scale-95 border border-gray-500/20"
+                                            >
+                                                <History className="w-4 h-4" />
+                                            </button>
+                                        </HelpTooltip>
+                                    )}
+
                                     <button
                                         onClick={(e) => {
                                             e.stopPropagation();
@@ -3695,6 +3727,19 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                     )}
 
                                     <div className="absolute top-6 left-6 flex items-center gap-2 z-20">
+                                        {!isRecentGenerationsOpen && hasRecentGenerations && (
+                                            <HelpTooltip zone="wardrobe" id="showRecentGenerationsButton">
+                                                <button
+                                                    onClick={() => setIsRecentGenerationsOpen(true)}
+                                                    aria-label="Show recent generations"
+                                                    title="Show recent generations"
+                                                    className="!p-0 bg-gray-500/10 hover:bg-gray-500 text-gray-400 hover:text-white w-9 h-9 rounded-full flex items-center justify-center transition-all active:scale-95 border border-gray-500/20"
+                                                >
+                                                    <History className="w-4 h-4" />
+                                                </button>
+                                            </HelpTooltip>
+                                        )}
+
                                         <div className="bg-blue-600 text-[10px] font-black uppercase px-3 py-1 rounded-full text-white ">FITTING MIRROR</div>
                                         <div className="bg-black/40 backdrop-blur-md text-[9px] font-bold text-gray-300 px-3 py-1 rounded-full border border-white/10 uppercase tracking-widest">
                                             {selectedCharacter ? selectedCharacter.name : 'No Subject'} + {selectedCostume ? selectedCostume.name : 'No Costume'}
@@ -3724,27 +3769,42 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                     </div>
 
                                     {/* RECENT GENERATIONS STRIP (Try-On Room) */}
-                                    <div className="absolute bottom-2 left-0 right-0 z-50 pointer-events-auto flex justify-center px-4">
-                                        <RecentGenerationsStrip
-                                            studio="wardrobe"
-                                            className="w-full max-w-3xl bg-black/80 backdrop-blur-md rounded-2xl border border-white/10"
-                                            onSelectGeneration={(gen) => {
-                                                tryOnOutputModeRef.current = 'front';
-                                                resetTryOnTurnaroundOutputs({
-                                                    fittedImage: gen.displayUrl,
-                                                    tryOnOutputMode: 'front'
-                                                });
-                                            }}
-                                            onExportGeneration={(gen) => {
-                                                tryOnOutputModeRef.current = 'front';
-                                                resetTryOnTurnaroundOutputs({
-                                                    fittedImage: gen.displayUrl,
-                                                    tryOnOutputMode: 'front'
-                                                });
-                                                handleOpenSaveModal(gen.displayUrl, gen.id);
-                                            }}
-                                        />
-                                    </div>
+                                    {isRecentGenerationsOpen && hasRecentGenerations && (
+                                        <div className="absolute bottom-2 left-0 right-0 z-50 pointer-events-none flex justify-center px-4 transition-all duration-200 ease-out opacity-100 translate-y-0">
+                                            <div className="relative w-full max-w-3xl pointer-events-auto">
+                                                <button
+                                                    type="button"
+                                                    className="absolute -top-3.5 left-1/2 -translate-x-1/2 z-[60] bg-[#1a1a1c]/90 border border-white/10 rounded-full p-0.5 text-gray-400 hover:text-white hover:bg-black transition-colors shadow-lg"
+                                                    aria-label="Hide recent generations"
+                                                    title="Hide recent generations"
+                                                    onClick={() => setIsRecentGenerationsOpen(false)}
+                                                >
+                                                    <ChevronDown className="w-4 h-4" />
+                                                </button>
+                                                <div className="transition-all duration-200 ease-out opacity-100 scale-100">
+                                                    <RecentGenerationsStrip
+                                                        studio="wardrobe"
+                                                        className="w-full bg-black/80 backdrop-blur-md rounded-2xl border border-white/10"
+                                                        onSelectGeneration={(gen) => {
+                                                            tryOnOutputModeRef.current = 'front';
+                                                            resetTryOnTurnaroundOutputs({
+                                                                fittedImage: gen.displayUrl,
+                                                                tryOnOutputMode: 'front'
+                                                            });
+                                                        }}
+                                                        onExportGeneration={(gen) => {
+                                                            tryOnOutputModeRef.current = 'front';
+                                                            resetTryOnTurnaroundOutputs({
+                                                                fittedImage: gen.displayUrl,
+                                                                tryOnOutputMode: 'front'
+                                                            });
+                                                            handleOpenSaveModal(gen.displayUrl, gen.id);
+                                                        }}
+                                                    />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
 
                                 </div>
 
@@ -3905,26 +3965,28 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                     )}
 
                     {/* RECENT GENERATIONS STRIP */}
-                    <RecentGenerationsStrip
-                        studio="wardrobe"
-                        className="shrink-0 mt-2"
-                        onSelectGeneration={(gen) => {
-                            tryOnOutputModeRef.current = 'front';
-                            resetTryOnTurnaroundOutputs({
-                                fittedImage: gen.displayUrl,
-                                tryOnOutputMode: 'front'
-                            });
-                        }}
-                        onExportGeneration={(gen) => {
-                            // Trigger the save modal flow with the selected generation
-                            tryOnOutputModeRef.current = 'front';
-                            resetTryOnTurnaroundOutputs({
-                                fittedImage: gen.displayUrl,
-                                tryOnOutputMode: 'front'
-                            });
-                            handleOpenSaveModal(gen.displayUrl, gen.id);
-                        }}
-                    />
+                    {!fittedImage && (
+                        <RecentGenerationsStrip
+                            studio="wardrobe"
+                            className="shrink-0 mt-2"
+                            onSelectGeneration={(gen) => {
+                                tryOnOutputModeRef.current = 'front';
+                                resetTryOnTurnaroundOutputs({
+                                    fittedImage: gen.displayUrl,
+                                    tryOnOutputMode: 'front'
+                                });
+                            }}
+                            onExportGeneration={(gen) => {
+                                // Trigger the save modal flow with the selected generation
+                                tryOnOutputModeRef.current = 'front';
+                                resetTryOnTurnaroundOutputs({
+                                    fittedImage: gen.displayUrl,
+                                    tryOnOutputMode: 'front'
+                                });
+                                handleOpenSaveModal(gen.displayUrl, gen.id);
+                            }}
+                        />
+                    )}
 
 
                     {/* SAVE TO LIBRARY MODAL (Refactored) */}
