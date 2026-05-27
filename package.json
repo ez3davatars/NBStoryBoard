@@ -17,7 +17,8 @@
     "dist": "electron-vite build --config src/electron.vite.config.ts && electron-builder",
     "build:win": "npm run build:desktop && electron-builder --win",
     "build:mac": "npm run build:desktop && electron-builder --mac",
-    "build:linux": "npm run build:desktop && electron-builder --linux"
+    "build:linux": "npm run build:desktop && electron-builder --linux",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1024.0",

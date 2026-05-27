@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { StrictMode, useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
@@ -9,15 +10,13 @@ let launchReadyNotificationSent = false
 
 const LaunchReadySignal = () => {
   useEffect(() => {
-    let timeoutId: number | undefined
-
     const notifyReady = () => {
       if (launchReadyNotificationSent) return
       launchReadyNotificationSent = true
       window.electronAPI?.notifyRendererReady?.()
     }
 
-    timeoutId = window.setTimeout(notifyReady, 250)
+    const timeoutId = window.setTimeout(notifyReady, 250)
 
     return () => {
       if (timeoutId) window.clearTimeout(timeoutId)
