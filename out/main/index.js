@@ -702,6 +702,60 @@ function registerFileIpcHandlers() {
       return false;
     }
   });
+  electron.ipcMain.handle("file:deleteLibraryPackageFolder", async (_event, packageFolderPath) => {
+    try {
+      const resolvedPath = path__namespace.resolve(packageFolderPath);
+      const normalizedPath = path__namespace.normalize(resolvedPath);
+      const includesProductionActors = normalizedPath.includes(path__namespace.join("Library", "ProductionActors")) || normalizedPath.includes("ProductionActors");
+      if (!includesProductionActors) {
+        console.warn("[IPC deleteLibraryPackageFolder] Safe check failed: Path must be inside Library/ProductionActors.", packageFolderPath);
+        return false;
+      }
+      let isDirectory = false;
+      try {
+        const stats = await fs__namespace.stat(normalizedPath);
+        isDirectory = stats.isDirectory();
+      } catch (e) {
+        console.warn("[IPC deleteLibraryPackageFolder] Path is not a valid directory or accessible:", packageFolderPath);
+        return false;
+      }
+      if (!isDirectory) {
+        console.warn("[IPC deleteLibraryPackageFolder] Path is not a directory:", packageFolderPath);
+        return false;
+      }
+      const actorJsonPath = path__namespace.join(normalizedPath, "actor.json");
+      let actorJsonExists = false;
+      try {
+        await fs__namespace.access(actorJsonPath);
+        actorJsonExists = true;
+      } catch {
+      }
+      let isFolderInIndex = false;
+      try {
+        const libraryIndexPath = path__namespace.join(normalizedPath, "..", "..", "library-index.json");
+        const indexText = await fs__namespace.readFile(libraryIndexPath, "utf-8");
+        if (indexText) {
+          const parsed = JSON.parse(indexText);
+          if (parsed && Array.isArray(parsed.assets)) {
+            const folderBaseName = path__namespace.basename(normalizedPath);
+            isFolderInIndex = parsed.assets.some(
+              (a) => a.folder === `ProductionActors/${folderBaseName}` || a.folder?.includes(folderBaseName)
+            );
+          }
+        }
+      } catch (e) {
+      }
+      if (!actorJsonExists && !isFolderInIndex) {
+        console.warn("[IPC deleteLibraryPackageFolder] Safe check failed: neither actor.json exists nor is directory listed in library-index.json.", packageFolderPath);
+        return false;
+      }
+      await fs__namespace.rm(normalizedPath, { recursive: true, force: true });
+      return true;
+    } catch (error) {
+      console.error("[IPC deleteLibraryPackageFolder] Error deleting folder:", error);
+      return false;
+    }
+  });
   electron.ipcMain.handle("file:rename", async (_event, oldPath, newPath) => {
     try {
       const dirname = path__namespace.dirname(newPath);

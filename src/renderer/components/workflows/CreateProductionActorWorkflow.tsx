@@ -87,47 +87,79 @@ export const CreateProductionActorWorkflow: React.FC = () => {
         setStep(3);
     };
 
-    const handleSaveAndRoute = async (route?: 'wardrobe' | 'staging' | 'props' | 'pitch') => {
+    const handleSaveAndRoute = async (route?: 'wardrobe' | 'staging' | 'props' | 'pitch', saveToLibrary = true) => {
         try {
             dispatch({ type: 'ADD_LOG', payload: { message: "Materializing Production Actor...", type: 'info' } });
             
-            const mat = await LibraryAssetMaterializer.materializeCastAsset({
-                sourceUrl: source.imageUrl,
-                saveDirectoryPath: state.saveDirectoryPath,
-                actorName: actorName,
-                category: 'Production Cast'
-            });
-
-            const profile: ProductionActorProfile = {
-                id: `prod-actor-${Date.now()}`,
+            const actorId = `prod-actor-${Date.now()}`;
+            const nowIso = new Date().toISOString();
+            const pendingProfile = {
+                id: actorId,
                 name: actorName,
-                sourceImageUrl: mat.sourceUrl,
-                approvedImageUrl: mat.previewUrl,
                 identitySummary,
                 styleSummary,
                 wardrobeSummary,
                 preserveRules: preserveRules.split(',').map(s => s.trim()),
                 avoidRules: avoidRules.split(',').map(s => s.trim()),
-                createdAt: new Date().toISOString(),
-                updatedAt: new Date().toISOString(),
+                createdAt: nowIso,
+                updatedAt: nowIso
+            };
+
+            const mat = await LibraryAssetMaterializer.materializeCastAsset({
+                sourceUrl: source.imageUrl,
+                saveDirectoryPath: state.saveDirectoryPath,
+                actorName: actorName,
+                category: 'Production Cast',
+                productionProfile: saveToLibrary ? pendingProfile : undefined,
+                sourcePitchSheetUrl: (source as any).pitchSheetUrl || state.storyboardSource?.url || undefined
+            });
+
+            const profile: ProductionActorProfile = {
+                ...pendingProfile,
+                sourceImageUrl: mat.sourceUrl,
+                approvedImageUrl: mat.previewUrl
+            };
+
+            const newActor = {
+                id: profile.id,
+                url: mat.previewUrl,
+                localPath: mat.localPath || undefined,
+                previewUrl: mat.previewUrl,
+                sourceUrl: mat.sourceUrl,
+                tag: 'front' as const,
+                name: profile.name,
+                filename: mat.filename,
+                isProductionActor: true,
+                assetType: "production_actor" as const,
+                productionActorProfile: profile,
+                productionProfile: profile,
+                category: "production_actors",
+                studio: "production_actors",
+                categoryKey: "production_actors",
+                profile: {
+                    identity: profile.name,
+                    wardrobe: profile.wardrobeSummary || '',
+                    accessories: '',
+                    style: profile.styleSummary || 'biometric_realism'
+                }
             };
 
             dispatch({
                 type: 'ADD_CAST',
-                payload: {
-                    id: profile.id,
-                    url: mat.previewUrl,
-                    localPath: mat.localPath || undefined,
-                    previewUrl: mat.previewUrl,
-                    sourceUrl: mat.sourceUrl,
-                    tag: 'front',
-                    name: profile.name,
-                    filename: mat.filename,
-                    productionProfile: profile
-                }
+                payload: newActor
             });
 
-            dispatch({ type: 'ADD_LOG', payload: { message: `Production Actor ${profile.name} locked and saved.`, type: 'success' } });
+            if (saveToLibrary) {
+                dispatch({
+                    type: 'ADD_ACTOR_LIBRARY',
+                    payload: newActor
+                });
+            }
+
+            const logMsg = saveToLibrary 
+                ? `Production Actor ${profile.name} saved to library and cast.`
+                : `Production Actor ${profile.name} added to cast only.`;
+            dispatch({ type: 'ADD_LOG', payload: { message: logMsg, type: 'success' } });
             
             if (route) {
                 if (route === 'pitch') {
@@ -393,12 +425,20 @@ export const CreateProductionActorWorkflow: React.FC = () => {
 
                                     <div className="mt-8 pt-6 border-t border-border flex items-center justify-between">
                                         <button onClick={() => setStep(3)} className="px-4 py-2 text-muted hover:text-white uppercase text-xs font-bold">Back</button>
-                                        <button 
-                                            onClick={() => void handleSaveAndRoute()}
-                                            className="px-6 py-3 bg-white/10 text-white hover:bg-white/20 font-black uppercase tracking-widest rounded-lg transition-colors"
-                                        >
-                                            Save to Cast Only
-                                        </button>
+                                        <div className="flex gap-4">
+                                            <button 
+                                                onClick={() => void handleSaveAndRoute(undefined, false)}
+                                                className="px-6 py-3 bg-white/5 border border-white/10 text-muted hover:bg-white/10 hover:text-white font-black uppercase tracking-widest rounded-lg transition-all text-xs"
+                                            >
+                                                Save to Cast Only
+                                            </button>
+                                            <button 
+                                                onClick={() => void handleSaveAndRoute(undefined, true)}
+                                                className="px-6 py-3 bg-accent/15 text-accent border border-accent/30 hover:bg-accent/25 hover:text-accent-2 hover:border-accent/50 font-black uppercase tracking-widest rounded-lg transition-all text-xs"
+                                            >
+                                                Save Production Actor
+                                            </button>
+                                        </div>
                                     </div>
                                 </div>
                             )}

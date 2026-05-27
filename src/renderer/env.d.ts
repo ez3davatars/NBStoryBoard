@@ -68,6 +68,7 @@ declare global {
     showSaveDialog?: (options: SaveDialogOptions) => Promise<string | null>;
     showOpenDialog?: (options: OpenDialogOptions) => Promise<string[] | null>;
     deleteFile?: (path: string) => Promise<boolean>;
+    deleteLibraryPackageFolder?: (path: string) => Promise<boolean>;
     renameFile?: (oldPath: string, newPath: string) => Promise<boolean>;
     getWorkerStatus?: () => Promise<{
       imageWorker: { status: string; lastError?: string | null; startedAt?: number | null; pid?: number | null };

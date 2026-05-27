@@ -23,8 +23,15 @@ import coverRealism from '../assets/cover-realism.png';
 import coverAnim from '../assets/cover-anim.png';
 import coverIllustration from '../assets/cover-illustration.png';
 import coverScifi from '../assets/cover-scifi.png';
+import coverProduction from '../assets/cover-production.png';
 
 const STUDIO_FOLDERS = [
+  {
+    id: 'production_actors',
+    label: 'Production Actors',
+    description: 'Authoritative Identity Packaged Actors',
+    image: coverProduction,
+  },
   {
     id: 'realism',
     label: 'Realism',

@@ -81,6 +81,45 @@ const formatNegativesForGemini = (merged: string, maxItems = 18): string => {
   return lines.join('\n');
 };
 
+export const buildProductionActorPromptContract = (profile: any, refLabel: string): string => {
+  if (!profile) return '';
+
+  const displayName = profile.displayName || profile.name || 'Production Actor';
+  const identitySummary = profile.identitySummary || 'No identity summary available.';
+  const styleSummary = profile.styleSummary || 'No style summary available.';
+  const wardrobeSummary = profile.wardrobeSummary || 'No wardrobe summary available.';
+  
+  const preserveRules = Array.isArray(profile.preserveRules) ? profile.preserveRules : [];
+  const avoidRules = Array.isArray(profile.avoidRules) ? profile.avoidRules : [];
+
+  const preserveStr = preserveRules.length > 0 ? preserveRules.join(', ') : 'None';
+  const avoidStr = avoidRules.length > 0 ? avoidRules.join(', ') : 'None';
+
+  return `PRODUCTION ACTOR LOCK FOR ${refLabel}:
+Actor Name: ${displayName}
+
+Identity Summary:
+${identitySummary}
+
+Style Summary:
+${styleSummary}
+
+Wardrobe Summary:
+${wardrobeSummary}
+
+Preserve:
+${preserveStr}
+
+Avoid:
+${avoidStr}
+
+Rules:
+This Production Actor metadata is authoritative for identity continuity.
+The reference image provides visual support, but the locked actor profile defines what must be preserved.
+Do not change the actor’s face, body identity, wardrobe identity, core style, or preserve-list traits unless the user explicitly requests an edit.
+Avoid all avoid-list traits.`;
+};
+
 export const getActiveReferenceSlots = (slots: ReferenceSlot[]) => {
   return slots
     .filter(s => !!s.url && s.active)
@@ -469,6 +508,11 @@ export const compileV3DirectorPrompt = (
     activeRefs.forEach(ref => {
       const txt = (ref.analysis || ref.name || '').trim();
       refBlock += `- Ref ${ref.index}: ${txt || 'No analysis provided'}\n`;
+      
+      const profile = ref.productionActorProfile || ref.productionProfile;
+      if (profile) {
+        refBlock += `\n` + buildProductionActorPromptContract(profile, `Ref ${ref.index}`) + `\n\n`;
+      }
     });
     segments.push(refBlock.trim());
   }
@@ -984,10 +1028,18 @@ export const buildStrictAnchorReplacementPrompt = (p: {
             }));
 
     const refLines = p.activeRefs.map(r => {
+        let base = '';
         if (p.replaceAnchorSubjects) {
-            return `[REFERENCE: ${r.name || `Ref ${r.index}`}]: Use this exact image to define the target subject's identity and biometric morphology (face + head + neck + body build). Do NOT copy reference clothing, headwear fit, or logos unless explicitly requested.`;
+            base = `[REFERENCE: ${r.name || `Ref ${r.index}`}]: Use this exact image to define the target subject's identity and biometric morphology (face + head + neck + body build). Do NOT copy reference clothing, headwear fit, or logos unless explicitly requested.`;
+        } else {
+            base = `[REFERENCE: ${r.name || `Ref ${r.index}`}]: Use this exact image to define the identity, clothing, and traits of the target subject.`;
         }
-        return `[REFERENCE: ${r.name || `Ref ${r.index}`}]: Use this exact image to define the identity, clothing, and traits of the target subject.`;
+
+        const profile = r.productionActorProfile || r.productionProfile;
+        if (profile) {
+            base += `\n\n` + buildProductionActorPromptContract(profile, `Ref ${r.index}`);
+        }
+        return base;
     });
 
     const identityFingerprintLines = p.activeRefs.map((r) => {

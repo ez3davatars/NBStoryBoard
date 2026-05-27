@@ -103,6 +103,73 @@ export function registerFileIpcHandlers() {
     }
   });
 
+  ipcMain.handle('file:deleteLibraryPackageFolder', async (_event, packageFolderPath: string) => {
+    try {
+      const resolvedPath = path.resolve(packageFolderPath);
+      const normalizedPath = path.normalize(resolvedPath);
+      
+      // 1. Check resolved path is inside Library/ProductionActors
+      const includesProductionActors = normalizedPath.includes(path.join('Library', 'ProductionActors')) || normalizedPath.includes('ProductionActors');
+      if (!includesProductionActors) {
+        console.warn("[IPC deleteLibraryPackageFolder] Safe check failed: Path must be inside Library/ProductionActors.", packageFolderPath);
+        return false;
+      }
+
+      // 2. Check path is a directory
+      let isDirectory = false;
+      try {
+        const stats = await fs.stat(normalizedPath);
+        isDirectory = stats.isDirectory();
+      } catch (e) {
+        console.warn("[IPC deleteLibraryPackageFolder] Path is not a valid directory or accessible:", packageFolderPath);
+        return false;
+      }
+      if (!isDirectory) {
+        console.warn("[IPC deleteLibraryPackageFolder] Path is not a directory:", packageFolderPath);
+        return false;
+      }
+
+      // 3. Check actor.json exists inside the folder OR folder is listed in library-index.json
+      const actorJsonPath = path.join(normalizedPath, 'actor.json');
+      let actorJsonExists = false;
+      try {
+        await fs.access(actorJsonPath);
+        actorJsonExists = true;
+      } catch {}
+
+      let isFolderInIndex = false;
+      try {
+        // library-index.json lies two directories up (Library/library-index.json)
+        const libraryIndexPath = path.join(normalizedPath, '..', '..', 'library-index.json');
+        const indexText = await fs.readFile(libraryIndexPath, 'utf-8');
+        if (indexText) {
+          const parsed = JSON.parse(indexText);
+          if (parsed && Array.isArray(parsed.assets)) {
+            const folderBaseName = path.basename(normalizedPath);
+            isFolderInIndex = parsed.assets.some((a: any) => 
+              a.folder === `ProductionActors/${folderBaseName}` || 
+              a.folder?.includes(folderBaseName)
+            );
+          }
+        }
+      } catch (e) {
+        // Safe check error logging
+      }
+
+      if (!actorJsonExists && !isFolderInIndex) {
+        console.warn("[IPC deleteLibraryPackageFolder] Safe check failed: neither actor.json exists nor is directory listed in library-index.json.", packageFolderPath);
+        return false;
+      }
+
+      // Execute safe recursive deletion
+      await fs.rm(normalizedPath, { recursive: true, force: true });
+      return true;
+    } catch (error) {
+      console.error("[IPC deleteLibraryPackageFolder] Error deleting folder:", error);
+      return false;
+    }
+  });
+
   ipcMain.handle('file:rename', async (_event, oldPath: string, newPath: string) => {
     try {
       const dirname = path.dirname(newPath);

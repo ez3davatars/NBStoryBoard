@@ -133,7 +133,7 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
       expect(prompt).toContain('STYLE-SAFE VISIBLE LABELING');
       expect(prompt).toContain('STYLE-CALLOUT RULE');
       expect(prompt).toContain('Style affects rendering language only.');
-      expect(prompt).toContain('It must not change skull shape, face structure, hairline, eyes, brows, nose, mouth, jaw, facial asymmetry, age impression, body type, costume package, footwear, props, or world/era unless the user explicitly requests that.');
+      expect(prompt).toContain('It must not change head shape, scalp outline, face structure, hairline, eyes, brows, nose, mouth, jaw, facial asymmetry, age impression, body type, costume package, footwear, props, or world/era unless the user explicitly requests that.');
       expect(prompt).toContain('Source images are the identity authority when supplied.');
       expect(prompt).toContain('If style and likeness conflict, likeness wins.');
       expect(prompt).toContain('Head studies must preserve the same exact subject, and turnaround figures must not use generic mannequin faces.');
@@ -266,7 +266,7 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
     expect(prompt).toContain('Do not add a broad smile or friendly expression by default.');
     expect(prompt).toContain('The result must read as the same biometric person rendered in Premium Animated 3D.');
     expect(prompt).toContain('Allowed: smooth stylized animated 3D materials, premium animated lighting, simplified skin texture, clean CG surface.');
-    expect(prompt).toContain('Forbidden: changing the face design, changing expression, changing skull/head proportions, changing facial hair shape, changing age impression, changing body identity.');
+    expect(prompt).toContain('Forbidden: changing the face design, changing expression, changing head/scalp proportions, changing facial hair shape, changing age impression, changing body identity.');
     expect(prompt).toContain('PREMIUM ANIMATED 3D PANEL FAMILY LOCK');
     expect(prompt).toContain('Every panel containing the character must stay in the same premium animated 3D rendering family.');
     expect(prompt).toContain('Do not drift into live-action realism, photoreal portraiture, painterly concept art, flat illustration, claymation, cel animation, line-art mannequin studies, or semi-realistic off-style panels.');
@@ -281,7 +281,7 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
 
     expect(styleContract).toContain('premium Pixar-style animated 3D character rendering');
     expect(styleContract).toContain('same biometric actor translated into animated 3D');
-    expect(styleContract).toContain('Translate the same biometric actor into premium animated 3D.');
+    expect(styleContract).toContain('Treat this as an adult biometric actor translation into premium animated 3D, not a new animated character design.');
     expect(styleContract).toContain('renderFamily: premium_animated_3d');
     expect(styleContract).toContain('same biometric identity geometry preserved in stylized form');
     expect(styleContract).toContain('recognizable head silhouette, scalp shape, facial hair pattern, and age impression');
@@ -419,7 +419,7 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
     const prompt = buildCharacterPitchSheetPrompt(input);
 
     expect(inferProps(input)).toBe('');
-    expect(prompt).toContain('Props and signature items: No signature props specified.');
+    expect(prompt).toContain('Props and signature items: No distinctive props specified.');
     expect(prompt).toContain('WEAPON / PROP SAFETY RULE');
     expect(prompt).toContain('Do not invent weapons, combat props, tactical gear, holsters, utility rigs, armor, shields, or action accessories');
     expect(prompt).toContain('If no props are specified, do not add a weapon.');
@@ -478,7 +478,7 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
       expect(prompt).toContain('STYLIZED BIOMETRIC TRANSLATION RULE');
       expect(prompt).toContain('For stylized render styles, style changes the rendering/material language only.');
       expect(prompt).toContain('Biometric identity geometry remains locked.');
-      expect(prompt).toContain('Do not use the selected style as permission to invent a new face, new skull shape, new expression, new facial hair pattern, new age impression, or new body identity.');
+      expect(prompt).toContain('Do not use the selected style as permission to invent a new face, new head shape, new scalp outline, new expression, new facial hair pattern, new age impression, or new body identity.');
       expect(prompt).toContain('The output should look like the supplied biometric person translated into the selected style.');
     }
   });
@@ -532,8 +532,8 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
     })).map(callout => callout.label);
 
     expect(prompt).toContain('supporting pose render');
-    expect(prompt).toContain('Include one compact supporting pose render that preserves the same face, build, hairstyle, costume, props, body proportions, and emotional presence.');
-    expect(prompt).toContain('omit it instead of rendering a cartoon, flat illustration, vector, doodle, or off-style miniature.');
+    expect(prompt).toContain('Include at most one compact supporting pose render that preserves the same face, build, hairstyle, costume, props, body proportions, and emotional presence.');
+    expect(prompt).toContain('omit it instead of rendering a cartoon, flat illustration, vector, doodle, off-style miniature, or cropped anatomy fragment.');
     expect(prompt).toContain('GLOBAL CHARACTER INVARIANT CONTRACT');
     expect(prompt).toContain('The selected style changes rendering/material language only; it must not recast the person.');
     expect(prompt).toContain('Do not infer body mass from face/head/neck scans.');
@@ -797,7 +797,7 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
     expect(prompt).toContain('clean neutral studio background');
     expect(prompt).toContain('HEADSHOT BACKGROUND NEGATIVE EXCLUSIONS');
     expect(prompt).toContain('source image background, bedroom, hallway, door frame, wall corner, window, furniture');
-    expect(prompt).toContain('Head-study panels must use the sheet');
+    expect(prompt).toContain('place every rendered head study on the clean neutral studio background');
   });
 
   it('keeps premium board quality first while preserving actor-based identity', () => {
@@ -957,8 +957,8 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
     expect(prompt).toContain("Approved Portrait Source: Image A is the approved character portrait.");
 
     expect(prompt).toContain('SURFACE MARK FIDELITY CONTRACT');
-    expect(prompt).toContain('STRICT ADHERENCE TO BIOMETRIC DATA FOR SKIN DETAILS');
-    expect(prompt).toContain('NEVER draw raised, bumpy, dark brown, or black moles.');
+    expect(prompt).toContain('Preserve skin tone, age impression, general complexion, and natural facial texture.');
+    expect(prompt).toContain('Ignore temporary texture, lighting noise, compression noise, shaving texture, and non-identity surface noise.');
 
     expect(prompt).toContain('GROOMING FIDELITY CONTRACT');
     expect(prompt).toContain('CLEAN-SHAVEN CONTINUITY: If the reference subject/Image A is clean-shaven, there must be ABSOLUTELY NO mustache, no upper lip stubble');
@@ -974,10 +974,10 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
 
     const prompt = buildCharacterPitchSheetPrompt(input);
 
-    expect(prompt).toContain('exactly four signed head studies');
-    expect(prompt).toContain('no duplicate head viewpoints');
-    expect(prompt).toContain('SIGNED HEAD VIEW LOCK');
-    expect(prompt).toContain('If space is tight, omit Right Profile Head before duplicating or mislabeling');
+    expect(prompt).toContain('HEAD PANEL VALIDATION:');
+    expect(prompt).toContain('If a panel label specifies left, the rendered head must read left.');
+    expect(prompt).toContain('If a panel label specifies right, the rendered head must read right.');
+    expect(prompt).toContain('Head direction failure traits: head-direction mismatch, mirrored head duplication, left-right profile collapse, profile label mismatch, three-quarter label mismatch.');
 
     expect(prompt).toContain('CALLOUT TARGET ACCURACY RULE');
     expect(prompt).toContain('If no exact visible target exists, omit the callout');
@@ -1006,17 +1006,12 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
       ],
     }));
 
-    expect(prompt).toContain('SCAN + CHARACTER SOURCE AUTHORITY:');
-    expect(prompt).toContain('[IMAGE 1] is the locked generated character source.');
-    expect(prompt).toContain('Preserve [IMAGE 1] as the visual/design authority');
-    expect(prompt).toContain('BIOMETRIC BACKUP AUTHORITY:');
-    expect(prompt).toContain('[IMAGE 2+] are biometric identity backup references.');
-    expect(prompt).toContain('MULTI-VIEW CONSISTENCY:');
-    expect(prompt).toContain('All full-body and torso views must depict the same character from [IMAGE 1].');
-    expect(prompt).toContain('STYLE SOURCE LOCK:');
-    expect(prompt).toContain('Match the character render style of [IMAGE 1] unless the user explicitly selected');
-    expect(prompt).toContain('COSTUME MATCHED BEHAVIOR:');
-    expect(prompt).toContain('When Source Panel Display is "Costume Matched", use [IMAGE 1]\'s outfit/costume');
+    expect(prompt).toContain('SCAN + CHARACTER SOURCE CONTRACT:');
+    expect(prompt).toContain('Image A is the approved actor. The pitch sheet must expand Image A into a production character board.');
+    expect(prompt).toContain('Images B-F are not alternate character references.');
+    expect(prompt).toContain('Image A controls:');
+    expect(prompt).toContain('Images B-F must not control:');
+    expect(prompt).toContain('Preserve Image A’s render style unless the user explicitly selected another render style.');
   });
 
   it('enforces wardrobe authority override and filters collar callouts correctly', () => {
@@ -1052,7 +1047,7 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
     const prompt = buildCharacterPitchSheetPrompt(input);
 
     expect(prompt).toContain('CONTROLLED TEXT AND LABEL CONTRACT');
-    expect(prompt).toContain('NO SIGNATURE / APPROVAL MARKS');
+    expect(prompt).toContain('NO SIGNATURE / ARTIST MARK CONTRACT');
     expect(prompt).toContain('TURNAROUND ANATOMY INTEGRITY');
     expect(prompt).toContain('PERFORMANCE DIRECTION SCOPE FOR PITCH SHEET');
     expect(prompt).toContain('CALLOUT ACCURACY CONTRACT');

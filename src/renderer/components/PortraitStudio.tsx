@@ -35,7 +35,10 @@ import {
     sanitizeVisibleBoardLanguage,
     mapNanoCastStyleToPitchSheetRenderStyle,
     type CharacterPitchSheetInput,
-    type CharacterPitchSheetRenderStyle
+    type CharacterPitchSheetRenderStyle,
+    type CharacterPitchSheetFrameSize,
+    type CharacterPitchSheetMusculature,
+    type CharacterPitchSheetBuildInterpretation
 } from "../../prompts/characterPitchSheetPrompts";
 
 
@@ -263,6 +266,37 @@ const normalizePitchSheetRenderStyle = (value: unknown): NonNullable<CharacterPi
     return isKnownOption
         ? clean as NonNullable<CharacterPitchSheetInput["characterRenderStyle"]>
         : defaultCharacterPitchSheetInput.characterRenderStyle || "biometric_realism";
+};
+
+const normalizePitchSheetFrameSize = (
+    value: unknown
+): CharacterPitchSheetFrameSize | undefined => {
+    if (!value || typeof value !== "string") return undefined;
+    const allowed = new Set<string>(["small", "medium", "large"]);
+    return allowed.has(value) ? (value as CharacterPitchSheetFrameSize) : undefined;
+};
+
+const normalizePitchSheetMusculature = (
+    value: unknown
+): CharacterPitchSheetMusculature | undefined => {
+    if (!value || typeof value !== "string") return undefined;
+    const allowed = new Set<string>(["minimal", "average", "athletic", "muscular"]);
+    return allowed.has(value) ? (value as CharacterPitchSheetMusculature) : undefined;
+};
+
+const normalizePitchSheetBuildInterpretation = (
+    value: unknown
+): CharacterPitchSheetBuildInterpretation | undefined => {
+    if (!value || typeof value !== "string") return undefined;
+    const allowed = new Set<string>([
+        "lean",
+        "lean_average",
+        "average",
+        "athletic",
+        "soft_average",
+        "stocky"
+    ]);
+    return allowed.has(value) ? (value as CharacterPitchSheetBuildInterpretation) : undefined;
 };
 
 const BOARD_PRESENTATION_STYLE_OPTIONS: Array<{
@@ -1013,7 +1047,20 @@ export default function PortraitStudio() {
     // --- COMPILER (PHASE 2) ---
     const compiledPrompt = useMemo(() => {
         if (mode === "pitch_sheet") {
-            return buildCharacterPitchSheetPrompt(pitchSheetInput);
+            const isBuildEmpty = !pitchSheetInput.build || pitchSheetInput.build.trim() === "";
+            const cleanInput: CharacterPitchSheetInput = {
+                ...pitchSheetInput,
+                frameSize: normalizePitchSheetFrameSize(pitchSheetInput.frameSize),
+                musculature: normalizePitchSheetMusculature(pitchSheetInput.musculature),
+                buildInterpretation: normalizePitchSheetBuildInterpretation(pitchSheetInput.buildInterpretation),
+                ...(isBuildEmpty ? {
+                    frameSize: undefined,
+                    musculature: undefined,
+                    buildInterpretation: undefined,
+                    weightLbs: undefined
+                } : {})
+            };
+            return buildCharacterPitchSheetPrompt(cleanInput);
         }
 
         return buildPortraitPrompt(dna);
@@ -1240,7 +1287,43 @@ export default function PortraitStudio() {
 
         try {
             const referenceImages = buildGenerationReferenceImages();
+            let finalPrompt = compiledPrompt;
+
             if (isPitchSheetMode) {
+                const snapshot = {
+                    characterName: pitchSheetInput.characterName || "",
+                    alias: pitchSheetInput.aliasCodename || "",
+                    visualAge: pitchSheetInput.visualAge || "",
+                    height: pitchSheetInput.height || "",
+                    build: pitchSheetInput.build || "",
+                    designLanguage: pitchSheetInput.designLanguage || "",
+                    worldEra: pitchSheetInput.worldEra || "",
+                    lightingMood: pitchSheetInput.lightingMood || "",
+                    sheetStyle: pitchSheetInput.sheetStyle || "",
+                    corePersonality: pitchSheetInput.corePersonality || "",
+                    internalConflict: pitchSheetInput.internalConflict || "",
+                    wardrobeDirection: pitchSheetInput.wardrobeDirection || "",
+                    propsSignatureItems: pitchSheetInput.propsSignatureItems || "",
+                    environment: pitchSheetInput.environment || ""
+                };
+
+                console.debug('[PitchSheet Field Snapshot]', {
+                    characterName: snapshot.characterName,
+                    alias: snapshot.alias,
+                    visualAge: snapshot.visualAge,
+                    height: snapshot.height,
+                    build: snapshot.build,
+                    designLanguage: snapshot.designLanguage,
+                    worldEra: snapshot.worldEra,
+                    lightingMood: snapshot.lightingMood,
+                    sheetStyle: snapshot.sheetStyle,
+                    corePersonality: snapshot.corePersonality,
+                    internalConflict: snapshot.internalConflict,
+                    wardrobeDirection: snapshot.wardrobeDirection,
+                    propsSignatureItems: snapshot.propsSignatureItems,
+                    environment: snapshot.environment,
+                });
+
                 const generatedCharacterSourceUrl = pitchSheetInput.characterStyleReferenceUrl;
                 const biometricReferenceCount = (pitchSheetInput.referenceImages || []).filter(ref => Boolean(ref.imageUrl)).length;
                 const characterRenderStyle = pitchSheetCharacterRenderStyle;
@@ -1261,7 +1344,35 @@ export default function PortraitStudio() {
                     index: index + 1,
                     label: ref.label
                 })));
+
+                // Build a fresh clean input for prompt construction
+                const isBuildEmpty = !snapshot.build || snapshot.build.trim() === "";
+                const cleanInput: CharacterPitchSheetInput = {
+                    ...pitchSheetInput,
+                    ...snapshot,
+                    frameSize: normalizePitchSheetFrameSize(pitchSheetInput.frameSize),
+                    musculature: normalizePitchSheetMusculature(pitchSheetInput.musculature),
+                    buildInterpretation: normalizePitchSheetBuildInterpretation(pitchSheetInput.buildInterpretation),
+                    ...(isBuildEmpty ? {
+                        frameSize: undefined,
+                        musculature: undefined,
+                        buildInterpretation: undefined,
+                        weightLbs: undefined
+                    } : {})
+                };
+
+                finalPrompt = buildCharacterPitchSheetPrompt(cleanInput);
+
+                console.debug('[PitchSheet Prompt Contains Build]', {
+                    build: snapshot.build,
+                    promptMentionsBuild:
+                        finalPrompt.includes('medium athletic') ||
+                        finalPrompt.includes('athletic musculature') ||
+                        finalPrompt.includes('athletic build') ||
+                        finalPrompt.includes('medium frame'),
+                });
             }
+
             const generationOptions = {
                 imageSize: state.imageResolution,
                 thinkingLevel: state.enableImageThinking,
@@ -1275,7 +1386,7 @@ export default function PortraitStudio() {
                 )?.label || pitchSheetCharacterRenderStyle;
 
             const url = await GeminiService.generateImage(
-                compiledPrompt,
+                finalPrompt,
                 state.apiKey,
                 state.model,
                 referenceImages,
@@ -1305,7 +1416,7 @@ export default function PortraitStudio() {
             
             setGeneratedImage(stableDisplayUrl); // Set local state for preview
             dispatch({ type: "SET_LAST_CASTED_IMAGE", payload: stableDisplayUrl });
-            dispatch({ type: "SET_LAST_CASTED_PROMPT", payload: compiledPrompt });
+            dispatch({ type: "SET_LAST_CASTED_PROMPT", payload: finalPrompt });
             dispatch({ type: "ADD_LOG", payload: { message: isPitchSheetMode ? "Character Pitch Sheet Generated" : "Portrait Generated", type: "success" } });
 
             // --- RECENT GENERATIONS: Cache result silently ---
@@ -1322,7 +1433,7 @@ export default function PortraitStudio() {
                             localCachePath: cacheResult.localCachePath,
                             displayUrl: cacheResult.displayUrl,
                             createdAt: Date.now(),
-                            prompt: compiledPrompt,
+                            prompt: finalPrompt,
                             mode: (state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok') || 'byok',
                             ...(isPitchSheetMode
                                 ? {

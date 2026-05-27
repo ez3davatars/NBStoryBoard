@@ -6,8 +6,11 @@ import {
     buildStrictBiometricIdentityContract,
     buildFinalIdentityAuthorityReassertion,
     buildSurfaceMarkFidelityContract,
-    type BiometricIdentityLock
+    type BiometricIdentityLock,
+    buildProductionActorPromptContract
 } from "./identityContracts";
+import type { ProductionActorProfile } from "../renderer/types/ProductionActorProfile";
+
 import { buildHeadshotWardrobeContinuityContract, buildHeadshotWardrobeNegativeTokens } from "./headshotWardrobeContinuity";
 import { buildPoseCoherenceNegativeTokens, buildTurnaroundPoseCoherenceContract, buildWholeBodyAxisLockContract } from "./poseCoherence";
 import { SHEET_STYLE_LOCK_NEGATIVE_TEXT, buildSheetStyleLockContract } from "./sheetStyleLock";
@@ -126,6 +129,7 @@ export type CharacterPitchSheetInput = {
     materialCostumeNotes: string;
     productionNotes: string;
     debugVisibleLabels?: boolean;
+    productionProfile?: ProductionActorProfile;
 };
 
 export const defaultCharacterPitchSheetInput: CharacterPitchSheetInput = {
@@ -135,6 +139,7 @@ export const defaultCharacterPitchSheetInput: CharacterPitchSheetInput = {
     identityStrength: undefined,
     characterStyleReferenceUrl: undefined,
     sourcePanelMode: "costume_matched",
+    productionProfile: undefined,
     characterRenderStyle: "biometric_realism",
     boardPresentationStyle: "premium_film_board",
     physiquePriority: "match_face_impression",
@@ -1386,6 +1391,72 @@ const DETAIL_INSET_CLEANNESS = `DETAIL / INSET CLEANNESS:
 - Detail panels must not include signatures, autographs, approval marks, or decorative handwriting.
 - Detail panels should contain only the isolated detail and accurate label text.`;
 
+const PITCH_SHEET_PRECISION_REFINEMENT_CONTRACT = `WARDROBE SPEC FIDELITY LOCK:
+- All wardrobe, clothing, material, footwear, and accessory callout panels must be derived from the same approved outfit worn by the character in the main rendered views.
+- If a clothing detail panel appears, it must match the actual garment or item shown on the character.
+- This applies to: footwear construction, fabric texture, material texture, collar / neckline / cuff / sleeve details, logo placement, ornament detail, accessory detail, color blocking, garment construction callouts.
+- Do not invent a different shoe, different fabric, different accessory, or different construction detail than the one shown on the character.
+- Do not create generic spec panels that do not match the visible outfit.
+- If a footwear detail panel is shown, it must reflect the actual footwear worn in the body views.
+- If a fabric/material callout is shown, it must reflect the actual garment materials visible in the character outfit.
+- If an accessory/ornament detail is shown, it must come from a visible accessory actually present on the character.
+
+DETAIL PANEL DERIVATION RULE:
+- Every spec/detail panel must be a zoomed-in, extracted, or diagrammatic breakdown of something visibly present in the main character design.
+- Detail panels must not behave like independent design inventions.
+- Do not generate "spec board filler."
+- Do not add extra labeled panels just to fill space.
+- Do not invent mismatched footwear details.
+- Do not invent mismatched garment/material details.
+
+PANEL TITLE ACCURACY RULE:
+- Every panel title must match the content actually shown in that panel.
+- Do not use generic or templated titles if the referenced content does not support them.
+- Do not label a panel as footwear construction, material texture, supporting pose, expression study, ornament detail, or color blocking unless that exact type of content is visibly present.
+
+CONDITIONAL PANEL TITLE RULE:
+- If a panel type is not meaningfully present, omit the title and omit the panel rather than forcing a placeholder heading.
+- Examples:
+  * If there is no distinct supporting pose beyond the standard front/3/4/profile/turnaround presentation, do not include a "Supporting Pose" panel or title.
+  * If there is no separate expression study, do not include an "Expression Study" title.
+  * If there is no meaningful footwear close-up, do not include a "Footwear Construction" panel.
+  * If there is no distinct material zoom panel, do not include a "Material Texture" panel.
+
+POSE TITLE PRECISION:
+- Use "Supporting Pose" only when there is a clearly distinct additional pose that is separate from the standard front/3/4/profile/turnaround presentation and communicates character personality or action.
+- If no distinct supporting pose is present, omit the supporting pose panel and title completely.
+
+HEAD VIEW ANGLE ACCURACY LOCK:
+- Every head-study panel must match its label exactly.
+- Required head-view definitions:
+  * Neutral Front Head: face points straight toward camera, both eyes visible evenly, nose centered, ears balanced or equally hidden, no left/right turn.
+  * 3/4 Left-Facing Head: head turned approximately 45 degrees toward the viewer's left, both eyes still partly visible, not a full side profile.
+  * 3/4 Right-Facing Head: head turned approximately 45 degrees toward the viewer's right, both eyes still partly visible, not a full side profile.
+  * Left-Facing Profile Head: true side profile facing viewer's left, one eye visible, nose and lips in clear side silhouette, ear visible, not a 3/4 view.
+  * Right-Facing Profile Head: true side profile facing viewer's right, one eye visible, nose and lips in clear side silhouette, ear visible, not a 3/4 view.
+- Do not mislabel head angles.
+- Do not label a 3/4 view as a profile.
+- Do not label a profile view as a 3/4 view.
+- Do not label an upward-looking head as a neutral front head.
+- Do not duplicate the same head angle under different labels.
+- Do not use a near-front view for side profile labels.
+- Do not use a side profile view for neutral front labels.
+
+HEAD STUDY BIOMETRIC MATCHING RULE:
+- When biometric references are present:
+  * front head views should follow the center/front biometric structure.
+  * left-facing and left-profile head views should follow the left biometric structure.
+  * right-facing and right-profile head views should follow the right biometric structure.
+  * upward/downward references should inform chin, jaw, nostril, forehead, crown, and head-volume structure only.
+- Use biometric references for geometry and likeness, not rendering style.
+- All head studies must remain in the selected Character Render Style.
+
+TITLE TO CONTENT CONSISTENCY:
+- Head-study titles must match the actual head angle shown.
+- Profile labels must match the actual facing direction shown.
+- Body-view titles must match the actual camera/body angle shown.
+- Detail panel titles must match the actual item shown.
+- Do not use a title that overstates or misidentifies the content.`;
 
 const HEAD_STUDY_VS_BODY_TURNAROUND_SEPARATION = `HEAD STUDY VS BODY TURNAROUND SEPARATION:
 - Head-study panels are close-up face/head references.
@@ -1393,6 +1464,57 @@ const HEAD_STUDY_VS_BODY_TURNAROUND_SEPARATION = `HEAD STUDY VS BODY TURNAROUND 
 - Do not use body turnaround labels to define head-study angles.
 - Do not allow a body side-view direction error to infect head-study labels.
 - Each head-study panel must be independently correct.`;
+
+const BODY_ORIENTATION_COHERENCE_CONTRACT = `BODY ORIENTATION COHERENCE LOCK:
+Every body view must have all body parts aligned to the same camera/view direction.
+
+This applies to:
+- head
+- neck
+- shoulders
+- chest
+- torso
+- waist
+- hips
+- arms
+- elbows
+- hands
+- thighs
+- knees
+- lower legs
+- feet
+- shoes
+
+Do not mix body-part directions within the same figure.
+Do not place a side-facing head on a front-facing torso.
+Do not place a front-facing torso on side-facing legs.
+Do not place front-facing feet on a profile body.
+Do not place hands or arms in a different orientation than the torso.
+Do not twist the pelvis, knees, or feet away from the labeled body angle unless the pose explicitly requires a natural small turn.
+
+VIEW-SPECIFIC BODY RULES:
+- Front View (0°): both shoulders visible evenly, chest faces camera, hips face camera, both feet face mostly forward.
+- 3/4 View (45°): head, shoulders, torso, hips, knees, and feet all share the same three-quarter turn.
+- Left-Facing Side View (90°): the entire body must read as a true side profile facing viewer’s left. Only one side of the torso should dominate. Feet and shoes must point left. Arms should hang naturally along the side plane.
+- Right-Facing Side View (90°): the entire body must read as a true side profile facing viewer’s right. Feet and shoes must point right. Arms should hang naturally along the side plane.
+- Back View (180°): head, shoulders, torso, hips, legs, and feet must all face away from the camera.
+
+TURNAROUND ANATOMY CONSISTENCY:
+The turnaround lineup must look like the same body rotated around a vertical axis, not separate poses with mismatched anatomy.
+Each view should preserve the same body proportions, clothing fit, and silhouette while rotating cleanly.
+
+SIDE-VIEW LIMB ALIGNMENT:
+For side views, the arm, hand, thigh, knee, lower leg, foot, and shoe must all align with the side-facing direction.
+Do not show a side-facing torso with a front-facing hand, front-facing foot, or twisted leg.
+The visible shoe should be a side profile of the shoe, not a front or 3/4 shoe.
+
+TITLE TO BODY VIEW CONSISTENCY:
+Only label a body panel as LEFT-FACING SIDE VIEW if the entire body is truly side-facing left.
+Only label a body panel as RIGHT-FACING SIDE VIEW if the entire body is truly side-facing right.
+Only label a body panel as FRONT VIEW if the entire body faces forward.
+Only label a body panel as BACK VIEW if the entire body faces away.
+
+If the body angle is ambiguous or mixed, correct the body orientation rather than mislabeling it.`;
 
 const STRICT_BODY_VIEW_DIRECTION_MAP = `STRICT BODY VIEW DIRECTION MAP:
 - FRONT VIEW (0°): body faces viewer directly.
@@ -1471,7 +1593,8 @@ const AVOID_OVERPOPULATING_SHEET_CONTRACT = `AVOID OVERPOPULATING THE SHEET:
 - Do not fill empty layout space with extra invented mini-scenes.
 - Every inset must have one clear purpose.`;
 
-export function buildCharacterPitchSheetPrompt(input: CharacterPitchSheetInput): string {
+export function buildCharacterPitchSheetPrompt(rawInput: CharacterPitchSheetInput): string {
+    const input = sanitizeVisibleBoardLanguage(rawInput);
     console.warn('[PITCH_PROMPT_CONSTRUCTION]', {
       identitySource: input.identitySource,
       characterStyleReferenceUrl: input.characterStyleReferenceUrl,
@@ -1552,15 +1675,20 @@ export function buildCharacterPitchSheetPrompt(input: CharacterPitchSheetInput):
         });
     }
 
-    const visibleInput = sanitizeVisibleBoardLanguage(input);
+    const visibleInput = input;
     const characterName = valueOr(visibleInput.characterName, visibleInput.aliasCodename, "Unnamed lead character");
     const alias = valueOr(visibleInput.aliasCodename, "No public codename");
     const visualAge = inferVisualAge(visibleInput);
     const bodyMetadataForBoard = buildBodyMetadataForBoard(visibleInput);
     const bodyGuideForPrompt = buildBodyGuideForPrompt(visibleInput);
     const height = valueOr(formatHeightLabel(visibleInput.heightIn), visibleInput.height, "height inferred from role and proportions");
-    const buildMetadata = valueOr(bodyMetadataForBoard, visibleInput.build, inferBuild(visibleInput));
-    const buildPromptGuide = valueOr(bodyGuideForPrompt, inferBuild(visibleInput));
+    const isBuildEmpty = !visibleInput.build || visibleInput.build.trim() === "";
+    const buildMetadata = isBuildEmpty 
+        ? "inferred from source image" 
+        : valueOr(bodyMetadataForBoard, visibleInput.build, inferBuild(visibleInput));
+    const buildPromptGuide = isBuildEmpty 
+        ? "no explicit build directive; infer body only from primary approved character source (Image A)" 
+        : valueOr(bodyGuideForPrompt, inferBuild(visibleInput));
     const designLanguage = valueOr(visibleInput.designLanguage, defaultCharacterPitchSheetInput.designLanguage);
     const worldEra = valueOr(visibleInput.worldEra, "original cinematic world inferred from the brief");
     const corePersonality = valueOr(visibleInput.corePersonality, "layered, specific, screen-readable personality");
@@ -1691,6 +1819,9 @@ WARDROBE SOURCE LOCK:
             });
     const biometricIdentityLockContract = isBiometricIdentitySource(input) && input.identityLock
         ? buildBiometricIdentityLockContract(input.identityLock)
+        : "";
+    const productionActorPromptContract = input.productionProfile
+        ? `\n${buildProductionActorPromptContract(input.productionProfile)}\n`
         : "";
     const strictBiometricContract = isBiometricIdentitySource(input)
         ? buildStrictBiometricIdentityContract({
@@ -2072,7 +2203,7 @@ Do not treat user fields as decorative text only.
 Do not ignore World / Era, Build, Design Language, Lighting Mood, Sheet Style, Personality, Props, Wardrobe Direction, or Environment when they are provided.
 
 ACTOR PANEL STYLE PURITY LOCK:
-The selected Character Render Style (Selected Style: "${input.characterRenderStyle || 'N/A'}") is the only permitted rendering style for every panel that depicts the actor as a person.
+The selected Character Render Style (Selected Style: "${characterRenderStyleLabel || 'N/A'}") is the only permitted rendering style for every panel that depicts the actor as a person.
 
 This applies to:
 - hero portrait
@@ -2135,6 +2266,7 @@ ${claymationIdentityLock}
 ${characterPanelStylePurity}
 
 ${biometricIdentityLockContract}
+${productionActorPromptContract}
 ${identityContract}
 ${surfaceMarkFidelity}
 ${groomingFidelity}
@@ -2151,6 +2283,7 @@ Body guide: ${buildPromptGuide}.
 ${pitchSheetPoseCoherence}
 ${CHARACTER_ANATOMY_INTEGRITY_CONTRACT}
 ${TURNAROUND_ANATOMY_INTEGRITY_CONTRACT}
+${BODY_ORIENTATION_COHERENCE_CONTRACT}
 
 STRUCTURED CHARACTER DATA / BOARD METADATA:
 - Structured values are board metadata and subtle fit guidance only: ${structuredBodySourceOfTruth}.
@@ -2164,6 +2297,11 @@ STRUCTURED CHARACTER DATA / BOARD METADATA:
 - If a numeric weight conflicts with the supplied identity/source images, preserve the supplied identity/source images.
 ${strictBodySpecsRule}
 - Do not let stale older prompt fragments, previous generated board text, or older metadata conflict with these current structured values.
+
+EMPTY FIELD RULE:
+If a user field is blank, do not invent that field from previous generations or prior prompt state.
+Blank Build means no user build directive is provided.
+Use the approved actor source for body proportions unless the user explicitly supplies a Build directive.
 
 UNIVERSAL STYLE CONSISTENCY CONTRACT:
 - Style affects rendering language only.
@@ -2312,6 +2450,8 @@ ${AVOID_OVERPOPULATING_SHEET_CONTRACT}
 
 ${DETAIL_INSET_CLEANNESS}
 
+${PITCH_SHEET_PRECISION_REFINEMENT_CONTRACT}
+
 FORBIDDEN INTERNAL VISIBLE TERMS:
 - Do not show internal workflow/debug terms as visible board callouts unless debugVisibleLabels is true.
 - Forbidden by default: NanoCast; biometric scanner; identity lock; source image; reference image; Image 1; Image 2; Image 3; prompt engine; generated image; debug labels.
@@ -2412,6 +2552,8 @@ ${TURNAROUND_ANATOMY_INTEGRITY_CONTRACT}
 ${STRICT_BODY_VIEW_DIRECTION_MAP}
 
 ${localBodyAxisLock}
+
+${BODY_ORIENTATION_COHERENCE_CONTRACT}
 
 TURNAROUND ORIENTATION LOCK:
 - Every turnaround figure must follow a single coherent global axis from head through feet.

@@ -1,6 +1,7 @@
 import { useEffect, useState, Component, useCallback, useRef, useMemo } from 'react';
 import type { ReactNode, ErrorInfo } from 'react';
 import { createPortal } from 'react-dom';
+import { motion, AnimatePresence } from 'framer-motion';
 import SceneCanvas from './components/SceneCanvas';
 import WardrobeStudio from './components/WardrobeStudio';
 import PropAccessoryStudio from './components/PropAccessoryStudio';
@@ -1291,11 +1292,35 @@ const App = () => {
   // Sync Actors from Disk Handle (External Folder)
   useEffect(() => {
     const syncFromDisk = async () => {
-      // In Native Electron mode, ignore Web Handlers to avoid double-sync or conflicts
-      if (window.electronAPI || !state.saveDirectoryHandle) return;
+      // In Native Electron mode, ignore WebFS handlers completely.
+      // Native sync owns actorLibraryStatus/isActorLibraryLoading. Setting the legacy
+      // boolean here caused the library to flash as "ready/empty" before native sync began.
+      if (window.electronAPI) {
+        return;
+      }
+
+      if (!state.saveDirectoryHandle) {
+        dispatch({ type: 'SET_ACTOR_LIBRARY_STATUS', payload: 'ready' });
+        dispatch({ type: 'SET_ACTOR_LIBRARY_LOADING', payload: false });
+        return;
+      }
 
       const saveDirHandle = state.saveDirectoryHandle as PermissionAwareDirectoryHandle;
-      if (saveDirHandle.queryPermission && (await saveDirHandle.queryPermission({ mode: 'read' })) !== 'granted') return;
+      if (saveDirHandle.queryPermission && (await saveDirHandle.queryPermission({ mode: 'read' })) !== 'granted') {
+        dispatch({ type: 'SET_ACTOR_LIBRARY_STATUS', payload: 'ready' });
+        dispatch({ type: 'SET_ACTOR_LIBRARY_LOADING', payload: false });
+        return;
+      }
+
+      dispatch({ type: 'SET_ACTOR_LIBRARY_STATUS', payload: 'hydrating' });
+      dispatch({ type: 'SET_ACTOR_LIBRARY_LOADING', payload: true });
+      console.debug('[ActorLibrary Hydration]', { status: 'hydrating' });
+      console.debug('[ActorLibrary Loading]', {
+        phase: 'native-sync-start',
+      });
+
+      let finalCountedLibrary: CastMember[] = [...state.actorLibrary];
+      let success = true;
 
       try {
         // dispatch({ type: 'ADD_LOG', payload: { message: "Scanning external actors folder...", type: 'info' } });
@@ -1329,9 +1354,6 @@ const App = () => {
 
               // Deduplicate based on ID scheme
               const diskId = `disk-${entry.name}`;
-              // Avoid re-reading if already in library
-              // However, we can't easily check state inside async loop without updated ref or dependency
-              // We'll filter later or hope state is fresh enough on mount
 
               const file = await fileEntry.getFile();
               // Read as DataURL
@@ -1361,24 +1383,6 @@ const App = () => {
         }
 
         if (externalActors.length > 0) {
-          // Functional update dispatch if possible, or just dispatch SET with merged list
-          // Since we can't easily access latest 'state' inside this async closure if it's stale,
-          // we rely on the specific dependency [state.saveDirectoryHandle] which implies this runs once per folder change.
-          // But we should check duplicates against the *current* state at dispatch time.
-          // We can pass a function to dispatch if it was setState, but here it's useReducer.
-          // We will just dispatch a new action 'MERGE_ACTOR_LIBRARY' if it existed, or just SET.
-          // I'll grab the latest state from the closure (it closed over state).
-          // NOTE: If state.actorLibrary changes often, we might miss updates unless we include it in deps.
-          // Inclusion in deps might cause loop.
-          // Let's assume SET_ACTOR_LIBRARY is idempotent if we merge carefully.
-
-          // To be safe, let's just dispatch ADD for each one? No, too many renders.
-          // We will use SET_ACTOR_LIBRARY with a merge strategy.
-
-          // MERGE STRATEGY:
-          // 1. New items from disk -> Add
-          // 2. Existing items matching disk -> Update filename (preserve name/tags)
-
           const libraryMap = new Map(state.actorLibrary.map((a: CastMember) => [a.id, a]));
           let hasChanges = false;
 
@@ -1425,21 +1429,77 @@ const App = () => {
 
           if (hasChanges) {
             const merged = Array.from(libraryMap.values());
-            // Sort by latest added (optional, but keep consistent)
-            // merged.sort(...) 
             dispatch({ type: 'SET_ACTOR_LIBRARY', payload: merged });
+            finalCountedLibrary = merged;
             dispatch({ type: 'ADD_LOG', payload: { message: `Synced ${externalActors.length} actors from disk.`, type: 'success' } });
           }
         }
       } catch (e: unknown) {
+        success = false;
         console.error("Disk sync error:", e);
+        console.warn("[ActorLibrary Hydration]", { status: "error", error: e });
+        dispatch({ type: 'SET_ACTOR_LIBRARY_STATUS', payload: 'error' });
         dispatch({ type: 'ADD_LOG', payload: { message: `Disk scan failed: ${getErrorMessage(e)}`, type: 'error' } });
+      } finally {
+        const knownStylesList = [
+          'exact_studio', 'photorealism', 'dslr_capture',
+          'family_3d', 'premium_animated_3d', 'claymation',
+          'retro_cel', 'graphic_noir', 'retro_anime', 'comic_book',
+          'cyberpunk_neon', 'cyberpunk'
+        ];
+        const knownStyles = new Set(knownStylesList.map(s => s.toLowerCase().replace(/[^a-z0-9]/g, '')));
+        
+        const categoryCounts = {
+          production_actors: 0,
+          realism: 0,
+          anim: 0,
+          illustration: 0,
+          scifi: 0,
+          uncategorized: 0
+        };
+
+        finalCountedLibrary.forEach(a => {
+          if (a.isProductionActor) {
+            categoryCounts.production_actors++;
+            return;
+          }
+          const s = (a.profile?.style || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+          if (!s || !knownStyles.has(s)) {
+            categoryCounts.uncategorized++;
+            return;
+          }
+          if (['exact_studio', 'photorealism', 'dslr_capture'].map(x => x.replace(/[^a-z0-9]/g, '')).includes(s)) {
+            categoryCounts.realism++;
+          } else if (['family_3d', 'premium_animated_3d', 'claymation'].map(x => x.replace(/[^a-z0-9]/g, '')).includes(s)) {
+            categoryCounts.anim++;
+          } else if (['retro_cel', 'graphic_noir', 'retro_anime', 'comic_book'].map(x => x.replace(/[^a-z0-9]/g, '')).includes(s)) {
+            categoryCounts.illustration++;
+          } else if (['cyberpunk_neon', 'cyberpunk'].map(x => x.replace(/[^a-z0-9]/g, '')).includes(s)) {
+            categoryCounts.scifi++;
+          } else {
+            categoryCounts.uncategorized++;
+          }
+        });
+
+        console.debug('[ActorLibrary Loading]', {
+          phase: 'native-sync-complete',
+          actorCount: finalCountedLibrary.length,
+          categoryCounts,
+        });
+
+        dispatch({ type: 'SET_ACTOR_LIBRARY_LOADING', payload: false });
+        if (success) {
+          console.debug("[ActorLibrary Hydration]", {
+            status: "ready",
+            actorCount: finalCountedLibrary.length,
+            categoryCounts,
+          });
+          dispatch({ type: 'SET_ACTOR_LIBRARY_STATUS', payload: 'ready' });
+        }
       }
     };
 
-    if (state.saveDirectoryHandle) {
-      syncFromDisk();
-    }
+    syncFromDisk();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.saveDirectoryHandle]); // Only run when folder connection changes
 
@@ -1503,15 +1563,195 @@ const App = () => {
     if (!postLaunchBackgroundWorkReady) return;
 
     const syncFromNative = async () => {
-      if (!window.electronAPI || !state.saveDirectoryPath) return;
+      if (!window.electronAPI || !state.saveDirectoryPath) {
+        if (window.electronAPI) {
+          dispatch({ type: 'SET_ACTOR_LIBRARY_STATUS', payload: 'ready' });
+        }
+        dispatch({ type: 'SET_ACTOR_LIBRARY_LOADING', payload: false });
+        return;
+      }
+
+      dispatch({ type: 'SET_ACTOR_LIBRARY_STATUS', payload: 'hydrating' });
+      dispatch({ type: 'SET_ACTOR_LIBRARY_LOADING', payload: true });
+      console.debug('[ActorLibrary Hydration]', { status: 'hydrating' });
+      console.debug('[ActorLibrary Loading]', {
+        phase: 'native-sync-start',
+      });
+
+      let finalCountedLibrary: CastMember[] = [...state.actorLibrary];
+      let success = true;
 
       try {
+        const externalActors: CastMember[] = [];
 
+        // 1. Direct directory scan under Library/ProductionActors for Organized Production Actor Packages
+        const libraryPath = await window.electronAPI.joinPath(state.saveDirectoryPath, 'Library');
+        const prodActorsPath = await window.electronAPI.joinPath(libraryPath, 'ProductionActors');
+        
+        if (await window.electronAPI.exists(prodActorsPath)) {
+          try {
+            const folderNames = await window.electronAPI.listFiles(prodActorsPath);
+            if (folderNames && folderNames.length > 0) {
+              for (const folderName of folderNames) {
+                // Skip plain files that might be in the root of ProductionActors
+                if (folderName.toLowerCase().endsWith('.png') || folderName.toLowerCase().endsWith('.json')) continue;
+                
+                const packageFolder = await window.electronAPI.joinPath(prodActorsPath, folderName);
+                const jsonPath = await window.electronAPI.joinPath(packageFolder, 'actor.json');
+                const pngPath = await window.electronAPI.joinPath(packageFolder, 'actor.png');
+                
+                if (await window.electronAPI.exists(jsonPath) && await window.electronAPI.exists(pngPath)) {
+                  try {
+                    const jsonText = await window.electronAPI.readTextFile(jsonPath);
+                    const pngBase64 = await window.electronAPI.readFile(pngPath);
+                    
+                    if (jsonText && pngBase64) {
+                      const actorMeta = JSON.parse(jsonText);
+                      const actorId = actorMeta.id || folderName;
+                      const diskId = `disk-packaged-${actorId}`;
+                      
+                      // Prevent duplicate registration if we scan both ways
+                      if (externalActors.some(a => a.id === diskId)) continue;
+                      
+                      const relativeFilename = `Library/ProductionActors/${folderName}/actor.png`;
+                      const displayName = actorMeta.displayName || actorMeta.name || folderName;
+                      const hasProfile = Boolean(actorMeta);
+                      const isIdentityLocked = actorMeta?.isIdentityLocked;
+
+                      console.debug('[ProductionActor Library Hydrate]', {
+                        actorId,
+                        displayName,
+                        category: 'Production Actors',
+                        hasProfile,
+                        isIdentityLocked,
+                      });
+                      
+                      externalActors.push({
+                        id: diskId,
+                        url: `data:image/png;base64,${pngBase64}`,
+                        localPath: pngPath,
+                        previewUrl: `data:image/png;base64,${pngBase64}`,
+                        sourceUrl: `data:image/png;base64,${pngBase64}`,
+                        tag: 'front',
+                        name: displayName,
+                        filename: relativeFilename,
+                        source: "production_actor_package",
+                        isProductionActor: true,
+                        assetType: "production_actor",
+                        productionActorProfile: actorMeta,
+                        category: "production_actors",
+                        studio: "production_actors",
+                        categoryKey: "production_actors",
+                        productionProfile: {
+                          ...actorMeta,
+                          sourceImageUrl: `data:image/png;base64,${pngBase64}`,
+                          approvedImageUrl: `data:image/png;base64,${pngBase64}`
+                        },
+                        profile: {
+                          identity: displayName,
+                          wardrobe: actorMeta.wardrobeSummary || '',
+                          accessories: '',
+                          style: actorMeta.styleSummary || 'biometric_realism'
+                        }
+                      });
+                    }
+                  } catch (err) {
+                    console.warn(`Failed to parse production actor subfolder ${folderName}:`, err);
+                  }
+                }
+              }
+            }
+          } catch (dirErr) {
+            console.warn(`Failed to list folders in ${prodActorsPath}:`, dirErr);
+          }
+        }
+
+        // 1b. Fallback index-based scanner for extra resilience
+        const indexPath = await window.electronAPI.joinPath(libraryPath, 'library-index.json');
+        if (await window.electronAPI.exists(indexPath)) {
+          try {
+            const indexText = await window.electronAPI.readTextFile(indexPath);
+            if (indexText) {
+              const parsedIndex = JSON.parse(indexText);
+              if (parsedIndex && Array.isArray(parsedIndex.assets)) {
+                for (const asset of parsedIndex.assets) {
+                  if (asset.assetType === 'production_actor') {
+                    const diskId = `disk-packaged-${asset.id}`;
+                    // Skip if already loaded from direct folder scan
+                    if (externalActors.some(a => a.id === diskId)) continue;
+
+                    const packageFolder = await window.electronAPI.joinPath(libraryPath, asset.folder);
+                    const jsonPath = await window.electronAPI.joinPath(packageFolder, asset.metadata);
+                    const pngPath = await window.electronAPI.joinPath(packageFolder, asset.primaryImage);
+                    
+                    if (await window.electronAPI.exists(jsonPath) && await window.electronAPI.exists(pngPath)) {
+                      try {
+                        const jsonText = await window.electronAPI.readTextFile(jsonPath);
+                        const pngBase64 = await window.electronAPI.readFile(pngPath);
+                        
+                        if (jsonText && pngBase64) {
+                          const actorMeta = JSON.parse(jsonText);
+                          const relativeFilename = `Library/${asset.folder}/${asset.primaryImage}`;
+                          const displayName = actorMeta.displayName || actorMeta.name || asset.displayName;
+                          const actorId = actorMeta.id || asset.id;
+                          const hasProfile = Boolean(actorMeta);
+                          const isIdentityLocked = actorMeta?.isIdentityLocked;
+
+                          console.debug('[ProductionActor Library Hydrate]', {
+                            actorId,
+                            displayName,
+                            category: 'Production Actors',
+                            hasProfile,
+                            isIdentityLocked,
+                          });
+                          
+                          externalActors.push({
+                            id: diskId,
+                            url: `data:image/png;base64,${pngBase64}`,
+                            localPath: pngPath,
+                            previewUrl: `data:image/png;base64,${pngBase64}`,
+                            sourceUrl: `data:image/png;base64,${pngBase64}`,
+                            tag: 'front',
+                            name: displayName,
+                            filename: relativeFilename,
+                            source: "production_actor_package",
+                            isProductionActor: true,
+                            assetType: "production_actor",
+                            productionActorProfile: actorMeta,
+                            category: "production_actors",
+                            studio: "production_actors",
+                            categoryKey: "production_actors",
+                            productionProfile: {
+                              ...actorMeta,
+                              sourceImageUrl: `data:image/png;base64,${pngBase64}`,
+                              approvedImageUrl: `data:image/png;base64,${pngBase64}`
+                            },
+                            profile: {
+                              identity: displayName,
+                              wardrobe: actorMeta.wardrobeSummary || '',
+                              accessories: '',
+                              style: actorMeta.styleSummary || 'biometric_realism'
+                            }
+                          });
+                        }
+                      } catch (err) {
+                        console.warn(`Failed to load index-packaged actor ${asset.id}:`, err);
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          } catch (indexErr) {
+            console.warn(`Failed to read library-index.json:`, indexErr);
+          }
+        }
+
+        // 2. Fallback / Legacy Flat Scanner
         const actorsPath = await window.electronAPI.joinPath(state.saveDirectoryPath, 'Actors');
 
         // Categories to scan + Root (empty string)
-        const SCAN_TARGETS = ['', 'Realism', 'Stylized Cartoon', 'Illustration', 'Sci-Fi', 'Uncategorized', 'Extras'];
-        const externalActors: CastMember[] = [];
+        const SCAN_TARGETS = ['', 'Realism', 'Stylized Cartoon', 'Illustration', 'Sci-Fi', 'Uncategorized', 'Extras', 'Production Cast'];
 
         // Parallel Scan of All Targets
         await Promise.all(SCAN_TARGETS.map(async (catOrRoot) => {
@@ -1530,7 +1770,8 @@ const App = () => {
             "Stylized Cartoon": "family_3d",
             "Illustration": "retro_anime",
             "Sci-Fi": "cyberpunk_neon",
-            "Extras": "exact_studio"
+            "Extras": "exact_studio",
+            "Production Cast": "biometric_realism"
           };
           const defaultStyle = catToStyle[catOrRoot] || "exact_studio";
 
@@ -1544,19 +1785,50 @@ const App = () => {
               const diskId = `disk-${catOrRoot || 'root'}-${filename}`; // Ensure ID uniqueness
               const displayName = filename.replace(/\.(png|jpg|jpeg)$/i, '');
 
+              // Check for matching .json sidecar
+              let productionProfile: any = undefined;
+              const jsonFilename = filename.replace(/\.png$/i, '.json');
+              const jsonFullPath = await window.electronAPI!.joinPath(catPath, jsonFilename);
+              if (await window.electronAPI!.exists(jsonFullPath)) {
+                try {
+                  const jsonText = await window.electronAPI!.readTextFile(jsonFullPath);
+                  if (jsonText) {
+                    const parsed = JSON.parse(jsonText);
+                    if (parsed && typeof parsed === 'object') {
+                      productionProfile = parsed;
+                      console.debug('[ProductionActor Load]', { 
+                        actorId: parsed.id, 
+                        hasJsonSidecar: true, 
+                        isIdentityLocked: true 
+                      });
+                    }
+                  }
+                } catch (jsonErr) {
+                  console.warn(`Failed to read/parse sidecar JSON for ${filename}`, jsonErr);
+                }
+              }
+
+              const isProd = productionProfile?.assetType === "production_actor" || productionProfile?.isProductionActor || false;
               externalActors.push({
                 id: diskId,
                 url: `data:image/png;base64,${base64}`,
                 localPath: fullPath,
                 previewUrl: undefined,
                 tag: 'front',
-                name: displayName,
+                name: productionProfile?.name || displayName,
                 filename: catOrRoot ? `${catOrRoot}/${filename}` : filename,
+                isProductionActor: isProd,
+                assetType: isProd ? "production_actor" : undefined,
+                productionActorProfile: isProd ? productionProfile : undefined,
+                productionProfile: productionProfile,
+                category: isProd ? "production_actors" : undefined,
+                studio: isProd ? "production_actors" : undefined,
+                categoryKey: isProd ? "production_actors" : undefined,
                 profile: {
-                  identity: displayName,
-                  wardrobe: '',
+                  identity: productionProfile?.name || displayName,
+                  wardrobe: productionProfile?.wardrobeSummary || '',
                   accessories: '',
-                  style: defaultStyle
+                  style: isProd ? (productionProfile?.styleSummary || 'biometric_realism') : defaultStyle
                 }
               });
             } catch (e) {
@@ -1567,39 +1839,17 @@ const App = () => {
 
         if (externalActors.length > 0 || state.actorLibrary.some(a => a.id.startsWith('disk-'))) {
           // SYNC TYPE: AUTHORITATIVE DISK SYNC
-          // We must remove 'disk-' actors that are NO LONGER in the folder (e.g. they were from Root, or deleted)
-          // And add/update the ones that are present.
-
           const foundIds = new Set(externalActors.map(a => a.id));
           console.log(`[Native Sync] Found ${externalActors.length} files on disk. Mapping existing state...`);
 
-          // 1. Keep non-disk actors (created in-app)
           const preservedActors = state.actorLibrary.filter(a => !a.id.startsWith('disk-'));
-          console.log(`[Native Sync] Preserving ${preservedActors.length} memory-based actors.`);
-
-          // 2. Keep disk actors that STILL exist (preserve their metadata if any)
           const existingDiskActors = state.actorLibrary.filter(a => a.id.startsWith('disk-') && foundIds.has(a.id));
-          console.log(`[Native Sync] Retaining ${existingDiskActors.length} valid disk-linked actors.`);
-
-          // 3. Merge New/Updated from Scan
-          // We prioritize the *Scan* for URL/Path updates, but might want to keep *Tags/Name* from Memory?
-          // For now, let's just use the Scan Result as truth for "External Assets", 
-          // but maybe preserve Profile/Name if ID matches?
-
-          // Better: Create a map of Existing for lookups
           const existingMap = new Map(existingDiskActors.map(a => [a.id, a]));
-
-          // NEW: Deduplicate memory zombies (from before disk- ID schemes or WardrobeStudio)
-          // Find any preserved actors whose basename ALREADY exists as a disk actor
           const newlyDiscoveredBasenames = new Set(externalActors.map(a => a.filename?.split(/[\\/]/).pop() || ""));
 
-          // Filter out preserved actors if their base filename corresponds to an actual file we just synced from disk.
           const cleanPreservedActors = preservedActors.filter(pa => {
             const basename = pa.filename?.split(/[\\/]/).pop();
-            // Legacy bug cleanup: if it's the hardcoded 'portrait.png' without a path, drop it.
             if (basename === 'portrait.png' && pa.id.startsWith('nano_') === false) return false;
-            
-            // If the disk scanner found this image natively, we DROP the memory zombie and let finalDiskActors handle it
             if (basename && newlyDiscoveredBasenames.has(basename)) return false;
             return true;
           });
@@ -1614,11 +1864,9 @@ const App = () => {
                 previewUrl: newActor.previewUrl,
                 localPath: newActor.localPath,
                 filename: newActor.filename 
-              }; // Update strictly durable runtime fields, keeping profile metadata
+              };
             }
 
-            // Also check if there was a memory zombie (UUID id scheme) that we just purged, 
-            // and rescue its custom profile/metadata (like specific identity fields)
             const basename = newActor.filename?.split(/[\\/]/).pop() || "";
             const memoryZombie = preservedActors.find(pa => pa.filename?.split(/[\\/]/).pop() === basename);
             if (memoryZombie) {
@@ -1627,7 +1875,7 @@ const App = () => {
                   ...memoryZombie, 
                   id: newActor.id, 
                   url: newActor.url, 
-                  previewUrl: newActor.previewUrl, // MUST explicitly override to prevent broken memory URLs from returning
+                  previewUrl: newActor.previewUrl,
                   filename: newActor.filename 
               };
             }
@@ -1635,26 +1883,78 @@ const App = () => {
             return newActor;
           });
 
-          // Combine
           const newLibrary = [...cleanPreservedActors, ...finalDiskActors];
-
-          // Only dispatch if count changed or we forced a refresh
-          // (Simple check: length diff or deep check. For safety, just dispatch.)
           dispatch({ type: 'SET_ACTOR_LIBRARY', payload: newLibrary });
+          finalCountedLibrary = newLibrary;
 
           console.log(`Native Sync: Pruned and Synced. Total: ${newLibrary.length}`);
         }
 
       } catch (err) {
+        success = false;
         console.error("Native Sync Error:", err);
+        console.warn("[ActorLibrary Hydration]", { status: "error", error: err });
+        dispatch({ type: 'SET_ACTOR_LIBRARY_STATUS', payload: 'error' });
+      } finally {
+        const knownStylesList = [
+          'exact_studio', 'photorealism', 'dslr_capture',
+          'family_3d', 'premium_animated_3d', 'claymation',
+          'retro_cel', 'graphic_noir', 'retro_anime', 'comic_book',
+          'cyberpunk_neon', 'cyberpunk'
+        ];
+        const knownStyles = new Set(knownStylesList.map(s => s.toLowerCase().replace(/[^a-z0-9]/g, '')));
+        
+        const categoryCounts = {
+          production_actors: 0,
+          realism: 0,
+          anim: 0,
+          illustration: 0,
+          scifi: 0,
+          uncategorized: 0
+        };
+
+        finalCountedLibrary.forEach(a => {
+          if (a.isProductionActor) {
+            categoryCounts.production_actors++;
+            return;
+          }
+          const s = (a.profile?.style || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+          if (!s || !knownStyles.has(s)) {
+            categoryCounts.uncategorized++;
+            return;
+          }
+          if (['exact_studio', 'photorealism', 'dslr_capture'].map(x => x.replace(/[^a-z0-9]/g, '')).includes(s)) {
+            categoryCounts.realism++;
+          } else if (['family_3d', 'premium_animated_3d', 'claymation'].map(x => x.replace(/[^a-z0-9]/g, '')).includes(s)) {
+            categoryCounts.anim++;
+          } else if (['retro_cel', 'graphic_noir', 'retro_anime', 'comic_book'].map(x => x.replace(/[^a-z0-9]/g, '')).includes(s)) {
+            categoryCounts.illustration++;
+          } else if (['cyberpunk_neon', 'cyberpunk'].map(x => x.replace(/[^a-z0-9]/g, '')).includes(s)) {
+            categoryCounts.scifi++;
+          } else {
+            categoryCounts.uncategorized++;
+          }
+        });
+
+        console.debug('[ActorLibrary Loading]', {
+          phase: 'native-sync-complete',
+          actorCount: finalCountedLibrary.length,
+          categoryCounts,
+        });
+
+        dispatch({ type: 'SET_ACTOR_LIBRARY_LOADING', payload: false });
+        if (success) {
+          console.debug("[ActorLibrary Hydration]", {
+            status: "ready",
+            actorCount: finalCountedLibrary.length,
+            categoryCounts,
+          });
+          dispatch({ type: 'SET_ACTOR_LIBRARY_STATUS', payload: 'ready' });
+        }
       }
     };
 
-
-
-    if (state.saveDirectoryPath && window.electronAPI) {
-      syncFromNative();
-    }
+    syncFromNative();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [postLaunchBackgroundWorkReady, state.saveDirectoryPath]);
 
@@ -1958,21 +2258,112 @@ const App = () => {
                 </button>
               </div>
             ) : (
-              <>
-                <div hidden={state.view !== 'casting'} className="flex-1 min-h-0 w-full flex flex-col">
-                  <CastingForge />
+              <AnimatePresence mode="wait">
+                <div
+                  key="casting-container"
+                  hidden={state.view !== 'casting'}
+                  className="flex-1 min-h-0 w-full flex flex-col"
+                >
+                  <motion.div
+                    className="flex-1 min-h-0 w-full flex flex-col"
+                    initial={{ opacity: 0, scale: 0.98 }}
+                    animate={{
+                      opacity: state.view === 'casting' ? 1 : 0,
+                      scale: state.view === 'casting' ? 1 : 0.98,
+                      pointerEvents: state.view === 'casting' ? 'auto' : 'none'
+                    }}
+                    transition={{ duration: 0.22, ease: "easeOut" }}
+                  >
+                    <CastingForge />
+                  </motion.div>
                 </div>
+
                 {visitedViews.nano_cast && (
-                  <div hidden={state.view !== 'nano_cast'} className="flex-1 min-h-0 w-full flex flex-col">
-                    <NanoCastingDirector />
+                  <div
+                    key="nano-cast-container"
+                    hidden={state.view !== 'nano_cast'}
+                    className="flex-1 min-h-0 w-full flex flex-col"
+                  >
+                    <motion.div
+                      className="flex-1 min-h-0 w-full flex flex-col"
+                      initial={{ opacity: 0, scale: 0.98 }}
+                      animate={{
+                        opacity: state.view === 'nano_cast' ? 1 : 0,
+                        scale: state.view === 'nano_cast' ? 1 : 0.98,
+                        pointerEvents: state.view === 'nano_cast' ? 'auto' : 'none'
+                      }}
+                      transition={{ duration: 0.22, ease: "easeOut" }}
+                    >
+                      <NanoCastingDirector />
+                    </motion.div>
                   </div>
                 )}
-                {state.view === 'portrait' && <PortraitStudio />}
-                {state.view === 'wardrobe' && <WardrobeStudio />}
-                {state.view === 'props' && <PropAccessoryStudio />}
-                {state.view === 'staging' && <SceneCanvas />}
-                {state.view === 'veo' && <VeoPromptStudio />}
-              </>
+
+                {state.view === 'portrait' && (
+                  <motion.div
+                    key="portrait"
+                    initial={{ opacity: 0, scale: 0.98 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.98 }}
+                    transition={{ duration: 0.22, ease: "easeOut" }}
+                    className="flex-1 min-h-0 w-full flex flex-col"
+                  >
+                    <PortraitStudio />
+                  </motion.div>
+                )}
+
+                {state.view === 'wardrobe' && (
+                  <motion.div
+                    key="wardrobe"
+                    initial={{ opacity: 0, scale: 0.98 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.98 }}
+                    transition={{ duration: 0.22, ease: "easeOut" }}
+                    className="flex-1 min-h-0 w-full flex flex-col"
+                  >
+                    <WardrobeStudio />
+                  </motion.div>
+                )}
+
+                {state.view === 'props' && (
+                  <motion.div
+                    key="props"
+                    initial={{ opacity: 0, scale: 0.98 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.98 }}
+                    transition={{ duration: 0.22, ease: "easeOut" }}
+                    className="flex-1 min-h-0 w-full flex flex-col"
+                  >
+                    <PropAccessoryStudio />
+                  </motion.div>
+                )}
+
+                {state.view === 'staging' && (
+                  <motion.div
+                    key="staging"
+                    initial={{ opacity: 0, scale: 0.98 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.98 }}
+                    transition={{ duration: 0.22, ease: "easeOut" }}
+                    className="flex-1 min-h-0 w-full flex flex-col"
+                  >
+                    <SceneCanvas />
+                  </motion.div>
+                )}
+
+                {state.view === 'veo' && (
+                  <motion.div
+                    key="veo"
+                    initial={{ opacity: 0, scale: 0.98 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.98 }}
+                    transition={{ duration: 0.22, ease: "easeOut" }}
+                    className="flex-1 min-h-0 w-full flex flex-col"
+                  >
+                    <VeoPromptStudio />
+                  </motion.div>
+                )}
+              </AnimatePresence>
             )}
           </main>
 

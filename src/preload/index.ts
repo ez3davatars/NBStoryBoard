@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     showSaveDialog: (options: SaveDialogOptions) => ipcRenderer.invoke('dialog:showSaveDialog', options),
     showOpenDialog: (options: OpenDialogOptions) => ipcRenderer.invoke('dialog:showOpenDialog', options),
     deleteFile: (path: string) => ipcRenderer.invoke('file:delete', path),
+    deleteLibraryPackageFolder: (path: string) => ipcRenderer.invoke('file:deleteLibraryPackageFolder', path),
     renameFile: (oldPath: string, newPath: string) => ipcRenderer.invoke('file:rename', oldPath, newPath),
     getWorkerStatus: () => ipcRenderer.invoke('worker:getStatus'),
     restartWorker: () => ipcRenderer.invoke('worker:restart'),

@@ -48,6 +48,43 @@ import libAnim from '../assets/library-anim.png';
 import libIllustration from '../assets/library-illustration.png';
 import libScifi from '../assets/library-scifi.png';
 import libUnsorted from '../assets/library-unsorted.png';
+import libProduction from '../assets/library-production.png';
+const getOptionalStringProperty = (
+  value: unknown,
+  key: string
+): string | null => {
+  if (!value || typeof value !== "object") return null;
+
+  const record = value as Record<string, unknown>;
+  const propertyValue = record[key];
+
+  return typeof propertyValue === "string" && propertyValue.trim()
+    ? propertyValue
+    : null;
+};
+
+const isPackagedProductionActor = (actor: any): boolean => {
+  if (!actor) return false;
+  // Do NOT treat these as packaged actors:
+  // - actor.filename starting with "Production Cast/"
+  // - actor.localPath containing "\Actors\Production Cast\"
+  // - category/name containing "Production Cast"
+  const isLegacyPath = Boolean(
+    (actor.filename && actor.filename.startsWith("Production Cast/")) ||
+    (actor.localPath && (actor.localPath.includes("\\Actors\\Production Cast\\") || actor.localPath.includes("/Actors/Production Cast/"))) ||
+    (actor.category && actor.category.includes("Production Cast")) ||
+    (actor.name && actor.name.includes("Production Cast"))
+  );
+  if (isLegacyPath) return false;
+
+  return Boolean(
+    actor.isProductionActor === true ||
+    actor.assetType === "production_actor" ||
+    actor.productionActorProfile ||
+    getOptionalStringProperty(actor, "folderPath") ||
+    (actor.localPath && (actor.localPath.includes("\\Library\\ProductionActors\\") || actor.localPath.includes("/Library/ProductionActors/")))
+  );
+};
 
 const REFERENCE_SHEET_PROMPT = `
 Create a professional, 8k resolution character reference sheet
@@ -296,6 +333,7 @@ const REF_LAYOUT_OPTIONS: Array<{ id: RefSheetLayoutMode; label: string }> = [
 ];
 
 const STUDIO_FOLDERS = [
+  { id: 'production_actors', label: 'Production Actors', description: "Authoritative Identity Packaged Actors", image: libProduction, styles: [] as string[] },
   { id: 'realism', label: 'Realism', description: "Photorealistic Portraiture & Raw Detail", image: libRealism, styles: ['exact_studio', 'photorealism', 'dslr_capture'] },
   { id: 'anim', label: 'Stylized Cartoon', description: "Modern 3D Animation & Soft Lighting", image: libAnim, styles: ['family_3d', 'premium_animated_3d', 'claymation'] },
   { id: 'illustration', label: 'Illustration', description: "Anime, Noir & Graphic", image: libIllustration, styles: ['retro_cel', 'graphic_noir', 'retro_anime', 'comic_book'] },
@@ -680,7 +718,7 @@ async function materializeDisplayUrl(url: string | null | undefined): Promise<st
 }
 
 const LibraryActorSkeleton = () => (
-  <div className="actor-card-skeleton relative aspect-square !h-auto w-full">
+  <div className="actor-card-skeleton relative aspect-square !h-auto w-full animate-in fade-in duration-200">
     <div className="actor-card-skeleton-shine" />
     <div className="actor-card-skeleton-title !left-4 !bottom-10 !w-24 !h-3" />
     <div className="actor-card-skeleton-line !left-4 !bottom-4 !w-32 !h-2" />
@@ -688,7 +726,7 @@ const LibraryActorSkeleton = () => (
 );
 
 const LibraryStudioSkeleton = () => (
-  <div className="actor-card-skeleton relative !h-48 w-full !rounded-3xl">
+  <div className="actor-card-skeleton relative !h-48 w-full !rounded-3xl animate-in fade-in duration-200">
     <div className="actor-card-skeleton-shine" />
     <div className="absolute inset-0 bg-gradient-to-r from-black/50 via-black/20 to-transparent" />
     <div className="absolute left-6 bottom-6 right-6 space-y-3">
@@ -701,21 +739,217 @@ const LibraryStudioSkeleton = () => (
   </div>
 );
 
+const getProductionActorPackageFolder = async (actor: any, saveDirectoryPath: string | null): Promise<string | null> => {
+  if (!actor || !window.electronAPI) return null;
+
+  // 1. asset.productionActorProfile.folderName
+  const profile = actor.productionActorProfile || actor.productionProfile;
+  if (profile?.folderName && saveDirectoryPath) {
+    return await window.electronAPI.joinPath(saveDirectoryPath, 'Library', 'ProductionActors', profile.folderName);
+  }
+
+  // 2. asset.folderPath
+  if (actor.folderPath) {
+    if (saveDirectoryPath && !actor.folderPath.startsWith('/') && !actor.folderPath.includes(':')) {
+      return await window.electronAPI.joinPath(saveDirectoryPath, 'Library', actor.folderPath);
+    }
+    return actor.folderPath;
+  }
+
+  // 3. asset.localPath parent directory if localPath ends with actor.png
+  if (actor.localPath && (actor.localPath.endsWith('actor.png') || actor.localPath.endsWith('actor.PNG'))) {
+    const parentPath = actor.localPath.substring(0, actor.localPath.lastIndexOfAny(['/', '\\']));
+    if (parentPath) return parentPath;
+  }
+
+  // 4. library-index.json folder entry or filename mapping
+  if (actor.filename && saveDirectoryPath) {
+    const parts = actor.filename.replace(/\\/g, '/').split('/');
+    const idx = parts.indexOf('ProductionActors');
+    if (idx >= 0 && parts[idx + 1]) {
+      const folderName = parts[idx + 1];
+      return await window.electronAPI.joinPath(saveDirectoryPath, 'Library', 'ProductionActors', folderName);
+    }
+  }
+
+  return null;
+};
+
+const preloadActorImages = async (actors: CastMember[], timeoutMs = 2500) => {
+  const imageUrls = actors
+    .map(actor => actor.previewUrl || actor.url)
+    .filter((url): url is string => Boolean(url))
+    .slice(0, 24);
+
+  if (imageUrls.length === 0) return;
+
+  const preloadPromises = imageUrls.map(url => new Promise<void>(resolve => {
+    const img = new Image();
+    const timeout = window.setTimeout(() => resolve(), timeoutMs);
+    img.onload = () => {
+      window.clearTimeout(timeout);
+      resolve();
+    };
+    img.onerror = () => {
+      window.clearTimeout(timeout);
+      resolve();
+    };
+    img.src = url;
+  }));
+
+  await Promise.allSettled(preloadPromises);
+};
+
+const ActorLibraryLoadingShell = () => (
+  <div className="flex flex-col gap-6 p-4 w-full select-none animate-pulse">
+    {/* Cinematic Spinner & Message */}
+    <div className="flex flex-col items-center justify-center py-6 text-center">
+      <div className="relative w-12 h-12 mb-4">
+        <div className="absolute inset-0 rounded-full border-4 border-yellow-500/10" />
+        <div className="absolute inset-0 rounded-full border-4 border-t-yellow-500 animate-spin" />
+      </div>
+      <h4 className="text-xs font-black uppercase tracking-[0.2em] text-white italic">Loading Actor Library</h4>
+      <p className="text-[10px] text-gray-500 mt-2 font-medium tracking-wide">
+        Indexing saved actors and production assets...
+      </p>
+    </div>
+
+    {/* Skeleton Category Cards */}
+    <div className="space-y-4">
+      <div className="text-[10px] font-black uppercase tracking-wider text-gray-600">Studios</div>
+      {Array.from({ length: 2 }).map((_, i) => (
+        <div key={`shell-cat-skeleton-${i}`} className="h-28 w-full rounded-2xl bg-zinc-900/40 border border-white/5 flex items-end p-5 relative overflow-hidden">
+          <div className="absolute inset-0 bg-gradient-to-r from-black/60 to-transparent z-0" />
+          <div className="relative z-10 flex flex-col gap-2 w-full text-left">
+            <div className="h-3 w-1/3 rounded bg-zinc-800/60" />
+            <div className="flex items-center gap-3">
+              <div className="h-1.5 w-1/2 rounded bg-zinc-800/40" />
+              <div className="h-4 w-12 rounded bg-white/5 border border-white/10" />
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+
+    {/* Skeleton Actor Thumbnails Grid */}
+    <div className="space-y-4">
+      <div className="text-[10px] font-black uppercase tracking-wider text-gray-600">Cast Members</div>
+      <div className="grid grid-cols-2 gap-4">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={`shell-actor-skeleton-${i}`} className="aspect-square rounded-xl bg-zinc-900/40 border border-[#27272a]/40 flex flex-col justify-end p-2 relative overflow-hidden">
+            <div className="absolute inset-0 bg-zinc-800/30" />
+            <div className="h-3 w-2/3 rounded bg-zinc-800/60 relative z-10" />
+          </div>
+        ))}
+      </div>
+    </div>
+  </div>
+);
+
+
+type LibraryNavigationTarget = {
+  type: 'studio' | 'category';
+  label: string;
+};
+
+const ActorLibraryNavigationShell = ({ target }: { target: LibraryNavigationTarget | null }) => {
+  const isStudio = !target || target.type === 'studio';
+  const title = isStudio ? 'Loading Studio Categories' : `Loading ${target.label}`;
+
+  return (
+    <motion.div
+      key={`library-transition-${isStudio ? 'studio' : target?.label || 'category'}`}
+      initial={{ opacity: 0, y: 10, scale: 0.985 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: -8, scale: 0.985 }}
+      transition={{ duration: 0.18, ease: 'easeOut' }}
+      className="relative flex flex-col gap-4 pb-20"
+    >
+      <div className="rounded-2xl border border-yellow-500/10 bg-black/30 px-4 py-4 overflow-hidden relative">
+        <div className="absolute inset-0 bg-gradient-to-r from-yellow-500/5 via-blue-500/5 to-transparent animate-pulse" />
+        <div className="relative flex items-center gap-3">
+          <div className="relative h-9 w-9 shrink-0">
+            <div className="absolute inset-0 rounded-full border-2 border-yellow-500/10" />
+            <div className="absolute inset-0 rounded-full border-2 border-t-yellow-400 animate-spin" />
+          </div>
+          <div>
+            <h4 className="text-[11px] font-black uppercase tracking-[0.18em] text-white">{title}</h4>
+            <p className="text-[10px] text-zinc-500 mt-1">
+              {isStudio ? 'Preparing studio folders and category covers…' : 'Preparing actor thumbnails and production metadata…'}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {isStudio ? (
+        <div className="flex flex-col gap-4">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <LibraryStudioSkeleton key={`transition-studio-skeleton-${i}`} />
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-4">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <LibraryActorSkeleton key={`transition-actor-skeleton-${i}`} />
+          ))}
+        </div>
+      )}
+    </motion.div>
+  );
+};
+
 const CastingForge = () => {
   const { state, dispatch } = useAppContext();
+
+  // --- LIBRARY SEARCH & SORT STATE ---
+  const [librarySearch, setLibrarySearch] = useState('');
+  const [sortOption, setSortOption] = useState<'name' | 'date' | 'type'>('date');
+  const [showSortMenu, setShowSortMenu] = useState(false);
+  const [activeFolder, setActiveFolder] = useState<string | null>(null);
+  const [refSheetUrl, setRefSheetUrl] = useState<string | null>(null);
+  const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
+  const [organizeTarget, setOrganizeTarget] = useState<{ id: string, name: string } | null>(null);
+  const [editingActorName, setEditingActorName] = useState<{ id: string, name: string } | null>(null);
   
   const [libraryViewLoading, setLibraryViewLoading] = useState(false);
+  const [libraryNavigationLoading, setLibraryNavigationLoading] = useState(false);
+  const [pendingLibraryTarget, setPendingLibraryTarget] = useState<LibraryNavigationTarget | null>(null);
   const [isRecentGenerationsOpen, setIsRecentGenerationsOpen] = useState(true);
   const recentStoreGenerations = useRecentGenerationsStore(state => state.recentGenerations);
   const hasRecentGenerations = recentStoreGenerations.filter(g => g.studio === 'general').length > 0;
-  const withLibraryTransition = (next: () => void, delay = 180) => {
+
+  // Hydration state tracking
+  const [isActorCategoryVisualLoading, setIsActorCategoryVisualLoading] = useState(true);
+  const [, setSelectedCategoryReady] = useState<string | null>(null);
+  const [initialLoadComplete, setInitialLoadComplete] = useState(false);
+
+  const withLibraryTransition = (
+    next: () => void,
+    target: LibraryNavigationTarget = { type: 'studio', label: 'Studio Categories' },
+    minimumDelay = 650
+  ) => {
+    console.debug('[ActorLibrary Navigation]', {
+      from: activeFolder || 'studio',
+      to: target.type === 'studio' ? 'studio' : target.label,
+      loading: true,
+    });
+
+    setPendingLibraryTarget(target);
+    setLibraryNavigationLoading(true);
     setLibraryViewLoading(true);
-    window.setTimeout(() => {
-      next();
+    setIsActorCategoryVisualLoading(true);
+
+    // Give React a guaranteed paint window for the transition shell before
+    // changing folders or starting any heavier image/categorization work.
+    window.requestAnimationFrame(() => {
       window.setTimeout(() => {
-        setLibraryViewLoading(false);
-      }, delay);
-    }, 40);
+        next();
+
+        window.setTimeout(() => {
+          setLibraryViewLoading(false);
+        }, minimumDelay);
+      }, 80);
+    });
   };
 
   // Pre-compute styles locally to ensure consistency
@@ -727,6 +961,145 @@ const CastingForge = () => {
         .map(s => normalizeStyle(s))
     );
   }, []);
+
+  // 1. Data Hydration Logger
+  useEffect(() => {
+    console.debug("[ActorLibrary Data Hydration]", {
+      status: state.actorLibraryStatus,
+      totalActors: state.actorLibrary.length,
+    });
+  }, [state.actorLibraryStatus, state.actorLibrary.length]);
+
+  // 2. Initial Load Resolver
+  useEffect(() => {
+    if (state.actorLibraryStatus === 'ready' && !isActorCategoryVisualLoading) {
+      setInitialLoadComplete(true);
+    }
+  }, [state.actorLibraryStatus, isActorCategoryVisualLoading]);
+
+  // Navigation transition resolver: keeps the actor library from going blank while views swap.
+  useEffect(() => {
+    if (!libraryNavigationLoading) return;
+    if (state.actorLibraryStatus !== 'ready' || libraryViewLoading || isActorCategoryVisualLoading) return;
+
+    const timer = window.setTimeout(() => {
+      console.debug('[ActorLibrary Navigation]', {
+        target: pendingLibraryTarget?.type === 'studio' ? 'studio' : pendingLibraryTarget?.label || activeFolder || 'studio',
+        loading: false,
+      });
+
+      setLibraryNavigationLoading(false);
+      setPendingLibraryTarget(null);
+    }, 120);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    libraryNavigationLoading,
+    state.actorLibraryStatus,
+    libraryViewLoading,
+    isActorCategoryVisualLoading,
+    pendingLibraryTarget,
+    activeFolder,
+  ]);
+
+  // 3. Reactive Visual Preload and Hydration loop
+  useEffect(() => {
+    if (state.actorLibraryStatus !== 'ready') {
+      setIsActorCategoryVisualLoading(true);
+      return;
+    }
+
+    let isObsolete = false;
+
+    const performVisualPreload = async () => {
+      setIsActorCategoryVisualLoading(true);
+
+      // Studio/root view should not wait on actor thumbnail preloading.
+      // Covers are already handled by the custom cover loader, and preloading
+      // the first 24 actors here is what caused the multi-second lag when
+      // returning from a category back to Studios.
+      if (!activeFolder) {
+        console.debug("[ActorLibrary Visual Hydration]", {
+          categoryKey: 'root',
+          loading: true,
+          actorCount: state.actorLibrary.length,
+          preloadedCount: 0,
+          mode: 'studio-root',
+        });
+
+        await new Promise(resolve => window.setTimeout(resolve, 180));
+
+        if (isObsolete) return;
+
+        console.debug("[ActorLibrary Visual Hydration]", {
+          categoryKey: 'root',
+          loading: false,
+          actorCount: state.actorLibrary.length,
+          preloadedCount: 0,
+          mode: 'studio-root',
+        });
+
+        setIsActorCategoryVisualLoading(false);
+        setSelectedCategoryReady('root');
+        return;
+      }
+
+      // Determine actors in the targeted category only.
+      const folder = STUDIO_FOLDERS.find(f => f.id === activeFolder);
+      const targetActors = folder
+        ? state.actorLibrary.filter(a => {
+            if (folder.id === 'production_actors') {
+              return a.isProductionActor;
+            }
+            if (a.isProductionActor) return false;
+            const s = normalizeStyle(a.profile?.style);
+            if (folder.id === 'uncategorized') {
+              return !s || !knownStyles.has(s);
+            }
+            const targetStyles = new Set(folder.styles.map(ts => normalizeStyle(ts)));
+            return targetStyles.has(s);
+          })
+        : [];
+
+      const imageUrls = targetActors
+        .map(actor => actor.previewUrl || actor.url)
+        .filter((url): url is string => Boolean(url));
+      const preloadedCount = Array.from(new Set(imageUrls)).slice(0, 24).length;
+
+      console.debug("[ActorLibrary Visual Hydration]", {
+        categoryKey: activeFolder,
+        loading: true,
+        actorCount: targetActors.length,
+        preloadedCount,
+        mode: 'category',
+      });
+
+      if (targetActors.length > 0) {
+        await preloadActorImages(targetActors);
+      } else {
+        await new Promise(resolve => window.setTimeout(resolve, 180));
+      }
+
+      if (isObsolete) return;
+
+      console.debug("[ActorLibrary Visual Hydration]", {
+        categoryKey: activeFolder,
+        loading: false,
+        actorCount: targetActors.length,
+        preloadedCount,
+        mode: 'category',
+      });
+
+      setIsActorCategoryVisualLoading(false);
+      setSelectedCategoryReady(activeFolder);
+    };
+
+    performVisualPreload();
+
+    return () => {
+      isObsolete = true;
+    };
+  }, [state.actorLibraryStatus, activeFolder, state.actorLibrary, knownStyles]);
 
   const mainUploadRef = useRef<HTMLInputElement>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
@@ -1438,6 +1811,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
 
   // DELETE CONFIRMATION STATE
   const [deleteTarget, setDeleteTarget] = useState<{ type: 'cast' | 'library' | 'cast_all', payload: string, name: string } | null>(null);
+  const [deleteFromDisk, setDeleteFromDisk] = useState<boolean>(false);
 
   const handleClearForgeCanvas = () => {
     generationIdRef.current += 1;
@@ -1484,72 +1858,309 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
       const actorId = deleteTarget.payload;
       const actor = state.actorLibrary.find(a => a.id === actorId);
 
-      const performDelete = async () => {      // 1. If it's a file-based actor, delete from disk FIRST
-        if (actor && actor.filename) {
+      const performDelete = async () => {
+        if (!actor) return;
+
+        const isPackagedProd = isPackagedProductionActor(actor);
+        const packageFolder = isPackagedProd ? await getProductionActorPackageFolder(actor, state.saveDirectoryPath) : null;
+
+        // 6. Add a debug log before branching:
+        console.debug('[Actor Delete Route]', {
+          actorId,
+          filename: actor.filename,
+          localPath: actor.localPath,
+          isPackagedProductionActor: isPackagedProd,
+          hasProductionActorProfile: Boolean(actor.productionActorProfile),
+          assetType: actor.assetType,
+        });
+
+        // 9. Add Delete Requested Log:
+        console.debug('[LibraryPackage Delete Requested]', {
+          assetId: actorId,
+          assetType: isPackagedProd ? 'production_actor' : 'legacy_actor',
+          deleteFromDisk: deleteFromDisk,
+          localPath: actor.localPath || actor.filename || '',
+          packageFolder: packageFolder || '',
+        });
+
+        if (isPackagedProd && packageFolder) {
           try {
+            // A. Clear active UI selection if this actor is selected (Prop studio / Wardrobe studio)
+            if (state.wardrobeState.selectedCharacter?.id === actor.id) {
+              dispatch({ type: 'SET_WARDROBE_STATE', payload: { selectedCharacter: null } });
+            }
+            if (state.propStudioState.selectedCharacter?.id === actor.id) {
+              dispatch({ type: 'SET_PROP_STUDIO_STATE', payload: { selectedCharacter: null } });
+            }
+
+            // B. If Windows file locking is aggressive, revoke any Object URLs first
+            if (actor.url && actor.url.startsWith('blob:')) {
+              try {
+                URL.revokeObjectURL(actor.url);
+              } catch (e) {}
+            }
+            if (actor.previewUrl && actor.previewUrl.startsWith('blob:')) {
+              try {
+                URL.revokeObjectURL(actor.previewUrl);
+              } catch (e) {}
+            }
+
+            // C. Remove the actor from React / in-memory state FIRST so no <img> tags render the file
+            dispatch({ type: 'REMOVE_ACTOR_LIBRARY', payload: actorId });
+            dispatch({ type: 'REMOVE_FROM_AVAILABLE_CAST', payload: { actorId } });
+            dispatch({ type: 'REMOVE_CAST', payload: actorId });
+
+            // If mapped to reference slots, clear those slots immediately
+            state.referenceSlots.forEach((slot) => {
+              if (slot.castId === actor.id) {
+                dispatch({
+                  type: 'UPDATE_REF_SLOT',
+                  payload: {
+                    index: slot.index,
+                    updates: {
+                      url: undefined,
+                      localPath: undefined,
+                      sourceUrl: undefined,
+                      name: `Ref ${slot.index}`,
+                      castId: undefined,
+                      active: false,
+                      status: 'empty',
+                      analysis: '',
+                      productionActorProfile: undefined,
+                      productionProfile: undefined
+                    }
+                  }
+                });
+              }
+            });
+
+            // D. Update Library/library-index.json
+            let removedFromIndex = false;
+            if (state.saveDirectoryPath && window.electronAPI?.joinPath && window.electronAPI?.exists) {
+              const libraryPath = await window.electronAPI.joinPath(state.saveDirectoryPath, 'Library');
+              const indexPath = await window.electronAPI.joinPath(libraryPath, 'library-index.json');
+              if (await window.electronAPI.exists(indexPath)) {
+                try {
+                  const text = await window.electronAPI.readTextFile(indexPath);
+                  if (text) {
+                    const parsed = JSON.parse(text);
+                    if (parsed && Array.isArray(parsed.assets)) {
+                      const profile = actor.productionActorProfile || actor.productionProfile;
+                      const originalProfileId = profile?.id || actor.id.replace('disk-packaged-', '');
+                      const folderName = profile?.folderName || (packageFolder ? packageFolder.split(/[\\/]/).pop() : '');
+                      
+                      const nextAssets = parsed.assets.filter((a: any) => 
+                        a.id !== originalProfileId && 
+                        a.folder !== `ProductionActors/${folderName}` &&
+                        !a.folder?.includes(folderName)
+                      );
+                      parsed.assets = nextAssets;
+
+                      const indexPayload = new TextEncoder().encode(JSON.stringify(parsed, null, 2));
+                      await window.electronAPI.writeFile(indexPath, new Uint8Array(indexPayload));
+                      removedFromIndex = true;
+                    }
+                  }
+                } catch (indexError) {
+                  console.warn('[LibraryPackage Index Update Failed]', indexError);
+                }
+              }
+            }
+
+            // E. Wait one tick before disk deletion to let React unmount images
+            await new Promise(resolve => setTimeout(resolve, 100));
+
+            let folderDeleted = false;
+            if (deleteFromDisk) {
+              if (packageFolder && window.electronAPI?.deleteLibraryPackageFolder) {
+                folderDeleted = await window.electronAPI.deleteLibraryPackageFolder(packageFolder);
+              }
+              if (!folderDeleted) {
+                throw new Error(`Folder recursive delete returned false or was skipped. Path: ${packageFolder}`);
+              }
+            }
+
+            // 9. Add Delete Success Log:
+            console.debug('[LibraryPackage Delete Success]', {
+              assetId: actorId,
+              packageFolder: packageFolder || '',
+              removedFromIndex: removedFromIndex,
+              diskDeleted: deleteFromDisk ? folderDeleted : false,
+            });
+
+            if (deleteFromDisk) {
+              dispatch({ type: 'ADD_LOG', payload: { message: `Production Actor folder deleted from disk successfully.`, type: 'success' } });
+              showToast("Production Actor permanently deleted from library and disk.");
+            } else {
+              dispatch({ type: 'ADD_LOG', payload: { message: `Production Actor removed from library (files retained on disk).`, type: 'info' } });
+              showToast("Production Actor removed from library only.");
+            }
+
+          } catch (error) {
+            console.warn(
+              '[LibraryPackage Delete Failed]',
+              JSON.stringify(
+                {
+                  assetId: actorId,
+                  deleteFromDisk,
+                  packageFolder: packageFolder || null,
+                  actorFilename: actor.filename || null,
+                  actorLocalPath: actor.localPath || null,
+                  actorFolderPath: getOptionalStringProperty(actor, "folderPath"),
+                  actorAssetType: actor.assetType || null,
+                  isProductionActor: actor.isProductionActor || false,
+                  hasProductionActorProfile: Boolean(actor.productionActorProfile),
+                  productionActorFolderName: actor.productionActorProfile?.folderName || null,
+                  errorMessage: getErrorMessage(error),
+                  errorRaw: error instanceof Error ? error.stack : String(error),
+                },
+                null,
+                2
+              )
+            );
+            showToast(`Delete Error: ${getErrorMessage(error)}`);
+            dispatch({ type: 'ADD_LOG', payload: { message: `Delete failed: ${getErrorMessage(error)}`, type: 'error' } });
+          }
+        } else if (actor.localPath || actor.filename) {
+          // 2. Legacy Flat Actors / Flat Image deletion
+          try {
+            // C. Remove the actor from React / in-memory state FIRST
+            dispatch({ type: 'REMOVE_ACTOR_LIBRARY', payload: actorId });
+            dispatch({ type: 'REMOVE_FROM_AVAILABLE_CAST', payload: { actorId } });
+            dispatch({ type: 'REMOVE_CAST', payload: actorId });
+
+            // If mapped to reference slots, clear those slots immediately
+            state.referenceSlots.forEach((slot) => {
+              if (slot.castId === actor.id) {
+                dispatch({
+                  type: 'UPDATE_REF_SLOT',
+                  payload: {
+                    index: slot.index,
+                    updates: {
+                      url: undefined,
+                      localPath: undefined,
+                      sourceUrl: undefined,
+                      name: `Ref ${slot.index}`,
+                      castId: undefined,
+                      active: false,
+                      status: 'empty',
+                      analysis: '',
+                      productionActorProfile: undefined,
+                      productionProfile: undefined
+                    }
+                  }
+                });
+              }
+            });
+
             let deleted = false;
             let diag = "";
-            if (state.saveDirectoryPath && window.electronAPI?.deleteFile && window.electronAPI?.joinPath) {
-              const filePath = await window.electronAPI.joinPath(state.saveDirectoryPath, 'Actors', actor.filename);
-              deleted = await window.electronAPI.deleteFile(filePath);
-              diag += `IPC[${deleted}] (${filePath}). `;
 
-              // SMART FALLBACK: If direct delete failed, maybe the file moved or category changed?
-              if (!deleted && window.electronAPI?.exists) {
-                diag += `FallbackSearch... `;
-                const possibleCats = ['', 'Realism', 'Stylized Cartoon', 'Illustration', 'Sci-Fi', 'Uncategorized', 'Extras'];
-                const basename = actor.filename?.split(/[\\/]/).pop();
+            if (deleteFromDisk) {
+              if (window.electronAPI?.deleteFile) {
+                // If we have localPath directly on disk:
+                if (actor.localPath && window.electronAPI.exists && await window.electronAPI.exists(actor.localPath)) {
+                  deleted = await window.electronAPI.deleteFile(actor.localPath);
+                  diag += `DirectLocalPath[${deleted}] (${actor.localPath}). `;
+                  
+                  const sidecarPath = actor.localPath.replace(/\.[^/.]+$/, ".json");
+                  if (await window.electronAPI.exists(sidecarPath)) {
+                    await window.electronAPI.deleteFile(sidecarPath);
+                    diag += `SidecarDeleted. `;
+                  }
+                } else if (actor.filename && state.saveDirectoryPath && window.electronAPI.joinPath) {
+                  const filePath = await window.electronAPI.joinPath(state.saveDirectoryPath, 'Actors', actor.filename);
+                  if (await window.electronAPI.exists(filePath)) {
+                    deleted = await window.electronAPI.deleteFile(filePath);
+                    diag += `IPC[${deleted}] (${filePath}). `;
 
-                if (basename) {
-                  for (const cat of possibleCats) {
-                    const testPath = await window.electronAPI.joinPath(state.saveDirectoryPath, 'Actors', cat, basename);
-                    if (await window.electronAPI.exists(testPath)) {
-                      deleted = await window.electronAPI.deleteFile(testPath);
-                      if (deleted) {
-                        diag += `FoundIn[${cat || 'Root'}]. `;
-                        break;
+                    // Also delete matching sidecar JSON if present
+                    const sidecarPath = filePath.replace(/\.[^/.]+$/, ".json");
+                    if (await window.electronAPI.exists(sidecarPath)) {
+                      await window.electronAPI.deleteFile(sidecarPath);
+                      diag += `SidecarDeleted. `;
+                    }
+                  }
+                }
+
+                // SMART FALLBACK: If direct delete failed, maybe the file moved or category changed?
+                if (!deleted && actor.filename && state.saveDirectoryPath && window.electronAPI.joinPath && window.electronAPI?.exists) {
+                  diag += `FallbackSearch... `;
+                  const possibleCats = ['', 'Realism', 'Stylized Cartoon', 'Illustration', 'Sci-Fi', 'Uncategorized', 'Extras'];
+                  const basename = actor.filename.split(/[\\/]/).pop();
+
+                  if (basename) {
+                    for (const cat of possibleCats) {
+                      const testPath = await window.electronAPI.joinPath(state.saveDirectoryPath, 'Actors', cat, basename);
+                      if (await window.electronAPI.exists(testPath)) {
+                        deleted = await window.electronAPI.deleteFile(testPath);
+                        if (deleted) {
+                          diag += `FoundIn[${cat || 'Root'}]. `;
+                          const catSidecar = testPath.replace(/\.[^/.]+$/, ".json");
+                          if (await window.electronAPI.exists(catSidecar)) {
+                            await window.electronAPI.deleteFile(catSidecar);
+                            diag += `SidecarDeleted. `;
+                          }
+                          break;
+                        }
                       }
                     }
                   }
                 }
+              } else {
+                diag += `IPC[Missing/NoPath]. `;
               }
+
+              if (!deleted && actor.filename && state.saveDirectoryHandle) {
+                const hasPermission = await verifyPermission(state.saveDirectoryHandle, true);
+                if (!hasPermission) {
+                  showToast("Permission Denied: Cannot delete file from disk.");
+                  return; // Abort delete
+                }
+                let curDir = await state.saveDirectoryHandle.getDirectoryHandle('Actors');
+                const pathParts = actor.filename.split(/[\\/]/);
+                for (let i = 0; i < pathParts.length - 1; i++) {
+                  curDir = await curDir.getDirectoryHandle(pathParts[i]);
+                }
+                await curDir.removeEntry(pathParts[pathParts.length - 1]);
+                deleted = true;
+                diag += `Web[Succeed]. `;
+              }
+
+              if (!deleted) throw new Error("File deletion failed or permission denied on disk. Trace: " + diag);
+            }
+
+            // 9. Add Delete Success Log:
+            console.debug('[LibraryPackage Delete Success]', {
+              assetId: actorId,
+              packageFolder: '',
+              removedFromIndex: false,
+              diskDeleted: deleteFromDisk ? deleted : false,
+            });
+
+            if (deleteFromDisk) {
+              dispatch({ type: 'ADD_LOG', payload: { message: `File deleted from disk ${diag}`, type: 'success' } });
+              showToast("Actor permanently deleted from library and disk.");
             } else {
-              diag += `IPC[Missing/NoPath]. `;
+              dispatch({ type: 'ADD_LOG', payload: { message: "Actor removed from library (files retained on disk).", type: 'info' } });
+              showToast("Actor removed from library only.");
             }
-
-            if (!deleted && state.saveDirectoryHandle) {
-              const hasPermission = await verifyPermission(state.saveDirectoryHandle, true);
-              if (!hasPermission) {
-                showToast("Permission Denied: Cannot delete file from disk.");
-                return; // Abort delete
-              }
-              let curDir = await state.saveDirectoryHandle.getDirectoryHandle('Actors');
-              const pathParts = actor.filename.split(/[\\/]/);
-              for (let i = 0; i < pathParts.length - 1; i++) {
-                curDir = await curDir.getDirectoryHandle(pathParts[i]);
-              }
-              await curDir.removeEntry(pathParts[pathParts.length - 1]);
-              deleted = true;
-              diag += `Web[Succeed]. `;
-            }
-
-            if (!deleted) throw new Error("File deletion failed or permission denied on disk. Trace: " + diag);
-
-            dispatch({ type: 'ADD_LOG', payload: { message: `File deleted from disk ${diag}`, type: 'success' } });
-
-            // Only remove from memory if disk delete succeeded
-            dispatch({ type: 'REMOVE_ACTOR_LIBRARY', payload: actorId });
-            dispatch({ type: 'ADD_LOG', payload: { message: "Actor permanently removed", type: 'info' } });
 
           } catch (e: unknown) {
-            console.error("Disk delete failed", e);
+            // 9. Add Delete Failed Log:
+            console.warn('[LibraryPackage Delete Failed]', {
+              assetId: actorId,
+              packageFolder: '',
+              error: e,
+            });
             showToast(`Delete Error: ${getErrorMessage(e)}`);
             dispatch({ type: 'ADD_LOG', payload: { message: `Disk delete failed: ${getErrorMessage(e)}`, type: 'error' } });
-            // Do NOT remove from memory if disk delete failed, prevents "zombie" confusion
           }
         } else {
           // Memory-only actor or no handle? Just remove from memory.
           dispatch({ type: 'REMOVE_ACTOR_LIBRARY', payload: actorId });
+          dispatch({ type: 'REMOVE_FROM_AVAILABLE_CAST', payload: { actorId } });
+          dispatch({ type: 'REMOVE_CAST', payload: actorId });
           dispatch({ type: 'ADD_LOG', payload: { message: "Actor removed (Memory Only)", type: 'info' } });
         }
       };
@@ -1557,6 +2168,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
       performDelete();
     }
     setDeleteTarget(null);
+    setDeleteFromDisk(false);
   };
 
   // DISK PERSISTENCE: Rename or Move Actor
@@ -1578,7 +2190,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
     if (isRename && safeName === actor.name && !isMove) return;
 
     const targetFolderId = options.newFolderId ?? (
-      STUDIO_FOLDERS.find(f => f.styles.includes(normalizeStyle(actor.profile?.style)))?.id || 'uncategorized'
+      actor.isProductionActor ? 'production_actors' : (STUDIO_FOLDERS.find(f => f.styles.includes(normalizeStyle(actor.profile?.style)))?.id || 'uncategorized')
     );
     const targetFolder = STUDIO_FOLDERS.find(f => f.id === targetFolderId) || STUDIO_FOLDERS.find(f => f.id === 'uncategorized')!;
     const newStyle = targetFolder.styles[0] || '';
@@ -1664,29 +2276,34 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
   };
 
 
-  // --- LIBRARY SEARCH & SORT STATE ---
-  const [librarySearch, setLibrarySearch] = useState('');
-  const [sortOption, setSortOption] = useState<'name' | 'date' | 'type'>('date');
-  const [showSortMenu, setShowSortMenu] = useState(false);
-  const [activeFolder, setActiveFolder] = useState<string | null>(null);
-  const [refSheetUrl, setRefSheetUrl] = useState<string | null>(null);
-
-  // Custom Covers moved to AppContext for persistence
-  // const [customCovers, setCustomCovers] = useState<Record<string, string>>({});
-
   const [needsPermission, setNeedsPermission] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // The following lines are duplicates from the provided diff, keeping the first set.
-  // const [librarySearch, setLibrarySearch] = useState("");
-  // const [sortOption, setSortOption] = useState<'date' | 'name' | 'type'>('date');
-  const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
-  const [organizeTarget, setOrganizeTarget] = useState<{ id: string, name: string } | null>(null);
-  const [editingActorName, setEditingActorName] = useState<{ id: string, name: string } | null>(null);
+  // Reactive Debug Category Loading Logger
+  useEffect(() => {
+    if (!activeFolder) return;
+    
+    // Get count for the active folder
+    const folder = STUDIO_FOLDERS.find(f => f.id === activeFolder);
+    const count = folder ? state.actorLibrary.filter(a => {
+      if (folder.id === 'production_actors') {
+        return a.isProductionActor;
+      }
+      if (a.isProductionActor) return false;
+      const s = normalizeStyle(a.profile?.style);
+      if (folder.id === 'uncategorized') {
+        return !s || !knownStyles.has(s);
+      }
+      const targetStyles = new Set(folder.styles.map(ts => normalizeStyle(ts)));
+      return targetStyles.has(s);
+    }).length : 0;
 
-  // Load covers from disk if available
-  // This useEffect is removed as per instructions, as customCovers are now in AppContext
-  // and should not be revoked on component unmount.
+    console.debug('[ActorLibrary Category]', {
+      categoryKey: activeFolder,
+      loading: libraryViewLoading || state.actorLibraryStatus === 'hydrating',
+      count,
+    });
+  }, [activeFolder, libraryViewLoading, state.actorLibraryStatus, state.actorLibrary, knownStyles]);
 
   const loadDiskCovers = useCallback(async (autoRequest: boolean = false) => {
     // 1. NATIVE MODE (Electron)
@@ -1862,9 +2479,12 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
     if (activeFolder) {
       const folder = STUDIO_FOLDERS.find(f => f.id === activeFolder);
       if (folder) {
-        if (folder.id === 'uncategorized') {
+        if (folder.id === 'production_actors') {
+          result = result.filter(a => a.isProductionActor);
+        } else if (folder.id === 'uncategorized') {
           // Robust Unsorted Filter
           result = result.filter(a => {
+            if (a.isProductionActor) return false;
             const s = normalizeStyle(a.profile?.style);
             // If style is empty OR it is NOT in the known list -> It is Unsorted
             const isUnsorted = !s || !knownStyles.has(s);
@@ -1875,7 +2495,7 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
         } else {
           // Robust Category Filter
           const targetStyles = new Set(folder.styles.map(s => normalizeStyle(s)));
-          result = result.filter(a => targetStyles.has(normalizeStyle(a.profile?.style)));
+          result = result.filter(a => !a.isProductionActor && targetStyles.has(normalizeStyle(a.profile?.style)));
         }
       }
     }
@@ -3630,7 +4250,7 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
           </h2>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => withLibraryTransition(() => loadDiskCovers(true))}
+              onClick={() => withLibraryTransition(() => loadDiskCovers(true), { type: 'studio', label: 'Studio Categories' })}
               title="Reload Custom Assets (Fixes Missing Covers)"
               className="p-1 rounded-full hover:bg-white/10 text-gray-500 hover:text-white transition-colors"
             >
@@ -3646,17 +4266,22 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
             >
               <HelpCircle className="w-3.5 h-3.5" />
             </button>
-            <div className="text-[10px] bg-blue-500/20 px-2 py-0.5 rounded border border-blue-500/30 text-blue-400 font-mono font-bold">{state.actorLibrary.length}</div>
+            <div className={`text-[10px] bg-blue-500/20 px-2 py-0.5 rounded border border-blue-500/30 text-blue-400 font-mono font-bold ${!initialLoadComplete ? 'animate-pulse' : ''}`}>
+              {!initialLoadComplete ? '...' : state.actorLibrary.length}
+            </div>
           </div>
         </div>
 
         <div className="flex-grow overflow-y-scroll flex flex-col scrollbar-thin scrollbar-thumb-gray-800 scrollbar-track-transparent">
-
-          <div className="sticky top-0 z-20 bg-[#18181b]/95 backdrop-blur-md px-4 pt-4 pb-2 border-b border-white/5 space-y-4">
+          {!initialLoadComplete ? (
+            <ActorLibraryLoadingShell />
+          ) : (
+            <>
+              <div className="sticky top-0 z-20 bg-[#18181b]/95 backdrop-blur-md px-4 pt-4 pb-2 border-b border-white/5 space-y-4">
             {activeFolder && (
               <div className="flex items-center gap-3 h-[34px]">
                 <button
-                  onClick={() => withLibraryTransition(() => setActiveFolder(null))}
+                  onClick={() => withLibraryTransition(() => setActiveFolder(null), { type: 'studio', label: 'Studio Categories' })}
                   className="flex items-center gap-2 px-3 py-2 bg-white/5 hover:bg-white/10 rounded-lg border border-white/10 text-xs font-bold text-gray-300 hover:text-white transition-all uppercase tracking-wider"
                 >
                   <ArrowDownUp className="w-3 h-3 rotate-90" /> Studios
@@ -3707,7 +4332,7 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
 
 
           {/* CONTENT PADDING WRAPPER */}
-          <div className={`p-4 pt-2 transition-opacity duration-200 ${libraryViewLoading ? 'opacity-80' : 'opacity-100'}`}>
+          <div className="p-4 pt-2 relative">
 
             {/* NATIVE MODE: MISSING CONFIG WARNING */}
             {isNativeParams() && !state.saveDirectoryPath && (
@@ -3752,214 +4377,276 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
               </div>
             )}
 
-            {!activeFolder ? (
-              libraryViewLoading ? (
-                <div className="flex flex-col gap-4 pb-20">
-                  {Array.from({ length: 5 }).map((_, i) => (
-                    <LibraryStudioSkeleton key={`studio-skeleton-${i}`} />
-                  ))}
-                </div>
-              ) : (
-              // ROOT VIEW: HERO STUDIO CARDS
-              <div className="flex flex-col gap-4 pb-20">
-                <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onClick={(e) => { (e.target as HTMLInputElement).value = ''; }} onChange={handleCoverUpload} />
-
-                {STUDIO_FOLDERS.map(folder => {
-                  const count = state.actorLibrary.filter(a => {
-                    const s = normalizeStyle(a.profile?.style);
-                    if (folder.id === 'uncategorized') {
-                      return !s || !knownStyles.has(s);
-                    }
-                    // Robust Category Count
-                    const targetStyles = new Set(folder.styles.map(ts => normalizeStyle(ts)));
-                    return targetStyles.has(s);
-                  }).length;
-
-                  const activeImage = state.customCovers[folder.id] || folder.image;
-
-                  return (
-                    <div key={folder.id} className="group relative h-48 w-full rounded-3xl overflow-hidden border border-white/10 transition-all hover:scale-[1.02] hover:border-white/30 cursor-pointer" onClick={() => withLibraryTransition(() => setActiveFolder(folder.id))}>
-                      {/* Background Image */}
-                      {activeImage ? (
-                        <SmartCardImage
-                          src={activeImage}
-                          alt={folder.label}
-                          className="absolute inset-0 transition-transform duration-700 group-hover:scale-110"
-                        />
-                      ) : (
-                        <div className="absolute inset-0 bg-gradient-to-br from-gray-800 to-black flex items-center justify-center">
-                          <HelpCircle className="w-12 h-12 text-white/20" />
-                        </div>
-                      )}
-
-                      {/* Cinematic Overlay */}
-                      <div className="absolute inset-0 bg-gradient-to-r from-black/50 via-black/20 to-transparent flex flex-col justify-end px-6 pb-4 pt-6">
-                        <div>
-                          <h3 className="text-lg font-black text-white italic tracking-tighter uppercase group-hover:text-yellow-500 transition-colors leading-none">
-                            {folder.label}
-                          </h3>
-                          <div className="flex items-center gap-3 mt-2">
-                            <p className="text-xs font-bold text-gray-300 border-l-2 border-yellow-500 pl-2">
-                              {folder.description}
-                            </p>
-                            <span className="bg-white/10 backdrop-blur text-gray-300 text-[10px] font-bold px-2 py-0.5 rounded-sm border border-white/10">
-                              {count} ACTORS
-                            </span>
+            <AnimatePresence mode="wait">
+              {libraryNavigationLoading ? (
+                <ActorLibraryNavigationShell target={pendingLibraryTarget} />
+              ) : !activeFolder ? (
+                state.actorLibraryStatus === 'hydrating' ? (
+                  <motion.div
+                    key="hydrating"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    transition={{ duration: 0.2 }}
+                    className="flex flex-col items-center justify-center py-16 px-4 text-center"
+                  >
+                    <div className="relative w-12 h-12 mb-5">
+                      <div className="absolute inset-0 rounded-full border-4 border-yellow-500/10" />
+                      <div className="absolute inset-0 rounded-full border-4 border-t-yellow-500 animate-spin" />
+                    </div>
+                    <h4 className="text-xs font-black uppercase tracking-[0.2em] text-white italic">Loading Actor Library</h4>
+                    <p className="text-[10px] text-gray-500 mt-2 font-medium tracking-wide">
+                      Indexing saved actors and production assets...
+                    </p>
+                    
+                    {/* Shimmering Skeletons */}
+                    <div className="w-full mt-8 flex flex-col gap-3">
+                      {Array.from({ length: 3 }).map((_, i) => (
+                        <div key={`hydration-skeleton-${i}`} className="h-16 w-full rounded-2xl bg-zinc-900/40 border border-white/5 animate-pulse flex items-center px-4 gap-4">
+                          <div className="w-10 h-10 rounded-lg bg-zinc-800/60" />
+                          <div className="flex-1 space-y-2">
+                            <div className="h-2 w-1/3 rounded bg-zinc-800/60" />
+                            <div className="h-1.5 w-1/2 rounded bg-zinc-800/60" />
                           </div>
                         </div>
-                      </div>
-
-                      {/* Edit Hotspot (Corner Only) */}
-                      <div className="absolute top-0 right-0 p-4 opacity-0 hover:opacity-100 transition-opacity duration-300 z-50">
-                        <button
-                          onClick={(e) => triggerCoverEdit(folder.id, e)}
-                          className="w-auto h-8 px-3 rounded-full bg-black/80 border border-white/20 flex items-center gap-2 transition-all hover:bg-zinc-900 hover:border-yellow-500 group/btn"
-                          title="Change Cover Image"
-                        >
-                          <Edit2 className="w-3.5 h-3.5 text-white group-hover/btn:text-yellow-500 transition-colors" />
-                          <span className="text-[10px] font-bold text-white group-hover/btn:text-yellow-500 uppercase tracking-wider transition-colors">Edit</span>
-                        </button>
-                      </div>
+                      ))}
                     </div>
-                  );
-                })}
-              </div>
-              )
-            ) : (
-              // FOLDER VIEW: GRID
-              <div className="grid grid-cols-2 gap-4 pb-20">
-                {libraryViewLoading ? (
-                  Array.from({ length: 8 }).map((_, i) => (
-                    <LibraryActorSkeleton key={`actor-skeleton-${i}`} />
-                  ))
+                  </motion.div>
+                ) : libraryViewLoading || state.isActorLibraryLoading ? (
+                  <motion.div
+                    key="studio-skeletons"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    transition={{ duration: 0.2 }}
+                    className="flex flex-col gap-4 pb-20"
+                  >
+                    {Array.from({ length: 5 }).map((_, i) => (
+                      <LibraryStudioSkeleton key={`studio-skeleton-${i}`} />
+                    ))}
+                  </motion.div>
                 ) : (
-                  <>
-                    {filteredLibrary.map(actor => {
-                      const safeDisplayUrl = actor.previewUrl || actor.url || '';
+                // ROOT VIEW: HERO STUDIO CARDS
+                <motion.div
+                  key="root-studios"
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  transition={{ duration: 0.2 }}
+                  className="flex flex-col gap-4 pb-20 animate-in fade-in duration-300"
+                >
+                  <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onClick={(e) => { (e.target as HTMLInputElement).value = ''; }} onChange={handleCoverUpload} />
 
-                  return (
-                    <div key={actor.id} className="group relative aspect-square rounded-xl overflow-hidden bg-black/40 border border-[#27272a] hover:border-yellow-500/50 transition-all hover:">
-                      {safeDisplayUrl ? (
-                        <SmartCardImage
-                          src={safeDisplayUrl}
-                          alt={actor.name}
-                          className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-500"
-                        />
-                      ) : (
-                        <div className="w-full h-full bg-black/60 animate-pulse" />
-                      )}
-                      {/* Overlay Actions */}
-                      <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 transition-all duration-300 flex flex-col items-center justify-center gap-2 backdrop-blur-md">
-                        {/* Top Row: 3 Actions */}
-                        <div className="flex gap-2">
-                          <HelpTooltip zone="cast" id="sendToDirectorButton">
+                  {STUDIO_FOLDERS.map(folder => {
+                    const count = state.actorLibrary.filter(a => {
+                      if (folder.id === 'production_actors') {
+                        return a.isProductionActor;
+                      }
+                      if (a.isProductionActor) return false;
+                      const s = normalizeStyle(a.profile?.style);
+                      if (folder.id === 'uncategorized') {
+                        return !s || !knownStyles.has(s);
+                      }
+                      // Robust Category Count
+                      const targetStyles = new Set(folder.styles.map(ts => normalizeStyle(ts)));
+                      return targetStyles.has(s);
+                    }).length;
+
+                    const activeImage = state.customCovers[folder.id] || folder.image;
+
+                    return (
+                      <div key={folder.id} className="group relative h-48 w-full rounded-3xl overflow-hidden border border-white/10 transition-all hover:scale-[1.02] hover:border-white/30 cursor-pointer" onClick={() => withLibraryTransition(() => setActiveFolder(folder.id), { type: 'category', label: folder.label })}>
+                        {/* Background Image */}
+                        {activeImage ? (
+                          <SmartCardImage
+                            src={activeImage}
+                            alt={folder.label}
+                            className="absolute inset-0 transition-transform duration-700 group-hover:scale-110"
+                          />
+                        ) : (
+                          <div className="absolute inset-0 bg-gradient-to-br from-gray-800 to-black flex items-center justify-center">
+                            <HelpCircle className="w-12 h-12 text-white/20" />
+                          </div>
+                        )}
+
+                        {/* Cinematic Overlay */}
+                        <div className="absolute inset-0 bg-gradient-to-r from-black/50 via-black/20 to-transparent flex flex-col justify-end px-6 pb-4 pt-6">
+                          <div>
+                            <h3 className="text-lg font-black text-white italic tracking-tighter uppercase group-hover:text-yellow-500 transition-colors leading-none">
+                              {folder.label}
+                            </h3>
+                            <div className="flex items-center gap-3 mt-2">
+                              <p className="text-xs font-bold text-gray-300 border-l-2 border-yellow-500 pl-2">
+                                {folder.description}
+                              </p>
+                              <span className={`bg-white/10 backdrop-blur text-gray-300 text-[10px] font-bold px-2 py-0.5 rounded-sm border border-white/10 ${state.actorLibraryStatus === 'hydrating' ? 'animate-pulse' : ''}`}>
+                                {state.actorLibraryStatus === 'hydrating' ? '...' : `${count} ACTORS`}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Edit Hotspot (Corner Only) */}
+                        <div className="absolute top-0 right-0 p-4 opacity-0 hover:opacity-100 transition-opacity duration-300 z-50">
+                          <button
+                            onClick={(e) => triggerCoverEdit(folder.id, e)}
+                            className="w-auto h-8 px-3 rounded-full bg-black/80 border border-white/20 flex items-center gap-2 transition-all hover:bg-zinc-900 hover:border-yellow-500 group/btn"
+                            title="Change Cover Image"
+                          >
+                            <Edit2 className="w-3.5 h-3.5 text-white group-hover/btn:text-yellow-500 transition-colors" />
+                            <span className="text-[10px] font-bold text-white group-hover/btn:text-yellow-500 uppercase tracking-wider transition-colors">Edit</span>
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </motion.div>
+                )
+              ) : (
+                // FOLDER VIEW: GRID
+                <motion.div
+                  key={`folder-grid-${activeFolder}`}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  transition={{ duration: 0.2 }}
+                  className="grid grid-cols-2 gap-4 pb-20 animate-in fade-in duration-300"
+                >
+                  {libraryViewLoading || state.isActorLibraryLoading || isActorCategoryVisualLoading ? (
+                    Array.from({ length: 8 }).map((_, i) => (
+                      <LibraryActorSkeleton key={`actor-skeleton-${i}`} />
+                    ))
+                  ) : (
+                    <>
+                      {filteredLibrary.map(actor => {
+                        const safeDisplayUrl = actor.previewUrl || actor.url || '';
+
+                    return (
+                      <div key={actor.id} className="group relative aspect-square rounded-xl overflow-hidden bg-black/40 border border-[#27272a] hover:border-yellow-500/50 transition-all hover:">
+                        {safeDisplayUrl ? (
+                          <SmartCardImage
+                            src={safeDisplayUrl}
+                            alt={actor.name}
+                            className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-500"
+                          />
+                        ) : (
+                          <div className="w-full h-full bg-black/60 animate-pulse" />
+                        )}
+                        {/* Overlay Actions */}
+                        <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 transition-all duration-300 flex flex-col items-center justify-center gap-2 backdrop-blur-md">
+                          {/* Top Row: 3 Actions */}
+                          <div className="flex gap-2">
+                            <HelpTooltip zone="cast" id="sendToDirectorButton">
+                              <button
+                                onClick={() => {
+                                  dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: safeDisplayUrl });
+                                  dispatch({ type: 'SET_LAST_CASTED_PROMPT', payload: actor.profile?.identity || "" });
+                                  dispatch({ type: 'SET_LAST_CASTED_MASK', payload: null });
+                                  setProcessedPreviewUrl(null);
+                                  dispatch({ type: 'ADD_LOG', payload: { message: `Loaded ${actor.name} into Viewport`, type: 'info' } });
+                                }}
+                                className="bg-[#27272a] hover:bg-orange-600 w-8 h-8 rounded-lg border border-white/10 hover:border-orange-400/50 transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
+                                title="Load to Forge / Turnaround"
+                              >
+                                <Hammer className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
+                              </button>
+                            </HelpTooltip>
+                            <InlineHint zone="cast" id="sendToDirectorButton" className="hidden" />
+                            <button
+                              onClick={() => dispatch({ type: 'SET_INSPECT_IMAGE', payload: safeDisplayUrl })}
+                              className="bg-[#27272a] hover:bg-blue-600 w-8 h-8 rounded-lg border border-white/10 hover:border-blue-400/50 transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
+                              title="Inspect Large"
+                            >
+                              <Maximize className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
+                            </button>
                             <button
                               onClick={() => {
-                                dispatch({ type: 'SET_LAST_CASTED_IMAGE', payload: safeDisplayUrl });
-                                dispatch({ type: 'SET_LAST_CASTED_PROMPT', payload: actor.profile?.identity || "" });
-                                dispatch({ type: 'SET_LAST_CASTED_MASK', payload: null });
-                                setProcessedPreviewUrl(null);
-                                dispatch({ type: 'ADD_LOG', payload: { message: `Loaded ${actor.name} into Viewport`, type: 'info' } });
+                                dispatch({
+                                  type: 'ADD_CAST',
+                                  payload: {
+                                    ...actor,
+                                    id: `ref-${Date.now()}-${Math.random()}`,
+                                    name: `${actor.name} (Ref)`,
+                                    url: safeDisplayUrl,
+                                    previewUrl: safeDisplayUrl,
+                                    sourceUrl: actor.sourceUrl || actor.url
+                                  }
+                                });
                               }}
-                              className="bg-[#27272a] hover:bg-orange-600 w-8 h-8 rounded-lg border border-white/10 hover:border-orange-400/50 transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
-                              title="Load to Forge / Turnaround"
+                              className="bg-[#27272a] hover:bg-emerald-600 w-8 h-8 rounded-lg border border-white/10 hover:border-emerald-400/50 transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
+                              title="Add to Cast"
                             >
-                              <Hammer className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
+                              <UserPlus className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
                             </button>
-                          </HelpTooltip>
-                          <InlineHint zone="cast" id="sendToDirectorButton" className="hidden" />
-                          <button
-                            onClick={() => dispatch({ type: 'SET_INSPECT_IMAGE', payload: safeDisplayUrl })}
-                            className="bg-[#27272a] hover:bg-blue-600 w-8 h-8 rounded-lg border border-white/10 hover:border-blue-400/50 transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
-                            title="Inspect Large"
-                          >
-                            <Maximize className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
-                          </button>
-                          <button
-                            onClick={() => {
-                              dispatch({
-                                type: 'ADD_CAST',
-                                payload: {
-                                  ...actor,
-                                  id: `ref-${Date.now()}-${Math.random()}`,
-                                  name: `${actor.name} (Ref)`,
-                                  url: safeDisplayUrl,
-                                  previewUrl: safeDisplayUrl,
-                                  sourceUrl: actor.sourceUrl || actor.url
+                          </div>
+                          {/* Bottom Row: 2 Actions (Centered) */}
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => setOrganizeTarget({ id: actor.id, name: actor.name })}
+                              className="bg-[#27272a] hover:bg-purple-600 w-8 h-8 rounded-lg border border-white/10 hover:border-purple-400/50 transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
+                              title="Move to Studio Folder"
+                            >
+                              <FolderInput className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
+                            </button>
+                            <button
+                              onClick={() => setDeleteTarget({ type: 'library', payload: actor.id, name: actor.name })}
+                              className="bg-[#27272a] hover:bg-red-600 w-8 h-8 rounded-lg border border-white/10 hover:border-red-400/50 transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
+                              title="Remove from Library"
+                            >
+                              <Trash2 className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
+                            </button>
+                          </div>
+                          <span className="text-[9px] font-black uppercase tracking-widest text-white/60 mt-3 pointer-events-none">Add to Stage</span>
+                        </div>
+                        {/* Centered Editable Label */}
+                        <div className="absolute bottom-0 inset-x-0 bg-black/60 backdrop-blur-md border-t border-white/5 p-1.5 flex justify-center items-center">
+                          <HelpTooltip zone="cast" id="actorNameDisplay">
+                            <input
+                              className="bg-transparent text-[10px] font-black uppercase text-center text-white/70 hover:text-white focus:text-white focus:outline-none w-full tracking-wider transition-colors"
+                              value={editingActorName?.id === actor.id ? editingActorName.name : actor.name}
+                              onChange={(e) => setEditingActorName({ id: actor.id, name: e.target.value })}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.currentTarget.blur();
                                 }
-                              });
-                            }}
-                            className="bg-[#27272a] hover:bg-emerald-600 w-8 h-8 rounded-lg border border-white/10 hover:border-emerald-400/50 transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
-                            title="Add to Cast"
-                          >
-                            <UserPlus className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
-                          </button>
+                              }}
+                              onBlur={() => {
+                                if (editingActorName?.id === actor.id) {
+                                  handleActorDiskOperation(actor.id, { newName: editingActorName.name });
+                                  setEditingActorName(null);
+                                }
+                              }}
+                              onFocus={(e) => {
+                                setEditingActorName({ id: actor.id, name: actor.name });
+                                e.target.select();
+                              }}
+                              title="Click to Rename Actor"
+                            />
+                          </HelpTooltip>
                         </div>
-                        {/* Bottom Row: 2 Actions (Centered) */}
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => setOrganizeTarget({ id: actor.id, name: actor.name })}
-                            className="bg-[#27272a] hover:bg-purple-600 w-8 h-8 rounded-lg border border-white/10 hover:border-purple-400/50 transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
-                            title="Move to Studio Folder"
-                          >
-                            <FolderInput className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
-                          </button>
-                          <button
-                            onClick={() => setDeleteTarget({ type: 'library', payload: actor.id, name: actor.name })}
-                            className="bg-[#27272a] hover:bg-red-600 w-8 h-8 rounded-lg border border-white/10 hover:border-red-400/50 transition-all hover:scale-110 flex items-center justify-center group/btn backdrop-blur-sm"
-                            title="Remove from Library"
-                          >
-                            <Trash2 className="w-4 h-4 text-white shrink-0 transition-transform group-hover/btn:scale-110" strokeWidth={2.5} />
-                          </button>
-                        </div>
-                        <span className="text-[9px] font-black uppercase tracking-widest text-white/60 mt-3 pointer-events-none">Add to Stage</span>
                       </div>
-                      {/* Centered Editable Label */}
-                      <div className="absolute bottom-0 inset-x-0 bg-black/60 backdrop-blur-md border-t border-white/5 p-1.5 flex justify-center items-center">
-                        <HelpTooltip zone="cast" id="actorNameDisplay">
-                          <input
-                            className="bg-transparent text-[10px] font-black uppercase text-center text-white/70 hover:text-white focus:text-white focus:outline-none w-full tracking-wider transition-colors"
-                            value={editingActorName?.id === actor.id ? editingActorName.name : actor.name}
-                            onChange={(e) => setEditingActorName({ id: actor.id, name: e.target.value })}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                e.currentTarget.blur();
-                              }
-                            }}
-                            onBlur={() => {
-                              if (editingActorName?.id === actor.id) {
-                                handleActorDiskOperation(actor.id, { newName: editingActorName.name });
-                                setEditingActorName(null);
-                              }
-                            }}
-                            onFocus={(e) => {
-                              setEditingActorName({ id: actor.id, name: actor.name });
-                              e.target.select();
-                            }}
-                            title="Click to Rename Actor"
-                          />
-                        </HelpTooltip>
-                      </div>
+                    )
+                  })}
+                  {filteredLibrary.length === 0 && state.actorLibraryStatus === 'ready' && !isActorCategoryVisualLoading && (
+                    <div className="col-span-2 py-10 flex flex-col items-center justify-center text-gray-600 gap-2 border border-dashed border-gray-800 rounded-xl">
+                      <Folder className="w-8 h-8 opacity-20" />
+                      <p className="text-xs uppercase font-bold tracking-widest">Empty Studio</p>
                     </div>
-                  )
-                })}
-                {filteredLibrary.length === 0 && (
-                  <div className="col-span-2 py-10 flex flex-col items-center justify-center text-gray-600 gap-2 border border-dashed border-gray-800 rounded-xl">
-                    <Folder className="w-8 h-8 opacity-20" />
-                    <p className="text-xs uppercase font-bold tracking-widest">Empty Studio</p>
-                  </div>
+                  )}
+                  </>
                 )}
-                </>
+                </motion.div>
               )}
-              </div>
-            )}
+            </AnimatePresence>
           </div>
 
-          {state.actorLibrary.length === 0 && (
-            <div className="flex flex-col items-center justify-center py-20 opacity-20 filter grayscale">
-              <UserPlus className="w-12 h-12 mb-3 text-gray-500" />
-              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-center text-gray-500">Library Empty</span>
-            </div>
+              {state.actorLibraryStatus === 'ready' && state.actorLibrary.length === 0 && (
+                <div className="flex flex-col items-center justify-center py-20 opacity-20 filter grayscale">
+                  <UserPlus className="w-12 h-12 mb-3 text-gray-500" />
+                  <span className="text-[10px] font-black uppercase tracking-[0.2em] text-center text-gray-500">Library Empty</span>
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -3983,14 +4670,116 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
       {/* DELETE CONFIRMATION MODAL */}
       <ConfirmDialog
         isOpen={!!deleteTarget}
-        onClose={() => setDeleteTarget(null)}
+        onClose={() => {
+          setDeleteTarget(null);
+          setDeleteFromDisk(false); // Reset to default library-only deletion
+        }}
         onConfirm={executeDelete}
         title="Delete Asset?"
         message={
-          <>
-            Are you sure you want to delete <span className="text-white font-bold">{deleteTarget?.name}</span>?
-            {deleteTarget?.type === 'library' && " This will permanently remove it from your global actors."}
-          </>
+          <div className="space-y-4 text-left">
+            <p className="text-zinc-300 text-sm">
+              Are you sure you want to delete <span className="text-white font-bold">{deleteTarget?.name}</span>?
+              {deleteTarget?.type === 'library' && " This will remove it from your global actors."}
+            </p>
+            {deleteTarget?.type === 'library' && (() => {
+              const actor = state.actorLibrary.find(a => a.id === deleteTarget.payload);
+              const isProdActor = actor && (
+                actor.isProductionActor ||
+                actor.source === 'production_actor_package' ||
+                !!actor.productionActorProfile ||
+                !!actor.productionProfile ||
+                (actor.filename && (actor.filename.includes('Library/ProductionActors') || actor.filename.includes('Library\\ProductionActors')))
+              );
+              if (isProdActor) {
+                return (
+                  <div className="mt-3 p-4 bg-black/40 border border-zinc-800 rounded-xl space-y-3">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-zinc-500 block">Deletion Policy Choice</span>
+                    <div className="space-y-3">
+                      <label className="flex items-start gap-3 cursor-pointer group select-none">
+                        <input
+                          type="radio"
+                          name="delete-mode"
+                          checked={!deleteFromDisk}
+                          onChange={() => setDeleteFromDisk(false)}
+                          className="mt-1 w-4 h-4 accent-yellow-500 shrink-0"
+                        />
+                        <div className="space-y-0.5">
+                          <span className="text-xs font-black uppercase tracking-wider text-zinc-200 group-hover:text-white transition-colors">
+                            Remove from Actor Library only
+                          </span>
+                          <p className="text-[10px] text-zinc-400 font-semibold leading-relaxed">
+                            leaves files on disk and removes this actor from the app library index.
+                          </p>
+                        </div>
+                      </label>
+                      
+                      <label className="flex items-start gap-3 cursor-pointer group select-none">
+                        <input
+                          type="radio"
+                          name="delete-mode"
+                          checked={deleteFromDisk}
+                          onChange={() => setDeleteFromDisk(true)}
+                          className="mt-1 w-4 h-4 accent-red-500 shrink-0"
+                        />
+                        <div className="space-y-0.5">
+                          <span className="text-xs font-black uppercase tracking-wider text-red-400 group-hover:text-red-300 transition-colors">
+                            Also delete files from disk
+                          </span>
+                          <p className="text-[10px] text-zinc-400 font-semibold leading-relaxed">
+                            permanently deletes the Production Actor folder package.
+                          </p>
+                        </div>
+                      </label>
+                    </div>
+                  </div>
+                );
+              }
+              // For legacy actors
+              return (
+                <div className="mt-3 p-4 bg-black/40 border border-zinc-800 rounded-xl space-y-3">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-zinc-500 block">Deletion Policy Choice</span>
+                  <div className="space-y-3">
+                    <label className="flex items-start gap-3 cursor-pointer group select-none">
+                      <input
+                        type="radio"
+                        name="delete-mode"
+                        checked={!deleteFromDisk}
+                        onChange={() => setDeleteFromDisk(false)}
+                        className="mt-1 w-4 h-4 accent-yellow-500 shrink-0"
+                      />
+                      <div className="space-y-0.5">
+                        <span className="text-xs font-black uppercase tracking-wider text-zinc-200 group-hover:text-white transition-colors">
+                          Remove from Actor Library only
+                        </span>
+                        <p className="text-[10px] text-zinc-400 font-semibold leading-relaxed">
+                          leaves files on disk and removes this actor from the app library index.
+                        </p>
+                      </div>
+                    </label>
+                    
+                    <label className="flex items-start gap-3 cursor-pointer group select-none">
+                      <input
+                        type="radio"
+                        name="delete-mode"
+                        checked={deleteFromDisk}
+                        onChange={() => setDeleteFromDisk(true)}
+                        className="mt-1 w-4 h-4 accent-red-500 shrink-0"
+                      />
+                      <div className="space-y-0.5">
+                        <span className="text-xs font-black uppercase tracking-wider text-red-400 group-hover:text-red-300 transition-colors">
+                          Also delete files from disk
+                        </span>
+                        <p className="text-[10px] text-zinc-400 font-semibold leading-relaxed">
+                          permanently deletes the Actor file from disk.
+                        </p>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
         }
         confirmText="Confirm"
         cancelText="Cancel"

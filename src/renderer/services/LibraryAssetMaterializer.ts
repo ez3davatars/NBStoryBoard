@@ -1,3 +1,4 @@
+import type { ProductionActorProfile } from '../types/ProductionActorProfile';
 import { resolveDisplayUrl } from '../utils/assetUrlResolver';
 
 const MAX_REFERENCE_DISPLAY_SIZE = 2048;
@@ -68,10 +69,12 @@ const optimizeReferenceDisplayUrl = async (
 
 export const LibraryAssetMaterializer = {
     async materializeCastAsset(args: {
+        productionProfile?: Omit<ProductionActorProfile, 'approvedImageUrl' | 'sourceImageUrl'>;
         sourceUrl: string;
         saveDirectoryPath: string | null;
         actorName: string;
         category?: string;
+        sourcePitchSheetUrl?: string;
     }) {
         if (!args.saveDirectoryPath || !window.electronAPI) {
             return {
@@ -83,21 +86,9 @@ export const LibraryAssetMaterializer = {
         }
 
         try {
-            const safeName = args.actorName.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-            const timestamp = Date.now();
-            const filename = `actor_${args.category ? args.category.toLowerCase() + '_' : ''}${safeName}_${timestamp}.png`;
-            const relativeFolder = args.category ? `Actors/${args.category}` : 'Actors';
-
-            const folderPath = await window.electronAPI.joinPath(args.saveDirectoryPath, relativeFolder);
-            await window.electronAPI.createDir(folderPath);
-            const finalPath = await window.electronAPI.joinPath(folderPath, filename);
-
             const response = await fetch(args.sourceUrl);
             const blob = await response.blob();
             const buffer = await blob.arrayBuffer();
-
-            const success = await window.electronAPI.writeFile(finalPath, new Uint8Array(buffer));
-            if (!success) throw new Error('Failed to write file to disk');
 
             // Generate resilient Base64 Data URL for immediate session memory display, matching Bootloader
             const displayUrl = await new Promise<string>((resolve) => {
@@ -105,6 +96,131 @@ export const LibraryAssetMaterializer = {
                 reader.onloadend = () => resolve(reader.result as string);
                 reader.readAsDataURL(blob);
             });
+
+            if (args.productionProfile) {
+                const profile = args.productionProfile;
+                // Organized library package layout
+                const cleanName = (profile.name || 'Actor')
+                    .replace(/[^a-z0-9\s-_]/gi, '')
+                    .trim()
+                    .replace(/\s+/g, '_');
+                const safePrefix = cleanName || 'Actor';
+                const suffix = profile.id.replace('prod-actor-', '');
+                const folderName = `${safePrefix}_ProductionActor_${suffix}`;
+
+                const libraryPath = await window.electronAPI.joinPath(args.saveDirectoryPath, 'Library');
+                const prodActorsPath = await window.electronAPI.joinPath(libraryPath, 'ProductionActors');
+                const packagePath = await window.electronAPI.joinPath(prodActorsPath, folderName);
+                
+                await window.electronAPI.createDir(packagePath);
+
+                if (args.sourcePitchSheetUrl) {
+                    try {
+                        const pitchResponse = await fetch(args.sourcePitchSheetUrl);
+                        const pitchBlob = await pitchResponse.blob();
+                        const pitchBuffer = await pitchBlob.arrayBuffer();
+                        const pitchPngPath = await window.electronAPI.joinPath(packagePath, 'source_pitch_sheet.png');
+                        await window.electronAPI.writeFile(pitchPngPath, new Uint8Array(pitchBuffer));
+                    } catch (pitchErr) {
+                        console.warn('[LibraryAssetMaterializer] Failed to optionally write source_pitch_sheet.png:', pitchErr);
+                    }
+                }
+
+                const actorPngPath = await window.electronAPI.joinPath(packagePath, 'actor.png');
+                const pngSuccess = await window.electronAPI.writeFile(actorPngPath, new Uint8Array(buffer));
+                if (!pngSuccess) throw new Error('Failed to write actor.png');
+
+                const actorJsonPath = await window.electronAPI.joinPath(packagePath, 'actor.json');
+                const actorMetadata = {
+                    assetType: "production_actor",
+                    schemaVersion: 1,
+                    id: profile.id,
+                    name: profile.name,
+                    displayName: profile.name,
+                    folderName: folderName,
+                    primaryImage: "actor.png",
+                    sourceImage: undefined,
+                    identitySummary: profile.identitySummary || "",
+                    styleSummary: profile.styleSummary || "",
+                    wardrobeSummary: profile.wardrobeSummary || "",
+                    preserveRules: profile.preserveRules || [],
+                    avoidRules: profile.avoidRules || [],
+                    source: "create_production_actor",
+                    isIdentityLocked: true,
+                    createdAt: profile.createdAt || new Date().toISOString(),
+                    updatedAt: profile.updatedAt || new Date().toISOString()
+                };
+
+                const jsonStr = JSON.stringify(actorMetadata, null, 2);
+                const jsonBuffer = new TextEncoder().encode(jsonStr);
+                await window.electronAPI.writeFile(actorJsonPath, new Uint8Array(jsonBuffer));
+
+                // Update index
+                const indexPath = await window.electronAPI.joinPath(libraryPath, 'library-index.json');
+                let index = { schemaVersion: 1, assets: [] as any[] };
+                if (await window.electronAPI.exists(indexPath)) {
+                    try {
+                        const text = await window.electronAPI.readTextFile(indexPath);
+                        if (text) {
+                            const parsed = JSON.parse(text);
+                            if (parsed && Array.isArray(parsed.assets)) {
+                                index = parsed;
+                            }
+                        }
+                    } catch (e) {
+                        console.warn('[LibraryAssetMaterializer] Failed to read library index:', e);
+                    }
+                }
+                const existingIndex = index.assets.findIndex((a: any) => a.id === profile.id);
+                const newEntry = {
+                    id: profile.id,
+                    assetType: 'production_actor',
+                    displayName: profile.name,
+                    folder: `ProductionActors/${folderName}`,
+                    primaryImage: 'actor.png',
+                    metadata: 'actor.json',
+                    createdAt: profile.createdAt || new Date().toISOString()
+                };
+                if (existingIndex >= 0) {
+                    index.assets[existingIndex] = newEntry;
+                } else {
+                    index.assets.push(newEntry);
+                }
+                const indexPayload = new TextEncoder().encode(JSON.stringify(index, null, 2));
+                await window.electronAPI.writeFile(indexPath, new Uint8Array(indexPayload));
+
+                console.debug('[ProductionActor Save]', {
+                    actorId: profile.id,
+                    folderName: folderName,
+                    primaryImage: 'actor.png',
+                    metadataFile: 'actor.json',
+                    hasIdentitySummary: Boolean(profile.identitySummary),
+                    hasStyleSummary: Boolean(profile.styleSummary),
+                    hasWardrobeSummary: Boolean(profile.wardrobeSummary),
+                    preserveRuleCount: (profile.preserveRules || []).length,
+                    avoidRuleCount: (profile.avoidRules || []).length,
+                });
+
+                return {
+                    localPath: actorPngPath,
+                    previewUrl: displayUrl,
+                    sourceUrl: args.sourceUrl,
+                    filename: `Library/ProductionActors/${folderName}/actor.png`
+                };
+            }
+
+            // Fallback for non-packaged/legacy actors
+            const safeName = args.actorName.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+            const timestamp = Date.now();
+            const filename = `actor_${args.category ? args.category.replace(/\s+/g, '_').toLowerCase() + '_' : ''}${safeName}_${timestamp}.png`;
+            const relativeFolder = args.category ? `Actors/${args.category}` : 'Actors';
+
+            const folderPath = await window.electronAPI.joinPath(args.saveDirectoryPath, relativeFolder);
+            await window.electronAPI.createDir(folderPath);
+            const finalPath = await window.electronAPI.joinPath(folderPath, filename);
+
+            const success = await window.electronAPI.writeFile(finalPath, new Uint8Array(buffer));
+            if (!success) throw new Error('Failed to write file to disk');
 
             return {
                 localPath: finalPath,

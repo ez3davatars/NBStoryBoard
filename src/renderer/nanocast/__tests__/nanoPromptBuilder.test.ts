@@ -37,7 +37,7 @@ describe("buildNanoCastPrompt", () => {
     expect(prompt).toContain("MORPHOLOGY MATRIX CONTRACT");
     expect(prompt).toContain("MORPHOLOGY BODY AUTHORITY MODEL");
     expect(prompt).toContain("SURFACE MARK FIDELITY CONTRACT");
-    expect(prompt).toContain("do not invent, relocate, or multiply skin marks on arms, hands, torso, clothing, or body skin");
+    expect(prompt).toContain("Preserve skin tone, age impression, general complexion, and natural facial texture.");
     expect(prompt).toContain("NANOCAST STYLE-SPECIFIC IDENTITY ENFORCEMENT");
     expect(prompt).toContain("different person");
     expect(prompt).toContain("new actor");
@@ -82,7 +82,7 @@ describe("buildNanoCastPrompt", () => {
     expect(animated).toContain("No photorealism");
     expect(animated).toContain("no live-action realism");
     expect(animated).toContain("no default cute animated face template");
-    expect(animated).toContain("no invented arm/body marks");
+    expect(animated).toContain("invented body marks");
     expect(realism).toContain("No Pixar style");
     expect(realism).toContain("no anime");
     expect(realism).toContain("no cartoon proportions");

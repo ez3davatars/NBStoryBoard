@@ -96,6 +96,13 @@ export interface CastMember {
     profile?: WhitelistProfile;
     identityLock?: BiometricIdentityLock;
     productionProfile?: ProductionActorProfile;
+    source?: string;
+    isProductionActor?: boolean;
+    productionActorProfile?: any;
+    assetType?: string;
+    category?: string;
+    studio?: string;
+    categoryKey?: string;
 }
 
 export interface HostedSession {
@@ -267,6 +274,10 @@ export interface ReferenceSlot {
     active: boolean;
     status: RefSlotStatus;
     castId?: string;
+    productionActorProfile?: any;
+    productionProfile?: any;
+    isProductionActor?: boolean;
+    assetType?: string;
 }
 export type DirectorSpatialLayout = '' | 'horizontal' | 'vertical' | 'center';
 export type DirectorMarkerType =
@@ -548,6 +559,8 @@ export interface BackgroundJob {
     errorMessage?: string | null;
 }
 
+export type ActorLibraryStatus = 'idle' | 'hydrating' | 'ready' | 'error';
+
 export interface AppState {
     apiKey: string;
     model: ImageGenerationModel;
@@ -585,6 +598,8 @@ export interface AppState {
     propItems: PropItem[];
     customCovers: Record<string, string>; // Studio ID -> Data URI/Blob URL
     isDepthProcessing: boolean;
+    isActorLibraryLoading: boolean;
+    actorLibraryStatus: ActorLibraryStatus;
 
     regionEdit: RegionEditState;
 
@@ -780,6 +795,8 @@ export type Action =
     | { type: 'REMOVE_ACTOR_LIBRARY_BY_URL'; payload: string }
     | { type: 'UPDATE_ACTOR_LIBRARY'; payload: { id: string; updates: Partial<CastMember> } }
     | { type: 'SET_ACTOR_LIBRARY'; payload: CastMember[] }
+    | { type: 'SET_ACTOR_LIBRARY_LOADING'; payload: boolean }
+    | { type: 'SET_ACTOR_LIBRARY_STATUS'; payload: ActorLibraryStatus }
     | { type: 'ADD_PROP_ITEM'; payload: PropItem }
     | { type: 'REMOVE_PROP_ITEM'; payload: string }
     | { type: 'SET_PROP_ITEMS'; payload: PropItem[] }
@@ -1212,6 +1229,8 @@ export const initialState: AppState = {
     floorPlane: loadJson<FloorPlane | null>('nano_floor_plane', null),
     occupiedVolumes: loadJson<OccupiedVolume[]>('nano_occupied_volumes', []),
     isDepthProcessing: false,
+    isActorLibraryLoading: true,
+    actorLibraryStatus: 'hydrating',
 
     regionEdit: smartClone(DEFAULT_REGION_EDIT),
     backgroundJobs: [],
@@ -2168,6 +2187,23 @@ export const reducer = (state: AppState, action: Action): AppState => {
         case 'SET_ACTOR_LIBRARY':
             return { ...state, actorLibrary: action.payload };
 
+        case 'SET_ACTOR_LIBRARY_LOADING':
+            return {
+                ...state,
+                isActorLibraryLoading: action.payload,
+                // Backward-compatible boolean only. Do not promote false -> "ready" here:
+                // the explicit SET_ACTOR_LIBRARY_STATUS action is the source of truth.
+                // This prevents the library from flashing as empty before native hydration starts.
+                actorLibraryStatus: action.payload ? 'hydrating' : state.actorLibraryStatus
+            };
+
+        case 'SET_ACTOR_LIBRARY_STATUS':
+            return { 
+                ...state, 
+                actorLibraryStatus: action.payload,
+                isActorLibraryLoading: action.payload === 'hydrating'
+            };
+
         case 'ADD_PROP_ITEM':
             return { ...state, propItems: [...state.propItems, action.payload] };
         case 'REMOVE_PROP_ITEM':
@@ -2672,7 +2708,7 @@ export function getActorIdentityReferenceSetsForScene(state: AppState, sceneId: 
             const identityReferenceViews = slots
                 .filter(s => s.url && !wardrobeRefs.includes(s.url))
                 .map(s => s.name?.trim() || s.target?.trim() || `reference_slot_${s.index}`);
-            const actorIdentityLock = actor?.identityLock ?? (
+            let actorIdentityLock = actor?.identityLock ?? (
                 primaryFaceAnchor || angleFaceAnchors.length || supportIdentityRefs.length
                     ? createBiometricIdentityLock({
                         characterId: castId as string,
@@ -2680,10 +2716,17 @@ export function getActorIdentityReferenceSetsForScene(state: AppState, sceneId: 
                         identityRangeText: `${actor?.name?.trim() || castId} uploaded actor reference stack`,
                         identityStrength: 100,
                         appliesTo: "staging generation, region replacement, multi-actor previews, validation, refinements, and export requests for this character",
-                        faceDominant: false
+                        faceDominant: false,
+                        productionProfile: actor?.productionProfile
                     })
                     : undefined
             );
+            if (actorIdentityLock && actor?.productionProfile) {
+                actorIdentityLock = {
+                    ...actorIdentityLock,
+                    productionProfile: actor.productionProfile
+                };
+            }
 
             referenceSets.push({
                 actorId: castId as string,
@@ -2845,8 +2888,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                         const savePath = localStorage.getItem('nano_save_path');
                         
                         if (!resolvedPath && actor.filename && isNativeParams() && savePath) {
-                            const fullPath = await nativeJoinPath(savePath, 'Actors', actor.filename);
-                            resolvedPath = fullPath;
+                            if (actor.filename.startsWith('Library/') || actor.filename.startsWith('Library\\')) {
+                                resolvedPath = await nativeJoinPath(savePath, actor.filename);
+                            } else {
+                                resolvedPath = await nativeJoinPath(savePath, 'Actors', actor.filename);
+                            }
                         }
 
                         let finalDisplayUrl: string | null = null;
@@ -2882,11 +2928,35 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                             (actor.url && !actor.url.startsWith('blob:') ? actor.url : '') ||
                             '';
 
+                        let productionProfile: ProductionActorProfile | undefined = actor.productionProfile;
+                        if (isNativeParams() && resolvedPath && window.electronAPI?.readTextFile && window.electronAPI?.exists) {
+                            const jsonPath = resolvedPath.replace(/\.png$/i, '.json');
+                            try {
+                                if (await window.electronAPI.exists(jsonPath)) {
+                                    const jsonText = await window.electronAPI.readTextFile(jsonPath);
+                                    if (jsonText) {
+                                        const parsed = JSON.parse(jsonText);
+                                        if (parsed && typeof parsed === 'object') {
+                                            productionProfile = parsed;
+                                            console.debug('[ProductionActor Load]', { 
+                                                actorId: parsed.id, 
+                                                hasJsonSidecar: true, 
+                                                isIdentityLocked: true 
+                                            });
+                                        }
+                                    }
+                                }
+                            } catch (jsonErr) {
+                                console.warn(`[AppContext] Failed to read/parse sidecar JSON for actor ${actor.id}`, jsonErr);
+                            }
+                        }
+
                         return {
                             ...actor,
                             localPath: resolvedPath,
                             previewUrl: undefined,
-                            url: safeUrl
+                            url: safeUrl,
+                            productionProfile: productionProfile || actor.productionProfile
                         };
                     } catch (e) {
                         console.warn(`[AppContext] Failed to hydrate previewUrl for actor ${actor.id}`, e);

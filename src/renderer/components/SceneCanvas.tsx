@@ -3474,6 +3474,12 @@ Output: environment plate only.
     };
 
     const setSlotFromUrl = async (index: number, url: string, name?: string, castId?: string, localPath?: string, sourceUrl?: string) => {
+        const castMember = castId
+            ? ((state.cast || []).find(c => c.id === castId) || (state.actorLibrary || []).find(a => a.id === castId))
+            : undefined;
+
+        const productionActorProfile = castMember?.productionActorProfile || castMember?.productionProfile;
+
         updateRefSlot(index, {
             url,
             localPath,
@@ -3482,7 +3488,11 @@ Output: environment plate only.
             castId,
             active: true,
             status: 'ready',
-            analysis: ''
+            analysis: '',
+            isProductionActor: castMember?.isProductionActor ?? !!productionActorProfile,
+            assetType: castMember?.assetType || (productionActorProfile ? 'production_actor' : undefined),
+            productionActorProfile,
+            productionProfile: productionActorProfile
         });
     };
 
@@ -3954,7 +3964,7 @@ Output: environment plate only.
                 // Handle Actor Drop
                 let castItem: CastMember | undefined;
                 if (item.type === 'cast_member') {
-                    castItem = (state.cast || []).find(c => c.id === item.id);
+                    castItem = (state.cast || []).find(c => c.id === item.id) || (state.actorLibrary || []).find(a => a.id === item.id);
                 } else if (item.url) {
                     castItem = item as CastMember;
                 }

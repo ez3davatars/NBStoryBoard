@@ -1,3 +1,5 @@
+import type { ProductionActorProfile } from "../renderer/types/ProductionActorProfile";
+
 export const PROMPT_PRIORITY_ORDER_LABEL = "biometric identity > style lock > costume/world > views > callouts > metadata/body > presentation polish";
 
 export const PROMPT_PRIORITY_ORDER_BLOCK = `PROMPT PRIORITY ORDER:
@@ -40,6 +42,7 @@ export type BiometricIdentityLock = {
     generatedSourceImageIndex?: number | null;
     generatedSourceRole?: string;
     faceDominant?: boolean;
+    productionProfile?: ProductionActorProfile;
 };
 
 export type BiometricIdentityLockOptions = Omit<
@@ -48,6 +51,7 @@ export type BiometricIdentityLockOptions = Omit<
 > & {
     enabled?: boolean;
     strictness?: "high" | "maximum";
+    productionProfile?: ProductionActorProfile;
 };
 
 export type CharacterInvariantContext = {
@@ -109,7 +113,8 @@ export const createBiometricIdentityLock = ({
     appliesTo,
     generatedSourceImageIndex = null,
     generatedSourceRole,
-    faceDominant = true
+    faceDominant = true,
+    productionProfile
 }: BiometricIdentityLockOptions): BiometricIdentityLock => ({
     enabled,
     scope: "character",
@@ -124,7 +129,8 @@ export const createBiometricIdentityLock = ({
     appliesTo,
     generatedSourceImageIndex,
     generatedSourceRole,
-    faceDominant
+    faceDominant,
+    productionProfile
 });
 
 export const shouldApplyBiometricIdentityLock = (
@@ -181,6 +187,10 @@ export const buildBiometricIdentityLockContract = (
         ? "Preserve body build and proportions only when they are visibly supported by uploaded biometric/full-body references."
         : "Face/head-dominant biometric references preserve identity only; do not infer or change body mass aggressively from face scans alone.";
 
+    const productionContract = lock.productionProfile
+        ? `\n\n${buildProductionActorPromptContract(lock.productionProfile)}`
+        : "";
+
     return `UNIVERSAL BIOMETRIC IDENTITY LOCK:
 ${formatIdentityLockJson(lock)}
 
@@ -199,7 +209,7 @@ IDENTITY LOCK CONTRACT:
 - ${appliesToLine}
 
 IDENTITY LOCK NEGATIVE PROMPT:
-${BIOMETRIC_IDENTITY_LOCK_NEGATIVE_TEXT}`;
+${BIOMETRIC_IDENTITY_LOCK_NEGATIVE_TEXT}${productionContract}`;
 };
 
 export const withBiometricIdentityLockContract = (
@@ -298,3 +308,34 @@ export function buildFinalIdentityAuthorityReassertion(
 - Do not replace the person with a generic style-template face.
 - Preserve skin tone, age impression, and general complexion.`;
 }
+
+export function buildProductionActorPromptContract(profile?: ProductionActorProfile): string {
+    if (!profile) return "";
+
+    const preserveRulesText = (profile.preserveRules || []).map(r => `- ${r}`).join("\n");
+    const avoidRulesText = (profile.avoidRules || []).map(r => `- ${r}`).join("\n");
+
+    return `--- ACTOR PASSPORT / IDENTITY CONTRACT ---
+Actor Name: ${profile.name}
+IDENTITY: ${profile.identitySummary || "N/A"}
+STYLE FAMILY: ${profile.styleSummary || "N/A"}
+WARDROBE PROFILE: ${profile.wardrobeSummary || "N/A"}
+
+PRESERVATION RULES:
+${preserveRulesText || "- None specified."}
+
+AVOIDANCE RULES:
+${avoidRulesText || "- None specified."}
+------------------------------------------
+
+PRODUCTION ACTOR LOCK:
+Actor Name: ${profile.name}
+Identity Summary: ${profile.identitySummary || "N/A"}
+Style Summary: ${profile.styleSummary || "N/A"}
+Wardrobe Summary: ${profile.wardrobeSummary || "N/A"}
+Preserve: ${(profile.preserveRules || []).join(", ") || "N/A"}
+Avoid: ${(profile.avoidRules || []).join(", ") || "N/A"}
+Rules:
+This Production Actor metadata is authoritative for identity continuity. Reference images provide visual support, but do not replace the locked actor profile. Do not change the actor’s face, body identity, wardrobe identity, or core style unless the user explicitly requests an edit.`;
+}
+
