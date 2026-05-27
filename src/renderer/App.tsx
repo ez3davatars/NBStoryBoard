@@ -1,14 +1,15 @@
-import { useEffect, useState, Component, useCallback, useRef, useMemo } from 'react';
+import { useEffect, useState, Component, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
 import type { ReactNode, ErrorInfo } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import SceneCanvas from './components/SceneCanvas';
-import WardrobeStudio from './components/WardrobeStudio';
-import PropAccessoryStudio from './components/PropAccessoryStudio';
 import { LibraryAssetMaterializer } from './services/LibraryAssetMaterializer';
 import { resolveDisplayUrl, materializeDisplayUrl } from './utils/assetUrlResolver';
-import PortraitStudio from './components/PortraitStudio';
-import VeoPromptStudio from './components/VeoPromptStudio';
+
+const SceneCanvas = lazy(() => import('./components/SceneCanvas'));
+const WardrobeStudio = lazy(() => import('./components/WardrobeStudio'));
+const PropAccessoryStudio = lazy(() => import('./components/PropAccessoryStudio'));
+const PortraitStudio = lazy(() => import('./components/PortraitStudio'));
+const VeoPromptStudio = lazy(() => import('./components/VeoPromptStudio'));
 import { StorageService } from './services/StorageService';
 import { LOGO_BASE64 } from './assets/logo';
 import { SupabaseAuth, supabase } from './services/SupabaseClient';
@@ -459,27 +460,80 @@ const FramedPanel = ({ children, className = '', trackClassName = 'px-3 py-1 gap
   );
 };
 
+function WorkspaceSwitchingShell({ label }: { label: string }) {
+  return (
+    <div className="flex-1 flex flex-col items-center justify-center bg-[#0a0a0c] text-gray-400 relative overflow-hidden select-none">
+      {/* Background gradients for premium feel */}
+      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] rounded-full bg-blue-500/5 blur-[120px] pointer-events-none" />
+      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[300px] h-[300px] rounded-full bg-indigo-500/5 blur-[80px] pointer-events-none animate-spin [animation-duration:20s]" />
+      
+      {/* Center content container with a subtle scale/fade animation */}
+      <div className="z-10 flex flex-col items-center max-w-sm px-6 text-center animate-fade-in">
+        <div className="relative mb-6">
+          {/* Sleek dynamic dual-ring loading spinner */}
+          <div className="w-16 h-16 rounded-full border-[3px] border-zinc-800 border-t-blue-500 animate-spin" />
+          <div className="absolute inset-0 w-16 h-16 rounded-full border-[3px] border-transparent border-b-indigo-400/60 animate-spin [animation-duration:1.5s] [animation-direction:reverse]" />
+          <div className="absolute inset-0 flex items-center justify-center">
+            <span className="text-[10px] font-black uppercase tracking-widest text-zinc-500">NB</span>
+          </div>
+        </div>
+        
+        <h2 className="text-sm font-black text-white tracking-[0.2em] uppercase mb-2">
+          Initializing {label}
+        </h2>
+        <div className="h-[1px] w-12 bg-gradient-to-r from-transparent via-zinc-700 to-transparent mb-3" />
+        <p className="text-[10px] text-zinc-500 uppercase tracking-widest leading-relaxed">
+          Loading layout resources & assets...
+        </p>
+      </div>
+    </div>
+  );
+}
+
 const App = () => {
   const { state, dispatch } = useAppContext();
   const [postLaunchBackgroundWorkReady, setPostLaunchBackgroundWorkReady] = useState(false);
 
-  const [visitedViews, setVisitedViews] = useState<Record<string, boolean>>({
-    casting: true,
-  });
+  const [mountedWorkspaces, setMountedWorkspaces] = useState<Set<ViewMode>>(() => new Set(["casting", "nano_cast"]));
   const [navPressedTab, setNavPressedTab] = useState<ViewMode | null>(null);
+  const prevWorkspaceRef = useRef<ViewMode | null>(null);
 
   useEffect(() => {
-    if (state.view && (state.view === 'casting' || state.view === 'nano_cast')) {
-      if (!visitedViews[state.view]) {
-        setVisitedViews((prev) => ({ ...prev, [state.view]: true }));
-      }
+    const from = prevWorkspaceRef.current;
+    const to = state.view;
+    if (to && from !== to) {
+      console.debug("[Workspace Navigation]", {
+        from: from || 'none',
+        to,
+        clickedAt: performance.now(),
+      });
+      prevWorkspaceRef.current = to;
+
+      setMountedWorkspaces((prev) => {
+        if (prev.has(to)) return prev;
+        const next = new Set(prev);
+        next.add(to);
+        console.debug("[Workspace Mounted]", {
+          workspace: to,
+          mountedAt: performance.now(),
+        });
+        return next;
+      });
     }
-  }, [state.view, visitedViews]);
+  }, [state.view]);
 
   const handleNavSelect = (mode: ViewMode) => {
     if (import.meta.env.DEV) {
       console.time(`[NAV] switch to ${mode}`);
     }
+    // Add the target view to mountedWorkspaces immediately
+    setMountedWorkspaces((prev) => {
+      if (prev.has(mode)) return prev;
+      const next = new Set(prev);
+      next.add(mode);
+      return next;
+    });
+    // Switch state.view immediately
     dispatch({ type: 'SET_VIEW', payload: mode });
     if (import.meta.env.DEV) {
       requestAnimationFrame(() => {
@@ -1296,6 +1350,7 @@ const App = () => {
       // Native sync owns actorLibraryStatus/isActorLibraryLoading. Setting the legacy
       // boolean here caused the library to flash as "ready/empty" before native sync began.
       if (window.electronAPI) {
+        console.debug('[Native Sync] Skipping WebFS sync because Electron native sync owns actor library hydration.');
         return;
       }
 
@@ -2278,90 +2333,138 @@ const App = () => {
                   </motion.div>
                 </div>
 
-                {visitedViews.nano_cast && (
+                <div
+                  key="nano-cast-container"
+                  hidden={state.view !== 'nano_cast'}
+                  className="flex-1 min-h-0 w-full flex flex-col"
+                >
+                  <motion.div
+                    className="flex-1 min-h-0 w-full flex flex-col"
+                    initial={{ opacity: 0, scale: 0.98 }}
+                    animate={{
+                      opacity: state.view === 'nano_cast' ? 1 : 0,
+                      scale: state.view === 'nano_cast' ? 1 : 0.98,
+                      pointerEvents: state.view === 'nano_cast' ? 'auto' : 'none'
+                    }}
+                    transition={{ duration: 0.22, ease: "easeOut" }}
+                  >
+                    <NanoCastingDirector />
+                  </motion.div>
+                </div>
+
+                {mountedWorkspaces.has('portrait') && (
                   <div
-                    key="nano-cast-container"
-                    hidden={state.view !== 'nano_cast'}
+                    key="portrait-container"
+                    hidden={state.view !== 'portrait'}
                     className="flex-1 min-h-0 w-full flex flex-col"
                   >
                     <motion.div
                       className="flex-1 min-h-0 w-full flex flex-col"
                       initial={{ opacity: 0, scale: 0.98 }}
                       animate={{
-                        opacity: state.view === 'nano_cast' ? 1 : 0,
-                        scale: state.view === 'nano_cast' ? 1 : 0.98,
-                        pointerEvents: state.view === 'nano_cast' ? 'auto' : 'none'
+                        opacity: state.view === 'portrait' ? 1 : 0,
+                        scale: state.view === 'portrait' ? 1 : 0.98,
+                        pointerEvents: state.view === 'portrait' ? 'auto' : 'none'
                       }}
                       transition={{ duration: 0.22, ease: "easeOut" }}
                     >
-                      <NanoCastingDirector />
+                      <Suspense fallback={<WorkspaceSwitchingShell label="Portrait" />}>
+                        <PortraitStudio />
+                      </Suspense>
                     </motion.div>
                   </div>
                 )}
 
-                {state.view === 'portrait' && (
-                  <motion.div
-                    key="portrait"
-                    initial={{ opacity: 0, scale: 0.98 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.98 }}
-                    transition={{ duration: 0.22, ease: "easeOut" }}
+                {mountedWorkspaces.has('wardrobe') && (
+                  <div
+                    key="wardrobe-container"
+                    hidden={state.view !== 'wardrobe'}
                     className="flex-1 min-h-0 w-full flex flex-col"
                   >
-                    <PortraitStudio />
-                  </motion.div>
+                    <motion.div
+                      className="flex-1 min-h-0 w-full flex flex-col"
+                      initial={{ opacity: 0, scale: 0.98 }}
+                      animate={{
+                        opacity: state.view === 'wardrobe' ? 1 : 0,
+                        scale: state.view === 'wardrobe' ? 1 : 0.98,
+                        pointerEvents: state.view === 'wardrobe' ? 'auto' : 'none'
+                      }}
+                      transition={{ duration: 0.22, ease: "easeOut" }}
+                    >
+                      <Suspense fallback={<WorkspaceSwitchingShell label="Wardrobe" />}>
+                        <WardrobeStudio />
+                      </Suspense>
+                    </motion.div>
+                  </div>
                 )}
 
-                {state.view === 'wardrobe' && (
-                  <motion.div
-                    key="wardrobe"
-                    initial={{ opacity: 0, scale: 0.98 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.98 }}
-                    transition={{ duration: 0.22, ease: "easeOut" }}
+                {mountedWorkspaces.has('props') && (
+                  <div
+                    key="props-container"
+                    hidden={state.view !== 'props'}
                     className="flex-1 min-h-0 w-full flex flex-col"
                   >
-                    <WardrobeStudio />
-                  </motion.div>
+                    <motion.div
+                      className="flex-1 min-h-0 w-full flex flex-col"
+                      initial={{ opacity: 0, scale: 0.98 }}
+                      animate={{
+                        opacity: state.view === 'props' ? 1 : 0,
+                        scale: state.view === 'props' ? 1 : 0.98,
+                        pointerEvents: state.view === 'props' ? 'auto' : 'none'
+                      }}
+                      transition={{ duration: 0.22, ease: "easeOut" }}
+                    >
+                      <Suspense fallback={<WorkspaceSwitchingShell label="Props" />}>
+                        <PropAccessoryStudio />
+                      </Suspense>
+                    </motion.div>
+                  </div>
                 )}
 
-                {state.view === 'props' && (
-                  <motion.div
-                    key="props"
-                    initial={{ opacity: 0, scale: 0.98 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.98 }}
-                    transition={{ duration: 0.22, ease: "easeOut" }}
+                {mountedWorkspaces.has('staging') && (
+                  <div
+                    key="staging-container"
+                    hidden={state.view !== 'staging'}
                     className="flex-1 min-h-0 w-full flex flex-col"
                   >
-                    <PropAccessoryStudio />
-                  </motion.div>
+                    <motion.div
+                      className="flex-1 min-h-0 w-full flex flex-col"
+                      initial={{ opacity: 0, scale: 0.98 }}
+                      animate={{
+                        opacity: state.view === 'staging' ? 1 : 0,
+                        scale: state.view === 'staging' ? 1 : 0.98,
+                        pointerEvents: state.view === 'staging' ? 'auto' : 'none'
+                      }}
+                      transition={{ duration: 0.22, ease: "easeOut" }}
+                    >
+                      <Suspense fallback={<WorkspaceSwitchingShell label="Staging" />}>
+                        <SceneCanvas />
+                      </Suspense>
+                    </motion.div>
+                  </div>
                 )}
 
-                {state.view === 'staging' && (
-                  <motion.div
-                    key="staging"
-                    initial={{ opacity: 0, scale: 0.98 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.98 }}
-                    transition={{ duration: 0.22, ease: "easeOut" }}
+                {mountedWorkspaces.has('veo') && (
+                  <div
+                    key="veo-container"
+                    hidden={state.view !== 'veo'}
                     className="flex-1 min-h-0 w-full flex flex-col"
                   >
-                    <SceneCanvas />
-                  </motion.div>
-                )}
-
-                {state.view === 'veo' && (
-                  <motion.div
-                    key="veo"
-                    initial={{ opacity: 0, scale: 0.98 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.98 }}
-                    transition={{ duration: 0.22, ease: "easeOut" }}
-                    className="flex-1 min-h-0 w-full flex flex-col"
-                  >
-                    <VeoPromptStudio />
-                  </motion.div>
+                    <motion.div
+                      className="flex-1 min-h-0 w-full flex flex-col"
+                      initial={{ opacity: 0, scale: 0.98 }}
+                      animate={{
+                        opacity: state.view === 'veo' ? 1 : 0,
+                        scale: state.view === 'veo' ? 1 : 0.98,
+                        pointerEvents: state.view === 'veo' ? 'auto' : 'none'
+                      }}
+                      transition={{ duration: 0.22, ease: "easeOut" }}
+                    >
+                      <Suspense fallback={<WorkspaceSwitchingShell label="Storyboard" />}>
+                        <VeoPromptStudio />
+                      </Suspense>
+                    </motion.div>
+                  </div>
                 )}
               </AnimatePresence>
             )}

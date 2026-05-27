@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { flushSync } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Scissors,
@@ -717,27 +718,7 @@ async function materializeDisplayUrl(url: string | null | undefined): Promise<st
   return url;
 }
 
-const LibraryActorSkeleton = () => (
-  <div className="actor-card-skeleton relative aspect-square !h-auto w-full animate-in fade-in duration-200">
-    <div className="actor-card-skeleton-shine" />
-    <div className="actor-card-skeleton-title !left-4 !bottom-10 !w-24 !h-3" />
-    <div className="actor-card-skeleton-line !left-4 !bottom-4 !w-32 !h-2" />
-  </div>
-);
 
-const LibraryStudioSkeleton = () => (
-  <div className="actor-card-skeleton relative !h-48 w-full !rounded-3xl animate-in fade-in duration-200">
-    <div className="actor-card-skeleton-shine" />
-    <div className="absolute inset-0 bg-gradient-to-r from-black/50 via-black/20 to-transparent" />
-    <div className="absolute left-6 bottom-6 right-6 space-y-3">
-      <div className="h-6 w-40 rounded bg-white/10" />
-      <div className="flex items-center gap-3">
-        <div className="h-3 w-44 rounded bg-white/10" />
-        <div className="h-5 w-16 rounded bg-white/10" />
-      </div>
-    </div>
-  </div>
-);
 
 const getProductionActorPackageFolder = async (actor: any, saveDirectoryPath: string | null): Promise<string | null> => {
   if (!actor || !window.electronAPI) return null;
@@ -775,30 +756,7 @@ const getProductionActorPackageFolder = async (actor: any, saveDirectoryPath: st
   return null;
 };
 
-const preloadActorImages = async (actors: CastMember[], timeoutMs = 2500) => {
-  const imageUrls = actors
-    .map(actor => actor.previewUrl || actor.url)
-    .filter((url): url is string => Boolean(url))
-    .slice(0, 24);
 
-  if (imageUrls.length === 0) return;
-
-  const preloadPromises = imageUrls.map(url => new Promise<void>(resolve => {
-    const img = new Image();
-    const timeout = window.setTimeout(() => resolve(), timeoutMs);
-    img.onload = () => {
-      window.clearTimeout(timeout);
-      resolve();
-    };
-    img.onerror = () => {
-      window.clearTimeout(timeout);
-      resolve();
-    };
-    img.src = url;
-  }));
-
-  await Promise.allSettled(preloadPromises);
-};
 
 const ActorLibraryLoadingShell = () => (
   <div className="flex flex-col gap-6 p-4 w-full select-none animate-pulse">
@@ -847,55 +805,11 @@ const ActorLibraryLoadingShell = () => (
 );
 
 
+
+
 type LibraryNavigationTarget = {
   type: 'studio' | 'category';
   label: string;
-};
-
-const ActorLibraryNavigationShell = ({ target }: { target: LibraryNavigationTarget | null }) => {
-  const isStudio = !target || target.type === 'studio';
-  const title = isStudio ? 'Loading Studio Categories' : `Loading ${target.label}`;
-
-  return (
-    <motion.div
-      key={`library-transition-${isStudio ? 'studio' : target?.label || 'category'}`}
-      initial={{ opacity: 0, y: 10, scale: 0.985 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, y: -8, scale: 0.985 }}
-      transition={{ duration: 0.18, ease: 'easeOut' }}
-      className="relative flex flex-col gap-4 pb-20"
-    >
-      <div className="rounded-2xl border border-yellow-500/10 bg-black/30 px-4 py-4 overflow-hidden relative">
-        <div className="absolute inset-0 bg-gradient-to-r from-yellow-500/5 via-blue-500/5 to-transparent animate-pulse" />
-        <div className="relative flex items-center gap-3">
-          <div className="relative h-9 w-9 shrink-0">
-            <div className="absolute inset-0 rounded-full border-2 border-yellow-500/10" />
-            <div className="absolute inset-0 rounded-full border-2 border-t-yellow-400 animate-spin" />
-          </div>
-          <div>
-            <h4 className="text-[11px] font-black uppercase tracking-[0.18em] text-white">{title}</h4>
-            <p className="text-[10px] text-zinc-500 mt-1">
-              {isStudio ? 'Preparing studio folders and category covers…' : 'Preparing actor thumbnails and production metadata…'}
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {isStudio ? (
-        <div className="flex flex-col gap-4">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <LibraryStudioSkeleton key={`transition-studio-skeleton-${i}`} />
-          ))}
-        </div>
-      ) : (
-        <div className="grid grid-cols-2 gap-4">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <LibraryActorSkeleton key={`transition-actor-skeleton-${i}`} />
-          ))}
-        </div>
-      )}
-    </motion.div>
-  );
 };
 
 const CastingForge = () => {
@@ -906,51 +820,71 @@ const CastingForge = () => {
   const [sortOption, setSortOption] = useState<'name' | 'date' | 'type'>('date');
   const [showSortMenu, setShowSortMenu] = useState(false);
   const [activeFolder, setActiveFolder] = useState<string | null>(null);
+  const [folderChangeOverlay, setFolderChangeOverlay] = useState(false);
+  const [folderChangeLabel, setFolderChangeLabel] = useState('Loading Actor Library');
+  const folderChangeOverlayTimerRef = useRef<number | null>(null);
+
   const [refSheetUrl, setRefSheetUrl] = useState<string | null>(null);
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
   const [organizeTarget, setOrganizeTarget] = useState<{ id: string, name: string } | null>(null);
   const [editingActorName, setEditingActorName] = useState<{ id: string, name: string } | null>(null);
   
   const [libraryViewLoading, setLibraryViewLoading] = useState(false);
-  const [libraryNavigationLoading, setLibraryNavigationLoading] = useState(false);
-  const [pendingLibraryTarget, setPendingLibraryTarget] = useState<LibraryNavigationTarget | null>(null);
+  const [visibleActorLimit, setVisibleActorLimit] = useState(18);
+  const actorLibraryScrollRef = useRef<HTMLDivElement | null>(null);
+
   const [isRecentGenerationsOpen, setIsRecentGenerationsOpen] = useState(true);
   const recentStoreGenerations = useRecentGenerationsStore(state => state.recentGenerations);
   const hasRecentGenerations = recentStoreGenerations.filter(g => g.studio === 'general').length > 0;
 
   // Hydration state tracking
   const [isActorCategoryVisualLoading, setIsActorCategoryVisualLoading] = useState(true);
-  const [, setSelectedCategoryReady] = useState<string | null>(null);
+
   const [initialLoadComplete, setInitialLoadComplete] = useState(false);
 
   const withLibraryTransition = (
     next: () => void,
-    target: LibraryNavigationTarget = { type: 'studio', label: 'Studio Categories' },
-    minimumDelay = 650
+    target: LibraryNavigationTarget = { type: 'studio', label: 'Studio Categories' }
   ) => {
-    console.debug('[ActorLibrary Navigation]', {
-      from: activeFolder || 'studio',
-      to: target.type === 'studio' ? 'studio' : target.label,
-      loading: true,
+    if (folderChangeOverlayTimerRef.current) {
+      window.clearTimeout(folderChangeOverlayTimerRef.current);
+      folderChangeOverlayTimerRef.current = null;
+    }
+
+    const label = target.type === 'studio'
+      ? 'Loading Studio Categories'
+      : `Loading ${target.label}`;
+
+    setFolderChangeLabel(label);
+
+    flushSync(() => {
+      setFolderChangeOverlay(true);
+      setLibraryViewLoading(false);
     });
 
-    setPendingLibraryTarget(target);
-    setLibraryNavigationLoading(true);
-    setLibraryViewLoading(true);
-    setIsActorCategoryVisualLoading(true);
-
-    // Give React a guaranteed paint window for the transition shell before
-    // changing folders or starting any heavier image/categorization work.
     window.requestAnimationFrame(() => {
-      window.setTimeout(() => {
-        next();
+      actorLibraryScrollRef.current?.scrollTo({
+        top: 0,
+        behavior: 'auto',
+      });
 
-        window.setTimeout(() => {
-          setLibraryViewLoading(false);
-        }, minimumDelay);
-      }, 80);
+      next();
+
+      folderChangeOverlayTimerRef.current = window.setTimeout(() => {
+        setFolderChangeOverlay(false);
+        folderChangeOverlayTimerRef.current = null;
+      }, 420);
     });
   };
+
+  useEffect(() => {
+    return () => {
+      if (folderChangeOverlayTimerRef.current) {
+        window.clearTimeout(folderChangeOverlayTimerRef.current);
+        folderChangeOverlayTimerRef.current = null;
+      }
+    };
+  }, []);
 
   // Pre-compute styles locally to ensure consistency
   const knownStyles = React.useMemo(() => {
@@ -977,129 +911,14 @@ const CastingForge = () => {
     }
   }, [state.actorLibraryStatus, isActorCategoryVisualLoading]);
 
-  // Navigation transition resolver: keeps the actor library from going blank while views swap.
+
+
   useEffect(() => {
-    if (!libraryNavigationLoading) return;
-    if (state.actorLibraryStatus !== 'ready' || libraryViewLoading || isActorCategoryVisualLoading) return;
-
-    const timer = window.setTimeout(() => {
-      console.debug('[ActorLibrary Navigation]', {
-        target: pendingLibraryTarget?.type === 'studio' ? 'studio' : pendingLibraryTarget?.label || activeFolder || 'studio',
-        loading: false,
-      });
-
-      setLibraryNavigationLoading(false);
-      setPendingLibraryTarget(null);
-    }, 120);
-
-    return () => window.clearTimeout(timer);
-  }, [
-    libraryNavigationLoading,
-    state.actorLibraryStatus,
-    libraryViewLoading,
-    isActorCategoryVisualLoading,
-    pendingLibraryTarget,
-    activeFolder,
-  ]);
-
-  // 3. Reactive Visual Preload and Hydration loop
-  useEffect(() => {
-    if (state.actorLibraryStatus !== 'ready') {
-      setIsActorCategoryVisualLoading(true);
-      return;
-    }
-
-    let isObsolete = false;
-
-    const performVisualPreload = async () => {
-      setIsActorCategoryVisualLoading(true);
-
-      // Studio/root view should not wait on actor thumbnail preloading.
-      // Covers are already handled by the custom cover loader, and preloading
-      // the first 24 actors here is what caused the multi-second lag when
-      // returning from a category back to Studios.
-      if (!activeFolder) {
-        console.debug("[ActorLibrary Visual Hydration]", {
-          categoryKey: 'root',
-          loading: true,
-          actorCount: state.actorLibrary.length,
-          preloadedCount: 0,
-          mode: 'studio-root',
-        });
-
-        await new Promise(resolve => window.setTimeout(resolve, 180));
-
-        if (isObsolete) return;
-
-        console.debug("[ActorLibrary Visual Hydration]", {
-          categoryKey: 'root',
-          loading: false,
-          actorCount: state.actorLibrary.length,
-          preloadedCount: 0,
-          mode: 'studio-root',
-        });
-
-        setIsActorCategoryVisualLoading(false);
-        setSelectedCategoryReady('root');
-        return;
-      }
-
-      // Determine actors in the targeted category only.
-      const folder = STUDIO_FOLDERS.find(f => f.id === activeFolder);
-      const targetActors = folder
-        ? state.actorLibrary.filter(a => {
-            if (folder.id === 'production_actors') {
-              return a.isProductionActor;
-            }
-            if (a.isProductionActor) return false;
-            const s = normalizeStyle(a.profile?.style);
-            if (folder.id === 'uncategorized') {
-              return !s || !knownStyles.has(s);
-            }
-            const targetStyles = new Set(folder.styles.map(ts => normalizeStyle(ts)));
-            return targetStyles.has(s);
-          })
-        : [];
-
-      const imageUrls = targetActors
-        .map(actor => actor.previewUrl || actor.url)
-        .filter((url): url is string => Boolean(url));
-      const preloadedCount = Array.from(new Set(imageUrls)).slice(0, 24).length;
-
-      console.debug("[ActorLibrary Visual Hydration]", {
-        categoryKey: activeFolder,
-        loading: true,
-        actorCount: targetActors.length,
-        preloadedCount,
-        mode: 'category',
-      });
-
-      if (targetActors.length > 0) {
-        await preloadActorImages(targetActors);
-      } else {
-        await new Promise(resolve => window.setTimeout(resolve, 180));
-      }
-
-      if (isObsolete) return;
-
-      console.debug("[ActorLibrary Visual Hydration]", {
-        categoryKey: activeFolder,
-        loading: false,
-        actorCount: targetActors.length,
-        preloadedCount,
-        mode: 'category',
-      });
-
+    if (state.actorLibraryStatus === 'ready') {
       setIsActorCategoryVisualLoading(false);
-      setSelectedCategoryReady(activeFolder);
-    };
-
-    performVisualPreload();
-
-    return () => {
-      isObsolete = true;
-    };
-  }, [state.actorLibraryStatus, activeFolder, state.actorLibrary, knownStyles]);
+      setInitialLoadComplete(true);
+    }
+  }, [state.actorLibraryStatus]);
 
   const mainUploadRef = useRef<HTMLInputElement>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
@@ -2527,6 +2346,26 @@ text, labels, HUD, overlays, duplicate subjects, extra limbs, fused fingers, wro
       }
     });
   }, [state.actorLibrary, librarySearch, sortOption, activeFolder, knownStyles]);
+
+  const visibleLibraryActors = React.useMemo(
+    () => filteredLibrary.slice(0, visibleActorLimit),
+    [filteredLibrary, visibleActorLimit]
+  );
+
+  useEffect(() => {
+    setVisibleActorLimit(18);
+  }, [activeFolder, librarySearch, sortOption, filteredLibrary.length]);
+
+  useEffect(() => {
+    if (libraryViewLoading) return;
+    if (visibleActorLimit >= filteredLibrary.length) return;
+
+    const timer = window.setTimeout(() => {
+      setVisibleActorLimit((current) => Math.min(current + 18, filteredLibrary.length));
+    }, 90);
+
+    return () => window.clearTimeout(timer);
+  }, [libraryViewLoading, visibleActorLimit, filteredLibrary.length]);
 
   // --- 4. ALPHA MATTE PROCESS ---
   // The 'mask' is now the isolated image URL itself.
@@ -4243,7 +4082,7 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
       />
 
       {/* 3. RIGHT SIDEBAR: Actor Library */}
-      <div className="w-96 border-l border-gray-800 bg-[#18181b] flex flex-col shrink-0">
+      <div className="w-96 border-l border-gray-800 bg-[#18181b] flex flex-col shrink-0 relative">
         <div className="p-4 border-b border-gray-800 flex justify-between items-center h-16 bg-black/20">
           <h2 className="text-sm font-black text-white tracking-widest uppercase flex items-center gap-3">
             <UserPlus className="w-4 h-4 text-blue-400" /> Actor Library
@@ -4272,7 +4111,7 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
           </div>
         </div>
 
-        <div className="flex-grow overflow-y-scroll flex flex-col scrollbar-thin scrollbar-thumb-gray-800 scrollbar-track-transparent">
+        <div ref={actorLibraryScrollRef} className="flex-grow overflow-y-scroll flex flex-col scrollbar-thin scrollbar-thumb-gray-800 scrollbar-track-transparent">
           {!initialLoadComplete ? (
             <ActorLibraryLoadingShell />
           ) : (
@@ -4377,55 +4216,13 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
               </div>
             )}
 
-            <AnimatePresence mode="wait">
-              {libraryNavigationLoading ? (
-                <ActorLibraryNavigationShell target={pendingLibraryTarget} />
+            <div
+              key={activeFolder || 'studio-root'}
+              className="animate-library-panel-enter"
+            >
+              {state.actorLibraryStatus === 'hydrating' ? (
+                <ActorLibraryLoadingShell />
               ) : !activeFolder ? (
-                state.actorLibraryStatus === 'hydrating' ? (
-                  <motion.div
-                    key="hydrating"
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -10 }}
-                    transition={{ duration: 0.2 }}
-                    className="flex flex-col items-center justify-center py-16 px-4 text-center"
-                  >
-                    <div className="relative w-12 h-12 mb-5">
-                      <div className="absolute inset-0 rounded-full border-4 border-yellow-500/10" />
-                      <div className="absolute inset-0 rounded-full border-4 border-t-yellow-500 animate-spin" />
-                    </div>
-                    <h4 className="text-xs font-black uppercase tracking-[0.2em] text-white italic">Loading Actor Library</h4>
-                    <p className="text-[10px] text-gray-500 mt-2 font-medium tracking-wide">
-                      Indexing saved actors and production assets...
-                    </p>
-                    
-                    {/* Shimmering Skeletons */}
-                    <div className="w-full mt-8 flex flex-col gap-3">
-                      {Array.from({ length: 3 }).map((_, i) => (
-                        <div key={`hydration-skeleton-${i}`} className="h-16 w-full rounded-2xl bg-zinc-900/40 border border-white/5 animate-pulse flex items-center px-4 gap-4">
-                          <div className="w-10 h-10 rounded-lg bg-zinc-800/60" />
-                          <div className="flex-1 space-y-2">
-                            <div className="h-2 w-1/3 rounded bg-zinc-800/60" />
-                            <div className="h-1.5 w-1/2 rounded bg-zinc-800/60" />
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </motion.div>
-                ) : libraryViewLoading || state.isActorLibraryLoading ? (
-                  <motion.div
-                    key="studio-skeletons"
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -10 }}
-                    transition={{ duration: 0.2 }}
-                    className="flex flex-col gap-4 pb-20"
-                  >
-                    {Array.from({ length: 5 }).map((_, i) => (
-                      <LibraryStudioSkeleton key={`studio-skeleton-${i}`} />
-                    ))}
-                  </motion.div>
-                ) : (
                 // ROOT VIEW: HERO STUDIO CARDS
                 <motion.div
                   key="root-studios"
@@ -4501,7 +4298,6 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
                     );
                   })}
                 </motion.div>
-                )
               ) : (
                 // FOLDER VIEW: GRID
                 <motion.div
@@ -4512,17 +4308,11 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
                   transition={{ duration: 0.2 }}
                   className="grid grid-cols-2 gap-4 pb-20 animate-in fade-in duration-300"
                 >
-                  {libraryViewLoading || state.isActorLibraryLoading || isActorCategoryVisualLoading ? (
-                    Array.from({ length: 8 }).map((_, i) => (
-                      <LibraryActorSkeleton key={`actor-skeleton-${i}`} />
-                    ))
-                  ) : (
-                    <>
-                      {filteredLibrary.map(actor => {
-                        const safeDisplayUrl = actor.previewUrl || actor.url || '';
+                  {visibleLibraryActors.map(actor => {
+                    const safeDisplayUrl = actor.previewUrl || actor.url || '';
 
                     return (
-                      <div key={actor.id} className="group relative aspect-square rounded-xl overflow-hidden bg-black/40 border border-[#27272a] hover:border-yellow-500/50 transition-all hover:">
+                      <div key={actor.id} className="group relative aspect-square rounded-xl overflow-hidden bg-black/40 border border-[#27272a] hover:border-yellow-500/50 transition-all">
                         {safeDisplayUrl ? (
                           <SmartCardImage
                             src={safeDisplayUrl}
@@ -4625,22 +4415,27 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
                           </HelpTooltip>
                         </div>
                       </div>
-                    )
+                    );
                   })}
-                  {filteredLibrary.length === 0 && state.actorLibraryStatus === 'ready' && !isActorCategoryVisualLoading && (
+                  {visibleActorLimit < filteredLibrary.length && (
+                    <div className="col-span-2 py-4 text-center text-[10px] font-black uppercase tracking-[0.22em] text-yellow-400/70">
+                      Loading more actors...
+                    </div>
+                  )}
+                  {filteredLibrary.length === 0 &&
+                    state.actorLibraryStatus === 'ready' &&
+                    !folderChangeOverlay && (
                     <div className="col-span-2 py-10 flex flex-col items-center justify-center text-gray-600 gap-2 border border-dashed border-gray-800 rounded-xl">
                       <Folder className="w-8 h-8 opacity-20" />
                       <p className="text-xs uppercase font-bold tracking-widest">Empty Studio</p>
                     </div>
                   )}
-                  </>
-                )}
                 </motion.div>
               )}
-            </AnimatePresence>
+            </div>
           </div>
 
-              {state.actorLibraryStatus === 'ready' && state.actorLibrary.length === 0 && (
+              {state.actorLibraryStatus === 'ready' && !folderChangeOverlay && state.actorLibrary.length === 0 && (
                 <div className="flex flex-col items-center justify-center py-20 opacity-20 filter grayscale">
                   <UserPlus className="w-12 h-12 mb-3 text-gray-500" />
                   <span className="text-[10px] font-black uppercase tracking-[0.2em] text-center text-gray-500">Library Empty</span>
@@ -4649,6 +4444,20 @@ DUPLICATE ANGLE CORRECTION PASS (MANDATORY):
             </>
           )}
         </div>
+
+        {folderChangeOverlay && state.actorLibraryStatus === 'ready' && (
+          <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center rounded-2xl bg-[#07080c]/92">
+            <div className="rounded-2xl border border-yellow-400/20 bg-black/45 px-6 py-5 text-center shadow-2xl">
+              <div className="mx-auto mb-4 h-9 w-9 animate-spin rounded-full border-2 border-yellow-400 border-t-transparent" />
+              <div className="text-xs font-black uppercase tracking-[0.24em] text-yellow-300">
+                {folderChangeLabel}
+              </div>
+              <div className="mt-2 text-[11px] text-zinc-500">
+                Preparing actor library view...
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* TOAST OVERLAY */}
