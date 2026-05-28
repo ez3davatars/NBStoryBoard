@@ -126,7 +126,37 @@ export const SupabaseAuth = {
     return supabase.auth.onAuthStateChange(callback);
   },
 
-  activateDevice: async (deviceFingerprint: string, deviceLabel: string, appVersion: string) => {
+  getMyDesktopLicenses: async () => {
+    if (!supabaseUrl || !supabaseAnonKey) {
+      throw new Error("Supabase is not configured.");
+    }
+    const token = await SupabaseAuth.getValidJwt();
+    const endpoint = `${supabaseUrl}/functions/v1/get-my-desktop-licenses`;
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      cache: 'no-store',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: supabaseAnonKey,
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/json'
+      }
+    });
+    const text = await response.text();
+    const data = JSON.parse(text);
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to retrieve desktop licenses');
+    }
+    return data.licenses || [];
+  },
+
+  activateDevice: async (
+    deviceFingerprint: string,
+    deviceLabel: string,
+    appVersion: string,
+    licenseKey?: string,
+    licenseId?: string
+  ) => {
     if (!supabaseUrl || !supabaseAnonKey) {
       throw new Error("Supabase is not configured.");
     }
@@ -145,13 +175,40 @@ export const SupabaseAuth = {
         deviceFingerprint,
         deviceLabel,
         platform: 'windows',
-        appVersion
+        appVersion,
+        licenseKey,
+        licenseId
       })
     });
     const text = await response.text();
     const data = JSON.parse(text);
     if (!response.ok) {
       throw new Error(data.error || 'Failed to communicate with activation server');
+    }
+    return data;
+  },
+
+  deactivateDevice: async (activationId: string) => {
+    if (!supabaseUrl || !supabaseAnonKey) {
+      throw new Error("Supabase is not configured.");
+    }
+    const token = await SupabaseAuth.getValidJwt();
+    const endpoint = `${supabaseUrl}/functions/v1/deactivate-device`;
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      cache: 'no-store',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: supabaseAnonKey,
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/json'
+      },
+      body: JSON.stringify({ activationId })
+    });
+    const text = await response.text();
+    const data = JSON.parse(text);
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to deactivate device');
     }
     return data;
   },

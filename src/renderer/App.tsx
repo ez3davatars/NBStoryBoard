@@ -13,6 +13,7 @@ const VeoPromptStudio = lazy(() => import('./components/VeoPromptStudio'));
 import { StorageService } from './services/StorageService';
 import { LOGO_BASE64 } from './assets/logo';
 import { SupabaseAuth, supabase } from './services/SupabaseClient';
+import { DeviceFingerprint } from './services/DeviceFingerprint';
 import { SIGN_IN_REQUIRED_EVENT } from './services/AuthGenerationGate';
 
 import type {
@@ -35,7 +36,6 @@ import { InsufficientCreditModal } from './components/ui/InsufficientCreditModal
 import { useRecentGenerationsStore } from './stores/useRecentGenerationsStore';
 import {
   INSUFFICIENT_HOSTED_CREDITS_EVENT,
-  getByokOwnership,
   type InsufficientCreditModalState
 } from './utils/billingProducts';
 import { createUniqueDownloadFilename } from './utils/downloadFilenames';
@@ -49,9 +49,6 @@ import {
   X,
   Hammer,
   HelpCircle,
-  CreditCard,
-  ExternalLink,
-  KeyRound,
   RefreshCw
 } from 'lucide-react';
 
@@ -123,7 +120,6 @@ const isMissingBillingMetadataColumn = (error: unknown): boolean =>
 const isMissingCreditLedgerResetColumn = (error: unknown): boolean =>
   isMissingColumnError(error, 'credit_ledger_reset_at');
 
-const USE_SETTINGS_BILLING_MODE_SELECTOR = true;
 const POST_LAUNCH_BACKGROUND_WORK_DELAY_MS = 8500;
 
 const formatHostedUsageDate = (value?: string | null): string => {
@@ -1061,15 +1057,185 @@ const App = () => {
     };
   }, [state.backgroundJobs, dispatch]);
 
-  function performActivation(session: unknown) {
+  async function refreshLicenses(customSession?: any) {
+    const activeSession = customSession || state.hostedSession;
+    if (!activeSession) return [];
+    setIsLicensesLoading(true);
+    setLicensesLoadError(null);
+    try {
+      const lics = await SupabaseAuth.getMyDesktopLicenses();
+      setLicensesList(lics);
+      if (lics.length === 1) {
+        setSelectedLicenseId(lics[0].id);
+      } else {
+        setSelectedLicenseId('');
+      }
+      return lics;
+    } catch (err: any) {
+      console.error('[Licenses] Failed to refresh licenses:', err);
+      const errMsg = err.message || 'Failed to fetch desktop licenses.';
+      setLicensesLoadError(errMsg);
+      return [];
+    } finally {
+      setIsLicensesLoading(false);
+    }
+  }
+
+  async function performActivation(session: any) {
     if (!session) {
       setActivationStatus('idle');
       setActivationError('');
+      setActiveLicense(null);
+      setActiveActivationId(null);
+      setLicensesList([]);
       return;
     }
 
-    setActivationStatus('allowed');
+    setActivationStatus('pending');
     setActivationError('');
+
+    try {
+      const fingerprint = await DeviceFingerprint.getStableDeviceFingerprint();
+      const label = DeviceFingerprint.getDeviceLabel();
+
+      const savedLicenseId = localStorage.getItem('cds_active_license_id');
+      const savedLicenseKey = localStorage.getItem('cds_active_license_key');
+
+      if (savedLicenseId || savedLicenseKey) {
+        try {
+          const res = await SupabaseAuth.activateDevice(
+            fingerprint,
+            label,
+            '1.0.0',
+            savedLicenseKey || undefined,
+            savedLicenseId || undefined
+          );
+
+          if (res.allowed) {
+            setActivationStatus('allowed');
+            setActiveActivationId(res.activationId);
+            
+            const lics = await refreshLicenses(session);
+            const activeLic = lics.find((l: any) => l.id === res.licenseId);
+            if (activeLic) {
+              setActiveLicense(activeLic);
+              localStorage.setItem('cds_active_license_id', activeLic.id);
+              localStorage.setItem('cds_active_license_type', activeLic.productKey);
+              localStorage.setItem('cds_active_license_suffix', activeLic.licenseKeySuffix);
+            } else {
+              setActiveLicense({
+                id: res.licenseId,
+                productKey: res.productKey,
+                displayName: res.productKey === 'agency_desktop_byok' ? 'Agency Commercial BYOK' : 'Indie Desktop BYOK',
+                licenseKeySuffix: savedLicenseKey ? `...${savedLicenseKey.slice(-8)}` : 'Active',
+                activationLimit: res.deviceLimit || 2,
+                activeDeviceCount: res.activeDevices || 1
+              });
+            }
+            return;
+          }
+        } catch (err: any) {
+          console.warn('[Activation] Saved activation verification failed:', err);
+          localStorage.removeItem('cds_active_license_id');
+          localStorage.removeItem('cds_active_license_key');
+          localStorage.removeItem('cds_active_license_type');
+          localStorage.removeItem('cds_active_license_suffix');
+        }
+      }
+
+      await refreshLicenses(session);
+      setActivationStatus('idle');
+    } catch (error: any) {
+      console.error('[Activation] Startup fetch licenses failed:', error);
+      setActivationStatus('denied');
+      setActivationError(error.message || 'Failed to fetch desktop licenses.');
+    }
+  }
+
+  async function handleActivateDevice() {
+    setIsActivating(true);
+    setActivationError('');
+    try {
+      const fingerprint = await DeviceFingerprint.getStableDeviceFingerprint();
+      const label = DeviceFingerprint.getDeviceLabel();
+
+      let res;
+      if (manualLicenseKey.trim()) {
+        const cleanedKey = manualLicenseKey.trim();
+        res = await SupabaseAuth.activateDevice(fingerprint, label, '1.0.0', cleanedKey, undefined);
+        localStorage.setItem('cds_active_license_key', cleanedKey);
+        localStorage.removeItem('cds_active_license_id');
+      } else if (selectedLicenseId) {
+        res = await SupabaseAuth.activateDevice(fingerprint, label, '1.0.0', undefined, selectedLicenseId);
+        localStorage.setItem('cds_active_license_id', selectedLicenseId);
+        localStorage.removeItem('cds_active_license_key');
+      } else {
+        throw new Error('Please select a license or enter a license key.');
+      }
+
+      if (res.allowed) {
+        setActivationStatus('allowed');
+        setActiveActivationId(res.activationId);
+        
+        const lics = await refreshLicenses();
+        const activeLic = lics.find((l: any) => l.id === res.licenseId);
+        if (activeLic) {
+          setActiveLicense(activeLic);
+          localStorage.setItem('cds_active_license_id', activeLic.id);
+          localStorage.setItem('cds_active_license_type', activeLic.productKey);
+          localStorage.setItem('cds_active_license_suffix', activeLic.licenseKeySuffix);
+        } else {
+          setActiveLicense({
+            id: res.licenseId,
+            productKey: res.productKey,
+            displayName: res.productKey === 'agency_desktop_byok' ? 'Agency Commercial BYOK' : 'Indie Desktop BYOK',
+            licenseKeySuffix: manualLicenseKey ? `...${manualLicenseKey.trim().slice(-8)}` : 'Active',
+            activationLimit: res.deviceLimit || 2,
+            activeDeviceCount: res.activeDevices || 1
+          });
+        }
+        
+        setShowActivationModal(false);
+        dispatch({ type: 'ADD_LOG', payload: { message: "Device successfully activated!", type: 'success' } });
+      } else {
+        throw new Error(res.error || 'Activation denied by server.');
+      }
+    } catch (err: any) {
+      console.error('[Activation] Activation failed:', err);
+      setActivationError(err.message || 'Activation failed.');
+      dispatch({ type: 'ADD_LOG', payload: { message: `Activation failed: ${err.message || 'Activation failed.'}`, type: 'error' } });
+    } finally {
+      setIsActivating(false);
+    }
+  }
+
+  async function handleDeactivateDevice() {
+    if (!activeActivationId) return;
+    setIsActivating(true);
+    setActivationError('');
+    try {
+      await SupabaseAuth.deactivateDevice(activeActivationId);
+      setActivationStatus('idle');
+      setActiveLicense(null);
+      setActiveActivationId(null);
+      
+      localStorage.removeItem('cds_active_license_id');
+      localStorage.removeItem('cds_active_license_key');
+      localStorage.removeItem('cds_active_license_type');
+      localStorage.removeItem('cds_active_license_suffix');
+
+      if (state.hostedSession) {
+        await refreshLicenses();
+      }
+
+      dispatch({ type: 'ADD_LOG', payload: { message: "Device deactivated.", type: 'success' } });
+    } catch (err: any) {
+      console.error('[Activation] Deactivation failed:', err);
+      setActivationError(err.message || 'Deactivation failed.');
+      dispatch({ type: 'ADD_LOG', payload: { message: `Deactivation failed: ${err.message}`, type: 'error' } });
+    } finally {
+      setIsActivating(false);
+    }
   }
 
   // Sync Supabase Hosted Auth Session
@@ -1202,6 +1368,22 @@ const App = () => {
   const [showSignInRequiredModal, setShowSignInRequiredModal] = useState(false);
   const [activationStatus, setActivationStatus] = useState<'idle' | 'pending' | 'allowed' | 'denied'>('idle');
   const [activationError, setActivationError] = useState('');
+  const [activeLicense, setActiveLicense] = useState<{
+    id: string;
+    productKey: string;
+    displayName: string;
+    licenseKeySuffix: string;
+    activationLimit: number;
+    activeDeviceCount: number;
+  } | null>(null);
+  const [activeActivationId, setActiveActivationId] = useState<string | null>(null);
+  const [licensesList, setLicensesList] = useState<any[]>([]);
+  const [selectedLicenseId, setSelectedLicenseId] = useState<string>('');
+  const [manualLicenseKey, setManualLicenseKey] = useState<string>('');
+  const [showActivationModal, setShowActivationModal] = useState(false);
+  const [isActivating, setIsActivating] = useState(false);
+  const [isLicensesLoading, setIsLicensesLoading] = useState(false);
+  const [licensesLoadError, setLicensesLoadError] = useState<string | null>(null);
   const [tempKey, setTempKey] = useState(state.apiKey);
   const [tempBillingMode, setTempBillingMode] = useState<'hosted' | 'byok'>(state.billingMode);
 
@@ -1209,33 +1391,11 @@ const App = () => {
   const [authEmail, setAuthEmail] = useState('');
   const [authPass, setAuthPass] = useState('');
   const [isAuthLoading, setIsAuthLoading] = useState(false);
-  const [billingPortalBusy, setBillingPortalBusy] = useState(false);
-  const [billingPortalError, setBillingPortalError] = useState<string | null>(null);
-
   useEffect(() => {
     if (!showSettings) return;
     setTempKey(state.apiKey);
     setTempBillingMode(state.billingMode);
   }, [showSettings, state.apiKey, state.billingMode]);
-
-  const byokOwnership = useMemo(
-    () => getByokOwnership({
-      entitlements: state.billingEntitlements,
-      hostedSession: state.hostedSession,
-      apiKey: state.apiKey
-    }),
-    [state.apiKey, state.billingEntitlements, state.hostedSession]
-  );
-  const hasHostedAccountContext =
-    state.billingEntitlements.hasHostedAccess &&
-    Boolean(state.hostedSession?.user?.id);
-  const hasBothHostedAndByok = hasHostedAccountContext && byokOwnership.ownsAnyByok;
-  const shouldShowByokHostedSuggestion =
-    state.billingEntitlements.effectiveBillingMode === 'hosted' &&
-    byokOwnership.ownsAnyByok;
-  const byokLicenseLabel = byokOwnership.byokTier
-    ? `${byokOwnership.byokTier === 'agency' ? 'Agency Commercial' : 'Indie'} BYOK license`
-    : 'BYOK license';
 
   useEffect(() => {
     const handleSignInRequired = () => {
@@ -1254,58 +1414,8 @@ const App = () => {
 
   const closeSettings = () => {
     setShowSettings(false);
-    setBillingPortalError(null);
     if (state.view === 'settings') {
       dispatch({ type: 'SET_VIEW', payload: 'casting' }); // Fallback to casting
-    }
-  };
-
-  const openExternalUrl = async (url: string, reservedWindow?: Window | null): Promise<boolean> => {
-    if (window.electronAPI?.openExternal) {
-      await window.electronAPI.openExternal(url);
-      return true;
-    }
-
-    if (reservedWindow && !reservedWindow.closed) {
-      reservedWindow.location.href = url;
-      reservedWindow.focus();
-      return true;
-    }
-
-    const openedWindow = window.open(url, '_blank', 'noopener,noreferrer');
-    return Boolean(openedWindow);
-  };
-
-  const switchToByokMode = () => {
-    dispatch({ type: 'SET_BILLING_MODE', payload: 'byok' });
-    setTempBillingMode('byok');
-    dispatch({ type: 'ADD_LOG', payload: { message: 'Switched to BYOK Mode.', type: 'info' } });
-    if (!state.apiKey.trim()) {
-      setShowSettings(true);
-    }
-  };
-
-  const handleManageHostedSubscription = async () => {
-    setBillingPortalBusy(true);
-    setBillingPortalError(null);
-    const reservedPortalWindow = window.electronAPI?.openExternal ? null : window.open('about:blank', '_blank');
-
-    try {
-      const portalUrl = await SupabaseAuth.createBillingPortalSession();
-      const opened = await openExternalUrl(portalUrl, reservedPortalWindow);
-      if (!opened) {
-        setBillingPortalError('Billing portal popup was blocked. Please allow popups and try again.');
-        dispatch({ type: 'ADD_LOG', payload: { message: 'Billing portal popup was blocked.', type: 'error' } });
-        return;
-      }
-      dispatch({ type: 'ADD_LOG', payload: { message: 'Hosted subscription portal opened.', type: 'info' } });
-    } catch (error: unknown) {
-      reservedPortalWindow?.close();
-      const message = getErrorMessage(error);
-      setBillingPortalError(message);
-      dispatch({ type: 'ADD_LOG', payload: { message: `Billing portal unavailable: ${message}`, type: 'error' } });
-    } finally {
-      setBillingPortalBusy(false);
     }
   };
 
@@ -2270,27 +2380,7 @@ const App = () => {
             </FramedPanel>
           </div>
         </header>
-
-          {shouldShowByokHostedSuggestion && (
-            <div className="flex flex-col gap-3 border-b border-blue-400/20 bg-blue-500/10 px-4 py-3 text-blue-100 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex min-w-0 items-start gap-3">
-                <KeyRound className="mt-0.5 h-4 w-4 shrink-0 text-blue-300" />
-                <p className="text-xs font-semibold leading-relaxed">
-                  BYOK license active. Switch to BYOK Mode to use your own Google/Vertex API key and preserve Hosted credits.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={switchToByokMode}
-                className="flex min-h-[34px] shrink-0 items-center justify-center gap-2 rounded-lg border border-blue-300/40 bg-blue-400/15 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-blue-50 transition-colors hover:border-blue-200 hover:bg-blue-400/20"
-              >
-                <KeyRound className="h-3.5 w-3.5" />
-                Switch to BYOK Mode
-              </button>
-            </div>
-          )}
-
-          {/* Main Content Area */}
+        {/* Main Content Area */}
           <main className="relative flex-1 min-h-0 overflow-hidden flex flex-col">
             {activationStatus === 'pending' ? (
               <div className="flex-1 flex flex-col items-center justify-center bg-[#0f0f11] text-gray-400">
@@ -2568,197 +2658,163 @@ const App = () => {
                 )}
               </div>
             </div>
-          </footer>
-
-          {/* Settings Modal */}
+          </footer>          {/* Settings Modal */}
           {
             showSettings && (
               <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[4000] flex items-center justify-center p-3 sm:p-6">
                 <div className="bg-[#18181b] border border-gray-700 p-4 sm:p-6 rounded-xl w-full max-w-2xl max-h-[90dvh] overflow-y-auto animate-in fade-in zoom-in duration-200">
                   <h2 className="text-lg font-bold text-white mb-4">Configuration</h2>
                   <div className="space-y-4">
-                    {/* BILLING MODE & ENTITLEMENTS */}
-                    {hasBothHostedAndByok && (
-                      <div className="rounded-lg border border-blue-400/30 bg-blue-500/10 p-4">
-                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                          <div className="min-w-0">
-                            <label className="block text-xs font-bold uppercase tracking-wider text-blue-200">Account Dashboard</label>
-                            <p className="mt-2 text-sm leading-relaxed text-blue-50">
-                              You have both Managed API credits and a BYOK Desktop license. BYOK may save money for high-volume generation, but your Hosted credits remain available.
-                            </p>
-                            <p className="mt-2 text-[10px] font-bold uppercase tracking-wider text-blue-200/80">
-                              {byokLicenseLabel} active
-                            </p>
-                          </div>
-                          <div className="flex shrink-0 flex-col gap-2 sm:min-w-[220px]">
-                            <button
-                              type="button"
-                              onClick={handleManageHostedSubscription}
-                              disabled={billingPortalBusy}
-                              className="flex min-h-[40px] items-center justify-center gap-2 rounded-lg border border-blue-300/40 bg-blue-400/15 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-blue-50 transition-colors hover:border-blue-200 hover:bg-blue-400/20 disabled:cursor-wait disabled:opacity-60"
-                            >
-                              <CreditCard className="h-4 w-4" />
-                              {billingPortalBusy ? 'Opening Portal...' : 'Manage Hosted Subscription'}
-                              <ExternalLink className="h-3.5 w-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={switchToByokMode}
-                              className="flex min-h-[40px] items-center justify-center gap-2 rounded-lg border border-yellow-300/40 bg-yellow-400/15 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-yellow-50 transition-colors hover:border-yellow-200 hover:bg-yellow-400/20"
-                            >
-                              <KeyRound className="h-4 w-4" />
-                              Use BYOK Mode
-                            </button>
-                          </div>
-                        </div>
-                        {billingPortalError && (
-                          <div className="mt-3 rounded-lg border border-red-400/25 bg-red-500/10 px-3 py-2 text-xs leading-relaxed text-red-100">
-                            Billing portal unavailable: {billingPortalError}
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {USE_SETTINGS_BILLING_MODE_SELECTOR ? (
-                      <>
-                        <div>
-                          <label className="block text-xs font-bold text-gray-400 uppercase mb-2 tracking-wider">Billing & Generation Mode (DEV OVERRIDE)</label>
-                          <div className="grid grid-cols-2 gap-2">
-                            <button
-                              onClick={() => setTempBillingMode('hosted')}
-                              className={`p-3 rounded-lg border transition-all text-left ${tempBillingMode === 'hosted' ? 'bg-blue-500/10 border-blue-500 ' : 'bg-[#09090b] border-[#27272a] hover:border-gray-600'}`}
-                            >
-                              <span className={`text-xs font-bold ${tempBillingMode === 'hosted' ? 'text-blue-500' : 'text-gray-200'}`}>Hosted Cloud</span>
-                              <p className="text-[10px] text-gray-500 mt-1">Uses secure Edge proxy and shared quota.</p>
-                            </button>
-                            <button
-                              onClick={() => setTempBillingMode('byok')}
-                              className={`p-3 rounded-lg border transition-all text-left ${tempBillingMode === 'byok' ? 'bg-yellow-500/10 border-yellow-500 ' : 'bg-[#09090b] border-[#27272a] hover:border-gray-600'}`}
-                            >
-                              <span className={`text-xs font-bold ${tempBillingMode === 'byok' ? 'text-yellow-500' : 'text-gray-200'}`}>Bring Your Own Key</span>
-                              <p className="text-[10px] text-gray-500 mt-1">Direct API requests using your local key.</p>
-                            </button>
-                          </div>
-                        </div>
-
-                        {tempBillingMode === 'byok' && (
+                    {/* SECTION 1: ACCOUNT */}
+                    <div className="p-4 bg-black/30 border border-gray-800 rounded-lg space-y-3">
+                      <label className="block text-xs font-black uppercase tracking-wider text-gray-400">Account</label>
+                      {state.hostedSession ? (
+                        <div className="flex items-center justify-between">
                           <div>
-                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Gemini API Key</label>
+                            <p className="text-sm font-semibold text-white">{state.hostedSession.user?.email}</p>
+                            <p className="text-[10px] text-emerald-400 font-mono mt-0.5">Signed In ✓</p>
+                          </div>
+                          <button
+                            onClick={handleSignOut}
+                            disabled={isAuthLoading}
+                            className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500 hover:text-white text-red-400 rounded text-xs font-bold transition-all"
+                          >
+                            {isAuthLoading ? 'Signing out...' : 'Sign Out'}
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          <p className="text-xs text-gray-500">Sign in to your Cast Director Studio account to view your desktop licenses.</p>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <input
+                              type="email"
+                              value={authEmail}
+                              onChange={(e) => setAuthEmail(e.target.value)}
+                              placeholder="Email account"
+                              className="bg-[#09090b] border border-gray-700 p-2 rounded text-xs text-white focus:border-blue-500 focus:outline-none"
+                            />
                             <input
                               type="password"
-                              className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-yellow-500 focus:outline-none"
-                              placeholder="AIzaSy..."
-                              value={tempKey}
-                              onChange={(e) => setTempKey(e.target.value)}
+                              value={authPass}
+                              onChange={(e) => setAuthPass(e.target.value)}
+                              placeholder="Password"
+                              className="bg-[#09090b] border border-gray-700 p-2 rounded text-xs text-white focus:border-blue-500 focus:outline-none"
                             />
-                            <p className="text-[10px] text-gray-500 mt-2">
-                              Required for BYOK Service Layer to connect directly to Google Cloud.
-                            </p>
                           </div>
-                        )}
+                          <button
+                            onClick={handleSignIn}
+                            disabled={isAuthLoading || !authEmail || !authPass}
+                            className="w-full py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded text-xs font-bold transition-colors"
+                          >
+                            {isAuthLoading ? 'Authenticating...' : 'Sign In'}
+                          </button>
+                        </div>
+                      )}
+                    </div>
 
-                        {tempBillingMode === 'hosted' && (
-                          <div className="p-4 bg-black/40 border border-[#27272a] rounded-lg">
-                            <label className="block text-xs font-bold text-blue-500 uppercase mb-2">Hosted Cloud Authentication</label>
-                            {state.hostedSession ? (
-                              <div className="flex items-center justify-between">
-                                <div>
-                                  <p className="text-sm text-white">{state.hostedSession.user?.email}</p>
-                                  <p className="text-[10px] text-emerald-500 font-mono">Authenticated ✓</p>
-                                </div>
-                                <button onClick={handleSignOut} disabled={isAuthLoading} className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white rounded text-xs font-bold transition-colors">
-                                  {isAuthLoading ? 'Signing out...' : 'Sign Out'}
-                                </button>
-                              </div>
-                            ) : (
-                              <div className="space-y-3">
-                                <input type="email" value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} placeholder="Email account" className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-blue-500 focus:outline-none" />
-                                <input type="password" value={authPass} onChange={(e) => setAuthPass(e.target.value)} placeholder="Password" className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-blue-500 focus:outline-none" />
-                                <button onClick={handleSignIn} disabled={isAuthLoading || !authEmail || !authPass} className="w-full py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded text-sm font-bold transition-colors">
-                                  {isAuthLoading ? 'Authenticating...' : 'Sign In'}
-                                </button>
-                              </div>
-                            )}
+                    {/* SECTION 2: DESKTOP LICENSE */}
+                    <div className="p-4 bg-black/30 border border-gray-800 rounded-lg space-y-4">
+                      <div className="flex justify-between items-center">
+                        <label className="block text-xs font-black uppercase tracking-wider text-gray-400">Desktop License</label>
+                        <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${activationStatus === 'allowed' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
+                          {activationStatus === 'allowed' ? 'Activated' : 'Not Activated'}
+                        </span>
+                      </div>
+
+                      {activationStatus === 'allowed' && activeLicense ? (
+                        <div className="grid grid-cols-2 gap-4 text-xs">
+                          <div>
+                            <span className="text-gray-500 uppercase text-[10px] tracking-wider block">License Type</span>
+                            <span className="font-bold text-white mt-1 block">
+                              {activeLicense.productKey === 'agency_desktop_byok' || activeLicense.productKey === 'agency_commercial_byok'
+                                ? 'Agency Commercial BYOK'
+                                : 'Indie Desktop BYOK'}
+                            </span>
                           </div>
-                        )}
-                      </>
-                    ) : (
-                      <div className="space-y-4">
-                        <div>
-                          <label className="block text-xs font-bold text-gray-400 uppercase mb-2 tracking-wider">Active Entitlement</label>
-                          {state.billingEntitlements.effectiveBillingMode === 'hosted' ? (
-                            <div className="p-4 rounded-lg border border-blue-500/50 bg-blue-500/10 text-blue-400">
-                              <span className="font-bold text-sm block mb-1">Hosted Cloud</span>
-                              <span className="text-xs">Your generation requests are routed securely through our Edge cloud using your active subscription.</span>
+                          <div>
+                            <span className="text-gray-500 uppercase text-[10px] tracking-wider block">License Suffix</span>
+                            <span className="font-mono text-gray-300 mt-1 block">{activeLicense.licenseKeySuffix || 'N/A'}</span>
+                          </div>
+                          <div className="col-span-2 flex items-center justify-between border-t border-gray-800/80 pt-3 mt-1">
+                            <div>
+                              <span className="text-gray-500 uppercase text-[10px] tracking-wider block">Activated Devices</span>
+                              <span className="font-bold text-white mt-1 block">
+                                {activeLicense.activeDeviceCount} of {activeLicense.activationLimit} active
+                              </span>
                             </div>
-                          ) : state.billingEntitlements.effectiveBillingMode === 'byok' ? (
-                            <div className="p-4 rounded-lg border border-yellow-500/50 bg-yellow-500/10 text-yellow-500">
-                              <span className="font-bold text-sm block mb-1">Bring Your Own Key</span>
-                              <span className="text-xs">You are using your own local Gemini API credentials for generation.</span>
-                            </div>
+                            <button
+                              type="button"
+                              onClick={handleDeactivateDevice}
+                              disabled={isActivating}
+                              className="px-3 py-1.5 bg-red-600/10 hover:bg-red-600 hover:text-white text-red-400 rounded text-xs font-bold transition-all disabled:opacity-50"
+                            >
+                              {isActivating ? 'Deactivating...' : 'Deactivate This Device'}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {state.hostedSession && licensesList.length === 0 && !isLicensesLoading && !licensesLoadError ? (
+                            <p className="text-xs text-red-400 font-semibold leading-relaxed">
+                              Signed in but no active desktop license found
+                            </p>
                           ) : (
-                            <div className="p-4 rounded-lg border border-red-500/50 bg-red-500/10 text-red-500">
-                              <span className="font-bold text-sm block mb-1">No Active Entitlement</span>
-                              <span className="text-xs">No active generation entitlement found. Please sign in to a Hosted account or activate a BYOK license.</span>
+                            <p className="text-xs text-gray-500">
+                              A valid BYOK desktop license is required to unlock local API integrations.
+                            </p>
+                          )}
+                          {state.hostedSession ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setManualLicenseKey('');
+                                setActivationError('');
+                                setShowActivationModal(true);
+                                refreshLicenses();
+                              }}
+                              className="w-full py-2 bg-yellow-600 hover:bg-yellow-500 text-white rounded text-xs font-bold transition-all"
+                            >
+                              Activate License
+                            </button>
+                          ) : (
+                            <div className="text-xs text-zinc-400 bg-zinc-800/20 border border-zinc-700/30 p-2.5 rounded-lg leading-relaxed">
+                              Please sign in to your account first to fetch active desktop licenses, or manually activate below.
                             </div>
                           )}
+                          {!state.hostedSession && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setManualLicenseKey('');
+                                setActivationError('');
+                                setShowActivationModal(true);
+                              }}
+                              className="w-full py-2 bg-yellow-600 hover:bg-yellow-500 text-white rounded text-xs font-bold transition-all"
+                            >
+                              Activate Manually
+                            </button>
+                          )}
                         </div>
+                      )}
+                    </div>
 
-                        {state.billingEntitlements.hasByokAccess && (
-                          <div>
-                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Gemini API Key</label>
-                            <input
-                              type="password"
-                              className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-yellow-500 focus:outline-none"
-                              placeholder="AIzaSy..."
-                              value={tempKey}
-                              onChange={(e) => setTempKey(e.target.value)}
-                            />
-                            <p className="text-[10px] text-gray-500 mt-2">
-                              Required for BYOK Service Layer to connect directly to Google Cloud.
-                            </p>
-                          </div>
-                        )}
-
-                        {!state.billingEntitlements.hasHostedAccess && state.billingEntitlements.hasByokAccess ? (
-                          <div className="p-4 bg-[#09090b] border border-[#27272a] rounded-lg">
-                            <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Hosted Cloud</label>
-                            <p className="text-[10px] text-gray-400">
-                              Your current entitlement is Bring Your Own Key. Hosted Cloud access is not active on this account.<br /><br />
-                              Sign in with a Hosted-enabled account or upgrade to use cloud generation.
-                            </p>
-                          </div>
-                        ) : (
-                          <div className="p-4 bg-black/40 border border-[#27272a] rounded-lg">
-                            <label className="block text-xs font-bold text-blue-500 uppercase mb-2">
-                              {!state.billingEntitlements.hasHostedAccess && !state.billingEntitlements.hasByokAccess ? 'Hosted Cloud Access' : 'Hosted Cloud Authentication'}
-                            </label>
-                            {!state.billingEntitlements.hasHostedAccess && !state.billingEntitlements.hasByokAccess && (
-                              <p className="text-[10px] text-gray-400 mb-3">Sign in with a Hosted-enabled account to use cloud generation.</p>
-                            )}
-                            {state.hostedSession ? (
-                              <div className="flex items-center justify-between">
-                                <div>
-                                  <p className="text-sm text-white">{state.hostedSession.user?.email}</p>
-                                  <p className="text-[10px] text-emerald-500 font-mono">Authenticated ✓</p>
-                                </div>
-                                <button onClick={handleSignOut} disabled={isAuthLoading} className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white rounded text-xs font-bold transition-colors">
-                                  {isAuthLoading ? 'Signing out...' : 'Sign Out'}
-                                </button>
-                              </div>
-                            ) : (
-                              <div className="space-y-3">
-                                <input type="email" value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} placeholder="Email account" className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-blue-500 focus:outline-none" />
-                                <input type="password" value={authPass} onChange={(e) => setAuthPass(e.target.value)} placeholder="Password" className="w-full bg-[#09090b] border border-[#27272a] p-2 rounded text-sm text-white focus:border-blue-500 focus:outline-none" />
-                                <button onClick={handleSignIn} disabled={isAuthLoading || !authEmail || !authPass} className="w-full py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded text-sm font-bold transition-colors">
-                                  {isAuthLoading ? 'Authenticating...' : 'Sign In'}
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        )}
+                    {/* SECTION 3: MODEL API KEY / BYOK */}
+                    <div className="p-4 bg-black/30 border border-gray-800 rounded-lg space-y-3">
+                      <label className="block text-xs font-black uppercase tracking-wider text-gray-400">Model API Key / BYOK</label>
+                      <div>
+                        <label className="block text-[10px] text-gray-500 uppercase mb-1 tracking-wider">Gemini API Key</label>
+                        <input
+                          type="password"
+                          className="w-full bg-[#09090b] border border-gray-700 p-2 rounded text-xs text-white focus:border-yellow-500 focus:outline-none"
+                          placeholder="AIzaSy..."
+                          value={tempKey}
+                          onChange={(e) => setTempKey(e.target.value)}
+                        />
+                        <p className="text-[10px] text-gray-500 mt-2 leading-relaxed">
+                          This is separate from the Cast Director Studio desktop license key. This API key is utilized directly for BYOK model generation queries via Google Cloud endpoints.
+                        </p>
                       </div>
-                    )}
+                    </div>
                     <div>
                       <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Render Save Folder</label>
                       <div className="flex flex-col sm:flex-row gap-2">
@@ -2789,7 +2845,7 @@ const App = () => {
                             } catch (e: unknown) {
                               console.error("Directory picker error:", e);
                               if ((e as { name?: string }).name !== 'AbortError') {
-                                dispatch({ type: 'ADD_LOG', payload: { message: `Failed to set folder: ${getErrorMessage(e)}`, type: 'error' } });
+                                  dispatch({ type: 'ADD_LOG', payload: { message: `Failed to set folder: ${getErrorMessage(e)}`, type: 'error' } });
                               }
                             }
                           }}
@@ -2954,6 +3010,112 @@ const App = () => {
                     <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
                       <button onClick={closeSettings} className="w-full sm:w-auto px-4 py-2 text-gray-400 text-xs hover:text-white">Cancel</button>
                       <button onClick={saveSettings} className="w-full sm:w-auto bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded text-xs font-bold">Save Config</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )
+          }
+
+          {/* Activation Modal */}
+          {
+            showActivationModal && (
+              <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[5000] flex items-center justify-center p-4">
+                <div className="bg-[#1c1c1f] border border-gray-800 p-6 rounded-xl w-full max-w-md animate-in fade-in zoom-in duration-150">
+                  <h3 className="text-base font-bold text-white mb-2">Activate Cast Director Studio</h3>
+                  <p className="text-xs text-zinc-400 mb-4 leading-relaxed">
+                    {!state.hostedSession ? (
+                      "Sign in to use a desktop license from your account, or paste your license key below."
+                    ) : isLicensesLoading ? (
+                      "Checking your account for active desktop licenses..."
+                    ) : licensesLoadError ? (
+                      "We could not load desktop licenses from your account. You can still paste a license key below."
+                    ) : licensesList.length > 0 ? (
+                      "Choose a desktop license from your account, or paste a license key below."
+                    ) : (
+                      `You are signed in as ${state.hostedSession.user?.email}, but no active desktop license was found on this account. Paste a Cast Director Studio license key below, or purchase/claim a desktop license from your account portal.`
+                    )}
+                  </p>
+
+                  <div className="space-y-4">
+                    {/* If signed in, show license picker if licenses exist and not loading */}
+                    {state.hostedSession && licensesList.length > 0 && !isLicensesLoading && (
+                      <div className="space-y-2">
+                        <label className="block text-xs font-bold text-zinc-400 uppercase tracking-wider">Select License</label>
+                        <div className="space-y-2 max-h-[160px] overflow-y-auto">
+                          {licensesList.map((lic) => (
+                            <label
+                              key={lic.id}
+                              className={`flex items-start gap-3 p-3 rounded-lg border transition-all cursor-pointer ${selectedLicenseId === lic.id ? 'bg-yellow-500/10 border-yellow-500' : 'bg-[#09090b] border-gray-800 hover:border-gray-700'}`}
+                            >
+                              <input
+                                type="radio"
+                                name="activation-license"
+                                checked={selectedLicenseId === lic.id}
+                                onChange={() => {
+                                  setSelectedLicenseId(lic.id);
+                                  setManualLicenseKey('');
+                                }}
+                                className="mt-0.5 accent-yellow-500"
+                              />
+                              <div className="text-xs">
+                                <p className="font-bold text-white">
+                                  {lic.displayName}
+                                </p>
+                                <p className="text-[10px] text-gray-400 mt-1">Suffix: {lic.licenseKeySuffix || 'N/A'}</p>
+                                <p className="text-[10px] text-gray-400">Limit: {lic.activeDeviceCount} of {lic.activationLimit} active</p>
+                              </div>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Manual Key entry */}
+                    <div className="space-y-1">
+                      <label className="block text-xs font-bold text-zinc-400 uppercase tracking-wider">Cast Director Studio License Key</label>
+                      <input
+                        type="text"
+                        className="w-full bg-[#09090b] border border-gray-700 p-2.5 rounded text-xs text-white focus:border-yellow-500 focus:outline-none placeholder-gray-600 font-mono"
+                        placeholder="CDS_LIC_..."
+                        value={manualLicenseKey}
+                        onChange={(e) => {
+                          setManualLicenseKey(e.target.value);
+                          setSelectedLicenseId(''); // deselect list if typing key manually
+                        }}
+                      />
+                    </div>
+
+                    {activationError && (
+                      <p className="text-xs text-red-400 font-bold bg-red-500/10 border border-red-500/25 p-2 rounded-lg leading-relaxed">
+                        ⚠️ {activationError}
+                      </p>
+                    )}
+
+                    <div className="flex justify-end gap-2 pt-2">
+                      <button
+                        onClick={() => {
+                          setShowActivationModal(false);
+                          setActivationError('');
+                        }}
+                        className="px-4 py-2 text-zinc-400 text-xs hover:text-white"
+                        disabled={isActivating}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleActivateDevice}
+                        className="bg-yellow-600 hover:bg-yellow-500 disabled:opacity-50 text-white px-4 py-2 rounded text-xs font-bold transition-all"
+                        disabled={
+                          isActivating ||
+                          !(
+                            (Boolean(selectedLicenseId) && !isLicensesLoading) ||
+                            manualLicenseKey.trim().length >= 10
+                          )
+                        }
+                      >
+                        {isActivating ? 'Activating...' : 'Activate This Device'}
+                      </button>
                     </div>
                   </div>
                 </div>
