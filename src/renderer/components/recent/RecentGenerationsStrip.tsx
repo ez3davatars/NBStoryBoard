@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Check, FolderOutput, Clock, ChevronLeft, ChevronRight, Trash2 } from 'lucide-react';
+import { X, Check, FolderOutput, Clock, ChevronDown, ChevronLeft, ChevronRight, Trash2 } from 'lucide-react';
 import { useRecentGenerationsStore } from '../../stores/useRecentGenerationsStore';
 import type { RecentGenerationStudio, RecentGeneration } from '../../stores/useRecentGenerationsStore';
 import ConfirmDialog from '../ui/ConfirmDialog';
@@ -13,6 +14,7 @@ export type RecentGenerationsStripProps = {
   showSingle?: boolean;
   showEmpty?: boolean;
   className?: string;
+  onHide?: () => void;
   onSelectGeneration?: (generation: RecentGeneration) => void;
   onExportGeneration?: (generation: RecentGeneration) => void;
 };
@@ -31,6 +33,7 @@ export default function RecentGenerationsStrip({
   showSingle = false,
   showEmpty = false,
   className = '',
+  onHide,
   onSelectGeneration,
   onExportGeneration,
 }: RecentGenerationsStripProps) {
@@ -217,6 +220,16 @@ export default function RecentGenerationsStrip({
             </button>
           </>
         )}
+        {onHide && (
+          <button
+            onClick={onHide}
+            className="!p-1 !bg-white/5 !border-transparent !min-w-0 !min-h-0 text-gray-400 hover:text-white transition-colors rounded"
+            title="Hide recent generations"
+            aria-label="Hide recent generations"
+          >
+            <ChevronDown className="w-3 h-3" />
+          </button>
+        )}
       </div>
     </div>
   );
@@ -332,7 +345,7 @@ export default function RecentGenerationsStrip({
         </AnimatePresence>
       </div>
 
-      <ConfirmDialog
+      {createPortal(<ConfirmDialog
         isOpen={isClearConfirmOpen}
         onClose={() => setIsClearConfirmOpen(false)}
         onConfirm={handleClearAll}
@@ -341,7 +354,7 @@ export default function RecentGenerationsStrip({
         confirmText="Clear All"
         cancelText="Cancel"
         variant="danger"
-      />
+      />, document.body)}
     </>
   );
 }

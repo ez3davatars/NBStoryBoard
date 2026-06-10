@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     Upload, RefreshCcw, Maximize, Shirt, Sparkles, Download,
     UserPlus, X, Trash2, CheckCircle2, FolderPlus, Zap, HelpCircle,
-    ChevronDown, History
+    History
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
@@ -3506,20 +3506,12 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                 {isRecentGenerationsOpen && hasRecentGenerations && (
                                     <div className="absolute bottom-2 left-0 right-0 z-50 pointer-events-none flex justify-center px-4 transition-all duration-200 ease-out opacity-100 translate-y-0">
                                         <div className="relative w-full max-w-3xl pointer-events-auto">
-                                            <button
-                                                type="button"
-                                                className="absolute -top-3.5 left-1/2 -translate-x-1/2 z-[60] bg-[#1a1a1c]/90 border border-white/10 rounded-full p-0.5 text-gray-400 hover:text-white hover:bg-black transition-colors shadow-lg"
-                                                aria-label="Hide recent generations"
-                                                title="Hide recent generations"
-                                                onClick={() => setIsRecentGenerationsOpen(false)}
-                                            >
-                                                <ChevronDown className="w-4 h-4" />
-                                            </button>
                                             <div className="transition-all duration-200 ease-out opacity-100 scale-100">
                                                 <RecentGenerationsStrip
                                                     studio="wardrobe"
                                                     showSingle
                                                     className="w-full bg-black/80 backdrop-blur-md rounded-2xl border border-white/10"
+                                                    onHide={() => setIsRecentGenerationsOpen(false)}
                                                     onSelectGeneration={(gen) => {
                                                         setDesignerImage(gen.displayUrl);
                                                     }}
@@ -3772,19 +3764,11 @@ text, labels, watermarks, diagrams, pattern layouts, mannequins, models, busy ba
                                     {isRecentGenerationsOpen && hasRecentGenerations && (
                                         <div className="absolute bottom-2 left-0 right-0 z-50 pointer-events-none flex justify-center px-4 transition-all duration-200 ease-out opacity-100 translate-y-0">
                                             <div className="relative w-full max-w-3xl pointer-events-auto">
-                                                <button
-                                                    type="button"
-                                                    className="absolute -top-3.5 left-1/2 -translate-x-1/2 z-[60] bg-[#1a1a1c]/90 border border-white/10 rounded-full p-0.5 text-gray-400 hover:text-white hover:bg-black transition-colors shadow-lg"
-                                                    aria-label="Hide recent generations"
-                                                    title="Hide recent generations"
-                                                    onClick={() => setIsRecentGenerationsOpen(false)}
-                                                >
-                                                    <ChevronDown className="w-4 h-4" />
-                                                </button>
                                                 <div className="transition-all duration-200 ease-out opacity-100 scale-100">
                                                     <RecentGenerationsStrip
                                                         studio="wardrobe"
                                                         className="w-full bg-black/80 backdrop-blur-md rounded-2xl border border-white/10"
+                                                        onHide={() => setIsRecentGenerationsOpen(false)}
                                                         onSelectGeneration={(gen) => {
                                                             tryOnOutputModeRef.current = 'front';
                                                             resetTryOnTurnaroundOutputs({
