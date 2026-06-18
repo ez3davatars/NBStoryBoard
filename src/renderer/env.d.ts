@@ -87,6 +87,7 @@ declare global {
 
   interface Window {
     electronAPI?: ElectronAPI;
+    __CDS_RESET_AUDIT_BUILD__?: string;
   }
 }
 

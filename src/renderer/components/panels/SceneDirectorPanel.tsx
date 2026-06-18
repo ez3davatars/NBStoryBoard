@@ -55,6 +55,7 @@ export const SceneDirectorPanel = ({
  >
  <div className="space-y-4">
  <HelpTooltip zone="stage" id="stageInstructions">
+ <div>
  <PropertyField
  label="Subject / Action"
  value={state.director.subject}
@@ -62,6 +63,12 @@ export const SceneDirectorPanel = ({
  placeholder="Describe the main action..."
  type="textarea"
  />
+ {state.director.replaceAnchorSubjects && (
+ <p className="mt-1 text-[10px] text-gray-500 leading-snug">
+ Action-only in replacement mode. Actor identity comes from the selected cast reference.
+ </p>
+ )}
+ </div>
  </HelpTooltip>
 
  <div>

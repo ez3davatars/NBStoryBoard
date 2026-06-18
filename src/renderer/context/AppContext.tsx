@@ -26,11 +26,17 @@ import {
     hasSeenWelcomeForInstall,
     markWelcomeSeenForInstall
 } from '../utils/welcomeState';
+import {
+    clearVolatileWorkspaceDataStores,
+    clearVolatileWorkspaceStorage
+} from '../utils/resetVolatileWorkspaceState';
+import { FRESH_STAGING_SESSION as FRESH_STAGING_SESSION_DEFAULTS } from '../state/freshStagingSession';
 import type { HeadwearSubtype, WearableClass } from '../services/WearableAnchorEngine';
 
 export const APP_SCHEMA_VERSION = 5; // bump when persisted state shape changes
 const POST_LAUNCH_HYDRATION_DELAY_MS = 8500;
 const WELCOME_INSTALL_CONTEXT_TIMEOUT_MS = 1500;
+clearVolatileWorkspaceStorage();
 // --- SHARED TYPES ---
 
 export type ViewMode =
@@ -665,6 +671,7 @@ export interface AppState {
     pendingPitchSheetHandoff: PendingPitchSheetHandoff | null;
     pendingRefSheetHandoff: PendingRefSheetHandoff | null;
     nanoCastSession: NanoCastSessionState;
+    volatileWorkspaceResetNonce: number;
 }
 
 export interface WardrobeState {
@@ -859,6 +866,7 @@ export type Action =
     | { type: 'SET_NANO_CAST_GENERATED_RESULT'; payload: string | null }
     | { type: 'SET_NANO_CAST_SESSION_METADATA'; payload: Partial<Omit<NanoCastSessionState, 'biometricImages' | 'generatedCharacterUrl' | 'identityLock' | 'updatedAt'>> }
     | { type: 'CLEAR_NANO_CAST_SESSION' }
+    | { type: 'RESET_VOLATILE_WORKSPACE_STATE' }
     | { type: 'ADD_BACKGROUND_JOB'; payload: BackgroundJob }
     | { type: 'UPDATE_BACKGROUND_JOB'; payload: { id: string; updates: Partial<BackgroundJob> } }
     | { type: 'REMOVE_BACKGROUND_JOB'; payload: string }
@@ -1115,13 +1123,8 @@ const resetDirectorSessionFields = (director: DirectorSettings): DirectorSetting
     globalReplaceTarget: '',
 });
 
-const loadStoredDirector = (): DirectorSettings => {
-    const stored = loadJson<Partial<DirectorSettings>>('nano_director_v3', {});
-    return resetDirectorSessionFields({ ...defaultDirector, ...stored });
-};
-
-const getPersistableDirector = (director: DirectorSettings): DirectorSettings =>
-    resetDirectorSessionFields(director);
+const loadStoredDirector = (): DirectorSettings =>
+    resetDirectorSessionFields({ ...defaultDirector });
 
 const defaultRefSlots: ReferenceSlot[] = Array.from({ length: 10 }, (_, i) => ({
     index: i + 1,
@@ -1158,6 +1161,61 @@ const DEFAULT_REGION_EDIT: RegionEditState = {
         { id: 'B', name: 'Mask B', enabled: false, maskDataUrl: null, prompt: '', lastOutputUrl: null, status: 'idle', lastError: null },
         { id: 'C', name: 'Mask C', enabled: false, maskDataUrl: null, prompt: '', lastOutputUrl: null, status: 'idle', lastError: null },
     ],
+};
+
+export const FRESH_STAGING_CONTEXT_STATE = {
+    tokens: [] as StageToken[],
+    annotations: [] as StageAnnotation[],
+    referenceSlots: smartClone(defaultRefSlots),
+    selection: null as string | null,
+    selectionType: null as AppState['selectionType'],
+    backgroundUrl: null as string | null,
+    depthMapUrl: FRESH_STAGING_SESSION_DEFAULTS.depthMapUrl as string | null,
+    depthMapHash: null as string | null,
+    sourceBackgroundHash: null as string | null,
+    floorPlane: FRESH_STAGING_SESSION_DEFAULTS.floorPlane as FloorPlane | null,
+    occupiedVolumes: [...FRESH_STAGING_SESSION_DEFAULTS.occupiedVolumes] as OccupiedVolume[],
+    resultImage: FRESH_STAGING_SESSION_DEFAULTS.resultImage as string | null,
+    storyboardSource: null as AppState['storyboardSource'],
+    storyboardEndSource: null as AppState['storyboardEndSource'],
+    storyboardGenerations: [] as StoryboardGeneration[],
+    lastCastedImage: null as string | null,
+    lastCastedPrompt: '',
+    lastCastedMask: null as string | null,
+    inspectImage: null as string | null,
+    inspectMask: null as string | null,
+    inspectImageLocalPath: undefined as string | undefined,
+    inspectImageSourceUrl: undefined as string | undefined,
+    isDepthProcessing: FRESH_STAGING_SESSION_DEFAULTS.isDepthProcessing,
+    regionEdit: smartClone(DEFAULT_REGION_EDIT),
+    historyPast: [] as HistorySnapshot[],
+    historyFuture: [] as HistorySnapshot[],
+    shots: [] as Shot[],
+    activeShotId: null as string | null,
+    shotSessionsBySceneId: {} as Record<string, ShotSession>,
+    veoPromptDraft: undefined as AppState['veoPromptDraft'],
+    globalProgress: undefined as AppState['globalProgress'],
+    liveStatus: null as LiveStatusMessage | null,
+    backgroundJobs: [] as BackgroundJob[],
+    sessionName: null as string | null,
+    sessionFilePath: null as string | null,
+    latestCompositeSource: undefined as AppState['latestCompositeSource'],
+    latestCompositeResultUrl: null as AppState['latestCompositeResultUrl'],
+    activeTemplateId: undefined as string | undefined,
+    templateNotes: undefined as string | undefined,
+    director: {
+        ...smartClone(defaultDirector),
+        subject: FRESH_STAGING_SESSION_DEFAULTS.sceneDirectorSubject,
+        environment: FRESH_STAGING_SESSION_DEFAULTS.sceneDirectorEnvironment,
+        lighting: FRESH_STAGING_SESSION_DEFAULTS.sceneDirectorLighting ?? '',
+        camera: FRESH_STAGING_SESSION_DEFAULTS.sceneDirectorCamera ?? '',
+        replaceAnchorSubjects: FRESH_STAGING_SESSION_DEFAULTS.replaceAnchorSubjects,
+        globalReplaceTarget: FRESH_STAGING_SESSION_DEFAULTS.anchorSubjectText,
+        mergeStrategy: 'Character Identity' as DirectorMergeStrategy,
+    },
+    productionActorWorkflowSource: null as AppState['productionActorWorkflowSource'],
+    nanoCastSession: createDefaultNanoCastSession(),
+    volatileWorkspaceResetNonce: 0,
 };
 
 const loadedPropStudioState = loadJson<PropAccessoryState>('nano_prop_studio_state', DEFAULT_PROP_STUDIO_STATE);
@@ -1292,6 +1350,7 @@ export const initialState: AppState = {
     pendingPitchSheetHandoff: null,
     pendingRefSheetHandoff: null,
     nanoCastSession: createDefaultNanoCastSession(),
+    volatileWorkspaceResetNonce: 0,
 };
 
 // --- DATA SANITIZATION ---
@@ -1507,6 +1566,36 @@ export const reducer = (state: AppState, action: Action): AppState => {
         }
         case 'CLEAR_NANO_CAST_SESSION':
             return { ...state, nanoCastSession: createDefaultNanoCastSession() };
+        case 'RESET_VOLATILE_WORKSPACE_STATE':
+            return {
+                ...state,
+                ...smartClone(FRESH_STAGING_CONTEXT_STATE),
+                referenceSlots: smartClone(defaultRefSlots),
+                director: smartClone(FRESH_STAGING_CONTEXT_STATE.director),
+                regionEdit: smartClone(DEFAULT_REGION_EDIT),
+                nanoCastSession: createDefaultNanoCastSession(),
+                propStudioState: {
+                    ...state.propStudioState,
+                    selectedProp: null,
+                    selectedCharacter: null,
+                    designerImage: null,
+                    appliedImage: null,
+                    applyNote: ''
+                },
+                wardrobeState: {
+                    ...state.wardrobeState,
+                    selectedCharacter: null,
+                    selectedCostume: null,
+                    fittedImage: null,
+                    processedTryOnUrl: null,
+                    tryOnViews: null,
+                    tryOnSheetFB: null,
+                    tryOnSheetLR: null,
+                    activeTryOnView: 'front',
+                    designerImage: null
+                },
+                volatileWorkspaceResetNonce: state.volatileWorkspaceResetNonce + 1,
+            };
         case 'SET_API_KEY': {
             const nextKey = action.payload;
             return { 
@@ -1678,24 +1767,9 @@ export const reducer = (state: AppState, action: Action): AppState => {
         case 'CLEAR_STAGE': {
             const nextState = {
                 ...state,
-                tokens: [],
-                annotations: [],
-                backgroundUrl: null,
-                depthMapUrl: null,
-                depthMapHash: null,
-                sourceBackgroundHash: null,
-                floorPlane: null,
-                occupiedVolumes: [],
-                selection: null,
-                selectionType: null,
-                storyboardSource: null,
-                storyboardEndSource: null,
-                storyboardGenerations: [],
-                lastCastedImage: null,
-                lastCastedPrompt: '',
-                lastCastedMask: null,
+                ...smartClone(FRESH_STAGING_CONTEXT_STATE),
                 regionEdit: smartClone(DEFAULT_REGION_EDIT),
-                director: smartClone(defaultDirector),
+                director: smartClone(FRESH_STAGING_CONTEXT_STATE.director),
                 historyPast: [],
                 historyFuture: [],
             };
@@ -1714,7 +1788,7 @@ export const reducer = (state: AppState, action: Action): AppState => {
                         floorPlane: null,
                         occupiedVolumes: [],
                         regionEdit: smartClone(DEFAULT_REGION_EDIT),
-                        director: smartClone(defaultDirector),
+                        director: smartClone(FRESH_STAGING_CONTEXT_STATE.director),
                         updatedAt: Date.now(),
                         promotedResultAnchor: undefined,
                         latestCompositeResultUrl: undefined,
@@ -1911,26 +1985,7 @@ export const reducer = (state: AppState, action: Action): AppState => {
         case 'DISCARD_SESSION': {
             return {
                 ...state,
-                tokens: [],
-                annotations: [],
-                shots: [],
-                activeShotId: null,
-                backgroundUrl: null,
-                depthMapUrl: null,
-                depthMapHash: null,
-                sourceBackgroundHash: null,
-                floorPlane: null,
-                occupiedVolumes: [],
-                selection: null,
-                selectionType: null,
-                storyboardGenerations: [],
-                veoPromptDraft: undefined,
-                historyPast: [],
-                historyFuture: [],
-                resultImage: null,
-                inspectImage: null,
-                inspectMask: null,
-                regionEdit: smartClone(DEFAULT_REGION_EDIT),
+                ...smartClone(FRESH_STAGING_CONTEXT_STATE),
                 sessionName: null,
                 sessionFilePath: null,
                 nanoCastSession: createDefaultNanoCastSession()
@@ -2149,24 +2204,12 @@ export const reducer = (state: AppState, action: Action): AppState => {
             } else if (job.context === 'prop_applied') {
                 newState.propStudioState = { ...newState.propStudioState, appliedImage: action.payload.assetUrl };
             } else if (job.context === 'scene_render') {
-                newState.resultImage = action.payload.assetUrl;
-                newState.latestCompositeSource = 'directorCanvas';
-                newState.latestCompositeResultUrl = action.payload.assetUrl;
-                if (newState.activeShotId) {
-                    newState.shots = (newState.shots || []).map((shot) =>
-                        shot.id === newState.activeShotId
-                            ? {
-                                ...shot,
-                                promotedResultAnchor: { kind: 'generated_result', imageUrl: action.payload.assetUrl },
-                                latestCompositeResultUrl: action.payload.assetUrl,
-                                latestCompositeSource: 'directorCanvas',
-                                latestCompositeStage: 'generate',
-                                latestCompositeTimestamp: new Date().toISOString(),
-                                updatedAt: Date.now()
-                            }
-                            : shot
-                    );
-                }
+                newState.liveStatus = {
+                    id: action.payload.id,
+                    text: 'Staging render completed in background. Open Recent Generations or promote it explicitly before using it as a prompt source.',
+                    type: 'success',
+                    createdAt: Date.now()
+                };
             }
 
             // Remove the completed job
@@ -2792,6 +2835,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const persistTimerRef = useRef<number | null>(null);
 
     useEffect(() => {
+        clearVolatileWorkspaceStorage();
+        dispatch({ type: 'RESET_VOLATILE_WORKSPACE_STATE' });
+        void clearVolatileWorkspaceDataStores();
+    }, []);
+
+    useEffect(() => {
         let cancelled = false;
         let settled = false;
 
@@ -2870,11 +2919,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             }
         };
 
+        void migrateOrLoad;
+
         const restore = async () => {
             try {
-                const [_tokens, _annotations, rawActors, rawWardrobe, rawProps] = await Promise.all([
-                    migrateOrLoad<StageToken[]>('nano_tokens', tokens => sanitizeTokens(tokens, { stripDataUrl: true })),
-                    migrateOrLoad<StageAnnotation[]>('nano_annotations', sanitizeAnnotations),
+                const [rawActors, rawWardrobe, rawProps] = await Promise.all([
                     StorageService.load<CastMember[]>('nano_actors', []),
                     StorageService.load<WardrobeItem[]>('nano_wardrobe', []),
                     StorageService.load<PropItem[]>('nano_props', []),
@@ -2964,13 +3013,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                     }
                 }));
 
-                // CLEAR TRANSIENT STAGE (USER REQUEST)
-                // We no longer restore nano_tokens or nano_annotations on cold start to ensure a clean stage.
-                // Persistence is now entirely shot-authoritative.
-                /* 
-                if (tokens) dispatch({ type: 'SET_TOKENS', payload: deduplicateTokens(tokens) });
-                if (annotations) dispatch({ type: 'SET_ANNOTATIONS', payload: annotations });
-                */
                 if (actors.length > 0) dispatch({ type: 'SET_ACTOR_LIBRARY', payload: actors });
 
                 const hydratedWardrobe = await Promise.all(rawWardrobe.map(async (item) => {
@@ -3078,14 +3120,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         try {
             localStorage.setItem('nano_api_key', state.apiKey);
             localStorage.setItem('nano_model', state.model);
-            localStorage.setItem('nano_director_v3', JSON.stringify(getPersistableDirector(state.director)));
-            localStorage.setItem('nano_bg_url', state.backgroundUrl || '');
-            localStorage.setItem('nano_depth_url', state.depthMapUrl || '');
-            localStorage.setItem('nano_depth_hash', state.depthMapHash || '');
-            localStorage.setItem('nano_source_hash', state.sourceBackgroundHash || '');
-            localStorage.setItem('nano_floor_plane', JSON.stringify(state.floorPlane));
-            localStorage.setItem('nano_occupied_volumes', JSON.stringify(state.occupiedVolumes));
-            localStorage.setItem('nano_active_shot_id', state.activeShotId || '');
             localStorage.setItem('nano_help_hints', JSON.stringify(state.showHelpHints));
             localStorage.setItem('nano_image_resolution', JSON.stringify(state.imageResolution));
             localStorage.setItem('nano_enable_image_thinking', JSON.stringify(state.enableImageThinking));
@@ -3099,14 +3133,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }, [
         state.apiKey,
         state.model,
-        state.director,
-        state.backgroundUrl,
-        state.depthMapUrl,
-        state.depthMapHash,
-        state.sourceBackgroundHash,
-        state.floorPlane,
-        state.occupiedVolumes,
-        state.activeShotId,
         state.showHelpHints,
         state.imageResolution,
         state.enableImageThinking,

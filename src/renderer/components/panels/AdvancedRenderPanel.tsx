@@ -77,10 +77,10 @@ export const AdvancedRenderPanel: React.FC<AdvancedRenderPanelProps> = ({
                     </div>
                 </div>
 
-                {/* SCENE DNA EXTRACTION */}
+                {/* SCENE-ONLY DNA EXTRACTION */}
                 <div className={`flex flex-col gap-2 p-3 rounded border transition-all duration-300 ${strictMode ? 'bg-[#18181b] border-[#27272a]' : 'opacity-40 grayscale pointer-events-none'}`}>
                     <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-gray-300">Anchor Scene DNA</span>
+                        <span className="text-xs font-bold text-gray-300">Re-Extract Scene Only</span>
                         <label className="relative inline-flex items-center cursor-pointer">
                             <input 
                                 type="checkbox" 
@@ -91,6 +91,9 @@ export const AdvancedRenderPanel: React.FC<AdvancedRenderPanelProps> = ({
                             <div className="w-9 h-5 bg-black peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:border-gray-500 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-purple-900 border border-white/10 shadow-inner"></div>
                         </label>
                     </div>
+                    <p className="text-[10px] text-gray-500 leading-snug">
+                        Scene extraction preserves background/layout only. Actor identity comes from the selected cast reference.
+                    </p>
                     <div className="text-[10px] text-gray-500 font-mono tracking-tight bg-black/40 p-2 rounded flex flex-col gap-1 overflow-hidden">
                         <div className="flex">
                             <span className="w-12 text-gray-600 shrink-0">ENV:</span>
@@ -111,7 +114,7 @@ export const AdvancedRenderPanel: React.FC<AdvancedRenderPanelProps> = ({
                         className="flex items-center justify-center gap-1.5 w-full py-1 mt-1 bg-[#27272a] hover:bg-[#3f3f46] text-white text-[9px] font-bold tracking-widest uppercase rounded disabled:opacity-50 transition-colors"
                     >
                         <RefreshCcw className={`w-3 h-3 ${dnaStatus === 'analyzing' ? 'animate-spin text-amber-500' : 'text-gray-400'}`} />
-                        {dnaStatus === 'analyzing' ? 'Extracting...' : 'Force Re-Extract'}
+                        {dnaStatus === 'analyzing' ? 'Extracting...' : 'Re-Extract Scene Only'}
                     </button>
                 </div>
 

@@ -5,7 +5,7 @@ import { ensureAuthenticatedForGeneration } from '../services/AuthGenerationGate
 
 export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Action>) => {
     const [strictMode, setStrictMode] = useState(true);
-    const [autoAnchorDNA, setAutoAnchorDNA] = useState(true);
+    const [autoAnchorDNA, setAutoAnchorDNA] = useState(false);
     const [autoTokenProfiles, setAutoTokenProfiles] = useState(true);
     const [dnaStatus, setDnaStatus] = useState<'idle' | 'analyzing' | 'ready' | 'error'>('idle');
     const lastDnaBgRef = useRef<string | null>(null);
@@ -15,6 +15,12 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
         lighting: state.director?.lighting || '',
         camera: state.director?.camera || '',
     };
+
+    useEffect(() => {
+        if (state.backgroundUrl || anchorDNA.environment || anchorDNA.lighting || anchorDNA.camera) return;
+        setDnaStatus('idle');
+        lastDnaBgRef.current = null;
+    }, [state.backgroundUrl, anchorDNA.environment, anchorDNA.lighting, anchorDNA.camera]);
 
     const getErrorMessage = (error: unknown): string => {
         if (error instanceof Error) return error.message;
@@ -48,11 +54,11 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
         }
 
         setDnaStatus('analyzing');
-        dispatch({ type: 'ADD_LOG', payload: { message: "Analyzing Anchor Scene DNA (env/lighting/camera)...", type: 'info' } });
+        dispatch({ type: 'ADD_LOG', payload: { message: "Re-extracting scene only (background/layout/lighting/camera)...", type: 'info' } });
 
         try {
             const raw = await GeminiService.analyzeImage(
-                "Analyze this image for a film compositor. Return JSON only with 3 keys: 'environment' (concise setting/vibe), 'lighting' (one concise but detailed sentence naming key light direction, fill/shadow ratio, color temperature, shadow softness, exposure/black level, and any visible colored practical/accent lights), and 'camera' (shot size/lens/framing). Only return the JSON.",
+                "Analyze this image for a film compositor. Extract SCENE/BACKGROUND DNA ONLY. Return JSON only with exactly 3 keys: 'environment' (concise setting/vibe/background/layout/visible typography or props), 'lighting' (one concise but detailed sentence naming key light direction, fill/shadow ratio, color temperature, shadow softness, exposure/black level, and any visible colored practical/accent lights), and 'camera' (shot size/lens/framing). Do NOT describe any person's identity, face, age, ethnicity, body type, hairstyle, baldness, facial hair, wardrobe identity, or subject traits. Do NOT return a subject key. Only return the JSON.",
                 state.apiKey || '',
                 state.model,
                 state.backgroundUrl,
@@ -80,7 +86,7 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
             setDnaStatus('ready');
             lastDnaBgRef.current = state.backgroundUrl;
 
-            dispatch({ type: 'ADD_LOG', payload: { message: "Anchor DNA extracted.", type: 'success' } });
+            dispatch({ type: 'ADD_LOG', payload: { message: "Scene-only DNA extracted.", type: 'success' } });
             return dna;
         } catch (e: unknown) {
             setDnaStatus('error');

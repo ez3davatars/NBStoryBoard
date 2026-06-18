@@ -79,6 +79,7 @@ import { useStableElementSize } from '../hooks/useStableElementSize';
 import { buildPlacementIntentsFromAnnotations, buildAnchorSurfaceFromZone, buildAllowanceMaskFromAnchor, buildForegroundProtectMaskFromDepth } from '../utils/spatialHelpers';
 import { NANO_BANANA_2_IMAGE_MODEL } from '../constants/generationModels';
 import { createUniqueDownloadFilename } from '../utils/downloadFilenames';
+import { useRecentGenerationsStore } from '../stores/useRecentGenerationsStore';
 
 import React from 'react';
 
@@ -180,6 +181,89 @@ const normalizeGeneratedImageUrl = async (res: GeneratedImageResponse): Promise<
     } catch {
         return rawUrl;
     }
+};
+
+const STAGING_STYLE_DRIFT_NEGATIVE =
+    'Do not change the image into illustration, comic book art, graphic novel, anime, cel shading, cartoon, 3D animation, painted art, or stylized avatar unless explicitly requested in the current session.';
+
+const STAGING_MATCH_REFERENCE_STYLE_RULE =
+    'Match the visual medium and rendering style of the current reference image. Do not convert the subject into illustration, comic, anime, cel-shaded, cartoon, or stylized 3D unless explicitly requested.';
+
+const STAGING_FORBIDDEN_STYLE_TERMS = [
+    'illustration',
+    'comic',
+    'graphic novel',
+    'cel shaded',
+    'anime',
+    'cartoon',
+    'animated 3d',
+    'stylized avatar'
+];
+
+const protectStagingPromptStyle = (
+    prompt: string,
+    generationContract: unknown,
+    hasExplicitStyleOverride: boolean
+): string => {
+    const protectedPrompt = hasExplicitStyleOverride
+        ? `${prompt}\n\n### STYLE DRIFT NEGATIVE\n${STAGING_STYLE_DRIFT_NEGATIVE}`
+        : `${prompt}\n\n### CURRENT-SESSION STYLE CONTRACT\n${STAGING_MATCH_REFERENCE_STYLE_RULE}\n\n### STYLE DRIFT NEGATIVE\n${STAGING_STYLE_DRIFT_NEGATIVE}`;
+
+    if (import.meta.env.DEV) {
+        const promptLower = protectedPrompt.toLowerCase();
+        const found = STAGING_FORBIDDEN_STYLE_TERMS.filter((term) => promptLower.includes(term));
+
+        if (found.length > 0 && !hasExplicitStyleOverride) {
+            console.warn('[STAGING STYLE DRIFT WARNING]', {
+                found,
+                prompt: protectedPrompt,
+                generationContract,
+            });
+        }
+    }
+
+    return protectedPrompt;
+};
+
+const buildReplaceModeIdentityActionSceneLock = (args: {
+    actionDirection: string;
+    sceneEnvironment: string;
+    sceneLighting: string;
+    sceneCamera: string;
+    sceneLayout: string;
+}): string => {
+    const action = args.actionDirection.trim();
+    const sceneLines = [
+        args.sceneEnvironment ? `Environment/background: ${args.sceneEnvironment}` : '',
+        args.sceneLighting ? `Lighting: ${args.sceneLighting}` : '',
+        args.sceneCamera ? `Camera/framing: ${args.sceneCamera}` : '',
+        args.sceneLayout && args.sceneLayout !== 'default' ? `Layout: ${args.sceneLayout}` : '',
+    ].filter(Boolean);
+
+    return [
+        '### IDENTITY LOCK - HIGHEST PRIORITY',
+        'Use the selected cast reference image(s) as the only identity source.',
+        "Preserve the actor's exact facial structure, head shape, skin tone, facial hair, body type, age impression, wardrobe identity, hairline/baldness pattern, and likeness.",
+        'Do not create a new person.',
+        'Do not average the actor with the background image.',
+        'Do not reinterpret the actor from text, Scene DNA, or Scene Director wording.',
+        '',
+        '### ACTION / EDIT DIRECTION',
+        action
+            ? `Apply this action/pose to the locked reference actor only: ${action}`
+            : 'No new identity-bearing action text was provided.',
+        'Do not infer or generate a new subject from this sentence.',
+        "Do not change the actor's face, identity, age, body type, skin tone, hairline, facial hair, expression baseline, or likeness.",
+        '',
+        '### SCENE LOCK',
+        sceneLines.length > 0
+            ? sceneLines.join('\n')
+            : 'Preserve the existing background composition, typography, logo placement, colors, props, and environment from the current stage scene.',
+        'Scene DNA may describe background, layout, lighting, and camera only. Scene DNA is never an identity source.',
+        '',
+        '### NEGATIVE IDENTITY DRIFT RULES',
+        'No identity drift. No lookalike substitution. No random similar person. No partial likeness only. No changed age impression, ethnicity-presenting traits, skull/head shape, hairline, facial hair, body build, or skin tone.',
+    ].join('\n');
 };
 
 const toFiniteNumber = (value: unknown, fallback: number): number => {
@@ -353,6 +437,8 @@ const SceneCanvas = () => {
 
 
     const { state, dispatch } = useAppContext();
+    const recentGenerationsCount = useRecentGenerationsStore((store) => store.recentGenerations.length);
+    const addRecentGeneration = useRecentGenerationsStore((store) => store.addRecentGeneration);
     const { ref: stageViewportRef, size: stageViewportSize } = useStableElementSize<HTMLDivElement>();
     const stageRef = stageViewportRef;
     const viewportRef = useRef<HTMLDivElement>(null);
@@ -412,9 +498,9 @@ const SceneCanvas = () => {
 
         try {
             // IF we are looking at the final result, just download that image directly
-            if (viewMode === 'result' && (state.resultImage || (activeShot && activeShot.latestCompositeResultUrl))) {
+            if (viewMode === 'result' && displayedResultImage) {
                 dispatch({ type: 'ADD_LOG', payload: { message: 'Downloading Final Result Image...', type: 'info' } });
-                const url = state.resultImage || activeShot?.latestCompositeResultUrl;
+                const url = displayedResultImage;
                 if (!url) throw new Error("No result image available.");
                 
                 // For data URLs we can download directly
@@ -630,18 +716,27 @@ const SceneCanvas = () => {
 
     // --- STAGING & RESULT VIEWS ---
     const [viewMode, setViewMode] = useState<'stage' | 'result' | 'shots'>('stage');
+    const [latestGeneratedOutputImage, setLatestGeneratedOutputImage] = useState<string | null>(null);
+    const [latestGeneratedOutputMeta, setLatestGeneratedOutputMeta] = useState<{
+        prompt?: string;
+        generationId?: string;
+        suggestedName?: string;
+        stage?: 'generate' | 'refine';
+        createdAt: number;
+    } | null>(null);
+    const [stagingGenerationCount, setStagingGenerationCount] = useState(0);
     const activeResultAnchor = getEffectiveResultAnchorForScene(state, state.activeShotId || 'default');
     
     // Auto-fallback if the current view's anchor becomes invalid (e.g. user clears stage or removes bg)
     useEffect(() => {
         const _activeShot = state.shots.find(s => s.id === (state.activeShotId || 'default'));
-        const hasResultViewAsset = Boolean(state.resultImage || (_activeShot && _activeShot.latestCompositeResultUrl));
+        const hasResultViewAsset = Boolean(state.resultImage || latestGeneratedOutputImage || (_activeShot && _activeShot.latestCompositeResultUrl));
         if (viewMode === 'result' && !hasResultViewAsset) {
             setViewMode('stage');
         } else if (viewMode === 'shots' && !activeResultAnchor) {
             setViewMode('stage');
         }
-    }, [activeResultAnchor, viewMode, state.resultImage, state.shots, state.activeShotId]);
+    }, [activeResultAnchor, viewMode, state.resultImage, latestGeneratedOutputImage, state.shots, state.activeShotId]);
     
     // --- ADVANCED RENDER CONTROLS ---
     const {
@@ -712,6 +807,91 @@ const SceneCanvas = () => {
             spatialFrame: viewportBox
         });
     }, [sourcePreservationPromptBlock, strictMode, bgPrompt, state.director, state.depthMapUrl, state.referenceSlots, activeReferences, promptIdentitySets, state.tokens, state.annotations, viewportBox]);
+
+    useEffect(() => {
+        if (!import.meta.env.DEV) return;
+
+        const activeReferenceSlots = activeReferences.map((slot) => ({
+            index: slot.index,
+            name: slot.name ?? null,
+            castId: slot.castId ?? null,
+            hasUrl: Boolean(slot.url),
+            status: slot.status
+        }));
+        const userTouchedStaging = Boolean(
+            bgPrompt ||
+            state.backgroundUrl ||
+            state.resultImage ||
+            state.tokens.length ||
+            state.annotations.length ||
+            activeReferenceSlots.length ||
+            state.director.subject ||
+            state.director.environment ||
+            state.director.replaceAnchorSubjects
+        );
+
+        console.group('[STAGING ACTIVE STATE AUDIT]');
+        console.log({
+            activeStageTab: viewMode,
+            scenePrompt: bgPrompt,
+            sceneReferenceImage: state.backgroundUrl,
+            sceneGeneratedImage: state.backgroundUrl,
+            sceneResultImage: state.resultImage,
+            stageResultImage: state.latestCompositeResultUrl,
+            resultImage: state.resultImage,
+            latestGeneratedOutputImage: Boolean(latestGeneratedOutputImage),
+            replaceAnchorSubjects: state.director.replaceAnchorSubjects,
+            anchorSubjectText: state.director.globalReplaceTarget,
+            selectedCastAssetId: state.selectionType === 'token' ? state.selection : null,
+            selectedReferenceSlot: state.referenceSlots.find((slot) => slot.active)?.index ?? null,
+            activeReferenceSlots,
+            sceneDirectorSubject: state.director.subject,
+            sceneDirectorEnvironment: state.director.environment,
+            sceneDirectorLighting: state.director.lighting,
+            sceneDirectorCamera: state.director.camera,
+            sceneDirectorLayout: state.director.spatialLayout || 'default',
+            compiledPrompt,
+            promptInstructions: bgPrompt,
+            currentPromptInstructions: bgPrompt,
+            targetStudioStyle: null,
+            styleOverride: extractedStyle?.renderStyle || extractedStyle?.medium || null,
+            mergeStrategy: state.director.mergeStrategy,
+        });
+        console.groupEnd();
+
+        if (!userTouchedStaging && compiledPrompt) {
+            console.warn('[STAGING WARNING] compiledPrompt exists before user interaction', compiledPrompt);
+        }
+    }, [
+        activeReferences,
+        bgPrompt,
+        compiledPrompt,
+        extractedStyle,
+        state.annotations,
+        state.backgroundUrl,
+        state.director,
+        state.latestCompositeResultUrl,
+        latestGeneratedOutputImage,
+        state.referenceSlots,
+        state.resultImage,
+        state.selection,
+        state.selectionType,
+        state.tokens,
+        viewMode
+    ]);
+
+    useEffect(() => {
+        setBgPrompt('');
+        setViewMode('stage');
+        setLatestGeneratedOutputImage(null);
+        setLatestGeneratedOutputMeta(null);
+        setStagingGenerationCount(0);
+        setExtractedStyle(null);
+        setSceneIntent(null);
+        setPreviousBackgroundUrl(null);
+        setAutoAnchorDNA(false);
+        setGroundDepth(null);
+    }, [state.volatileWorkspaceResetNonce, setAutoAnchorDNA]);
 
 
     const [dragItem, setDragItem] = useState<{ id: string, type: 'token' | 'annotation', startX: number, startY: number, initialX: number, initialY: number } | null>(null);
@@ -1858,6 +2038,95 @@ Output: environment plate only.
         const stageUiWaitWindowMs = state.billingEntitlements.effectiveBillingMode === 'hosted'
             ? (state.imageResolution === '4K' ? 180000 : 120000)
             : undefined;
+        const nextGenerationNumber = stagingGenerationCount + 1;
+        setStagingGenerationCount(nextGenerationNumber);
+        const generationContract = {
+            generationNumber: nextGenerationNumber,
+            styleMode: 'match_reference',
+            explicitStyleOverride: null as string | null,
+            referenceImageIds: activeReferences.map((ref) => ref.index),
+            sceneImage: activeBgUrl ?? null,
+            replaceAnchorSubjects: state.director.replaceAnchorSubjects,
+            anchorSubjectText: state.director.globalReplaceTarget,
+            sceneDirector: {
+                subject: state.director.subject,
+                environment: state.director.environment,
+                lighting: state.director.lighting,
+                camera: state.director.camera,
+                layout: state.director.spatialLayout || 'default',
+            },
+            mergeStrategy: state.director.mergeStrategy,
+            sourceResultImage: null as string | null,
+        };
+        const hasExplicitStyleOverride = Boolean(generationContract.explicitStyleOverride);
+        const contractActiveReferenceSlots = [...activeReferences];
+        const replaceModeIdentityRefs = contractActiveReferenceSlots.filter((ref) => Boolean(ref.url));
+        const strictIdentityLock = generationContract.replaceAnchorSubjects && replaceModeIdentityRefs.length > 0;
+        const replaceIdentityContractBlock = generationContract.replaceAnchorSubjects
+            ? buildReplaceModeIdentityActionSceneLock({
+                actionDirection: bgPrompt || generationContract.sceneDirector.subject,
+                sceneEnvironment: generationContract.sceneDirector.environment,
+                sceneLighting: generationContract.sceneDirector.lighting,
+                sceneCamera: generationContract.sceneDirector.camera,
+                sceneLayout: generationContract.sceneDirector.layout,
+            })
+            : '';
+        const logStagingGenerationSources = (compiledPromptForRequest: string) => {
+            if (!import.meta.env.DEV) return;
+
+            console.group(`[STAGING GENERATION SOURCES] ${Date.now()}`);
+            console.log({
+                generationNumber: generationContract.generationNumber,
+                activeStageTab: viewMode,
+                scenePrompt: bgPrompt || generationContract.sceneDirector.subject,
+                sceneReferenceImage: Boolean(generationContract.sceneImage),
+                sceneGeneratedImage: Boolean(state.backgroundUrl),
+                sceneResultImage: false,
+                resultImage: Boolean(state.resultImage),
+                selectedCastAssetId: state.selectionType === 'token' ? state.selection : null,
+                activeReferenceSlots: contractActiveReferenceSlots.map((ref) => ({
+                    index: ref.index,
+                    name: ref.name ?? null,
+                    castId: ref.castId ?? null,
+                    hasUrl: Boolean(ref.url),
+                    status: ref.status
+                })),
+                replaceAnchorSubjects: generationContract.replaceAnchorSubjects,
+                anchorSubjectText: generationContract.anchorSubjectText,
+                sceneDirectorEnvironment: generationContract.sceneDirector.environment,
+                sceneDirectorLighting: generationContract.sceneDirector.lighting,
+                sceneDirectorCamera: generationContract.sceneDirector.camera,
+                sceneDirectorLayout: generationContract.sceneDirector.layout,
+                targetStudioStyle: null,
+                styleOverride: generationContract.explicitStyleOverride,
+                lastUsedStyle: null,
+                autoStyleEnvironment: false,
+                mergeStrategy: generationContract.mergeStrategy,
+                compiledPrompt: compiledPromptForRequest,
+                recentGenerationsCount,
+            });
+            console.groupEnd();
+        };
+        const logStagingIdentityContract = (imageReferences: Array<{ label?: string; role?: string }>) => {
+            if (!import.meta.env.DEV) return;
+
+            console.group('[STAGING IDENTITY CONTRACT]');
+            console.log({
+                replaceAnchorSubjects: generationContract.replaceAnchorSubjects,
+                selectedCastAssetId: replaceModeIdentityRefs[0]?.castId ?? null,
+                hasSelectedCastReference: replaceModeIdentityRefs.length > 0,
+                strictIdentityLock,
+                hasIdentityReference: replaceModeIdentityRefs.length > 0,
+                identityAuthority: generationContract.replaceAnchorSubjects ? 'selected_cast_reference' : 'current_session_reference_stack',
+                sceneAuthority: 'current_stage_scene',
+                actionAuthority: 'scene_director',
+                sceneDnaSubject: null,
+                sceneDirectorSubjectAction: generationContract.sceneDirector.subject,
+                styleOverride: generationContract.explicitStyleOverride,
+                activeImageReferences: imageReferences.map((ref) => ref.role || ref.label || 'unlabeled_reference'),
+            });
+            console.groupEnd();
+        };
         const formatDurationLabel = (totalSeconds: number) => {
             const clamped = Math.max(0, totalSeconds);
             const minutes = Math.floor(clamped / 60);
@@ -1925,9 +2194,12 @@ Output: environment plate only.
             const shouldUseSourcePreservingTransform =
                 renderSourceIntent.mode === 'source_preserving_layout_transform' && !!activeBgUrl;
 
-            let safeExtractedStyle = extractedStyle;
-            if (hasStrictIdentityRefs && extractedStyle) {
-                safeExtractedStyle = sanitizeStyleForStrictIdentity(extractedStyle);
+            let safeExtractedStyle: ExtractedStyle | null = null;
+            if (hasExplicitStyleOverride && extractedStyle) {
+                safeExtractedStyle = extractedStyle;
+            }
+            if (hasStrictIdentityRefs && safeExtractedStyle) {
+                safeExtractedStyle = sanitizeStyleForStrictIdentity(safeExtractedStyle);
                 console.warn(`[IdentityPrecedence] Subject/style analysis demoted in STAGE generation because strict actor refs are present`);
             }
 
@@ -1943,15 +2215,46 @@ Output: environment plate only.
                 });
             }
 
+            if (generationContract.replaceAnchorSubjects && replaceModeIdentityRefs.length === 0) {
+                dispatch({
+                    type: 'ADD_LOG',
+                    payload: {
+                        message: 'Select a cast reference before replacing anchor subjects.',
+                        type: 'error'
+                    }
+                });
+                setViewMode('stage');
+                window.clearInterval(progressInterval);
+                dispatch({ type: 'SET_PROCESSING', payload: false });
+                return;
+            }
+
+            if (import.meta.env.DEV) {
+                console.log('[STAGING PROMPT SOURCES]', {
+                    scenePrompt: bgPrompt || state.director.subject,
+                    sceneReferenceImage: Boolean(activeBgUrl),
+                    sceneGeneratedImage: Boolean(state.backgroundUrl),
+                    sceneResultImage: Boolean(state.resultImage),
+                    replaceAnchorSubjects: state.director.replaceAnchorSubjects,
+                    selectedCastAssetId: state.selectionType === 'token' ? state.selection : null,
+                    sceneDirectorEnvironment: state.director.environment,
+                    targetStudioStyle: null,
+                    styleOverride: extractedStyle?.renderStyle || extractedStyle?.medium || null,
+                    activeReferenceCount: contractActiveReferenceSlots.length,
+                    tokenCount: state.tokens.length,
+                    compiledPrompt: compiledPrompt
+                });
+            }
+
             if (shouldUseStrictPipeline) {
                 const plan = buildRegionPlan({ token: tokenOverrides });
                 const isReplaceMode = state.director.replaceAnchorSubjects;
                 const sceneNotesForStrict = (bgPrompt || state.director.subject || '').trim();
-                const hasExplicitTargetMap = activeReferences.some((ref) => (ref.target || '').trim().length > 0);
+                const hasExplicitTargetMap = contractActiveReferenceSlots.some((ref) => (ref.target || '').trim().length > 0);
                 const isSingleSubjectReplaceFallback = isReplaceMode
                     && plan.length === 0
                     && !hasExplicitTargetMap
-                    && activeReferences.length === 1;
+                    && contractActiveReferenceSlots.length === 1;
 
                 if (!strictMode && isReplaceMode) {
                     dispatch({
@@ -1988,9 +2291,9 @@ Output: environment plate only.
                     });
                 }
 
-                if (isReplaceMode && plan.length > 0 && activeReferences.length > 1 && !hasExplicitTargetMap) {
+                if (isReplaceMode && plan.length > 0 && contractActiveReferenceSlots.length > 1 && !hasExplicitTargetMap) {
                     const mappedCastIds = new Set(
-                        activeReferences
+                        contractActiveReferenceSlots
                             .map((ref) => ref.castId)
                             .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
                     );
@@ -2030,7 +2333,7 @@ Output: environment plate only.
                         return;
                     }
 
-                    const sortedRefs = [...activeReferences]
+                    const sortedRefs = [...contractActiveReferenceSlots]
                         .filter((ref) => !!ref.url)
                         .sort((a, b) => a.index - b.index);
 
@@ -2121,11 +2424,21 @@ Output: environment plate only.
                         }
 
                         const allowedIdentityLabels = [passRefLabel, ...passSupportLabels];
-                        const passPrompt = [
+                        const passPrompt = protectStagingPromptStyle([
+                            replaceIdentityContractBlock,
                             passPromptBase,
                             passLightingBlock,
                             `### SINGLE-REGION REPLACEMENT LOCK (HARD)\n- This pass may edit ONLY REGION ${pass.regionEntry.region}.\n- REGION ${pass.regionEntry.region} may use ONLY identity references labeled ${allowedIdentityLabels.join(', ')}.\n- Treat ${passRefLabel} as the primary identity anchor for this region.\n- Do NOT alter identity or pose of people outside REGION ${pass.regionEntry.region} in CLEAN_BG_PLATE.\n- Preserve all non-target pixels exactly.\n- GAZE/HEAD POSE LOCK: Match the target subject head yaw/pitch/roll and eye gaze direction from CLEAN_BG_PLATE in this region. If the anchor subject is not looking at camera, the replacement must also NOT look at camera.\n- LIGHTING LOCK: Match the ANCHOR LIGHTING TRANSFER block above. Do not use portrait/studio lighting from identity references.\n- NO LOOKALIKE SUBSTITUTION: If uncertain, preserve mapped identity references over aesthetic similarity.`
-                        ].filter(Boolean).join('\n\n');
+                        ].filter(Boolean).join('\n\n'), generationContract, hasExplicitStyleOverride);
+                        logStagingGenerationSources(passPrompt);
+                        logStagingIdentityContract(passRefs.map((ref) => ({
+                            label: ref.label,
+                            role: ref.label === passRefLabel || ref.label.startsWith('ACTOR_ID_')
+                                ? 'selected_cast_reference'
+                                : ref.label === 'CLEAN_BG_PLATE'
+                                    ? 'current_stage_scene'
+                                    : ref.label
+                        })));
 
                         let passJobId = '';
                         const passRes = await GeminiService.generateImage(
@@ -2191,7 +2504,7 @@ Output: environment plate only.
                 const urls = new Set(refs.map(r => r.url));
 
                 const referenceStackLabelsBySlotIndex = new Map<number, string>();
-                for (const ref of activeReferences) {
+                for (const ref of contractActiveReferenceSlots) {
                     const url = ref.url;
                     if (!url) continue;
                     const existingRef = refs.find((entry) => entry.url === url);
@@ -2216,7 +2529,7 @@ Output: environment plate only.
                         .slice(0, 28) || 'ACTOR';
 
                 if (isReplaceMode) {
-                    const sortedRefs = [...activeReferences].sort((a, b) => a.index - b.index);
+                    const sortedRefs = [...contractActiveReferenceSlots].sort((a, b) => a.index - b.index);
                     const identitySetByActorId = new Map(identitySets.map((set) => [set.actorId, set]));
                     for (const ref of sortedRefs) {
                         const label = referenceStackLabelsBySlotIndex.get(ref.index) || `REFERENCE_${ref.index}`;
@@ -2248,7 +2561,7 @@ Output: environment plate only.
                         }
                     }
                 } else {
-                    const sortedRefs = [...activeReferences].sort((a, b) => a.index - b.index);
+                    const sortedRefs = [...contractActiveReferenceSlots].sort((a, b) => a.index - b.index);
                     for (const ref of sortedRefs) {
                         const label = referenceStackLabelsBySlotIndex.get(ref.index);
                         if (!label) continue;
@@ -2347,7 +2660,7 @@ Output: environment plate only.
                         dispatch({ type: 'SET_PROCESSING', payload: false });
                         return;
                     }
-                    for (const ref of activeReferences) {
+                    for (const ref of contractActiveReferenceSlots) {
                         const labels = ref.castId
                             ? (actorIdentityLabelsByActorId.get(ref.castId) || [])
                             : [`REFERENCE_${ref.index}`];
@@ -2356,7 +2669,7 @@ Output: environment plate only.
                         refIndexMapLines.push(`- REFERENCE ${ref.index} (${refLabel}) corresponds to identity labels: ${labels.join(', ')}`);
                     }
                     if (isSingleSubjectReplaceFallback) {
-                        const primaryRef = activeReferences[0];
+                        const primaryRef = contractActiveReferenceSlots[0];
                         const fallbackLabels = primaryRef?.castId
                             ? (actorIdentityLabelsByActorId.get(primaryRef.castId) || [`REFERENCE_${primaryRef.index}`])
                             : (primaryRef ? [`REFERENCE_${primaryRef.index}`] : []);
@@ -2367,7 +2680,8 @@ Output: environment plate only.
                     }
                 }
 
-                const strictPromptText = [
+                const strictPromptText = protectStagingPromptStyle([
+                    isReplaceMode ? replaceIdentityContractBlock : '',
                     strictPromptBase,
                     anchorLightingBlock,
                     routingLines.length > 0
@@ -2377,7 +2691,16 @@ Output: environment plate only.
                     refIndexMapLines.length > 0
                         ? `### REFERENCE-LABEL MAPPING LOCK (HARD)\n${refIndexMapLines.join('\n')}\n- Use the REFERENCE index mapping above when interpreting replacement map directives.\n- If a REFERENCE index conflicts with visual similarity, trust the mapped labels above.`
                         : ''
-                ].filter(Boolean).join('\n\n');
+                ].filter(Boolean).join('\n\n'), generationContract, hasExplicitStyleOverride);
+                logStagingGenerationSources(strictPromptText);
+                logStagingIdentityContract(limitedRefs.map((ref) => ({
+                    label: ref.label,
+                    role: ref.label.startsWith('REFERENCE_') || ref.label.includes('_ID_')
+                        ? 'selected_cast_reference'
+                        : ref.label === 'CLEAN_BG_PLATE' || ref.label === 'Environment/Lighting Anchor'
+                            ? 'current_stage_scene'
+                            : ref.label
+                })));
 
                 let actualGenId = '';
                 const res = await GeminiService.generateImage(
@@ -2411,7 +2734,7 @@ Output: environment plate only.
                 const references: { url: string; label: string }[] = [];
                 const urls = new Set<string>();
 
-                for (const ref of activeReferences) {
+                for (const ref of contractActiveReferenceSlots) {
                     const url = ref.url;
                     if (!url) continue;
                     if (references.length >= 14) break;
@@ -2457,11 +2780,6 @@ Output: environment plate only.
                     references.push({ url: activeBgUrl, label: "Environment/Lighting Anchor" });
                 }
 
-                const safeCast = state.cast || [];
-                if (references.length === 0 && safeCast.length > 0) {
-                    references.push({ url: safeCast[0].url, label: "Style Reference" });
-                }
-
                 const loosePlan = buildRegionPlan({ token: tokenOverrides });
                 const looseControlOverlay = await buildSpatialControlOverlay(loosePlan);
                 if (looseControlOverlay) {
@@ -2474,7 +2792,8 @@ Output: environment plate only.
                     dnaForRender.lighting || state.director.lighting
                 );
 
-                const loosePromptText = [
+                const loosePromptText = protectStagingPromptStyle([
+                    generationContract.replaceAnchorSubjects ? replaceIdentityContractBlock : '',
                     renderSourcePreservationBlock,
                     buildLoosePrompt(
                         dnaForRender,
@@ -2487,7 +2806,16 @@ Output: environment plate only.
                         viewportBox
                     ),
                     looseLightingBlock
-                ].filter(Boolean).join('\n\n');
+                ].filter(Boolean).join('\n\n'), generationContract, hasExplicitStyleOverride);
+                logStagingGenerationSources(loosePromptText);
+                logStagingIdentityContract(references.slice(0, 14).map((ref) => ({
+                    label: ref.label,
+                    role: ref.label.startsWith('REFERENCE_') || ref.label === 'ACTOR IDENTITY ANCHOR'
+                        ? 'selected_cast_reference'
+                        : ref.label === 'Environment/Lighting Anchor'
+                            ? 'current_stage_scene'
+                            : ref.label
+                })));
 
                 let actualGenId = '';
                 const res = await GeminiService.generateImage(
@@ -2680,6 +3008,8 @@ Output: environment plate only.
     const shots = state.shots as Shot[] | undefined;
     const activeShotId = state.activeShotId;
     const activeShot = shots?.find(s => s.id === activeShotId) || null;
+    const displayedResultImage = state.resultImage || latestGeneratedOutputImage || activeShot?.latestCompositeResultUrl || null;
+    const hasPassiveGeneratedOutput = Boolean(latestGeneratedOutputImage && state.resultImage !== latestGeneratedOutputImage);
 
     const applyStagingResult = useCallback(async (
         imageUrl: string,
@@ -2693,24 +3023,52 @@ Output: environment plate only.
     ): Promise<string> => {
         const displayUrl = imageUrl;
 
-        dispatch({ type: 'SET_RESULT_IMAGE', payload: displayUrl });
+        setLatestGeneratedOutputImage(displayUrl);
+        setLatestGeneratedOutputMeta({
+            prompt: options?.prompt,
+            generationId: options?.generationId,
+            suggestedName: options?.suggestedName,
+            stage: options?.stage || 'generate',
+            createdAt: Date.now()
+        });
+        addRecentGeneration({
+            id: options?.generationId,
+            studio: 'staging',
+            displayUrl,
+            localCachePath: `transient:staging:${options?.generationId || Date.now()}`,
+            createdAt: Date.now(),
+            prompt: options?.prompt,
+            mode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
+            displayLabel: options?.suggestedName || 'Staging result',
+            settingsSnapshot: { selectedStyle: null }
+        });
+
+        setViewMode('result');
+        return displayUrl;
+    }, [addRecentGeneration, state.billingEntitlements.effectiveBillingMode]);
+
+    const promoteLatestGeneratedOutputToResult = useCallback(() => {
+        if (!latestGeneratedOutputImage) return;
+
+        dispatch({ type: 'SET_RESULT_IMAGE', payload: latestGeneratedOutputImage });
         dispatch({
             type: 'SET_COMPOSITE_METADATA',
             payload: {
                 latestCompositeSource: 'directorCanvas',
-                latestCompositeResultUrl: displayUrl
+                latestCompositeResultUrl: latestGeneratedOutputImage
             }
         });
 
-        if (activeShotId) {
+        const sceneId = state.activeShotId;
+        if (sceneId) {
             dispatch({
                 type: 'UPDATE_SHOT_META',
                 payload: {
-                    id: activeShotId,
+                    id: sceneId,
                     updates: {
-                        latestCompositeResultUrl: displayUrl,
+                        latestCompositeResultUrl: latestGeneratedOutputImage,
                         latestCompositeSource: 'directorCanvas',
-                        latestCompositeStage: options?.stage || 'generate',
+                        latestCompositeStage: latestGeneratedOutputMeta?.stage || 'generate',
                         latestCompositeTimestamp: new Date().toISOString()
                     }
                 }
@@ -2718,15 +3076,14 @@ Output: environment plate only.
             dispatch({
                 type: 'SET_SCENE_RESULT_ANCHOR',
                 payload: {
-                    sceneId: activeShotId,
-                    anchor: { kind: 'generated_result', imageUrl: displayUrl }
+                    sceneId,
+                    anchor: { kind: 'generated_result', imageUrl: latestGeneratedOutputImage }
                 }
             });
         }
 
-        setViewMode('result');
-        return displayUrl;
-    }, [activeShotId, dispatch]);
+        dispatch({ type: 'ADD_LOG', payload: { message: 'Generated output promoted to active Result.', type: 'success' } });
+    }, [dispatch, latestGeneratedOutputImage, latestGeneratedOutputMeta, state.activeShotId]);
 
     useEffect(() => {
         setActiveShotNameDraft(activeShot?.name || '');
@@ -2957,8 +3314,8 @@ Output: environment plate only.
         if (!(await ensureStagingAiAccess('Protection Mask'))) return;
         setProtectStatus('generating');
         try {
-            const captured = (viewMode === 'result' && state.resultImage)
-                ? state.resultImage 
+            const captured = (viewMode === 'result' && displayedResultImage)
+                ? displayedResultImage
                 : await captureSceneImage();
 
             if (!captured) throw new Error('Stage capture returned empty.');
@@ -3164,8 +3521,8 @@ Output: environment plate only.
             const captured = sourceAutoMeta ? null : await captureSceneImage();
             const startingBase = sourceAutoMeta && state.backgroundUrl
                 ? state.backgroundUrl
-                : (viewMode === 'result' && state.resultImage)
-                    ? state.resultImage
+                : (viewMode === 'result' && displayedResultImage)
+                    ? displayedResultImage
                     : captured;
 
             if (!startingBase) {
@@ -4003,7 +4360,7 @@ Output: environment plate only.
                     }
                 });
 
-                dispatch({ type: 'ADD_LOG', payload: { message: `Actor ${castItem.tag} auto-staged — drag to reposition`, type: 'success' } });
+                dispatch({ type: 'ADD_LOG', payload: { message: `Actor ${castItem.tag} auto-staged â€” drag to reposition`, type: 'success' } });
                 return;
             } catch { /* ignore */ }
         }
@@ -4250,7 +4607,7 @@ Output: environment plate only.
             }
         }
 
-        const showUseAsStage = viewMode === 'result' && (state.resultImage || (activeShot && activeShot.latestCompositeResultUrl));
+        const showUseAsStage = viewMode === 'result' && displayedResultImage;
 
         const renderSegmentedControl = () => (
             <div className="flex bg-black rounded p-1 border border-gray-800 relative shadow-inner shrink-0">
@@ -4264,7 +4621,7 @@ Output: environment plate only.
                 </button>
                 <button
                     onClick={() => {
-                        if (state.resultImage || (activeShot && activeShot.latestCompositeResultUrl)) {
+                        if (displayedResultImage) {
                             setViewMode('result');
                         } else {
                             dispatch({ type: 'ADD_LOG', payload: { message: "No result generated yet.", type: 'error' } });
@@ -4272,7 +4629,7 @@ Output: environment plate only.
                     }}
                     className={`px-3 py-1 text-[9px] lg:text-[10px] whitespace-nowrap font-bold tracking-widest uppercase rounded transition-colors z-10 ${
                         viewMode === 'result' ? 'text-green-400' : 'text-gray-500 hover:text-gray-300'
-                    } ${!(state.resultImage || (activeShot && activeShot.latestCompositeResultUrl)) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    } ${!displayedResultImage ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
                     Result
                 </button>
@@ -4329,9 +4686,19 @@ Output: environment plate only.
         const renderGenerateButtons = (isCompact: boolean = false) => (
             <div className={`flex items-center gap-1.5 ${isCompact ? 'shrink min-w-0' : 'shrink-0'}`}>
                 {showUseAsStage && (
+                    <>
+                    {hasPassiveGeneratedOutput && (
+                    <button
+                        onClick={promoteLatestGeneratedOutputToResult}
+                        className="px-3 py-1.5 h-full bg-[#09090b] hover:bg-blue-950/40 border border-blue-500/30 hover:border-blue-500/80 rounded flex items-center justify-center text-[8px] lg:text-[9px] whitespace-nowrap font-bold tracking-widest text-blue-400 uppercase transition-colors"
+                    >
+                        <span className="hidden lg:inline">Use as Result</span>
+                        <span className="lg:hidden">Use Result</span>
+                    </button>
+                    )}
                     <button
                         onClick={() => {
-                            const url = state.resultImage || activeShot?.latestCompositeResultUrl;
+                            const url = displayedResultImage;
                             if (url) {
                                 dispatch({ type: 'SET_BG', payload: url });
                                 setViewMode('stage');
@@ -4343,6 +4710,7 @@ Output: environment plate only.
                         <span className="hidden lg:inline">Use as Stage Scene</span>
                         <span className="lg:hidden">Use Scene</span>
                     </button>
+                    </>
                 )}
 
                 <button
@@ -5446,13 +5814,13 @@ Output: environment plate only.
                                     zIndex: 10
                                 }}
                             >
-                            {viewMode === 'result' && (state.resultImage || (activeShot && activeShot.latestCompositeResultUrl)) ? (
+                            {viewMode === 'result' && displayedResultImage ? (
                                 <img
-                                    src={state.resultImage || activeShot?.latestCompositeResultUrl || undefined}
+                                    src={displayedResultImage}
                                     alt="Generated Result"
                                     className="absolute inset-0 w-full h-full object-contain bg-black pointer-events-none z-[60]"
                                     onError={() => {
-                                        console.error('[SceneCanvas] Result image failed to load:', state.resultImage || activeShot?.latestCompositeResultUrl);
+                                        console.error('[SceneCanvas] Result image failed to load:', displayedResultImage);
                                         dispatch({
                                             type: 'ADD_LOG',
                                             payload: { message: 'Result image failed to load. Invalid image payload reached UI.', type: 'error' }
