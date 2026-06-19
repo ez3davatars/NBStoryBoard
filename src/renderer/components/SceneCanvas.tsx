@@ -2788,6 +2788,28 @@ Output: environment plate only.
                     contentReferences: references,
                     controlOverlay: looseControlOverlay
                 });
+
+                // Invariant: an identity request must never silently become a text-only generation.
+                // If the user staged an actor (token.castId) but no identity reference was attached,
+                // fail closed instead of letting the model invent a random character.
+                const stagedIdentityExpected = state.tokens.some((token) => Boolean(token.castId));
+                const hasIdentityReference = finalizedLooseRefs.some(
+                    (ref) => ref.role === 'selected_cast_reference'
+                );
+                if (stagedIdentityExpected && !hasIdentityReference) {
+                    dispatch({
+                        type: 'ADD_LOG',
+                        payload: {
+                            message: 'Generation blocked: a staged actor has no identity reference image. Assign a valid scan/reference before generating (prevented a random-character render).',
+                            type: 'error'
+                        }
+                    });
+                    setViewMode('stage');
+                    window.clearInterval(progressInterval);
+                    dispatch({ type: 'SET_PROCESSING', payload: false });
+                    return;
+                }
+
                 const looseGenerationRefs = buildFinalizedReferenceInputs(finalizedLooseRefs);
                 const loosePromptText = protectStagingPromptStyle([
                     generationContract.replaceAnchorSubjects ? replaceIdentityContractBlock : '',

@@ -1,6 +1,7 @@
 import type { VeoFivePartDraft, VeoAudioBlock } from '../promptEngine/veoFivePart';
 import type { ActorIdentityReferenceSet } from '../context/AppContext';
 import { buildOrderedActorIdentityInputs, hasStrongFaceAnchor } from '../utils/identityReferenceHelpers';
+import { assertReferenceImageData, isPlausibleReferenceImageData } from '../utils/identityReferenceIntegrity';
 import { FunctionsFetchError, FunctionsHttpError, FunctionsRelayError } from '@supabase/supabase-js';
 import { SupabaseAuth, supabase } from './SupabaseClient';
 import { assertAuthenticatedForGeneration } from './AuthGenerationGate';
@@ -719,6 +720,12 @@ export const GeminiService = {
       }
     } catch (err) {
       console.warn('[GeminiService] Image downscale Guardian failed, falling back to original extracted base64.', err);
+    }
+
+    // Integrity floor: never return empty/blank image data. Empty reference bytes silently reach the
+    // provider as a usable-less payload and cause identity hallucination (random character).
+    if (!isPlausibleReferenceImageData(resolvedData)) {
+      throw new Error(`Image resolution produced empty or corrupt data for: ${url.substring(0, 80)}...`);
     }
 
     return { mimeType: resolvedMimeType, data: resolvedData };
@@ -1470,8 +1477,9 @@ export const GeminiService = {
             // If we upload the Raw Blob directly, Gemini API silently fails or ignores unoptimized/rotated alpha payloads,
             // resulting in complete identity hallucinations.
             let inline = await GeminiService._resolveImageData(ref.url, HOSTED_REFERENCE_UPLOAD_PRIMARY_MAX_SIZE);
+            assertReferenceImageData({ index: imgIndex, label: ref.label, data: inline.data });
             let blob = inlineImageDataToBlob(inline);
-            
+
             const fileExt = inline.mimeType.split('/')[1] || 'jpeg';
             const storagePath = `${host_uid}/${executionBatchId}/ref_${imgIndex}.${fileExt}`;
             
@@ -1497,6 +1505,7 @@ export const GeminiService = {
 
                 console.warn(`[Storage Proxy Retry] High-fidelity upload stayed unstable for ${ref.label}. Retrying with ${HOSTED_REFERENCE_UPLOAD_FALLBACK_MAX_SIZE}px normalized fallback...`);
                 inline = await GeminiService._resolveImageData(ref.url, HOSTED_REFERENCE_UPLOAD_FALLBACK_MAX_SIZE);
+                assertReferenceImageData({ index: imgIndex, label: ref.label, data: inline.data });
                 blob = inlineImageDataToBlob(inline);
                 console.log(`- Fallback Upload Size: ${(blob.size / (1024 * 1024)).toFixed(2)} MB`);
 
@@ -1519,6 +1528,7 @@ export const GeminiService = {
         } else {
             // BYOK keeps the high fidelity 3072 local base64 pipeline
             const inline = await GeminiService._resolveImageData(ref.url, 3072);
+            assertReferenceImageData({ index: imgIndex, label: ref.label, data: inline.data });
             contentsParts.push({
               inlineData: { mimeType: inline.mimeType, data: inline.data }
             });
