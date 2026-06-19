@@ -61,6 +61,33 @@ export const formatHostedGenerationErrorResponse = (
   return `Hosted Generation Error [${label}]: ${message}`;
 };
 
+export type AnalysisFailureDiagnostic = {
+  operation: 'analyze';
+  model: string;
+  code: string;
+  status: number | null;
+};
+
+/**
+ * Builds a concise, privacy-safe diagnostic for a failed post-generation analysis call.
+ * Includes only the operation, analysis model, error code, and HTTP status — never raw images,
+ * base64, prompts, tokens, or secrets. Used to log analysis failures as "unavailable" rather than
+ * letting the caller silently treat the output as having passed validation.
+ */
+export const describeAnalysisFailure = (error: unknown, model: string): AnalysisFailureDiagnostic => {
+  const message = error instanceof Error ? error.message : String(error);
+  const labelMatch = message.match(/\[([A-Z0-9_]+)\]/);
+  const label = labelMatch?.[1] ?? '';
+  const httpMatch = label.match(/^HTTP_?(\d+)$/);
+
+  return {
+    operation: 'analyze',
+    model,
+    code: httpMatch ? 'HTTP_ERROR' : (label || 'UNKNOWN'),
+    status: httpMatch ? Number(httpMatch[1]) : null
+  };
+};
+
 export const formatHostedGenerationThrownError = (error: unknown): string => {
   const rawMessage = error instanceof Error ? error.message : String(error);
   const match = rawMessage.match(/^generate-image\s+(\d+):\s*([\s\S]+)$/i);

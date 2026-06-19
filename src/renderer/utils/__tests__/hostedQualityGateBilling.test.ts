@@ -37,6 +37,6 @@ describe('hosted quality gate billing defaults', () => {
     expect(edgeSource).toContain('const includedQualityGate = isIncludedHostedQualityGateBilling(options, expectedResponseType)');
     expect(edgeSource).toContain('? 0');
     expect(edgeSource).toContain('requiredCredits must be a non-negative integer.');
-    expect(edgeSource).toContain('readHostedCreditMetadata(requestBody, expectedResponseType)');
+    expect(edgeSource).toContain('readHostedCreditMetadata(requestBody, expectedResponseType, providerModel)');
   });
 });

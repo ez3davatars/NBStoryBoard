@@ -472,9 +472,40 @@ const calculateBackendRequiredCredits = (_generationType: GenerationType, resolu
   return 1;
 };
 
-const readHostedCreditMetadata = (body: GenerateImageRequestBody, expectedResponseType: ExpectedResponseType) => {
+// Server-side operation contract. The operation is derived from the authenticated response type,
+// never trusted from a client-supplied label: text/json => analyze (post-generation quality gate),
+// image => generate.
+type HostedOperation = 'generate' | 'analyze';
+
+const deriveHostedOperation = (expectedResponseType: ExpectedResponseType): HostedOperation =>
+  expectedResponseType === 'text' || expectedResponseType === 'json' ? 'analyze' : 'generate';
+
+// Analysis (pose/style/wardrobe quality gates) is restricted to approved vision-text models so a
+// paid image generation cannot be relabeled as a free zero-credit analysis call.
+const ANALYSIS_OPERATION_MODELS = new Set<string>([
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite'
+]);
+
+const readHostedCreditMetadata = (
+  body: GenerateImageRequestBody,
+  expectedResponseType: ExpectedResponseType,
+  providerModel: string
+) => {
   const payload = body.payload ?? {};
   const options = isObjectRecord(body.options) ? body.options : {};
+
+  const operation = deriveHostedOperation(expectedResponseType);
+  const qualityGateBilling = normalizeHostedQualityGateBilling(options.hostedQualityGateBilling);
+
+  // Prevent relabeling a generation as free analysis: analysis must use a whitelisted vision model.
+  if (operation === 'analyze' && !ANALYSIS_OPERATION_MODELS.has(providerModel)) {
+    throw new HttpError(
+      400,
+      'INVALID_ANALYSIS_MODEL',
+      `Analysis operations must use an approved vision-text model; received "${providerModel}".`
+    );
+  }
 
   const generationType = normalizeGenerationType(
     body.generationType ??
@@ -493,15 +524,22 @@ const readHostedCreditMetadata = (body: GenerateImageRequestBody, expectedRespon
     deriveResolutionTierFromRequestBody(payload.requestBody) ??
     '1k';
 
+  // Post-generation analysis is included in the original generation's charge: the server bills it as
+  // zero credits (derived from the server-side operation type, NOT a client flag) unless the caller
+  // explicitly opts into separately-paid analysis. This guarantees a legitimate analysis call can
+  // never be rejected with INVALID_REQUIRED_CREDITS, while image generation is always charged.
   const includedQualityGate = isIncludedHostedQualityGateBilling(options, expectedResponseType);
-  const backendCalculatedRequiredCredits = includedQualityGate
+  const treatAsIncludedAnalysis =
+    includedQualityGate || (operation === 'analyze' && qualityGateBilling !== 'paid');
+
+  const backendCalculatedRequiredCredits = treatAsIncludedAnalysis
     ? 0
     : calculateBackendRequiredCredits(generationType, resolutionTier);
   const clientRequiredCredits = normalizeClientRequiredCredits(
     body.requiredCredits ??
     payload.requiredCredits ??
     options.requiredCredits,
-    includedQualityGate
+    treatAsIncludedAnalysis
   );
 
   if (clientRequiredCredits !== null && clientRequiredCredits !== backendCalculatedRequiredCredits) {
@@ -513,6 +551,7 @@ const readHostedCreditMetadata = (body: GenerateImageRequestBody, expectedRespon
   }
 
   return {
+    operation,
     generationType,
     resolutionTier,
     requiredCredits: backendCalculatedRequiredCredits,
@@ -1059,7 +1098,7 @@ serve(async (req) => {
     const expectedResponseType = readExpectedResponseType(requestBody);
     expectedResponseTypeForFailure = expectedResponseType;
 
-    const creditMetadata = readHostedCreditMetadata(requestBody, expectedResponseType);
+    const creditMetadata = readHostedCreditMetadata(requestBody, expectedResponseType, providerModel);
     let currentCredits = await readHostedCreditBalance(supabaseService, userId);
 
     if (currentCredits < creditMetadata.requiredCredits) {

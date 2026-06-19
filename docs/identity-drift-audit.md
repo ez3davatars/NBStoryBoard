@@ -130,6 +130,48 @@ button. These are correct and aligned with invariants #6, #7, #9, #10.
 
 ---
 
+## 5. CONFIRMED — `INVALID_REQUIRED_CREDITS` on post-generation analysis calls
+
+- **Severity:** High · **Status:** Confirmed & fixed
+- **Symptom:** Primary generation succeeds and displays, then secondary calls
+  (`analyzeImage`, `_validatePoseCoherenceAndRetry`, `_validateStyleCategoryAndRetry`,
+  `_validateHeadshotWardrobeContinuityAndRetry`) return `HTTP 400
+  { "code": "INVALID_REQUIRED_CREDITS", "error": "requiredCredits must be a positive integer." }`.
+- **Exact invalid value:** `requiredCredits: 0`.
+- **Cause:** Quality-gate validators call `analyzeImage` through `withQualityGateWaitWindow`, which sets
+  `hostedQualityGateBilling: 'included'` + `expectedResponseType: 'text'`. Client
+  `buildHostedBillingMetadata` then computes `requiredCredits: 0` (included gate) and
+  `_executeHostedRequest` forwards `0`. The Edge Function only allowed `0` when it *also* recognized
+  an included quality gate — a decision **coupled to the client-supplied `hostedQualityGateBilling`
+  flag**. Any Edge build (or path) that didn't see/accept that flag fell into the `allowZero=false`
+  branch and rejected `0` as "must be a positive integer." (The committed source added the
+  `allowZero`/included path in `af95d0b`; a deployed Edge predating that rejects every analysis `0`.)
+- **Fix (server-authoritative operation/billing contract):**
+  `supabase/functions/generate-image/index.ts` now derives an explicit `operation`
+  (`'generate' | 'analyze'`) from the **server-side** `expectedResponseType` (`deriveHostedOperation`),
+  not from a client label. Analysis (`text`/`json`) is treated as **included → 0 credits** unless the
+  caller explicitly opts into `hostedQualityGateBilling: 'paid'` — decoupled from the `'included'`
+  flag, so a legitimate analysis call can never be rejected with `INVALID_REQUIRED_CREDITS`. Image
+  generation still requires the **server-calculated positive** amount (client `0` is rejected).
+- **Security (no free-analysis relabeling / no public zero-credit proxy):** analysis operations must
+  use a whitelisted vision-text model (`ANALYSIS_OPERATION_MODELS` = `gemini-2.5-flash[-lite]`),
+  enforced server-side (`INVALID_ANALYSIS_MODEL`); they remain authenticated and carry an
+  `executionFingerprint`. Server-derived credits stay the billing source of truth; the client value is
+  only cross-checked (`CREDIT_COST_MISMATCH`).
+- **Client diagnostics (task #8):** `describeAnalysisFailure` (in `utils/hostedGenerationErrors.ts`)
+  emits one concise `{ operation, model, code, status }` line with no raw images/base64/prompts/tokens;
+  the four validators now log "validation unavailable … (not reported as passed)" and preserve the
+  successful generated image rather than implying it passed validation.
+- **Tests:** `src/renderer/utils/__tests__/hostedAnalysisOperationContract.test.ts`.
+- **Edge Function changed → requires redeployment.** (Logic-only; no DB migration.)
+
+> Known limitation / follow-up: analysis is bound to the authenticated user + execution fingerprint
+> but not to a signed, server-issued generation ID. A relabeled call still cannot obtain a free image
+> (whitelisted text model + text response path), but strict generation-ID binding for analysis is a
+> recommended hardening if standalone authenticated vision usage must be eliminated.
+
+---
+
 ## Cannot be verified without a provider call
 
 Whether the model now renders a *wrong* face for a **present, non-empty** scan (provider-level identity

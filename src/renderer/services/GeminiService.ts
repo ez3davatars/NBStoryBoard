@@ -54,7 +54,7 @@ import {
   shouldApplyCharacterAnatomyIntegrity,
   withCharacterAnatomyIntegrityContract
 } from '../../prompts/characterAnatomyIntegrity';
-import { formatHostedGenerationErrorResponse } from '../utils/hostedGenerationErrors';
+import { formatHostedGenerationErrorResponse, describeAnalysisFailure } from '../utils/hostedGenerationErrors';
 
 export type ExtractedStyle = {
   medium?: string;
@@ -217,6 +217,10 @@ const withFinalIdentityAuthorityContract = (
 };
 
 const QUALITY_GATE_UI_WAIT_WINDOW_MS = 90000;
+
+// Whitelisted vision-text model used for all hosted post-generation analysis / quality-gate calls.
+// Kept in sync with ANALYSIS_OPERATION_MODELS in supabase/functions/generate-image/index.ts.
+const HOSTED_ANALYSIS_MODEL = 'gemini-2.5-flash';
 
 const withQualityGateWaitWindow = <T extends SharedGenerationOptions>(options: T): T => ({
   ...options,
@@ -1103,7 +1107,7 @@ export const GeminiService = {
       );
     } catch (error) {
       if (error instanceof HostedQualityGateRejectionError) throw error;
-      console.warn('[PoseCoherence] Validation skipped after quality-gate error.', error);
+      console.warn('[PoseCoherence] Pose validation unavailable; preserving generated image (not reported as passed).', describeAnalysisFailure(error, HOSTED_ANALYSIS_MODEL));
       return imageUrl;
     }
   },
@@ -1177,7 +1181,7 @@ export const GeminiService = {
       });
     } catch (error) {
       if (error instanceof HostedQualityGateRejectionError) throw error;
-      console.warn('[PoseCoherence] Custom validation skipped after quality-gate error.', error);
+      console.warn('[PoseCoherence] Custom pose validation unavailable; preserving generated image (not reported as passed).', describeAnalysisFailure(error, HOSTED_ANALYSIS_MODEL));
       return imageUrl;
     }
   },
@@ -1258,7 +1262,7 @@ export const GeminiService = {
       );
     } catch (error) {
       if (error instanceof HostedQualityGateRejectionError) throw error;
-      console.warn('[HeadshotWardrobeContinuity] Validation skipped after quality-gate error.', error);
+      console.warn('[HeadshotWardrobeContinuity] Wardrobe validation unavailable; preserving generated image (not reported as passed).', describeAnalysisFailure(error, HOSTED_ANALYSIS_MODEL));
       return imageUrl;
     }
   },
@@ -1346,7 +1350,7 @@ export const GeminiService = {
       );
     } catch (error) {
       if (error instanceof HostedQualityGateRejectionError) throw error;
-      console.warn('[StyleCategory] Validation skipped after quality-gate error.', error);
+      console.warn('[StyleCategory] Style validation unavailable; preserving generated image (not reported as passed).', describeAnalysisFailure(error, HOSTED_ANALYSIS_MODEL));
       return imageUrl;
     }
   },
@@ -1758,8 +1762,9 @@ export const GeminiService = {
     }
     if (!apiKey && options.billingMode !== 'hosted') throw new Error("No API Key provided.");
     const effectiveKey = options.billingMode === 'hosted' ? 'HOSTED_MODE' : (apiKey || '');
-    // Force a vision-text model for analysis to avoid modality errors with generation models
-    const useModel = 'gemini-2.5-flash';
+    // Force a vision-text model for analysis to avoid modality errors with generation models.
+    // Must remain a whitelisted analysis model (ANALYSIS_OPERATION_MODELS in the edge function).
+    const useModel = HOSTED_ANALYSIS_MODEL;
     const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${useModel}:generateContent`;
 
     const inline = await GeminiService._resolveImageData(imageUrl, 1024);
