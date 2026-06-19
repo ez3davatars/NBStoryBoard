@@ -2806,20 +2806,45 @@ const App = () => {
 
                     {/* SECTION 3: MODEL API KEY / BYOK */}
                     <div className="p-4 bg-black/30 border border-gray-800 rounded-lg space-y-3">
-                      <label className="block text-xs font-black uppercase tracking-wider text-gray-400">Model API Key / BYOK</label>
-                      <div>
-                        <label className="block text-[10px] text-gray-500 uppercase mb-1 tracking-wider">Gemini API Key</label>
-                        <input
-                          type="password"
-                          className="w-full bg-[#09090b] border border-gray-700 p-2 rounded text-xs text-white focus:border-yellow-500 focus:outline-none"
-                          placeholder="AIzaSy..."
-                          value={tempKey}
-                          onChange={(e) => setTempKey(e.target.value)}
-                        />
-                        <p className="text-[10px] text-gray-500 mt-2 leading-relaxed">
-                          This is separate from the Cast Director Studio desktop license key. This API key is utilized directly for BYOK model generation queries via Google Cloud endpoints.
-                        </p>
+                      <label className="block text-xs font-black uppercase tracking-wider text-gray-400">Generation Billing Mode</label>
+
+                      <div className="grid grid-cols-2 gap-2 bg-[#09090b] p-1 rounded-lg border border-gray-850">
+                        <button
+                          type="button"
+                          onClick={() => setTempBillingMode('hosted')}
+                          className={`py-1.5 rounded-md text-xs font-bold transition-all uppercase tracking-wider ${tempBillingMode === 'hosted' ? 'bg-blue-600 text-white shadow-md' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}
+                        >
+                          Hosted Cloud
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setTempBillingMode('byok')}
+                          className={`py-1.5 rounded-md text-xs font-bold transition-all uppercase tracking-wider ${tempBillingMode === 'byok' ? 'bg-yellow-600 text-white shadow-md' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}
+                        >
+                          BYOK / API Key
+                        </button>
                       </div>
+
+                      {tempBillingMode === 'hosted' ? (
+                        <div className="text-xs text-zinc-400 bg-blue-500/5 border border-blue-500/20 p-3 rounded-lg leading-relaxed animate-in fade-in slide-in-from-top-1 duration-150">
+                          <p className="font-semibold text-blue-400 uppercase text-[10px] tracking-wider mb-1">Hosted Cloud Mode Active</p>
+                          Uses your hosted credits or hosted subscription. No Gemini API key required.
+                        </div>
+                      ) : (
+                        <div className="space-y-2 animate-in fade-in slide-in-from-top-1 duration-150">
+                          <label className="block text-[10px] text-gray-500 uppercase mb-1 tracking-wider">Gemini API Key</label>
+                          <input
+                            type="password"
+                            className="w-full bg-[#09090b] border border-gray-700 p-2 rounded text-xs text-white focus:border-yellow-500 focus:outline-none"
+                            placeholder="AIzaSy..."
+                            value={tempKey}
+                            onChange={(e) => setTempKey(e.target.value)}
+                          />
+                          <p className="text-[10px] text-gray-500 mt-2 leading-relaxed">
+                            Uses your own Gemini API key. Requires an activated Cast Director Studio desktop license. This is separate from the Cast Director Studio desktop license key.
+                          </p>
+                        </div>
+                      )}
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Render Save Folder</label>

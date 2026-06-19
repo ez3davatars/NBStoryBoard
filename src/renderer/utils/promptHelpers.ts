@@ -7,6 +7,7 @@ import type { ActorIdentityReferenceSet, ShotsActorOption } from '../context/App
 import { SHOT_PRESETS, type ShotPresetDefinition } from './shotsPresets';
 import { buildSceneTruthSnapshotBlock } from './sceneTruthHelpers';
 import { stripShotDirectiveContamination } from './analysisSanitizers';
+import { createPromptSafeReferenceSlots, sanitizeReferenceAnalysisForPrompt } from './stagingPromptProtection';
 import { buildPoseCoherenceContract, buildPoseCoherenceNegativeTokens } from '../../prompts/poseCoherence';
 import { buildStyleCategoryContract, buildStyleNegativePrompt } from '../../prompts/styleContracts';
 import { buildStagingSpatialControlBlock, type SpatialFrame } from './stagingSpatialDirectives';
@@ -285,7 +286,8 @@ export const compileV3DirectorPrompt = (
   annotations: StageAnnotation[] = [],
   spatialFrame?: SpatialFrame
 ): string => {
-  const activeRefs = getActiveReferenceSlots(slots);
+  const promptSafeSlots = createPromptSafeReferenceSlots(slots);
+  const activeRefs = getActiveReferenceSlots(promptSafeSlots);
   const heightRelationshipBlock = buildHeightRelationshipLockBlock({
     director,
     bgPrompt,
@@ -293,13 +295,13 @@ export const compileV3DirectorPrompt = (
     annotations
   });
   const spatialControlBlock = buildStagingSpatialControlBlock({
-    referenceSlots: slots,
+    referenceSlots: promptSafeSlots,
     tokens,
     annotations,
     spatialFrame,
     includeTokenMap: true
   });
-  const referenceIdentityBlock = buildReferenceStackIdentitySourceBlock(slots);
+  const referenceIdentityBlock = buildReferenceStackIdentitySourceBlock(promptSafeSlots);
 
   const segments: string[] = [];
   const hasVisibleHumanSubject =
@@ -640,6 +642,7 @@ export const buildStrictPrompt = (
     extractedStyle?: ExtractedStyle | null,
     spatialFrame?: SpatialFrame
 ) => {
+    const promptSafeReferenceSlots = createPromptSafeReferenceSlots(referenceSlots);
     const tech = buildMasterStyleKeywords(director);
 
     const dnaBlock = [
@@ -678,14 +681,14 @@ export const buildStrictPrompt = (
     });
 
     const spatialControlBlock = buildStagingSpatialControlBlock({
-        referenceSlots,
+        referenceSlots: promptSafeReferenceSlots,
         tokens,
         annotations,
         spatialFrame,
         includeTokenMap: true
     });
-    const refStackActive = getActiveReferenceSlots(referenceSlots);
-    const refStackBlock = buildReferenceStackIdentitySourceBlock(referenceSlots);
+    const refStackActive = getActiveReferenceSlots(promptSafeReferenceSlots);
+    const refStackBlock = buildReferenceStackIdentitySourceBlock(promptSafeReferenceSlots);
 
     const rules = [
         "SCENE RECONSTRUCTION AND COMPOSITING AUTHORIZATION:",
@@ -800,11 +803,12 @@ export const buildLoosePrompt = (
     bgPrompt?: string,
     spatialFrame?: SpatialFrame
 ) => {
+    const promptSafeReferenceSlots = createPromptSafeReferenceSlots(referenceSlots);
     const sortedTokens = [...tokens].sort((a, b) => a.x - b.x);
     
     // Inline implementation of buildReferenceStackText for loose prompt
-    const activeSlots = getActiveReferenceSlots(referenceSlots);
-    const refStackBlock = buildReferenceStackIdentitySourceBlock(referenceSlots);
+    const activeSlots = getActiveReferenceSlots(promptSafeReferenceSlots);
+    const refStackBlock = buildReferenceStackIdentitySourceBlock(promptSafeReferenceSlots);
 
     const tech = buildMasterStyleKeywords(director);
 
@@ -818,7 +822,7 @@ export const buildLoosePrompt = (
         annotations
     });
     const spatialControlBlock = buildStagingSpatialControlBlock({
-        referenceSlots,
+        referenceSlots: promptSafeReferenceSlots,
         tokens,
         annotations,
         spatialFrame,
@@ -1012,9 +1016,13 @@ export const buildStrictAnchorReplacementPrompt = (p: {
     annotations?: StageAnnotation[],
     spatialFrame?: SpatialFrame
 }): string => {
+    const promptSafeActiveRefs = createPromptSafeReferenceSlots(p.activeRefs);
     const strictIdentitySets = (p.actorIdentitySets && p.actorIdentitySets.length > 0)
-        ? p.actorIdentitySets
-        : p.activeRefs
+        ? p.actorIdentitySets.map((set) => ({
+            ...set,
+            biometricProfile: sanitizeReferenceAnalysisForPrompt(set.biometricProfile)
+        }))
+        : promptSafeActiveRefs
             .filter((r) => !!r.url)
             .map((r) => ({
                 actorId: String(r.castId || r.index),
@@ -1027,7 +1035,7 @@ export const buildStrictAnchorReplacementPrompt = (p: {
                 identityPriority: 'strict' as const
             }));
 
-    const refLines = p.activeRefs.map(r => {
+    const refLines = promptSafeActiveRefs.map(r => {
         let base = '';
         if (p.replaceAnchorSubjects) {
             base = `[REFERENCE: ${r.name || `Ref ${r.index}`}]: Use this exact image to define the target subject's identity and biometric morphology (face + head + neck + body build). Do NOT copy reference clothing, headwear fit, or logos unless explicitly requested.`;
@@ -1042,7 +1050,7 @@ export const buildStrictAnchorReplacementPrompt = (p: {
         return base;
     });
 
-    const identityFingerprintLines = p.activeRefs.map((r) => {
+    const identityFingerprintLines = promptSafeActiveRefs.map((r) => {
         const refLabel = r.name || `Ref ${r.index}`;
         const biometricText = (r.analysis || '').trim();
         const biometricClause = biometricText
@@ -1072,13 +1080,13 @@ CRITICAL DIRECTIVES:
         annotations: p.annotations || []
     });
     const spatialControlBlock = buildStagingSpatialControlBlock({
-        referenceSlots: p.activeRefs,
+        referenceSlots: promptSafeActiveRefs,
         tokens: p.tokens || [],
         annotations: p.annotations || [],
         spatialFrame: p.spatialFrame,
         includeTokenMap: true
     });
-    const referenceIdentityBlock = buildReferenceStackIdentitySourceBlock(p.activeRefs);
+    const referenceIdentityBlock = buildReferenceStackIdentitySourceBlock(promptSafeActiveRefs);
 
     if (heightRelationshipBlock) {
         prompt += `\n\n### HEIGHT RELATIONSHIP INSTRUCTIONS\n${heightRelationshipBlock}`;
@@ -1101,11 +1109,11 @@ CRITICAL DIRECTIVES:
     if (p.replaceAnchorSubjects) {
         const specificMaps: string[] = [];
         const hasTokenTargets = Boolean(p.tokens && p.tokens.length > 0);
-        const hasExplicitTargets = p.activeRefs.some((ref) => (ref.target || '').trim().length > 0);
-        const dominantSingleSubjectFallback = p.activeRefs.length === 1 && !hasExplicitTargets && !hasTokenTargets;
+        const hasExplicitTargets = promptSafeActiveRefs.some((ref) => (ref.target || '').trim().length > 0);
+        const dominantSingleSubjectFallback = promptSafeActiveRefs.length === 1 && !hasExplicitTargets && !hasTokenTargets;
         
         // Explicit UI Target Overrides
-        p.activeRefs.forEach(ref => {
+        promptSafeActiveRefs.forEach(ref => {
             const targetVal = (ref.target || '').trim();
             let dnaMandate = '';
             if (ref.analysis && ref.analysis.trim()) {
@@ -1118,9 +1126,9 @@ CRITICAL DIRECTIVES:
 
         // Spatial Token Inference Fallback
         if (specificMaps.length === 0 && p.tokens && p.tokens.length > 0) {
-            const orderedRefs = [...p.activeRefs].sort((a, b) => a.index - b.index);
+            const orderedRefs = [...promptSafeActiveRefs].sort((a, b) => a.index - b.index);
             p.tokens.forEach((token, tokenIndex) => {
-                const ref = p.activeRefs.find(r => r.castId === token.castId) || orderedRefs[tokenIndex];
+                const ref = promptSafeActiveRefs.find(r => r.castId === token.castId) || orderedRefs[tokenIndex];
                 if (ref) {
                     const x = Math.round(Number(token.x) || 0);
                     const y = Math.round(Number(token.y) || 0);
@@ -1140,7 +1148,7 @@ CRITICAL DIRECTIVES:
         if (specificMaps.length > 0) {
             prompt += `\n6. CRITICAL REPLACEMENT MAP (MANDATORY IDENTITY TARGETING):\n${specificMaps.join('\n')}\nWARNING: You MUST enforce this exact positioning. DO NOT rely on visual similarity between the reference faces and the original anchor bodies to decide who goes where. You MUST strictly swap the identities into the physical locations defined above. Randomly swapping these characters is a FAILURE.\nFULL-SUBJECT REPLACEMENT LOCK (NON-NEGOTIABLE): This is NOT a face-swap. Replace each target subject's full visible identity and build (face, head shape, hairline, neck, shoulder width, torso build, limb thickness, overall body proportions). Keeping the anchor body and only changing the head is a hard failure.\nOMNIPOTENT OBLITERATION DIRECTIVE: When replacing subjects, you are FORBIDDEN from preserving the anchor's original facial structure, hair, head shape, or body build. You MUST completely overwrite their biological traits to match the Reference Subject and their Biometric Profile, EVEN IF it breaks the original silhouette.\nWARDROBE CONTINUITY (CRITICAL): Unless the Biometric Override explicitly requests a different outfit, you MUST perfectly preserve the EXACT original clothing, suits, and attire worn by the humans in the anchor image. Re-dress your generated subjects in those exact anchor outfits. Do NOT use the casual clothing from the Reference images.\nHEADWEAR/LOGO CONTINUITY (CRITICAL): If the anchor subject wears a hat/cap/headwear, preserve its fit geometry and visible logo/emblem exactly (position, scale, and orientation).\nGAZE/HEAD POSE CONTINUITY (CRITICAL): Preserve head yaw/pitch/roll and eye gaze direction from the mapped anchor subject at this location. Do NOT make subjects face camera unless the anchor subject does.\nLIGHTING CONTINUITY (CRITICAL): Match local key/fill and color temperature from CLEAN_BG_PLATE pixels around the mapped region boundary.\nANTI-HEAD-SWAP PIXEL RULE (CRITICAL): Inside each mapped replacement region, do NOT keep anchor facial/head/skin pixels. Re-synthesize the entire subject body from the mapped identity references while preserving anchor pose, gaze, wardrobe, and lighting continuity.`;
         } else if (dominantSingleSubjectFallback) {
-            const onlyRef = p.activeRefs[0];
+            const onlyRef = promptSafeActiveRefs[0];
             prompt += `\n6. SINGLE-SUBJECT DOMINANT REPLACEMENT LOCK (MANDATORY): Identify the single most prominent, camera-dominant human subject in the anchor image and replace that exact subject entirely with the person from Reference ${onlyRef.index} (${onlyRef.name || 'Subject'}).\n- This is a one-person identity overwrite, not a vibe match.\n- Preserve the anchor subject's pose, gaze direction, framing, wardrobe, props, and background.\n- Overwrite the anchor subject's face, head shape, hairline, neck, shoulder width, and body build to match Reference ${onlyRef.index} exactly.\n- If the anchor subject differs from Reference ${onlyRef.index} in sex presentation, age appearance, facial structure, skin texture, or ethnicity-presenting features, those anchor traits must be replaced by the reference-defined identity.\n- Do NOT keep the anchor body and only change the head.\n- Do NOT invent a similar-looking new person.\n- If multiple humans are visible, replace only the most visually dominant human subject and leave all others unchanged.`;
         } else {
             prompt += `\n6. REPLACE ANCHOR SUBJECTS: Disregard the original subjects defined in the anchor plate. Completely overwrite them with the new Reference/Subject identities. This is a full-subject biometric replacement, not a loose resemblance transfer. Do NOT invent a lookalike.`;
@@ -1163,7 +1171,7 @@ CRITICAL DIRECTIVES:
             : buildIdentityPrecedenceBlock({
                 hasFaceAnchors: strictIdentitySets.length > 0,
                 hasActorReferences: strictIdentitySets.length > 0,
-                hasSubjectStyleAnalysis: p.activeRefs.some((r) => !!(r.analysis || '').trim())
+                hasSubjectStyleAnalysis: promptSafeActiveRefs.some((r) => !!(r.analysis || '').trim())
             });
         prompt += `\n\n### ${p.replaceAnchorSubjects ? 'FULL-SUBJECT IDENTITY LOCK' : 'FACE IDENTITY LOCK'}\n`;
         prompt += buildStrictFaceIdentityLockBlock({

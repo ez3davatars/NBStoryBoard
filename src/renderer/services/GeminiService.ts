@@ -1,6 +1,7 @@
 import type { VeoFivePartDraft, VeoAudioBlock } from '../promptEngine/veoFivePart';
 import type { ActorIdentityReferenceSet } from '../context/AppContext';
 import { buildOrderedActorIdentityInputs, hasStrongFaceAnchor } from '../utils/identityReferenceHelpers';
+import { FunctionsFetchError, FunctionsHttpError, FunctionsRelayError } from '@supabase/supabase-js';
 import { SupabaseAuth, supabase } from './SupabaseClient';
 import { assertAuthenticatedForGeneration } from './AuthGenerationGate';
 import {
@@ -521,6 +522,45 @@ const tryParseJson = (text: string): unknown => {
   }
 };
 
+const stringifyFunctionData = (data: unknown): string => {
+  if (typeof data === 'string') return data;
+  if (data === null || data === undefined) return '';
+  try {
+    return JSON.stringify(data);
+  } catch {
+    return String(data);
+  }
+};
+
+const readHostedFunctionError = async (error: unknown): Promise<{ status: number; bodyText: string }> => {
+  if (error instanceof FunctionsHttpError) {
+    const response = error.context;
+    const bodyText = await response.clone().text().catch(() => '');
+    return { status: response.status, bodyText };
+  }
+
+  if (error instanceof FunctionsRelayError) {
+    const response = error.context;
+    const bodyText = await response.clone().text().catch(() => '');
+    return {
+      status: response.status || 502,
+      bodyText: bodyText || JSON.stringify({ error: 'Supabase relay failed while invoking generate-image.' })
+    };
+  }
+
+  if (error instanceof FunctionsFetchError) {
+    return {
+      status: 0,
+      bodyText: JSON.stringify({ error: 'Network error while invoking generate-image. Check connectivity and CORS preflight.' })
+    };
+  }
+
+  return {
+    status: 500,
+    bodyText: JSON.stringify({ error: error instanceof Error ? error.message : String(error) })
+  };
+};
+
 export const GeminiService = {
 
   // Helper: Flatten structured actor references for multi-image Gemini injection
@@ -851,30 +891,38 @@ export const GeminiService = {
       await GeminiService._assertHostedCreditsAvailable(requestBody, options);
     }
 
-    const edgeUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-image`;
-    const rawResponse = await fetch(edgeUrl, {
-      method: 'POST',
-      cache: 'no-store',
+    const edgeRequestBody = {
+      payload: payloadBodyForEdge,
+      options,
+      executionFingerprint,
+      generationType: billingMetadata.generationType,
+      resolutionTier: billingMetadata.resolutionTier,
+      requiredCredits: billingMetadata.requiredCredits,
+      creditPricingVersion: billingMetadata.creditPricingVersion
+    };
+
+    const { data: functionData, error: functionError, response: invokeResponse } = await supabase.functions.invoke('generate-image', {
+      body: edgeRequestBody,
       headers: {
         Authorization: `Bearer ${token}`,
         apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
-        'Content-Type': 'application/json',
         'X-Idempotency-Key': idempotencyKey,
         Accept: 'application/json'
       },
-      body: JSON.stringify({
-        payload: payloadBodyForEdge,
-        options,
-        executionFingerprint,
-        generationType: billingMetadata.generationType,
-        resolutionTier: billingMetadata.resolutionTier,
-        requiredCredits: billingMetadata.requiredCredits,
-        creditPricingVersion: billingMetadata.creditPricingVersion
-      }),
       signal: options.signal
     });
 
-    const responseText = await rawResponse.text();
+    let rawResponse = invokeResponse;
+    let responseText = stringifyFunctionData(functionData);
+    if (functionError) {
+      const functionFailure = await readHostedFunctionError(functionError);
+      responseText = functionFailure.bodyText;
+      rawResponse = rawResponse ?? new Response(responseText, { status: functionFailure.status || 500 });
+    }
+
+    if (!rawResponse) {
+      throw new Error('Hosted Generation Error: generate-image returned no response.');
+    }
 
     if (rawResponse.status === 202) {
       const data = JSON.parse(responseText);
@@ -2990,3 +3038,4 @@ Note: Leave audio fields out if not applicable. The core 5 parts are required.
   }
 
 };
+

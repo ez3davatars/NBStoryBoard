@@ -53,6 +53,18 @@ export const ensureAuthenticatedForGeneration = async ({
   requireAccountForByok = false,
   featureLabel
 }: GenerationAuthOptions = {}): Promise<boolean> => {
+  if (billingMode === 'byok') {
+    const hasLicenseId = localStorage.getItem('cds_active_license_id');
+    const hasLicenseKey = localStorage.getItem('cds_active_license_key');
+    if (!hasLicenseId && !hasLicenseKey) {
+      console.log('[AuthGate] generation blocked: no active desktop BYOK license');
+      if (typeof window !== 'undefined') {
+        alert('Cast Director Studio License Required\n\nA valid desktop license activation is required to run model generation in BYOK mode. Please activate your license from Configuration Settings.');
+      }
+      return false;
+    }
+  }
+
   const requiresSession =
     billingMode === 'hosted' ||
     (billingMode === 'byok' && requireAccountForByok);

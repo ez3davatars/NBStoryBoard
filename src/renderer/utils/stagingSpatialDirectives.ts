@@ -255,7 +255,7 @@ export const buildStagingSpatialControlBlock = (input: {
   const lines: string[] = [
     '### STAGING CONTROL CONTRACT (HARD)',
     'CONTROL COORDINATE FRAME: all x/y/bbox values below are normalized 0-1000, origin top-left, matching the attached stage viewport.',
-    'If an image labeled CONTROL_OVERLAY is attached, use it only as a spatial blueprint. Do not render its labels, boxes, arrows, outlines, guide colors, or UI marks in the final image.',
+    'If an image labeled CONTROL_OVERLAY_GEOMETRY_ONLY is attached, use it only as a spatial blueprint. Do not render its labels, boxes, arrows, outlines, guide colors, or UI marks in the final image.',
     'Obey these controls before style, mood, or generic composition preferences.'
   ];
 

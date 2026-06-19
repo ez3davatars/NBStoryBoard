@@ -71,6 +71,18 @@ import {
 } from '../utils/stagingSpatialDirectives';
 import { formatHostedGenerationThrownError } from '../utils/hostedGenerationErrors';
 import { sanitizeStyleForStrictIdentity } from '../utils/analysisSanitizers';
+import {
+    CONTROL_OVERLAY_GEOMETRY_ONLY_LABEL,
+    createPromptSafeReferenceSlots,
+    deriveExplicitStyleOverride,
+    deriveStagingReferenceRole,
+    finalizeStagingReferences,
+    findReferenceAnalysisMediumContamination,
+    protectStagingPromptStyle,
+    buildSubmittedStagingRequestSnapshot,
+    type FinalizedStagingReference,
+    type SubmittedStagingRequestSnapshot
+} from '../utils/stagingPromptProtection';
 import { LibraryAssetMaterializer } from '../services/LibraryAssetMaterializer';
 import { useProductionExports } from '../hooks/useProductionExports';
 import { useAdvancedRender } from '../hooks/useAdvancedRender';
@@ -183,47 +195,16 @@ const normalizeGeneratedImageUrl = async (res: GeneratedImageResponse): Promise<
     }
 };
 
-const STAGING_STYLE_DRIFT_NEGATIVE =
-    'Do not change the image into illustration, comic book art, graphic novel, anime, cel shading, cartoon, 3D animation, painted art, or stylized avatar unless explicitly requested in the current session.';
+const buildReferenceLogEntries = (references: Array<{ label: string; role?: string }>) => (
+    references.map((reference) => ({
+        label: reference.label,
+        role: reference.role || deriveStagingReferenceRole(reference.label)
+    }))
+);
 
-const STAGING_MATCH_REFERENCE_STYLE_RULE =
-    'Match the visual medium and rendering style of the current reference image. Do not convert the subject into illustration, comic, anime, cel-shaded, cartoon, or stylized 3D unless explicitly requested.';
-
-const STAGING_FORBIDDEN_STYLE_TERMS = [
-    'illustration',
-    'comic',
-    'graphic novel',
-    'cel shaded',
-    'anime',
-    'cartoon',
-    'animated 3d',
-    'stylized avatar'
-];
-
-const protectStagingPromptStyle = (
-    prompt: string,
-    generationContract: unknown,
-    hasExplicitStyleOverride: boolean
-): string => {
-    const protectedPrompt = hasExplicitStyleOverride
-        ? `${prompt}\n\n### STYLE DRIFT NEGATIVE\n${STAGING_STYLE_DRIFT_NEGATIVE}`
-        : `${prompt}\n\n### CURRENT-SESSION STYLE CONTRACT\n${STAGING_MATCH_REFERENCE_STYLE_RULE}\n\n### STYLE DRIFT NEGATIVE\n${STAGING_STYLE_DRIFT_NEGATIVE}`;
-
-    if (import.meta.env.DEV) {
-        const promptLower = protectedPrompt.toLowerCase();
-        const found = STAGING_FORBIDDEN_STYLE_TERMS.filter((term) => promptLower.includes(term));
-
-        if (found.length > 0 && !hasExplicitStyleOverride) {
-            console.warn('[STAGING STYLE DRIFT WARNING]', {
-                found,
-                prompt: protectedPrompt,
-                generationContract,
-            });
-        }
-    }
-
-    return protectedPrompt;
-};
+const buildFinalizedReferenceInputs = (references: FinalizedStagingReference[]) => (
+    references.map(({ url, label }) => ({ url, label }))
+);
 
 const buildReplaceModeIdentityActionSceneLock = (args: {
     actionDirection: string;
@@ -362,7 +343,7 @@ const resolveNamedReferenceFromInstruction = (
         };
     }).filter(candidate => candidate.normalizedName.length > 0);
 
-    let matches = candidates.filter(candidate =>
+    const matches = candidates.filter(candidate =>
         normalizedInstruction.includes(candidate.normalizedName)
     );
 
@@ -535,20 +516,12 @@ const SceneCanvas = () => {
     const ensureStagingAiAccess = useCallback(async (featureLabel: string): Promise<boolean> => {
         const billingMode = state.billingEntitlements?.effectiveBillingMode || state.billingMode;
         
-        if (billingMode === 'hosted') {
-            return await ensureAuthenticatedForGeneration({ billingMode, featureLabel });
+        if (billingMode === 'byok' && !state.apiKey) {
+            dispatch({ type: 'ADD_LOG', payload: { message: `${featureLabel} blocked: API Key required for BYOK`, type: 'error' } });
+            return false;
         }
 
-        if (billingMode === 'byok') {
-            if (!state.apiKey) {
-                dispatch({ type: 'ADD_LOG', payload: { message: `${featureLabel} blocked: API Key required for BYOK`, type: 'error' } });
-                return false;
-            }
-
-            return true;
-        }
-
-        return true;
+        return await ensureAuthenticatedForGeneration({ billingMode, featureLabel });
     }, [dispatch, state.apiKey, state.billingEntitlements, state.billingMode]);
 
     const [isCompactCommandHeader, setIsCompactCommandHeader] = useState(false);
@@ -703,6 +676,7 @@ const SceneCanvas = () => {
     const [isAnalyzingStyle, setIsAnalyzingStyle] = useState(false);
     const [extractedStyle, setExtractedStyle] = useState<ExtractedStyle | null>(null);
     const [sceneIntent, setSceneIntent] = useState<SceneIntent | null>(null);
+    const [latestSubmittedStagingRequest, setLatestSubmittedStagingRequest] = useState<SubmittedStagingRequestSnapshot | null>(null);
     const [previousBackgroundUrl, setPreviousBackgroundUrl] = useState<string | null>(null);
     const AUTO_STYLE_ANALYSIS_WAIT_MS = 60000;
     const AUTO_STYLE_ENVIRONMENT_WAIT_MS = state.billingEntitlements.effectiveBillingMode === 'hosted'
@@ -710,6 +684,7 @@ const SceneCanvas = () => {
         : 90000;
     
     const colorPickerRef = useRef<HTMLInputElement>(null);
+    const stagingGenerationInFlightRef = useRef(false);
     const [lastCustomColor, setLastCustomColor] = useState('#ffffff');
     const [showColorEditor, setShowColorEditor] = useState(false);
     const [showClearConfirm, setShowClearConfirm] = useState(false);
@@ -1901,7 +1876,7 @@ Output: environment plate only.
 
         ctx.font = '700 26px Arial, sans-serif';
         ctx.fillStyle = '#ffffff';
-        ctx.fillText('CONTROL_OVERLAY - SPATIAL BLUEPRINT ONLY - DO NOT RENDER MARKS', 34, 48);
+        ctx.fillText(`${CONTROL_OVERLAY_GEOMETRY_ONLY_LABEL} - SPATIAL BLUEPRINT ONLY - DO NOT RENDER MARKS`, 34, 48);
 
         const drawLabel = (text: string, x: number, y: number, color: string) => {
             ctx.save();
@@ -2021,12 +1996,22 @@ Output: environment plate only.
 
     // Unified Workflow Generate Button
     const generateBg = async (overrideBgUrl?: string | unknown) => {
-        if (!(await ensureStagingAiAccess('Environment Plate Generation'))) return;
+        if (stagingGenerationInFlightRef.current || state.isProcessing) return;
+        stagingGenerationInFlightRef.current = true;
+
+        if (!(await ensureStagingAiAccess('Environment Plate Generation'))) {
+            stagingGenerationInFlightRef.current = false;
+            return;
+        }
+
         const activeBgUrl = (typeof overrideBgUrl === 'string' ? overrideBgUrl : undefined) || state.backgroundUrl;
         const hasSourceScene = !!activeBgUrl;
         const hasPromptText = !!bgPrompt?.trim() || !!state.director.subject?.trim();
 
-        if (!hasPromptText && !hasSourceScene) return;
+        if (!hasPromptText && !hasSourceScene) {
+            stagingGenerationInFlightRef.current = false;
+            return;
+        }
 
         dispatch({ type: 'SET_PROCESSING', payload: true });
 
@@ -2043,7 +2028,7 @@ Output: environment plate only.
         const generationContract = {
             generationNumber: nextGenerationNumber,
             styleMode: 'match_reference',
-            explicitStyleOverride: null as string | null,
+            explicitStyleOverride: deriveExplicitStyleOverride(extractedStyle),
             referenceImageIds: activeReferences.map((ref) => ref.index),
             sceneImage: activeBgUrl ?? null,
             replaceAnchorSubjects: state.director.replaceAnchorSubjects,
@@ -2059,7 +2044,16 @@ Output: environment plate only.
             sourceResultImage: null as string | null,
         };
         const hasExplicitStyleOverride = Boolean(generationContract.explicitStyleOverride);
-        const contractActiveReferenceSlots = [...activeReferences];
+        if (import.meta.env.DEV && !hasExplicitStyleOverride) {
+            const contaminatedAnalyses = findReferenceAnalysisMediumContamination(activeReferences);
+            if (contaminatedAnalyses.length > 0) {
+                console.warn('[STAGING REFERENCE ANALYSIS MEDIUM WARNING]', {
+                    contaminatedAnalyses,
+                    message: 'Reference analysis contains medium/process language. The outgoing prompt uses sanitized prompt-safe copies.'
+                });
+            }
+        }
+        const contractActiveReferenceSlots = createPromptSafeReferenceSlots(activeReferences);
         const replaceModeIdentityRefs = contractActiveReferenceSlots.filter((ref) => Boolean(ref.url));
         const strictIdentityLock = generationContract.replaceAnchorSubjects && replaceModeIdentityRefs.length > 0;
         const replaceIdentityContractBlock = generationContract.replaceAnchorSubjects
@@ -2375,6 +2369,7 @@ Output: environment plate only.
                         }
                     });
 
+                    let finalDeterministicReplacePrompt = sceneNotesForStrict || bgPrompt || state.director.subject;
                     for (const pass of passPlan) {
                         const passAnchorPlate = await buildAnchorPlate([pass.regionEntry], runningBgUrl);
                         const passControlOverlay = await buildSpatialControlOverlay([pass.regionEntry]);
@@ -2406,9 +2401,6 @@ Output: environment plate only.
                             { url: runningBgUrl, label: 'CLEAN_BG_PLATE' },
                             { url: passReference.url!, label: passRefLabel }
                         ];
-                        if (passControlOverlay) {
-                            passRefs.splice(2, 0, { url: passControlOverlay, label: 'CONTROL_OVERLAY' });
-                        }
                         const passRefUrlSet = new Set(passRefs.map((r) => r.url));
                         const passSupportLabels: string[] = [];
                         if (passIdentitySet) {
@@ -2423,29 +2415,32 @@ Output: environment plate only.
                             }
                         }
 
+                        const finalizedPassRefs = finalizeStagingReferences({
+                            cleanBgPlate: runningBgUrl,
+                            anchorGuide: passAnchorPlate,
+                            contentReferences: passRefs,
+                            controlOverlay: passControlOverlay
+                        });
+                        const passGenerationRefs = buildFinalizedReferenceInputs(finalizedPassRefs);
+
                         const allowedIdentityLabels = [passRefLabel, ...passSupportLabels];
                         const passPrompt = protectStagingPromptStyle([
                             replaceIdentityContractBlock,
                             passPromptBase,
                             passLightingBlock,
                             `### SINGLE-REGION REPLACEMENT LOCK (HARD)\n- This pass may edit ONLY REGION ${pass.regionEntry.region}.\n- REGION ${pass.regionEntry.region} may use ONLY identity references labeled ${allowedIdentityLabels.join(', ')}.\n- Treat ${passRefLabel} as the primary identity anchor for this region.\n- Do NOT alter identity or pose of people outside REGION ${pass.regionEntry.region} in CLEAN_BG_PLATE.\n- Preserve all non-target pixels exactly.\n- GAZE/HEAD POSE LOCK: Match the target subject head yaw/pitch/roll and eye gaze direction from CLEAN_BG_PLATE in this region. If the anchor subject is not looking at camera, the replacement must also NOT look at camera.\n- LIGHTING LOCK: Match the ANCHOR LIGHTING TRANSFER block above. Do not use portrait/studio lighting from identity references.\n- NO LOOKALIKE SUBSTITUTION: If uncertain, preserve mapped identity references over aesthetic similarity.`
-                        ].filter(Boolean).join('\n\n'), generationContract, hasExplicitStyleOverride);
+                        ].filter(Boolean).join('\n\n'), generationContract.explicitStyleOverride);
+                        finalDeterministicReplacePrompt = passPrompt;
                         logStagingGenerationSources(passPrompt);
-                        logStagingIdentityContract(passRefs.map((ref) => ({
-                            label: ref.label,
-                            role: ref.label === passRefLabel || ref.label.startsWith('ACTOR_ID_')
-                                ? 'selected_cast_reference'
-                                : ref.label === 'CLEAN_BG_PLATE'
-                                    ? 'current_stage_scene'
-                                    : ref.label
-                        })));
+                        logStagingIdentityContract(buildReferenceLogEntries(finalizedPassRefs));
+                        setLatestSubmittedStagingRequest(buildSubmittedStagingRequestSnapshot('strict-pass', passPrompt, finalizedPassRefs));
 
                         let passJobId = '';
                         const passRes = await GeminiService.generateImage(
                             passPrompt,
                             state.apiKey!,
                             state.model,
-                            passRefs,
+                            passGenerationRefs,
                             {
                                 aspectRatio: state.director.aspectRatio,
                                 imageSize: state.imageResolution,
@@ -2466,7 +2461,7 @@ Output: environment plate only.
                     }
 
                     await applyStagingResult(runningBgUrl, {
-                        prompt: sceneNotesForStrict || bgPrompt || state.director.subject,
+                        prompt: finalDeterministicReplacePrompt,
                         surface: 'result',
                         suggestedName: 'staging_replace_result',
                         stage: 'generate'
@@ -2500,7 +2495,7 @@ Output: environment plate only.
                 const refs: { url: string; label: string }[] = [];
                 refs.push({ url: anchorPlate, label: "ANCHOR_GUIDE" });
                 if (activeBgUrl) refs.push({ url: activeBgUrl, label: "CLEAN_BG_PLATE" });
-                if (controlOverlay) refs.push({ url: controlOverlay, label: "CONTROL_OVERLAY" });
+                
                 const urls = new Set(refs.map(r => r.url));
 
                 const referenceStackLabelsBySlotIndex = new Map<number, string>();
@@ -2614,7 +2609,13 @@ Output: environment plate only.
                     }
                 }
 
-                const limitedRefs = refs.slice(0, 14);
+                const finalizedStrictRefs = finalizeStagingReferences({
+                    cleanBgPlate: activeBgUrl,
+                    anchorGuide: anchorPlate,
+                    contentReferences: refs,
+                    controlOverlay
+                });
+                const strictGenerationRefs = buildFinalizedReferenceInputs(finalizedStrictRefs);
                 const routingLines: string[] = [];
                 const usedFallbackIdentityGroups = new Set<number>();
                 const missingIdentityMappings: string[] = [];
@@ -2691,23 +2692,17 @@ Output: environment plate only.
                     refIndexMapLines.length > 0
                         ? `### REFERENCE-LABEL MAPPING LOCK (HARD)\n${refIndexMapLines.join('\n')}\n- Use the REFERENCE index mapping above when interpreting replacement map directives.\n- If a REFERENCE index conflicts with visual similarity, trust the mapped labels above.`
                         : ''
-                ].filter(Boolean).join('\n\n'), generationContract, hasExplicitStyleOverride);
+                ].filter(Boolean).join('\n\n'), generationContract.explicitStyleOverride);
                 logStagingGenerationSources(strictPromptText);
-                logStagingIdentityContract(limitedRefs.map((ref) => ({
-                    label: ref.label,
-                    role: ref.label.startsWith('REFERENCE_') || ref.label.includes('_ID_')
-                        ? 'selected_cast_reference'
-                        : ref.label === 'CLEAN_BG_PLATE' || ref.label === 'Environment/Lighting Anchor'
-                            ? 'current_stage_scene'
-                            : ref.label
-                })));
+                logStagingIdentityContract(buildReferenceLogEntries(finalizedStrictRefs));
+                setLatestSubmittedStagingRequest(buildSubmittedStagingRequestSnapshot('strict', strictPromptText, finalizedStrictRefs));
 
                 let actualGenId = '';
                 const res = await GeminiService.generateImage(
                     strictPromptText,
                     state.apiKey!,
                     state.model,
-                    limitedRefs,
+                    strictGenerationRefs,
                     { 
                         aspectRatio: state.director.aspectRatio, imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, strictMode: true, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, uiWaitWindowMs: stageUiWaitWindowMs,
                         identityLocks: activeIdentityLocks,
@@ -2723,7 +2718,7 @@ Output: environment plate only.
                 if (actualGenId) dispatch({ type: 'REMOVE_BACKGROUND_JOB', payload: actualGenId });
 
                 await applyStagingResult(img, {
-                    prompt: bgPrompt || state.director.subject,
+                    prompt: strictPromptText,
                     generationId: actualGenId || undefined,
                     surface: 'result',
                     suggestedName: 'staging_result',
@@ -2777,21 +2772,23 @@ Output: environment plate only.
                     urls.clear();
                     sourceFirstReferences.forEach((reference) => urls.add(reference.url));
                 } else if (activeBgUrl && !references.some(r => r.url === activeBgUrl)) {
-                    references.push({ url: activeBgUrl, label: "Environment/Lighting Anchor" });
+                    references.push({ url: activeBgUrl, label: "CLEAN_BG_PLATE" });
                 }
 
                 const loosePlan = buildRegionPlan({ token: tokenOverrides });
                 const looseControlOverlay = await buildSpatialControlOverlay(loosePlan);
-                if (looseControlOverlay) {
-                    const insertAt = Math.min(references.length, activeBgUrl ? 1 : 0);
-                    references.splice(insertAt, 0, { url: looseControlOverlay, label: "CONTROL_OVERLAY" });
-                }
                 const looseLightingBlock = await buildAnchorLightingTransferBlock(
                     activeBgUrl,
                     loosePlan,
                     dnaForRender.lighting || state.director.lighting
                 );
 
+                const finalizedLooseRefs = finalizeStagingReferences({
+                    cleanBgPlate: activeBgUrl,
+                    contentReferences: references,
+                    controlOverlay: looseControlOverlay
+                });
+                const looseGenerationRefs = buildFinalizedReferenceInputs(finalizedLooseRefs);
                 const loosePromptText = protectStagingPromptStyle([
                     generationContract.replaceAnchorSubjects ? replaceIdentityContractBlock : '',
                     renderSourcePreservationBlock,
@@ -2806,23 +2803,17 @@ Output: environment plate only.
                         viewportBox
                     ),
                     looseLightingBlock
-                ].filter(Boolean).join('\n\n'), generationContract, hasExplicitStyleOverride);
+                ].filter(Boolean).join('\n\n'), generationContract.explicitStyleOverride);
                 logStagingGenerationSources(loosePromptText);
-                logStagingIdentityContract(references.slice(0, 14).map((ref) => ({
-                    label: ref.label,
-                    role: ref.label.startsWith('REFERENCE_') || ref.label === 'ACTOR IDENTITY ANCHOR'
-                        ? 'selected_cast_reference'
-                        : ref.label === 'Environment/Lighting Anchor'
-                            ? 'current_stage_scene'
-                            : ref.label
-                })));
+                logStagingIdentityContract(buildReferenceLogEntries(finalizedLooseRefs));
+                setLatestSubmittedStagingRequest(buildSubmittedStagingRequestSnapshot('loose', loosePromptText, finalizedLooseRefs));
 
                 let actualGenId = '';
                 const res = await GeminiService.generateImage(
                     loosePromptText,
                     state.apiKey!,
                     state.model,
-                    references.slice(0, 14),
+                    looseGenerationRefs,
                     { 
                         aspectRatio: state.director.aspectRatio, imageSize: state.imageResolution, thinkingLevel: state.enableImageThinking, googleGrounding: state.enableGoogleGrounding, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements, uiWaitWindowMs: stageUiWaitWindowMs,
                         identityLocks: activeIdentityLocks,
@@ -2838,7 +2829,8 @@ Output: environment plate only.
                 if (actualGenId) dispatch({ type: 'REMOVE_BACKGROUND_JOB', payload: actualGenId });
 
                 await applyStagingResult(img, {
-                    prompt: bgPrompt || state.director.subject,
+                    prompt: loosePromptText,
+                    
                     generationId: actualGenId || undefined,
                     surface: 'result',
                     suggestedName: 'staging_result',
@@ -2862,6 +2854,7 @@ Output: environment plate only.
             clearInterval(progressInterval);
             dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: null });
             dispatch({ type: 'SET_PROCESSING', payload: false });
+            stagingGenerationInFlightRef.current = false;
         }
     };
 
@@ -3315,7 +3308,7 @@ Output: environment plate only.
         setProtectStatus('generating');
         try {
             const captured = (viewMode === 'result' && displayedResultImage)
-                ? displayedResultImage
+                ? displayedResultImage 
                 : await captureSceneImage();
 
             if (!captured) throw new Error('Stage capture returned empty.');
@@ -3780,7 +3773,14 @@ Output: environment plate only.
         }
     };
 
-    const refAnalysisPrompt = "Describe the subject, their clothing/appearance, and the specific art style or texture details. Be concise (max 20 words).";
+    const refAnalysisPrompt = [
+        'Describe only visible factual content needed for compositing.',
+        'For a person, describe facial traits, hair, facial hair, expression, pose, and clothing.',
+        'For wardrobe or props, describe color, material, pattern, construction, details, and fit.',
+        'Do not describe or infer the image-making medium, aesthetic treatment, rendering process, scan process, or camera treatment.',
+        'Use neutral factual language.',
+        'Maximum 30 words.'
+    ].join(' ');
 
     // V33: Automated re-sync via useEffect is removed per Depth Purge.
 
@@ -3967,10 +3967,10 @@ Output: environment plate only.
     }, [state.director, state.referenceSlots, state.tokens, state.annotations]);
 
     const handleCopyDirectorPrompt = async () => {
-        const text = v3DirectorPrompt || '';
+        const text = latestSubmittedStagingRequest?.prompt || v3DirectorPrompt || '';
         try {
             await navigator.clipboard.writeText(text);
-            dispatch({ type: 'ADD_LOG', payload: { message: 'Director prompt copied to clipboard.', type: 'success' } });
+            dispatch({ type: 'ADD_LOG', payload: { message: latestSubmittedStagingRequest ? 'Submitted staging prompt copied to clipboard.' : 'Director prompt preview copied to clipboard.', type: 'success' } });
         } catch {
             dispatch({ type: 'ADD_LOG', payload: { message: 'Clipboard copy failed (browser permissions).', type: 'error' } });
         }
@@ -4360,7 +4360,7 @@ Output: environment plate only.
                     }
                 });
 
-                dispatch({ type: 'ADD_LOG', payload: { message: `Actor ${castItem.tag} auto-staged â€” drag to reposition`, type: 'success' } });
+                dispatch({ type: 'ADD_LOG', payload: { message: `Actor ${castItem.tag} auto-staged — drag to reposition`, type: 'success' } });
                 return;
             } catch { /* ignore */ }
         }
@@ -4714,6 +4714,7 @@ Output: environment plate only.
                 )}
 
                 <button
+                    type="button"
                     onClick={generateBg}
                     disabled={state.isProcessing}
                     className="relative group px-4 py-1.5 h-full bg-[#09090b] hover:bg-black border border-white/10 hover:border-purple-500/50 rounded flex items-center justify-center text-[8px] lg:text-[9px] whitespace-nowrap font-bold tracking-widest uppercase transition-all disabled:opacity-50 overflow-hidden shrink-0"
@@ -6521,6 +6522,7 @@ Output: environment plate only.
                     <div className="shrink-0 p-2 border-t border-white/5">
                         <PromptTerminalPanel
                             v3DirectorPrompt={v3DirectorPrompt}
+                            submittedStagingRequest={latestSubmittedStagingRequest}
                             handleCopyDirectorPrompt={handleCopyDirectorPrompt}
                             collapsed={collapsedPanels['v3_terminal']}
                             onToggle={togglePanel}
@@ -6558,6 +6560,7 @@ Output: environment plate only.
             onClose={() => setShowClearConfirm(false)}
             onConfirm={() => {
                 dispatch({ type: 'CLEAR_STAGE' });
+                setLatestSubmittedStagingRequest(null);
                 setStrictMode(false);
                 dispatch({ type: 'SET_RESULT_IMAGE', payload: null });
                 setViewMode('stage');
@@ -6573,3 +6576,4 @@ Output: environment plate only.
 };
 
 export default SceneCanvas;
+

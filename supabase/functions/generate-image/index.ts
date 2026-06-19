@@ -8,6 +8,32 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-idempotency-key',
 };
+const jsonHeaders = {
+  ...corsHeaders,
+  'Content-Type': 'application/json'
+};
+
+const jsonResponse = (
+  body: Record<string, unknown>,
+  init: Omit<ResponseInit, 'headers'> & { headers?: Record<string, string> } = {}
+): Response => new Response(JSON.stringify(body), {
+  ...init,
+  headers: {
+    ...jsonHeaders,
+    ...(init.headers ?? {})
+  }
+});
+
+const corsPreflightResponse = (req: Request): Response => {
+  const requestedHeaders = req.headers.get('Access-Control-Request-Headers');
+  return new Response(null, {
+    status: 204,
+    headers: {
+      ...corsHeaders,
+      'Access-Control-Allow-Headers': requestedHeaders || corsHeaders['Access-Control-Allow-Headers']
+    }
+  });
+};
 
 type GenerationJob = {
   id: string;
@@ -133,6 +159,50 @@ const getErrorMessage = (error: unknown): string =>
 
 const isObjectRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const readJsonBody = async (req: Request): Promise<GenerateImageRequestBody> => {
+  try {
+    const body = await withTimeout(req.json() as Promise<unknown>, 15000, 'req.json');
+    if (!isObjectRecord(body)) {
+      throw new HttpError(400, 'INVALID_REQUEST_BODY', 'Request body must be a JSON object.');
+    }
+    return body as GenerateImageRequestBody;
+  } catch (error) {
+    if (isHttpErrorLike(error)) throw error;
+    throw new HttpError(400, 'INVALID_JSON', 'Invalid JSON request body.');
+  }
+};
+
+const validateGenerateImageRequestBody = (body: GenerateImageRequestBody): {
+  payload: NonNullable<GenerateImageRequestBody['payload']> & { model: string; requestBody: unknown };
+  executionFingerprint: string;
+} => {
+  if (!isObjectRecord(body.payload)) {
+    throw new HttpError(400, 'MISSING_PAYLOAD', 'Missing required field: payload');
+  }
+
+  const payload = body.payload;
+  if (typeof payload.model !== 'string' || !payload.model.trim()) {
+    throw new HttpError(400, 'MISSING_MODEL', 'Missing required field: payload.model');
+  }
+
+  if (payload.requestBody === undefined || payload.requestBody === null) {
+    throw new HttpError(400, 'MISSING_REQUEST_BODY', 'Missing required field: payload.requestBody');
+  }
+
+  if (typeof body.executionFingerprint !== 'string' || !body.executionFingerprint.trim()) {
+    throw new HttpError(400, 'MISSING_EXECUTION_FINGERPRINT', 'Missing required field: executionFingerprint');
+  }
+
+  return {
+    payload: {
+      ...payload,
+      model: payload.model.trim(),
+      requestBody: payload.requestBody
+    },
+    executionFingerprint: body.executionFingerprint.trim()
+  };
+};
 
 type HostedFailureClassification = {
   status: number;
@@ -918,13 +988,14 @@ const executeSynchronousTextAnalysis = async (
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
-    const requestedHeaders = req.headers.get('Access-Control-Request-Headers');
-    return new Response('ok', { 
-        headers: {
-            ...corsHeaders,
-            'Access-Control-Allow-Headers': requestedHeaders || corsHeaders['Access-Control-Allow-Headers']
-        } 
-    });
+    return corsPreflightResponse(req);
+  }
+
+  if (req.method !== 'POST') {
+    return jsonResponse(
+      { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' },
+      { status: 405, headers: { Allow: 'POST, OPTIONS' } }
+    );
   }
 
   let supabaseServiceForFailure: SupabaseClientAny | null = null;
@@ -934,7 +1005,7 @@ serve(async (req) => {
 
   try {
     const authHeader = req.headers.get('Authorization');
-    if (!authHeader) throw new Error('Missing Authorization header');
+    if (!authHeader) throw new HttpError(401, 'UNAUTHORIZED', 'Missing Authorization header');
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
     const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
@@ -974,7 +1045,7 @@ serve(async (req) => {
 
     if (userError || !userData?.user) {
       console.warn('[AUTH] Unauthorized generation request:', userError?.message || 'User data missing');
-      throw new Error('Unauthorized');
+      throw new HttpError(401, 'UNAUTHORIZED', 'Unauthorized');
     }
 
     // Service client ONLY
@@ -982,13 +1053,8 @@ serve(async (req) => {
     supabaseServiceForFailure = supabaseService;
     
     const userId = userData.user.id;
-
-    const payloadRaw = await withTimeout(req.json() as Promise<unknown>, 15000, "req.json");
-    const requestBody = (payloadRaw ?? {}) as GenerateImageRequestBody;
-    const { payload, executionFingerprint } = requestBody;
-    if (!payload?.model || !executionFingerprint) {
-      throw new Error("Invalid request payload: missing payload.model or executionFingerprint");
-    }
+    const requestBody = await readJsonBody(req);
+    const { payload, executionFingerprint } = validateGenerateImageRequestBody(requestBody);
     const providerModel = normalizeHostedProviderModel(payload.model);
     const expectedResponseType = readExpectedResponseType(requestBody);
     expectedResponseTypeForFailure = expectedResponseType;
@@ -1267,3 +1333,4 @@ serve(async (req) => {
     });
   }
 });
+
