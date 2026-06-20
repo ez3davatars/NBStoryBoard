@@ -1,5 +1,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import { getLaunchProduct, getPaidCreditGrant } from "../_shared/launchPricing.ts";
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type SupabaseClientAny = ReturnType<typeof createClient<any, "public", any>>;
+
+type StripeMetadata = Record<string, string | null> | null;
 
 type StripeCheckoutSession = {
   id?: string;
@@ -7,14 +13,25 @@ type StripeCheckoutSession = {
   mode?: string | null;
   payment_status?: string | null;
   client_reference_id?: string | null;
-  metadata?: Record<string, string | null> | null;
+  metadata?: StripeMetadata;
+};
+
+type StripeInvoice = {
+  id?: string;
+  object?: string;
+  status?: string | null;
+  billing_reason?: string | null;
+  subscription?: string | null;
+  metadata?: StripeMetadata;
+  subscription_details?: { metadata?: StripeMetadata } | null;
+  lines?: { data?: Array<{ metadata?: StripeMetadata; price?: { id?: string | null } | null }> } | null;
 };
 
 type StripeEvent = {
   id?: string;
   type?: string;
   data?: {
-    object?: StripeCheckoutSession;
+    object?: StripeCheckoutSession & StripeInvoice;
   };
 };
 
@@ -27,11 +44,6 @@ type CreditTopUp = {
 };
 
 type CreditPackProductKey = "credit_pack_100" | "credit_pack_500";
-
-const CREDIT_PACK_CREDITS: Record<CreditPackProductKey, number> = {
-  credit_pack_100: 100,
-  credit_pack_500: 500,
-};
 
 const jsonResponse = (body: Record<string, unknown>, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -145,7 +157,7 @@ const readCreditTopUp = (event: StripeEvent): CreditTopUp | null => {
     throw new Error(`Unsupported TOPUP_PURCHASE product_key: ${productKey ?? "missing"}`);
   }
 
-  const expectedCredits = CREDIT_PACK_CREDITS[productKey];
+  const expectedCredits = getPaidCreditGrant(productKey); // server-owned grant from the launch registry
   const credits = Number(readMetadataValue(session.metadata, "credits"));
   if (!Number.isInteger(credits) || credits !== expectedCredits) {
     throw new Error(`Invalid TOPUP_PURCHASE credits metadata for ${productKey}.`);
@@ -177,7 +189,7 @@ const rpcFunctionNotFound = (message: string): boolean =>
   /function .*apply_stripe_credit_topup|could not find the function|schema cache/i.test(message);
 
 const applyCreditTopUpWithRpc = async (
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClientAny,
   topUp: CreditTopUp
 ): Promise<{ applied: boolean; balance: number | null }> => {
   const { data, error } = await supabase.rpc("apply_stripe_credit_topup", {
@@ -206,7 +218,7 @@ const applyCreditTopUpWithRpc = async (
 };
 
 const applyCreditTopUpDirectly = async (
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClientAny,
   topUp: CreditTopUp
 ): Promise<{ applied: boolean; balance: number | null }> => {
   const { data: profileData, error: readError } = await supabase
@@ -244,7 +256,7 @@ const applyCreditTopUpDirectly = async (
 };
 
 const applyCreditTopUp = async (
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClientAny,
   topUp: CreditTopUp
 ): Promise<{ applied: boolean; balance: number | null }> => {
   try {
@@ -255,6 +267,79 @@ const applyCreditTopUp = async (
     console.warn("apply_stripe_credit_topup RPC not found; falling back to direct credit update.");
     return applyCreditTopUpDirectly(supabase, topUp);
   }
+};
+
+type SubscriptionGrant = {
+  eventId: string;
+  invoiceId: string;
+  userId: string;
+  productKey: string;
+  credits: number;
+};
+
+// Reads a subscription credit grant from a paid invoice event. Grant amount + product validity come from
+// the SERVER-OWNED launch registry, never the Stripe amount/metadata credits. Only eligible (create/cycle)
+// successfully-paid subscription invoices grant credits.
+const readSubscriptionGrant = (event: StripeEvent): SubscriptionGrant | null => {
+  const invoice = event.data?.object;
+  if (!invoice || invoice.object !== "invoice") return null;
+  if (invoice.status !== "paid") return null;
+  if (invoice.billing_reason !== "subscription_create" && invoice.billing_reason !== "subscription_cycle") return null;
+
+  // Server-set metadata lives on the subscription; Stripe surfaces it on the invoice.
+  const md = invoice.subscription_details?.metadata ?? invoice.lines?.data?.[0]?.metadata ?? invoice.metadata;
+  const purchaseKind = readMetadataValue(md, "purchase_kind");
+  if (purchaseKind !== "HOSTED_SUBSCRIPTION") return null;
+
+  const productKey = readMetadataValue(md, "product_key");
+  const product = productKey ? getLaunchProduct(productKey) : null;
+  if (!product || product.isByok || product.purchaseType !== "subscription") {
+    throw new Error(`Unsupported subscription product_key: ${productKey ?? "missing"}`);
+  }
+  const credits = getPaidCreditGrant(productKey!); // 600 / 1200 from the registry
+
+  const userId = readMetadataValue(md, "user_id");
+  if (!userId) throw new Error("Missing subscription user_id metadata.");
+  if (!event.id) throw new Error("Missing Stripe event id.");
+  if (!invoice.id) throw new Error("Missing Stripe invoice id.");
+
+  return { eventId: event.id, invoiceId: invoice.id, userId, productKey: productKey!, credits };
+};
+
+// Grants subscription credits idempotently. The (stripe_event_id PK, stripe_session_id UNIQUE) constraints
+// on stripe_processed_events make duplicate event/invoice deliveries no-ops: we claim the row first and
+// only credit on a fresh insert. A duplicate (23505) is treated as already-processed.
+const applySubscriptionCreditGrant = async (
+  supabase: SupabaseClientAny,
+  grant: SubscriptionGrant
+): Promise<{ applied: boolean; balance: number | null }> => {
+  const claim = await supabase
+    .from("stripe_processed_events")
+    .insert({
+      stripe_event_id: grant.eventId,
+      stripe_session_id: grant.invoiceId,
+      user_id: grant.userId,
+      product_key: grant.productKey,
+      purchase_kind: "HOSTED_SUBSCRIPTION",
+      credits: grant.credits,
+    })
+    .select("stripe_event_id");
+
+  if (claim.error) {
+    if ((claim.error as { code?: string }).code === "23505") {
+      return { applied: false, balance: null }; // duplicate event/invoice -> already granted
+    }
+    throw new Error(`Could not record subscription credit event: ${claim.error.message}`);
+  }
+
+  const credited = await applyCreditTopUpDirectly(supabase, {
+    eventId: grant.eventId,
+    sessionId: grant.invoiceId,
+    userId: grant.userId,
+    productKey: grant.productKey as CreditPackProductKey,
+    credits: grant.credits,
+  });
+  return { applied: true, balance: credited.balance };
 };
 
 serve(async (req) => {
@@ -272,8 +357,36 @@ serve(async (req) => {
     await verifyStripeSignature(rawBody, req.headers.get("stripe-signature"), webhookSecret);
 
     const event = JSON.parse(rawBody) as StripeEvent;
-    if (event.type !== "checkout.session.completed" && event.type !== "checkout.session.async_payment_succeeded") {
+    const isCheckout =
+      event.type === "checkout.session.completed" || event.type === "checkout.session.async_payment_succeeded";
+    const isSubscriptionInvoice =
+      event.type === "invoice.paid" || event.type === "invoice.payment_succeeded";
+
+    // Failed/voided/refunded/unrelated events grant nothing.
+    if (!isCheckout && !isSubscriptionInvoice) {
       return jsonResponse({ received: true, ignored: true });
+    }
+
+    const supabaseUrl = getEnv("SUPABASE_URL");
+    const serviceRoleKey = getEnv("SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_SECRET_KEY");
+    if (!supabaseUrl || !serviceRoleKey) {
+      throw new Error("Supabase service credentials are not configured.");
+    }
+    const supabase = createClient(supabaseUrl, serviceRoleKey);
+
+    if (isSubscriptionInvoice) {
+      const grant = readSubscriptionGrant(event);
+      if (!grant) {
+        return jsonResponse({ received: true, ignored: true, reason: "not_eligible_subscription_invoice" });
+      }
+      const subResult = await applySubscriptionCreditGrant(supabase, grant);
+      return jsonResponse({
+        received: true,
+        applied: subResult.applied,
+        product_key: grant.productKey,
+        credits: grant.credits,
+        credit_balance: subResult.balance,
+      });
     }
 
     const session = event.data?.object;
@@ -286,13 +399,6 @@ serve(async (req) => {
       return jsonResponse({ received: true, ignored: true, reason: "not_topup_purchase" });
     }
 
-    const supabaseUrl = getEnv("SUPABASE_URL");
-    const serviceRoleKey = getEnv("SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_SECRET_KEY");
-    if (!supabaseUrl || !serviceRoleKey) {
-      throw new Error("Supabase service credentials are not configured.");
-    }
-
-    const supabase = createClient(supabaseUrl, serviceRoleKey);
     const result = await applyCreditTopUp(supabase, topUp);
 
     return jsonResponse({

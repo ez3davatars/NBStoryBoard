@@ -1,8 +1,11 @@
-// eslint-disable-next-line @typescript-eslint/triple-slash-reference
-/// <reference path="../deno-edge.d.ts" />
-
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import {
+  assertLaunchPricingConfigured,
+  getLaunchProduct,
+  isPricingRolloutEnabled,
+  resolveLaunchPriceId,
+} from "../_shared/launchPricing.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -43,6 +46,9 @@ const getEnv = (...keys: string[]): string | null => {
   }
   return null;
 };
+
+// Single-key getter for the shared launch-pricing registry.
+const envGetter = (key: string): string | null => getEnv(key);
 
 const PRICE_MAP: Record<BillingProductKey, CheckoutProductConfig> = {
   credit_pack_100: {
@@ -178,8 +184,11 @@ const createCheckoutMetadata = (
     return metadata;
   }
 
-  if (config.purchaseKind === "TOPUP_PURCHASE" && typeof config.credits === "number") {
-    metadata.purchase_kind = "TOPUP_PURCHASE";
+  if (
+    (config.purchaseKind === "TOPUP_PURCHASE" || config.purchaseKind === "HOSTED_SUBSCRIPTION") &&
+    typeof config.credits === "number"
+  ) {
+    metadata.purchase_kind = config.purchaseKind;
     metadata.credits = String(config.credits);
     metadata.user_id = userId ?? "";
     metadata.email = userEmail ?? "";
@@ -229,13 +238,48 @@ serve(async (req) => {
       body.priceId ?? body.price_id ?? body.stripe_price_id
     );
 
+    const rolloutEnabled = isPricingRolloutEnabled(envGetter);
+
     let productConfig: CheckoutProductConfig | null = null;
-    let productKey: BillingProductKey | null = null;
+    let productKey: string | null = null;
 
     if (rawProductKey) {
-      productKey = normalizeProductKey(rawProductKey);
-      productConfig = PRICE_MAP[productKey];
+      const requestedKey = String(rawProductKey).trim().toLowerCase();
+
+      if (rolloutEnabled) {
+        // Launch mode: only server-owned launch products; price is DERIVED from the registry env vars,
+        // never from a client-supplied price. BYOK is unchanged; hosted launch products use the V2 ids.
+        const launch = getLaunchProduct(requestedKey);
+        if (!launch || !launch.availableForNewCheckout) {
+          throw new HttpError(400, "UNKNOWN_PRODUCT", "Unknown or inactive product.");
+        }
+        if (launch.isByok) {
+          productKey = normalizeProductKey(requestedKey);
+          productConfig = PRICE_MAP[productKey as BillingProductKey];
+        } else {
+          assertLaunchPricingConfigured(envGetter); // all four V2 ids required (fail closed)
+          productKey = requestedKey;
+          productConfig = {
+            stripePriceId: resolveLaunchPriceId(requestedKey, envGetter),
+            mode: launch.purchaseType === "subscription" ? "subscription" : "payment",
+            purchaseKind: launch.purchaseType === "subscription" ? "HOSTED_SUBSCRIPTION" : "TOPUP_PURCHASE",
+            productKey: requestedKey,
+            credits: launch.paidCredits,
+          };
+        }
+      } else {
+        // Prelaunch: unchanged behavior (old PRICE_MAP env ids).
+        productKey = normalizeProductKey(requestedKey);
+        productConfig = PRICE_MAP[productKey as BillingProductKey];
+      }
     } else if (legacyPriceId) {
+      if (rolloutEnabled) {
+        throw new HttpError(
+          400,
+          "CLIENT_PRICE_NOT_ALLOWED",
+          "Client-supplied Stripe price ids are not accepted for launch checkout. Use a product_key."
+        );
+      }
       productConfig = {
         stripePriceId: legacyPriceId,
         mode: body.mode === "subscription" ? "subscription" : "payment",
@@ -249,9 +293,14 @@ serve(async (req) => {
       );
     }
 
-    const isCreditPack = productKey ? isCreditPackProductKey(productKey) : false;
+    // Hosted credit-bearing products (packs + subscriptions) require an authenticated user for credit
+    // attribution; BYOK does not. Derived from the server-owned purchaseKind, never the client.
+    const requiresUserAttribution =
+      productConfig.purchaseKind === "TOPUP_PURCHASE" ||
+      productConfig.purchaseKind === "HOSTED_SUBSCRIPTION";
 
-    const directUrlEnv = productKey ? PRODUCT_DIRECT_URL_ENV[productKey] : null;
+    const isByokKey = productKey === "indie_desktop_byok" || productKey === "agency_desktop_byok";
+    const directUrlEnv = isByokKey ? PRODUCT_DIRECT_URL_ENV[productKey as BillingProductKey] : null;
     const directUrl = directUrlEnv ? getEnv(...directUrlEnv) : null;
     if (directUrl) {
       return jsonResponse({ url: directUrl, checkout_url: directUrl });
@@ -261,7 +310,7 @@ serve(async (req) => {
     let userId: string | null = null;
     let userEmail: string | null = null;
 
-    if (isCreditPack) {
+    if (requiresUserAttribution) {
       if (!token) {
         return jsonResponse({
           error: "Auth session missing!",
