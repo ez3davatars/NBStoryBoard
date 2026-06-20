@@ -193,6 +193,7 @@ export const ActorIntelligencePanel = ({
                             <div className="actor-intelligence-selected-token flex items-center justify-between mb-2">
                                 <span className="token-label text-[11px] font-bold text-white uppercase" title={token.tag}>{getCompactActorLabel(token.tag)}</span>
                                 <button
+                                    type="button"
                                     onClick={async () => {
                                         if (state.billingEntitlements.effectiveBillingMode === 'byok' && !state.apiKey) {
                                             dispatch({ type: 'ADD_LOG', payload: { message: "BYOK mode is selected. Add your API key in Settings to continue.", type: 'error' } });
@@ -216,16 +217,16 @@ export const ActorIntelligencePanel = ({
                                                 throw new Error('No analyzable actor image was found.');
                                             }
 
-                                            const analysisPromise = GeminiService.analyzeImage(
-                                                "Describe this character's pose, expression, and physical action in this scene context. Be very specific about lighting interaction. Max 30 words.",
-                                                state.apiKey || '', state.model, imageUrl,
-                                                {
-                                                    billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
-                                                    expectedResponseType: 'text',
-                                                    uiWaitWindowMs: ACTOR_ANALYSIS_UI_WAIT_MS,
-                                                    signal: abortController.signal
-                                                }
-                                            );
+                                            const analysisPromise = GeminiService.runHostedImageAnalysis({
+                                                analysisKind: 'actor_intelligence',
+                                                prompt: "Describe this character's pose, expression, and physical action in this scene context. Be very specific about lighting interaction. Max 30 words.",
+                                                imageUrl,
+                                                apiKey: state.apiKey || '',
+                                                model: state.model,
+                                                billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
+                                                uiWaitWindowMs: ACTOR_ANALYSIS_UI_WAIT_MS,
+                                                signal: abortController.signal
+                                            });
                                             analysisPromise.catch(() => undefined);
 
                                             const timeoutPromise = new Promise<never>((_, reject) => {

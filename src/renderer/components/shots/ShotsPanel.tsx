@@ -241,19 +241,18 @@ Return JSON with:
 `;
 
     try {
-      const report = await GeminiService.analyzeMultiFrameJson<ShotIntegrityReport>(
+      const report = await GeminiService.runHostedMultiFrameAnalysis<ShotIntegrityReport>({
+        analysisKind: 'shot_integrity_gate',
         prompt,
         apiKey,
         model,
-        [
+        frames: [
           { url: args.sourceUrl, label: 'SOURCE_ANCHOR' },
           { url: args.previewUrl, label: 'GENERATED_SHOT' }
         ],
-        {
-          billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
-          entitlements: state.billingEntitlements
-        }
-      );
+        billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
+        entitlements: state.billingEntitlements
+      });
 
       const passed = Boolean(report.passed)
         && report.actorCountPreserved !== false

@@ -575,6 +575,7 @@ const VeoPromptBuilderPanel = forwardRef<VeoPromptBuilderRef>((_, ref) => { // R
                     <Trash2 className="w-4 h-4" />
                 </button>
                 <button
+                    type="button"
                     onClick={handleEnhance}
                     disabled={isEnhancing || !concept.trim()}
                     className="flex-1 py-2.5 px-4 rounded-full flex items-center justify-center gap-2 text-[10px] font-bold uppercase tracking-widest transition-all bg-white/5 hover:bg-white/10 border border-white/10 text-white disabled:opacity-50"

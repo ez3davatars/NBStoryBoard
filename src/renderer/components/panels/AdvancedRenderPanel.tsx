@@ -108,7 +108,8 @@ export const AdvancedRenderPanel: React.FC<AdvancedRenderPanelProps> = ({
                             <span className="truncate text-green-300/80">{anchorDNA.camera || 'Pending Analysis...'}</span>
                         </div>
                     </div>
-                    <button 
+                    <button
+                        type="button"
                         onClick={analyzeBackgroundDNA}
                         disabled={dnaStatus === 'analyzing'}
                         className="flex items-center justify-center gap-1.5 w-full py-1 mt-1 bg-[#27272a] hover:bg-[#3f3f46] text-white text-[9px] font-bold tracking-widest uppercase rounded disabled:opacity-50 transition-colors"
@@ -143,6 +144,7 @@ export const AdvancedRenderPanel: React.FC<AdvancedRenderPanelProps> = ({
                     </div>
                     {tokenProfilesReady < tokenProfilesTotal && (
                         <button
+                            type="button"
                             onClick={handleAnalyzeMissingTokenProfiles}
                             className="w-full py-1 text-[9px] font-bold tracking-widest uppercase bg-amber-900/30 hover:bg-amber-800/50 text-amber-500 border border-amber-900/50 rounded transition-colors"
                         >

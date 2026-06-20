@@ -1,6 +1,10 @@
 // Focused, testable helpers for the Hosted Usage panel. The label/credit logic lives here rather
 // than inline in App.tsx so it can be unit-tested directly.
 
+import { HOSTED_USAGE_CATEGORY_LABELS } from '../services/hostedAnalysisPolicy';
+
+export { HOSTED_USAGE_CATEGORY_LABELS };
+
 export type HostedUsageMetadata = {
   requiredCredits?: number;
   generationType?: string;
@@ -15,11 +19,6 @@ export type HostedUsageRow = {
   status?: string | null;
   provider_model?: string | null;
   billing_metadata?: HostedUsageMetadata | null;
-};
-
-// Stable, server-approved usage categories => their fixed Hosted Usage display labels.
-export const HOSTED_USAGE_CATEGORY_LABELS: Record<string, string> = {
-  reference_dna_analysis: 'Reference DNA Analysis'
 };
 
 export const getHostedUsageCredits = (row: HostedUsageRow): number => {

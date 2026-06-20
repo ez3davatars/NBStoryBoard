@@ -61,12 +61,13 @@ describe('billing totals + credit reads are unaffected by the label change', () 
 });
 
 describe('server-side category validation + persistence (edge function)', () => {
-  it('only approves reference_dna_analysis for a paid text analysis on an approved model', () => {
+  it('derives the usage category from the validated analysisKind policy, not a client string', () => {
     const source = edgeSource();
-    expect(source).toContain("requestedUsageCategory === 'reference_dna_analysis' &&");
-    expect(source).toContain("operation === 'analyze' &&");
-    expect(source).toContain("expectedResponseType === 'text' &&");
-    expect(source).toContain("qualityGateBilling === 'paid' &&");
+    expect(source).toContain('HOSTED_ANALYSIS_POLICIES[requestedAnalysisKind]');
+    expect(source).toContain("'INVALID_ANALYSIS_KIND'");
+    expect(source).toContain("'ANALYSIS_KIND_RESPONSE_MISMATCH'");
+    expect(source).toContain("'ANALYSIS_KIND_ON_GENERATE'");
+    expect(source).toContain("reference_dna: { billing: 'metered', credits: 0, responseType: 'text', usageCategory: 'reference_dna_analysis'");
     expect(source).toContain('ANALYSIS_OPERATION_MODELS.has(providerModel)');
   });
 
@@ -75,8 +76,8 @@ describe('server-side category validation + persistence (edge function)', () => 
     // usageCategory is part of the returned creditMetadata that is written to billing_metadata.
     expect(source).toContain('creditPricingVersion: CREDIT_PRICING_VERSION,\n    usageCategory');
     expect(source).toContain('billing_metadata: creditMetadata');
-    // Only the typed literal is ever stored.
-    expect(source).toContain("type HostedUsageCategory = 'reference_dna_analysis'");
+    // Category comes only from the server-owned analysisKind policy, never a client display string.
+    expect(source).toContain('const usageCategory: string | undefined = analysisPolicy?.usageCategory;');
   });
 
   it('does not change pricing or deductions (server-derived requiredCredits, mismatch guard intact)', () => {
@@ -87,14 +88,12 @@ describe('server-side category validation + persistence (edge function)', () => 
 });
 
 describe('client only tags the manual Reference DNA AUTO-ANALYZE path', () => {
-  it('sends usageCategory only from the manual handler, alongside paid text analysis', () => {
+  it('declares the reference_dna analysisKind only from the manual handler', () => {
     const source = sceneSource();
     const handlerIndex = source.indexOf('const handleManualAnalyze');
     const handlerBody = source.slice(handlerIndex, handlerIndex + 1400);
-    expect(handlerBody).toContain("usageCategory: 'reference_dna_analysis'");
-    expect(handlerBody).toContain("hostedQualityGateBilling: 'paid'");
-    expect(handlerBody).toContain("expectedResponseType: 'text'");
-    // The category must not be attached to the automatic quality-gate validators.
-    expect(source).not.toContain("withQualityGateWaitWindow(options), expectedResponseType: 'text', usageCategory");
+    expect(handlerBody).toContain("analysisKind: 'reference_dna'");
+    // The automatic quality-gate validators use their own included analysisKind, never reference_dna.
+    expect(source).not.toContain("withQualityGateWaitWindow(options), expectedResponseType: 'text', analysisKind: 'reference_dna'");
   });
 });

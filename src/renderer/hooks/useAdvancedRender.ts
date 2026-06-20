@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import type { AppState, Action, StageToken, WhitelistProfile } from '../context/AppContext';
 import { GeminiService } from '../services/GeminiService';
+import type { HostedAnalysisKind } from '../services/hostedAnalysisPolicy';
 import { ensureAuthenticatedForGeneration } from '../services/AuthGenerationGate';
 
 export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Action>) => {
@@ -40,7 +41,9 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
         }
     };
 
-    const analyzeBackgroundDNA = useCallback(async (): Promise<{ environment: string; lighting: string; camera: string } | null> => {
+    const analyzeBackgroundDNA = useCallback(async (
+        analysisKind: HostedAnalysisKind = 'scene_dna_gate'
+    ): Promise<{ environment: string; lighting: string; camera: string } | null> => {
         if (!state.backgroundUrl) {
             dispatch({ type: 'ADD_LOG', payload: { message: "No background set to analyze.", type: 'error' } });
             return null;
@@ -57,13 +60,14 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
         dispatch({ type: 'ADD_LOG', payload: { message: "Re-extracting scene only (background/layout/lighting/camera)...", type: 'info' } });
 
         try {
-            const raw = await GeminiService.analyzeImage(
-                "Analyze this image for a film compositor. Extract SCENE/BACKGROUND DNA ONLY. Return JSON only with exactly 3 keys: 'environment' (concise setting/vibe/background/layout/visible typography or props), 'lighting' (one concise but detailed sentence naming key light direction, fill/shadow ratio, color temperature, shadow softness, exposure/black level, and any visible colored practical/accent lights), and 'camera' (shot size/lens/framing). Do NOT describe any person's identity, face, age, ethnicity, body type, hairstyle, baldness, facial hair, wardrobe identity, or subject traits. Do NOT return a subject key. Only return the JSON.",
-                state.apiKey || '',
-                state.model,
-                state.backgroundUrl,
-                { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', expectedResponseType: 'json' }
-            );
+            const raw = await GeminiService.runHostedImageAnalysis({
+                analysisKind,
+                prompt: "Analyze this image for a film compositor. Extract SCENE/BACKGROUND DNA ONLY. Return JSON only with exactly 3 keys: 'environment' (concise setting/vibe/background/layout/visible typography or props), 'lighting' (one concise but detailed sentence naming key light direction, fill/shadow ratio, color temperature, shadow softness, exposure/black level, and any visible colored practical/accent lights), and 'camera' (shot size/lens/framing). Do NOT describe any person's identity, face, age, ethnicity, body type, hairstyle, baldness, facial hair, wardrobe identity, or subject traits. Do NOT return a subject key. Only return the JSON.",
+                imageUrl: state.backgroundUrl,
+                apiKey: state.apiKey || '',
+                model: state.model,
+                billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok'
+            });
 
             const parsed = safeParseJson(raw);
             if (!parsed) throw new Error("DNA parse failed (non-JSON response).");
@@ -106,15 +110,17 @@ export const useAdvancedRender = (state: AppState, dispatch: React.Dispatch<Acti
     }, [autoAnchorDNA, state.backgroundUrl, state.apiKey, state.billingEntitlements, state.director?.environment, state.director?.lighting, state.director?.camera, analyzeBackgroundDNA]);
 
     const analyzeWhitelistProfile = async (imageUrl: string, label: string): Promise<WhitelistProfile> => {
-        const raw = await GeminiService.analyzeImage(
-            "Analyze this single character/object cutout. Return a JSON object with keys: " +
-            "'identity' (who/what it is), 'wardrobe' (clothing/body/materials), 'accessories' (items held/worn), 'style' (render style/texture cues). " +
-            "Keep each value concise (max ~18 words). If unknown, use empty string. ONLY return JSON.",
-            state.apiKey || '',
-            state.model,
+        const raw = await GeminiService.runHostedImageAnalysis({
+            analysisKind: 'token_profile_gate',
+            prompt:
+                "Analyze this single character/object cutout. Return a JSON object with keys: " +
+                "'identity' (who/what it is), 'wardrobe' (clothing/body/materials), 'accessories' (items held/worn), 'style' (render style/texture cues). " +
+                "Keep each value concise (max ~18 words). If unknown, use empty string. ONLY return JSON.",
             imageUrl,
-            { billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', expectedResponseType: 'json' }
-        );
+            apiKey: state.apiKey || '',
+            model: state.model,
+            billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok'
+        });
 
         const parsed = safeParseJson(raw);
         if (!parsed) {

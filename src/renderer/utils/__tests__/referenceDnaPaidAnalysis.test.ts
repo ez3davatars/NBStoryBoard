@@ -50,9 +50,9 @@ describe('Reference DNA AUTO-ANALYZE sends paid analysis', () => {
     const handlerIndex = source.indexOf('const handleManualAnalyze');
     expect(handlerIndex).toBeGreaterThan(-1);
     const handlerBody = source.slice(handlerIndex, handlerIndex + 1400);
-    expect(handlerBody).toContain('GeminiService.analyzeImage(refAnalysisPrompt');
-    expect(handlerBody).toContain("expectedResponseType: 'text'");
-    expect(handlerBody).toContain("hostedQualityGateBilling: 'paid'");
+    // Billing/response-type now derive from the 'reference_dna' analysisKind policy via the wrapper.
+    expect(handlerBody).toContain('runHostedImageAnalysis({');
+    expect(handlerBody).toContain("analysisKind: 'reference_dna'");
   });
 
   it('analyzeImage threads options through normalizeAnalyzeOptions', () => {
@@ -63,13 +63,14 @@ describe('Reference DNA AUTO-ANALYZE sends paid analysis', () => {
 });
 
 describe('edge function billing for paid vs included analysis vs generation', () => {
-  it('bills paid analysis as a positive amount and included analysis as zero', () => {
+  it('meters analysis by usage (reservation then settle), keeping the legacy fallback for non-kind calls', () => {
     const source = edgeSource();
-    // paid => treatAsIncludedAnalysis is false => calculateBackendRequiredCredits (positive).
+    // analysisKind policy is metered => reserve a bounded max, settle from real usageMetadata.
+    expect(source).toContain('const isMeteredAnalysis = analysisPolicy?.billing === \'metered\'');
+    expect(source).toContain('meteredReservationCredits(analysisPolicy!)');
+    // Legacy fixed-price fallback remains for requests without an analysisKind.
     expect(source).toContain("operation === 'analyze' && qualityGateBilling !== 'paid'");
-    expect(source).toContain('const backendCalculatedRequiredCredits = treatAsIncludedAnalysis');
     expect(source).toContain('calculateBackendRequiredCredits(generationType, resolutionTier)');
-    expect(source).toContain('? 0');
   });
 
   it('returns text (not an image) for a text analysis response type', () => {

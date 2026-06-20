@@ -13,15 +13,12 @@ describe('hosted operation + billing contract (edge function)', () => {
     expect(source).toContain("expectedResponseType === 'text' || expectedResponseType === 'json' ? 'analyze' : 'generate'");
   });
 
-  it('treats post-generation analysis as zero-credit included billing without trusting a client flag', () => {
+  it('keeps the legacy flag-based fallback for non-analysisKind calls (included unless paid)', () => {
     const source = edgeSource();
-    // analyze (not explicitly paid) is included => 0 credits, derived from the server operation type.
+    // For requests without an analysisKind, analyze is included (0) unless explicitly paid.
     expect(source).toContain("operation === 'analyze' && qualityGateBilling !== 'paid'");
     expect(source).toContain('const treatAsIncludedAnalysis =');
-    expect(source).toContain('const backendCalculatedRequiredCredits = treatAsIncludedAnalysis');
-    expect(source).toContain('? 0');
-    // The zero is allowed (analyzeImage no longer returns INVALID_REQUIRED_CREDITS for analysis).
-    expect(source).toContain('normalizeClientRequiredCredits(\n    body.requiredCredits ??');
+    expect(source).toContain('treatAsIncludedAnalysis ? 0 : calculateBackendRequiredCredits(generationType, resolutionTier)');
     expect(source).toContain('requiredCredits must be a non-negative integer.');
   });
 
@@ -70,7 +67,9 @@ describe('hosted analysis client contract (GeminiService)', () => {
   it('runs pose/style/wardrobe validation as included text analysis and ties each call to a fingerprint', () => {
     const source = serviceSource();
     // Each validator analyzes via the quality-gate (included) billing window and a text response type.
-    expect(source).toContain("{ ...withQualityGateWaitWindow(options), expectedResponseType: 'text' }");
+    expect(source).toContain("{ ...withQualityGateWaitWindow(options), expectedResponseType: 'text', analysisKind: 'pose_quality_gate' }");
+    expect(source).toContain("analysisKind: 'style_quality_gate'");
+    expect(source).toContain("analysisKind: 'wardrobe_continuity_gate'");
     expect(source).toContain("hostedQualityGateBilling: options.hostedQualityGateBilling ?? 'included'");
     // Every hosted call (including analysis) carries an executionFingerprint, associating it to a request.
     expect(source).toContain('executionFingerprint');

@@ -43,22 +43,21 @@ export const CreateProductionActorWorkflow: React.FC = () => {
             "preserveRules": An array of strings, listing 3-4 visual traits to strictly preserve.
             "avoidRules": An array of strings, listing 2-3 traits/errors to strictly avoid.`;
             
-            const analysis = await GeminiService.analyzeMultiFrameJson<{
+            const analysis = await GeminiService.runHostedMultiFrameAnalysis<{
                 name: string;
                 identitySummary: string;
                 styleSummary: string;
                 wardrobeSummary: string;
                 preserveRules: string[];
                 avoidRules: string[];
-            }>(
+            }>({
+                analysisKind: 'production_actor_identity',
                 prompt,
-                state.apiKey || '',
-                state.model,
-                [{ url: source.imageUrl, label: 'Source Material' }],
-                {
-                    billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok',
-                }
-            );
+                apiKey: state.apiKey || '',
+                model: state.model,
+                frames: [{ url: source.imageUrl, label: 'Source Material' }],
+                billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok'
+            });
             
             if (analysis.name) setActorName(analysis.name);
             if (analysis.identitySummary) setIdentitySummary(analysis.identitySummary);
@@ -275,7 +274,8 @@ export const CreateProductionActorWorkflow: React.FC = () => {
                                             <p className="text-xs text-red-400 font-bold mb-4">{analysisError}</p>
                                         )}
                                         <div className="flex gap-4">
-                                            <button 
+                                            <button
+                                                type="button"
                                                 onClick={() => void handleAnalysis()}
                                                 disabled={isAnalyzing}
                                                 className="px-6 py-3 bg-surface border border-accent/30 text-accent font-black uppercase tracking-widest rounded-lg hover:bg-accent/10 transition-colors flex items-center gap-2 disabled:opacity-50"

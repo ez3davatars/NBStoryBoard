@@ -55,6 +55,17 @@ import {
   withCharacterAnatomyIntegrityContract
 } from '../../prompts/characterAnatomyIntegrity';
 import { formatHostedGenerationErrorResponse, describeAnalysisFailure } from '../utils/hostedGenerationErrors';
+import {
+  type HostedAnalysisKind,
+  getHostedAnalysisPolicy
+} from './hostedAnalysisPolicy';
+
+// Maps a policy's billing mode to the legacy hostedQualityGateBilling flag. Metered kinds carry no
+// flag — the edge derives metered billing (and the per-call charge) authoritatively from analysisKind.
+const policyBillingFlag = (kind: HostedAnalysisKind): 'included' | 'paid' | undefined => {
+  const billing = getHostedAnalysisPolicy(kind).billing;
+  return billing === 'metered' ? undefined : billing;
+};
 
 export type ExtractedStyle = {
   medium?: string;
@@ -170,6 +181,7 @@ type HostedExecutionOptions = {
   signal?: AbortSignal;
   hostedQualityGateBilling?: HostedQualityGateBilling;
   usageCategory?: HostedUsageCategory;
+  analysisKind?: HostedAnalysisKind;
 };
 
 type HostedBillingMetadata = {
@@ -201,9 +213,17 @@ type SharedGenerationOptions = PoseCoherenceGenerationOptions & HeadshotWardrobe
   signal?: AbortSignal;
   hostedQualityGateBilling?: HostedQualityGateBilling;
   usageCategory?: HostedUsageCategory;
+  analysisKind?: HostedAnalysisKind;
   sheetStyleLock?: boolean;
   characterAnatomyIntegrity?: boolean;
 };
+
+// Options for hosted text-generation analyzers (generateText/generateJson) which carry the analysis
+// contract so callers like the Veo "Enhance with AI" action can be billed via an analysisKind policy.
+type HostedTextGenerationOptions = Pick<
+  SharedGenerationOptions,
+  'billingMode' | 'entitlements' | 'analysisKind' | 'hostedQualityGateBilling' | 'signal' | 'uiWaitWindowMs'
+>;
 
 type ImageGenerationOptions = SharedGenerationOptions & {
   aspectRatio?: string;
@@ -815,8 +835,8 @@ export const GeminiService = {
     if (!level) return undefined;
     const lv = String(level).trim().toLowerCase();
 
-    // Gemini 3.1 Flash Image Preview
-    if (model === "gemini-3.1-flash-image-preview") {
+    // Gemini 3.1 Flash Image (GA) — and the deprecated preview during transition.
+    if (model === "gemini-3.1-flash-image" || model === "gemini-3.1-flash-image-preview") {
       // Default thinkingLevel is `minimal`; only set config when explicitly requesting High.
       if (lv === "high") return { thinkingLevel: "High" };
       return undefined;
@@ -1085,7 +1105,7 @@ export const GeminiService = {
         apiKey,
         model,
         imageUrl,
-        { ...withQualityGateWaitWindow(options), expectedResponseType: 'text' }
+        { ...withQualityGateWaitWindow(options), expectedResponseType: 'text', analysisKind: 'pose_quality_gate' }
       );
       const validation = parsePoseCoherenceValidation(validationText);
       const poseFailed =
@@ -1167,7 +1187,7 @@ export const GeminiService = {
         apiKey,
         model,
         imageUrl,
-        { ...withQualityGateWaitWindow(options), expectedResponseType: 'text' }
+        { ...withQualityGateWaitWindow(options), expectedResponseType: 'text', analysisKind: 'pose_quality_gate' }
       );
       const validation = parsePoseCoherenceValidation(validationText);
       const poseFailed =
@@ -1240,7 +1260,7 @@ export const GeminiService = {
         apiKey,
         model,
         imageUrl,
-        { ...withQualityGateWaitWindow(options), expectedResponseType: 'text' }
+        { ...withQualityGateWaitWindow(options), expectedResponseType: 'text', analysisKind: 'wardrobe_continuity_gate' }
       );
       const validation = parseHeadshotWardrobeValidation(validationText);
       const wardrobeFailed =
@@ -1326,7 +1346,7 @@ export const GeminiService = {
         apiKey,
         model,
         imageUrl,
-        { ...withQualityGateWaitWindow(options), expectedResponseType: 'text' }
+        { ...withQualityGateWaitWindow(options), expectedResponseType: 'text', analysisKind: 'style_quality_gate' }
       );
       const validation = parseStyleValidation(validationText);
       const styleFailed =
@@ -1771,6 +1791,58 @@ export const GeminiService = {
   },
 
   // Vision/Text-only analysis from a single image (returns model text)
+  // ===== Centralized hosted-analysis wrappers =====
+  // Every user/pipeline analyzer must go through these so billing, response type, and usage category
+  // are derived from the typed analysisKind policy rather than hand-assembled at each call site.
+  // Direct GeminiService.analyzeImage / analyzeMultiFrameJson calls outside these wrappers (and the
+  // internal quality-gate validators) are blocked by a contract test.
+
+  // Single-image analysis (text or json per policy). Returns the raw provider text.
+  async runHostedImageAnalysis(params: {
+    analysisKind: HostedAnalysisKind;
+    prompt: string;
+    imageUrl: string;
+    apiKey: string | null | undefined;
+    model: string;
+    billingMode?: BillingMode;
+    entitlements?: GenerationEntitlements;
+    signal?: AbortSignal;
+    uiWaitWindowMs?: number;
+  }): Promise<string> {
+    const policy = getHostedAnalysisPolicy(params.analysisKind);
+    return GeminiService.analyzeImage(params.prompt, params.apiKey, params.model, params.imageUrl, {
+      billingMode: params.billingMode,
+      entitlements: params.entitlements,
+      signal: params.signal,
+      uiWaitWindowMs: params.uiWaitWindowMs,
+      expectedResponseType: policy.responseType,
+      hostedQualityGateBilling: policyBillingFlag(params.analysisKind),
+      analysisKind: params.analysisKind
+    });
+  },
+
+  // Multi-frame JSON analysis (also used with an empty frame list for text-only structured parsing).
+  async runHostedMultiFrameAnalysis<T>(params: {
+    analysisKind: HostedAnalysisKind;
+    prompt: string;
+    frames: { url: string; label: string }[];
+    apiKey: string | null | undefined;
+    model: string;
+    billingMode?: BillingMode;
+    entitlements?: GenerationEntitlements;
+    signal?: AbortSignal;
+    uiWaitWindowMs?: number;
+  }): Promise<T> {
+    return GeminiService.analyzeMultiFrameJson<T>(params.prompt, params.apiKey, params.model, params.frames, {
+      billingMode: params.billingMode,
+      entitlements: params.entitlements,
+      signal: params.signal,
+      uiWaitWindowMs: params.uiWaitWindowMs,
+      hostedQualityGateBilling: policyBillingFlag(params.analysisKind),
+      analysisKind: params.analysisKind
+    });
+  },
+
   async analyzeImage(
     prompt: string,
     apiKey: string | null | undefined,
@@ -1979,7 +2051,7 @@ export const GeminiService = {
         effectiveKey,
         model,
         [{ url: imageUrl, label: 'Character Asset' }],
-        options
+        { ...options, analysisKind: 'character_style_gate' }
       );
       
       if (!result || !result.styleSummary) {
@@ -2343,7 +2415,7 @@ Return ONLY valid JSON without markdown formatting. Exact schema:
           effectiveKey,
           model,
           [],
-          options
+          { ...options, analysisKind: 'scene_intent_gate' }
         );
 
         return {
@@ -2468,7 +2540,7 @@ Return ONLY valid JSON without markdown formatting. Exact schema:
     return intent;
   },
 
-  async generateText(prompt: string, apiKey: string, options: Pick<SharedGenerationOptions, 'billingMode' | 'entitlements'> = {}): Promise<string> {
+  async generateText(prompt: string, apiKey: string, options: HostedTextGenerationOptions = {}): Promise<string> {
     if (options.billingMode === 'hosted') {
       await assertAuthenticatedForGeneration({ billingMode: 'hosted' });
     }
@@ -2508,7 +2580,7 @@ Return ONLY valid JSON without markdown formatting. Exact schema:
     return textOut;
   },
 
-  async generateJson<T>(prompt: string, apiKey: string, options: Pick<SharedGenerationOptions, 'billingMode' | 'entitlements'> = {}): Promise<T> {
+  async generateJson<T>(prompt: string, apiKey: string, options: HostedTextGenerationOptions = {}): Promise<T> {
     const strictPrompt = `${prompt}\n\nCRITICAL INSTRUCTION: Return ONLY valid JSON. No markdown formatting. No code fences. No commentary.`;
 
     let rawText = await this.generateText(strictPrompt, apiKey, options);
@@ -2535,7 +2607,7 @@ Return ONLY valid JSON without markdown formatting. Exact schema:
     }
   },
 
-  async generateVeoFivePartDraft(concept: string, apiKey: string, optionalContext?: string, options: Pick<SharedGenerationOptions, 'billingMode' | 'entitlements'> = {}): Promise<VeoFivePartDraftResponse> {
+  async generateVeoFivePartDraft(concept: string, apiKey: string, optionalContext?: string, options: HostedTextGenerationOptions = {}): Promise<VeoFivePartDraftResponse> {
     if (!apiKey && options.billingMode !== 'hosted') {
       console.warn("No API Key. Returning mocked Veo prompt.");
       await new Promise(r => setTimeout(r, 1000));
@@ -2577,7 +2649,11 @@ Output a JSON object exactly matching this structure:
 Note: Leave audio fields out if not applicable. The core 5 parts are required.
 `;
 
-    return await this.generateJson<VeoFivePartDraftResponse>(prompt, apiKey, options);
+    return await this.generateJson<VeoFivePartDraftResponse>(prompt, apiKey, {
+      ...options,
+      analysisKind: 'veo_prompt_enhance',
+      hostedQualityGateBilling: policyBillingFlag('veo_prompt_enhance')
+    });
   },
 
   /**

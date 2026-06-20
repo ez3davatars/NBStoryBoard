@@ -105,6 +105,7 @@ export const RefInspectorModal = ({
         Reference DNA / Notes
       </label>
       <button
+        type="button"
         onClick={onAnalyze}
         disabled={isAnalyzing}
         className={`px-3 py-1 rounded bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 text-[10px] font-bold uppercase tracking-widest transition-colors ${isAnalyzing ? 'opacity-50 cursor-not-allowed' : ''}`}

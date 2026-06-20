@@ -685,6 +685,7 @@ const SceneCanvas = () => {
     
     const colorPickerRef = useRef<HTMLInputElement>(null);
     const stagingGenerationInFlightRef = useRef(false);
+    const manualAnalyzeInFlightRef = useRef(false);
     const [lastCustomColor, setLastCustomColor] = useState('#ffffff');
     const [showColorEditor, setShowColorEditor] = useState(false);
     const [showClearConfirm, setShowClearConfirm] = useState(false);
@@ -3831,22 +3832,32 @@ Output: environment plate only.
         if (inspectRefIndex === null) return;
         const slot = state.referenceSlots.find(s => s.index === inspectRefIndex);
         if (!slot || !slot.url) return;
-        
-        if (!(await ensureStagingAiAccess('Auto-Analyze DNA'))) return;
+
+        // Synchronous in-flight guard: one click => one request, even before React state updates.
+        if (manualAnalyzeInFlightRef.current) return;
+        manualAnalyzeInFlightRef.current = true;
+
+        if (!(await ensureStagingAiAccess('Auto-Analyze DNA'))) {
+            manualAnalyzeInFlightRef.current = false;
+            return;
+        }
 
         setAnalyzingTokenId('ref');
         setInspectAnalysis('Analyzing DNA...');
-        
+
         try {
             // Manual Reference DNA AUTO-ANALYZE is a deliberate, separately-billed analysis (1 credit
             // when hosted), distinct from the automatic post-generation quality gates that are
-            // included in the generation price. Mark it explicitly as paid text analysis.
-            const text = await GeminiService.analyzeImage(refAnalysisPrompt, state.apiKey, state.model, slot.url, {
+            // included in the generation price. Billing/response-type/usage label all derive from the
+            // 'reference_dna' analysisKind policy.
+            const text = await GeminiService.runHostedImageAnalysis({
+                analysisKind: 'reference_dna',
+                prompt: refAnalysisPrompt,
+                imageUrl: slot.url,
+                apiKey: state.apiKey,
+                model: state.model,
                 billingMode: state.billingEntitlements?.effectiveBillingMode as 'hosted' | 'byok',
-                entitlements: state.billingEntitlements,
-                expectedResponseType: 'text',
-                hostedQualityGateBilling: 'paid',
-                usageCategory: 'reference_dna_analysis'
+                entitlements: state.billingEntitlements
             });
             setInspectAnalysis(text);
             dispatch({ type: 'ADD_LOG', payload: { message: 'DNA analysis complete.', type: 'success' } });
@@ -3855,6 +3866,7 @@ Output: environment plate only.
             dispatch({ type: 'ADD_LOG', payload: { message: `Analysis failed: ${getErrorMessage(e)}`, type: 'error' } });
         } finally {
             setAnalyzingTokenId(null);
+            manualAnalyzeInFlightRef.current = false;
         }
     };
 
@@ -6393,7 +6405,7 @@ Output: environment plate only.
                                             setAutoAnchorDNA={setAutoAnchorDNA}
                                             dnaStatus={dnaStatus}
                                             anchorDNA={anchorDNA}
-                                            analyzeBackgroundDNA={analyzeBackgroundDNA}
+                                            analyzeBackgroundDNA={() => analyzeBackgroundDNA('scene_reextract')}
                                             autoTokenProfiles={autoTokenProfiles}
                                             setAutoTokenProfiles={setAutoTokenProfiles}
                                             handleAnalyzeMissingTokenProfiles={handleAnalyzeMissingTokenProfiles}

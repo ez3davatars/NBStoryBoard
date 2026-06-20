@@ -92,6 +92,66 @@ type GeminiProviderResponse = {
       parts?: GeminiProviderPart[];
     };
   }>;
+  usageMetadata?: Record<string, unknown> | null;
+  modelVersion?: string | null;
+  responseId?: string | null;
+};
+
+// ===== Metered image pricing — gemini-3.1-flash-image (GA), Standard. MUST stay identical to the edge
+// (supabase/functions/generate-image/index.ts); an alignment test asserts the registries match. =====
+const HOSTED_METERED_BILLING_ENABLED = (Deno.env.get('HOSTED_METERED_BILLING_ENABLED') ?? '').toLowerCase() === 'true';
+const HOSTED_GOOGLE_IMAGE_PRICING_VERSION = 'gemini-3.1-flash-image-standard-2026-06';
+const HOSTED_GOOGLE_COST_MARKUP_BPS = 10000;
+const HOSTED_GOOGLE_IMAGE_PRICING: Record<string, Partial<Record<'standard', { inputTokenNanoUsd: number; textOutputTokenNanoUsd: number; imageOutputTokenNanoUsd: number; imageOutputTokensByResolution: Record<'1k' | '2k' | '4k', number> }>>> = {
+  'gemini-3.1-flash-image': {
+    standard: { inputTokenNanoUsd: 500, textOutputTokenNanoUsd: 3000, imageOutputTokenNanoUsd: 60000, imageOutputTokensByResolution: { '1k': 1120, '2k': 1680, '4k': 2520 } }
+  }
+};
+
+const ceilDivBigInt = (n: bigint, d: bigint): bigint => (n <= 0n ? 0n : (n + d - 1n) / d);
+const isNonNegInt = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
+
+const resolveResolutionTier = (payload: unknown): '1k' | '2k' | '4k' => {
+  const size = (payload as { generationConfig?: { imageConfig?: { imageSize?: unknown } } } | null)?.generationConfig?.imageConfig?.imageSize;
+  if (size === '4K') return '4k';
+  if (size === '2K') return '2k';
+  return '1k';
+};
+
+// Computes the metered image settlement (list cost × 2) for reconciliation. Fails closed (returns null +
+// logs) on unknown model/tier/resolution or invalid usage rather than guessing.
+const computeWorkerImageSettlement = (
+  providerModel: string,
+  resolution: '1k' | '2k' | '4k',
+  result: GeminiProviderResponse
+): Record<string, unknown> | null => {
+  const rates = HOSTED_GOOGLE_IMAGE_PRICING[providerModel]?.standard;
+  const imageOutputTokens = rates?.imageOutputTokensByResolution[resolution];
+  const usage = result.usageMetadata as Record<string, unknown> | null | undefined;
+  const tierRaw = usage?.serviceTier;
+  const tierOk = tierRaw === undefined || tierRaw === null || tierRaw === '' || String(tierRaw).toLowerCase() === 'standard';
+  if (!rates || imageOutputTokens === undefined || !usage || !tierOk) return null;
+  const prompt = usage.promptTokenCount ?? 0;
+  const thoughts = usage.thoughtsTokenCount ?? 0;
+  if (!isNonNegInt(prompt) || !isNonNegInt(thoughts)) return null;
+  const listCost = BigInt(prompt) * BigInt(rates.inputTokenNanoUsd) + BigInt(thoughts) * BigInt(rates.textOutputTokenNanoUsd) + BigInt(imageOutputTokens) * BigInt(rates.imageOutputTokenNanoUsd);
+  const customerPrice = ceilDivBigInt(listCost * BigInt(10000 + HOSTED_GOOGLE_COST_MARKUP_BPS), 10000n);
+  return {
+    pricingVersion: HOSTED_GOOGLE_IMAGE_PRICING_VERSION,
+    pricingSource: 'published_rate',
+    billingUnit: 'image_output',
+    provider: 'gemini',
+    providerModel,
+    providerServiceTier: 'standard',
+    providerModelVersion: typeof result.modelVersion === 'string' ? result.modelVersion : null,
+    providerResponseId: typeof result.responseId === 'string' ? result.responseId : null,
+    providerListCostNanoUsd: listCost.toString(),
+    providerInvoicedCostNanoUsd: null,
+    markupBasisPoints: HOSTED_GOOGLE_COST_MARKUP_BPS,
+    customerPriceNanoUsd: customerPrice.toString(),
+    fundingSource: 'paid',
+    settlementStatus: 'RECONCILE_PENDING'
+  };
 };
 
 const getErrorMessage = (error: unknown): string => {
@@ -372,6 +432,24 @@ async function executeJob(job: JobRecord) {
         }).eq('id', job.id);
     } catch (metricErr) {
         console.error(`[Worker ${WORKER_ID}] Non-fatal: failed to write timing_metrics for ${job.id}`, metricErr);
+    }
+
+    // Metered image cost (list × 2) for reconciliation parity with the synchronous edge path. The worker
+    // does not apply the metered charge (legacy reservation stands); flipping requires the same feature
+    // flag + local DB settle tests as the edge.
+    if (imgData) {
+      try {
+        const imgSettlement = computeWorkerImageSettlement(job.provider_model, resolveResolutionTier(payload), result);
+        if (imgSettlement) {
+          await supabase.from('generations').update({
+            billing_metadata: { ...imgSettlement, parentGenerationId: job.id, meteredBillingEnabled: HOSTED_METERED_BILLING_ENABLED }
+          }).eq('id', job.id);
+        } else {
+          console.warn(`[Worker ${WORKER_ID}] Could not meter image ${job.id} (unknown model/tier/resolution or invalid usage); left on legacy reservation.`);
+        }
+      } catch (billErr) {
+        console.warn(`[Worker ${WORKER_ID}] Non-fatal: metered settlement persist failed for ${job.id}`, billErr);
+      }
     }
 
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();

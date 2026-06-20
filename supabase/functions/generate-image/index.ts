@@ -61,6 +61,7 @@ type GenerateImageRequestBody = {
     requiredCredits?: unknown;
     hostedQualityGateBilling?: unknown;
     usageCategory?: unknown;
+    analysisKind?: unknown;
   } | unknown;
   generationType?: unknown;
   resolutionTier?: unknown;
@@ -87,6 +88,9 @@ type GeminiProviderResponse = {
       parts?: GeminiProviderPart[];
     };
   }>;
+  usageMetadata?: Record<string, unknown> | null;
+  modelVersion?: string | null;
+  responseId?: string | null;
 };
 
 type GeminiRequestPart = {
@@ -111,10 +115,14 @@ type GeminiRequestPayload = {
 };
 
 const CREDIT_PRICING_VERSION = '1-2-6';
-const NANO_BANANA_2_IMAGE_MODEL = 'gemini-3.1-flash-image-preview';
+// GA image model. The preview `gemini-3.1-flash-image-preview` is deprecated (shutdown 2026-06-25) and is
+// normalized forward to GA; the metered pricing registry has no preview entry, so any stray preview model
+// also fails closed at pricing time.
+const NANO_BANANA_2_IMAGE_MODEL = 'gemini-3.1-flash-image';
 const LEGACY_HOSTED_IMAGE_MODELS = new Set([
   'gemini-2.5-flash-image',
-  'imagen-4.0-generate-001'
+  'imagen-4.0-generate-001',
+  'gemini-3.1-flash-image-preview'
 ]);
 
 const normalizeHostedProviderModel = (model: string): string =>
@@ -481,9 +489,287 @@ type HostedOperation = 'generate' | 'analyze';
 const deriveHostedOperation = (expectedResponseType: ExpectedResponseType): HostedOperation =>
   expectedResponseType === 'text' || expectedResponseType === 'json' ? 'analyze' : 'generate';
 
-// Stable, server-approved usage categories persisted in billing_metadata for the Hosted Usage panel.
-// Only a category the server can independently verify is recorded; client display strings are ignored.
-type HostedUsageCategory = 'reference_dna_analysis';
+// ===== Hosted analysis policy registry (server-authoritative) =====
+// MUST stay aligned with src/renderer/services/hostedAnalysisPolicy.ts (a contract test asserts this).
+// The kind is the single source of truth: the server derives billing, credits, response type, and the
+// persisted usageCategory from this registry and never trusts a client-supplied display string.
+type HostedAnalysisResponseType = 'text' | 'json';
+type HostedAnalysisBilling = 'paid' | 'included' | 'metered';
+type HostedAnalysisBounds = {
+  maxOutputTokens: number;
+  thinkingBudget: number;
+  maxImages: number;
+  maxAttempts: number;
+  maxBillableMicrocredits: number;
+};
+type HostedAnalysisPolicy = {
+  billing: HostedAnalysisBilling;
+  credits: number;
+  responseType: HostedAnalysisResponseType;
+  usageCategory?: string;
+  aggregateUnderParent?: boolean;
+  bounds?: HostedAnalysisBounds;
+};
+
+const TEXT_BOUNDS: HostedAnalysisBounds = { maxOutputTokens: 256, thinkingBudget: 0, maxImages: 1, maxAttempts: 1, maxBillableMicrocredits: 200000 };
+const JSON_BOUNDS: HostedAnalysisBounds = { maxOutputTokens: 768, thinkingBudget: 0, maxImages: 2, maxAttempts: 1, maxBillableMicrocredits: 500000 };
+
+const HOSTED_ANALYSIS_POLICIES: Record<string, HostedAnalysisPolicy> = {
+  reference_dna: { billing: 'metered', credits: 0, responseType: 'text', usageCategory: 'reference_dna_analysis', aggregateUnderParent: false, bounds: TEXT_BOUNDS },
+  actor_intelligence: { billing: 'metered', credits: 0, responseType: 'text', usageCategory: 'actor_intelligence_analysis', aggregateUnderParent: false, bounds: TEXT_BOUNDS },
+  scene_reextract: { billing: 'metered', credits: 0, responseType: 'json', usageCategory: 'scene_reextract_analysis', aggregateUnderParent: false, bounds: JSON_BOUNDS },
+  production_actor_identity: { billing: 'metered', credits: 0, responseType: 'json', usageCategory: 'production_actor_identity_analysis', aggregateUnderParent: false, bounds: JSON_BOUNDS },
+  veo_prompt_enhance: { billing: 'metered', credits: 0, responseType: 'text', usageCategory: 'veo_prompt_enhance_analysis', aggregateUnderParent: false, bounds: JSON_BOUNDS },
+  scene_dna_gate: { billing: 'metered', credits: 0, responseType: 'json', aggregateUnderParent: true, bounds: JSON_BOUNDS },
+  token_profile_gate: { billing: 'metered', credits: 0, responseType: 'json', aggregateUnderParent: true, bounds: JSON_BOUNDS },
+  character_style_gate: { billing: 'metered', credits: 0, responseType: 'json', aggregateUnderParent: true, bounds: JSON_BOUNDS },
+  scene_intent_gate: { billing: 'metered', credits: 0, responseType: 'json', aggregateUnderParent: true, bounds: JSON_BOUNDS },
+  shot_integrity_gate: { billing: 'metered', credits: 0, responseType: 'json', aggregateUnderParent: true, bounds: { ...JSON_BOUNDS, maxImages: 2 } },
+  pose_quality_gate: { billing: 'metered', credits: 0, responseType: 'text', aggregateUnderParent: true, bounds: TEXT_BOUNDS },
+  style_quality_gate: { billing: 'metered', credits: 0, responseType: 'text', aggregateUnderParent: true, bounds: TEXT_BOUNDS },
+  wardrobe_continuity_gate: { billing: 'metered', credits: 0, responseType: 'text', aggregateUnderParent: true, bounds: TEXT_BOUNDS }
+};
+
+// ===== Server-owned provider pricing (gemini-standard-2026-06). Mirror of
+// src/renderer/services/hostedMeteredPricing.ts; an alignment test asserts they match.
+// customer price = provider list cost × 2 (100% markup => 50% gross margin). =====
+const HOSTED_GOOGLE_PRICING_VERSION = 'gemini-standard-2026-06';
+const HOSTED_GOOGLE_GROSS_MARGIN_BPS = 5000;
+
+// Markup is server config. Validate it is a non-negative integer; fall back to the 100% default
+// rather than silently using NaN/garbage.
+const readMarkupBps = (): number => {
+  const raw = Deno.env.get('HOSTED_GOOGLE_COST_MARKUP_BPS');
+  if (raw === undefined || raw === null || raw.trim() === '') return 10000;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    console.error(`[Metered] Invalid HOSTED_GOOGLE_COST_MARKUP_BPS "${raw}"; using default 10000.`);
+    return 10000;
+  }
+  return parsed;
+};
+const HOSTED_GOOGLE_COST_MARKUP_BPS = readMarkupBps();
+const MICROCREDITS_PER_CREDIT = 1000000n;
+
+// Master feature flag for charging the metered amount. While OFF (default) the metered settlement is
+// computed + persisted for reconciliation but NOT applied as the live charge (the legacy reservation
+// stands), so users are never partially charged before local DB tests + UI + credit value are ready.
+const HOSTED_METERED_BILLING_ENABLED = (Deno.env.get('HOSTED_METERED_BILLING_ENABLED') ?? '').toLowerCase() === 'true';
+
+type HostedServiceTier = 'standard';
+type ProviderTokenRates = { uncachedInput: number; cachedInput: number; output: number };
+// Published Gemini token pricing (nano-USD/token) keyed by model then service tier.
+const HOSTED_GOOGLE_TOKEN_PRICING: Record<string, Partial<Record<HostedServiceTier, ProviderTokenRates>>> = {
+  'gemini-2.5-flash': { standard: { uncachedInput: 300, cachedInput: 30, output: 2500 } },
+  'gemini-2.5-flash-lite': { standard: { uncachedInput: 100, cachedInput: 10, output: 400 } }
+};
+
+type ProviderUsage = {
+  promptTokenCount: number;
+  cachedContentTokenCount: number;
+  candidatesTokenCount: number;
+  thoughtsTokenCount: number;
+};
+
+const isNonNegativeInteger = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isInteger(value) && value >= 0;
+
+const ceilDivBigInt = (numerator: bigint, denominator: bigint): bigint => {
+  if (denominator <= 0n) throw new Error('ceilDivBigInt: denominator must be positive');
+  if (numerator <= 0n) return 0n;
+  return (numerator + denominator - 1n) / denominator;
+};
+
+// Maps the provider serviceTier to a priced tier; fails closed on batch/flex/priority/preview/unknown.
+const normalizeServiceTier = (raw: unknown): HostedServiceTier => {
+  if (raw === undefined || raw === null || raw === '') return 'standard';
+  const normalized = String(raw).trim().toLowerCase();
+  if (normalized === 'standard') return 'standard';
+  throw new GenerationExecutionError(502, 'UNKNOWN_SERVICE_TIER', 'PROVIDER_ERROR', `Unsupported Google service tier "${String(raw)}"; only Standard tier is priced.`);
+};
+
+// Validates raw Gemini usageMetadata into ProviderUsage; fails closed on invalid/missing fields.
+const normalizeProviderUsage = (raw: Record<string, unknown> | null | undefined): ProviderUsage => {
+  if (!raw) {
+    throw new GenerationExecutionError(502, 'MISSING_USAGE_METADATA', 'PROVIDER_ERROR', 'Provider returned no usageMetadata; cannot meter the call.');
+  }
+  const fields: Array<keyof ProviderUsage> = ['promptTokenCount', 'cachedContentTokenCount', 'candidatesTokenCount', 'thoughtsTokenCount'];
+  const out = {} as ProviderUsage;
+  for (const name of fields) {
+    const value = raw[name] ?? 0;
+    if (!isNonNegativeInteger(value)) {
+      throw new GenerationExecutionError(502, 'INVALID_USAGE_METADATA', 'PROVIDER_ERROR', `Invalid provider usage field "${name}".`);
+    }
+    out[name] = value;
+  }
+  return out;
+};
+
+// Published provider LIST cost (nano-USD) for a model+tier. Fails closed on unknown model OR tier.
+const computeProviderListCostNanoUsd = (model: string, tier: HostedServiceTier, usage: ProviderUsage): bigint => {
+  const rates = HOSTED_GOOGLE_TOKEN_PRICING[model]?.[tier];
+  if (!rates) {
+    throw new GenerationExecutionError(500, 'UNKNOWN_PROVIDER_PRICING', 'INTERNAL_ERROR', `No server pricing for provider "${model}" at tier "${tier}".`);
+  }
+  const uncachedInput = Math.max(0, usage.promptTokenCount - usage.cachedContentTokenCount);
+  const outputTokens = usage.candidatesTokenCount + usage.thoughtsTokenCount;
+  return (
+    BigInt(uncachedInput) * BigInt(rates.uncachedInput) +
+    BigInt(usage.cachedContentTokenCount) * BigInt(rates.cachedInput) +
+    BigInt(outputTokens) * BigInt(rates.output)
+  );
+};
+
+const applyMarkupNanoUsd = (providerListCostNanoUsd: bigint, markupBps: number = HOSTED_GOOGLE_COST_MARKUP_BPS): bigint =>
+  ceilDivBigInt(providerListCostNanoUsd * BigInt(10000 + markupBps), 10000n);
+
+const customerPriceToMicrocredits = (customerPriceNanoUsd: bigint, creditValueNanoUsd: bigint): bigint => {
+  if (creditValueNanoUsd <= 0n) throw new Error('creditValueNanoUsd must be positive');
+  return ceilDivBigInt(customerPriceNanoUsd * MICROCREDITS_PER_CREDIT, creditValueNanoUsd);
+};
+
+type MeteredSettlement = {
+  pricingVersion: string;
+  pricingSource: 'published_rate' | 'invoice_reconciled';
+  reconciliationStatus: 'pending' | 'reconciled';
+  billingUnit: 'token' | 'image_output';
+  providerModel: string;
+  providerModelVersion: string | null;
+  providerServiceTier: HostedServiceTier;
+  providerResponseId: string | null;
+  promptTokenCount: number;
+  cachedContentTokenCount: number;
+  candidatesTokenCount: number;
+  thoughtsTokenCount: number;
+  providerListCostNanoUsd: string;
+  providerInvoicedCostNanoUsd: string | null;
+  markupBasisPoints: number;
+  grossMarginBasisPoints: number;
+  customerPriceNanoUsd: string;
+  creditMicroUnitsCharged: string | null;
+};
+
+// Reads the configured min realized USD value per credit (nano-USD). Null when unset.
+const readCreditValueNanoUsd = (): bigint | null => {
+  const raw = Deno.env.get('HOSTED_CREDIT_USD_VALUE_NANO_USD');
+  if (!raw) return null;
+  try {
+    const v = BigInt(raw);
+    return v > 0n ? v : null;
+  } catch {
+    return null;
+  }
+};
+
+const buildMeteredSettlement = (params: {
+  providerModel: string;
+  modelVersion: string | null;
+  serviceTier: HostedServiceTier;
+  responseId: string | null;
+  usage: ProviderUsage;
+}): MeteredSettlement => {
+  const providerListCost = computeProviderListCostNanoUsd(params.providerModel, params.serviceTier, params.usage);
+  const customerPrice = applyMarkupNanoUsd(providerListCost);
+  const creditValue = readCreditValueNanoUsd();
+  return {
+    pricingVersion: HOSTED_GOOGLE_PRICING_VERSION,
+    pricingSource: 'published_rate',
+    reconciliationStatus: 'pending',
+    billingUnit: 'token',
+    providerModel: params.providerModel,
+    providerModelVersion: params.modelVersion,
+    providerServiceTier: params.serviceTier,
+    providerResponseId: params.responseId,
+    promptTokenCount: params.usage.promptTokenCount,
+    cachedContentTokenCount: params.usage.cachedContentTokenCount,
+    candidatesTokenCount: params.usage.candidatesTokenCount,
+    thoughtsTokenCount: params.usage.thoughtsTokenCount,
+    providerListCostNanoUsd: providerListCost.toString(),
+    providerInvoicedCostNanoUsd: null,
+    markupBasisPoints: HOSTED_GOOGLE_COST_MARKUP_BPS,
+    grossMarginBasisPoints: HOSTED_GOOGLE_GROSS_MARGIN_BPS,
+    customerPriceNanoUsd: customerPrice.toString(),
+    // Microcredit settlement requires the configured credit USD value; null => reconcile later.
+    creditMicroUnitsCharged: creditValue ? customerPriceToMicrocredits(customerPrice, creditValue).toString() : null
+  };
+};
+
+// Conservative reservation (in displayed credits) for a metered analysis: the policy's hard cap.
+const meteredReservationCredits = (policy: HostedAnalysisPolicy): number =>
+  policy.bounds ? policy.bounds.maxBillableMicrocredits / 1000000 : 0;
+
+// Detects a Google grounding / search / URL-context tool in the provider request body.
+const requestUsesGoogleGrounding = (requestBody: unknown): boolean => {
+  if (!isObjectRecord(requestBody)) return false;
+  const tools = (requestBody as { tools?: unknown }).tools;
+  if (!Array.isArray(tools)) return false;
+  return tools.some((tool) =>
+    isObjectRecord(tool) && (
+      'googleSearch' in tool || 'googleSearchRetrieval' in tool || 'google_search' in tool || 'urlContext' in tool || 'url_context' in tool
+    )
+  );
+};
+
+// ===== Image-generation pricing — gemini-3.1-flash-image (GA), Standard tier. Mirror of
+// hostedMeteredPricing.ts (alignment-tested). input 500 / text-thinking output 3000 / image output 60000
+// nano-USD per token; per-resolution image-output token counts. Unknown model/tier/resolution fails
+// closed; there is NO preview entry so a stray preview model also fails closed. =====
+const HOSTED_GOOGLE_IMAGE_PRICING_VERSION = 'gemini-3.1-flash-image-standard-2026-06';
+type ImageGenerationRates = {
+  inputTokenNanoUsd: number;
+  textOutputTokenNanoUsd: number;
+  imageOutputTokenNanoUsd: number;
+  imageOutputTokensByResolution: Record<ResolutionTier, number>;
+};
+const HOSTED_GOOGLE_IMAGE_PRICING: Record<string, Partial<Record<HostedServiceTier, ImageGenerationRates>>> = {
+  'gemini-3.1-flash-image': {
+    standard: { inputTokenNanoUsd: 500, textOutputTokenNanoUsd: 3000, imageOutputTokenNanoUsd: 60000, imageOutputTokensByResolution: { '1k': 1120, '2k': 1680, '4k': 2520 } }
+  }
+};
+
+const buildImageMeteredSettlement = (params: {
+  providerModel: string;
+  serviceTier: HostedServiceTier;
+  resolution: ResolutionTier;
+  modelVersion: string | null;
+  responseId: string | null;
+  usage: ProviderUsage;
+}): MeteredSettlement => {
+  const rates = HOSTED_GOOGLE_IMAGE_PRICING[params.providerModel]?.[params.serviceTier];
+  const imageOutputTokens = rates?.imageOutputTokensByResolution[params.resolution];
+  if (!rates || imageOutputTokens === undefined) {
+    throw new GenerationExecutionError(500, 'UNKNOWN_PROVIDER_PRICING', 'INTERNAL_ERROR', `No image pricing for "${params.providerModel}" tier "${params.serviceTier}" resolution "${params.resolution}".`);
+  }
+  // Sum ALL provider components before the 2× markup. The image-output cost is the fixed per-resolution
+  // amount; candidatesTokenCount (the image tokens) is NOT re-charged at the text rate. Thinking tokens
+  // are billed as text/thinking output. Grounding is fail-closed upstream (not added here).
+  const inputCost = BigInt(Math.max(0, params.usage.promptTokenCount)) * BigInt(rates.inputTokenNanoUsd);
+  const textThinkingCost = BigInt(Math.max(0, params.usage.thoughtsTokenCount)) * BigInt(rates.textOutputTokenNanoUsd);
+  const imageOutputCost = BigInt(imageOutputTokens) * BigInt(rates.imageOutputTokenNanoUsd);
+  const providerListCost = inputCost + textThinkingCost + imageOutputCost;
+  const customerPrice = applyMarkupNanoUsd(providerListCost);
+  const creditValue = readCreditValueNanoUsd();
+  return {
+    pricingVersion: HOSTED_GOOGLE_IMAGE_PRICING_VERSION,
+    pricingSource: 'published_rate',
+    reconciliationStatus: 'pending',
+    billingUnit: 'image_output',
+    providerModel: params.providerModel,
+    providerModelVersion: params.modelVersion,
+    providerServiceTier: params.serviceTier,
+    providerResponseId: params.responseId,
+    promptTokenCount: params.usage.promptTokenCount,
+    cachedContentTokenCount: params.usage.cachedContentTokenCount,
+    candidatesTokenCount: params.usage.candidatesTokenCount,
+    thoughtsTokenCount: params.usage.thoughtsTokenCount,
+    providerListCostNanoUsd: providerListCost.toString(),
+    providerInvoicedCostNanoUsd: null,
+    markupBasisPoints: HOSTED_GOOGLE_COST_MARKUP_BPS,
+    grossMarginBasisPoints: HOSTED_GOOGLE_GROSS_MARGIN_BPS,
+    customerPriceNanoUsd: customerPrice.toString(),
+    creditMicroUnitsCharged: creditValue ? customerPriceToMicrocredits(customerPrice, creditValue).toString() : null
+  };
+};
 
 // Analysis (pose/style/wardrobe quality gates) is restricted to approved vision-text models so a
 // paid image generation cannot be relabeled as a free zero-credit analysis call.
@@ -502,6 +788,23 @@ const readHostedCreditMetadata = (
 
   const operation = deriveHostedOperation(expectedResponseType);
   const qualityGateBilling = normalizeHostedQualityGateBilling(options.hostedQualityGateBilling);
+
+  // Resolve the server-owned analysis policy from the client-declared analysisKind. The kind — not any
+  // client billing flag or usageCategory string — is authoritative for billing/credits/usage label.
+  const requestedAnalysisKind = typeof options.analysisKind === 'string' ? options.analysisKind : undefined;
+  let analysisPolicy: HostedAnalysisPolicy | undefined;
+  if (requestedAnalysisKind !== undefined) {
+    if (operation !== 'analyze') {
+      throw new HttpError(400, 'ANALYSIS_KIND_ON_GENERATE', 'analysisKind is only valid for text/json analysis operations, not image generation.');
+    }
+    analysisPolicy = HOSTED_ANALYSIS_POLICIES[requestedAnalysisKind];
+    if (!analysisPolicy) {
+      throw new HttpError(400, 'INVALID_ANALYSIS_KIND', `Unknown analysisKind "${requestedAnalysisKind}".`);
+    }
+    if (analysisPolicy.responseType !== expectedResponseType) {
+      throw new HttpError(400, 'ANALYSIS_KIND_RESPONSE_MISMATCH', `analysisKind "${requestedAnalysisKind}" requires response type "${analysisPolicy.responseType}", received "${expectedResponseType}".`);
+    }
+  }
 
   // Prevent relabeling a generation as free analysis: analysis must use a whitelisted vision model.
   if (operation === 'analyze' && !ANALYSIS_OPERATION_MODELS.has(providerModel)) {
@@ -533,19 +836,35 @@ const readHostedCreditMetadata = (
   // zero credits (derived from the server-side operation type, NOT a client flag) unless the caller
   // explicitly opts into separately-paid analysis. This guarantees a legitimate analysis call can
   // never be rejected with INVALID_REQUIRED_CREDITS, while image generation is always charged.
-  const includedQualityGate = isIncludedHostedQualityGateBilling(options, expectedResponseType);
-  const treatAsIncludedAnalysis =
-    includedQualityGate || (operation === 'analyze' && qualityGateBilling !== 'paid');
+  // When an analysisKind is present, the policy is billing truth. Otherwise fall back to the
+  // flag-based rule (analyze is included unless explicitly paid) so unmigrated/legacy calls still work.
+  // Metered analysis kinds are billed by actual Google usage × markup, settled AFTER the provider call.
+  // Before the call we reserve a bounded maximum (the policy cap). The client's fixed estimate is not
+  // cross-checked because the real charge is variable and computed server-side from usageMetadata.
+  const isMeteredAnalysis = analysisPolicy?.billing === 'metered';
 
-  const backendCalculatedRequiredCredits = treatAsIncludedAnalysis
-    ? 0
-    : calculateBackendRequiredCredits(generationType, resolutionTier);
-  const clientRequiredCredits = normalizeClientRequiredCredits(
-    body.requiredCredits ??
-    payload.requiredCredits ??
-    options.requiredCredits,
-    treatAsIncludedAnalysis
-  );
+  const includedQualityGate = isIncludedHostedQualityGateBilling(options, expectedResponseType);
+  const treatAsIncludedAnalysis = analysisPolicy
+    ? analysisPolicy.billing === 'included'
+    : includedQualityGate || (operation === 'analyze' && qualityGateBilling !== 'paid');
+
+  let backendCalculatedRequiredCredits: number;
+  if (isMeteredAnalysis) {
+    backendCalculatedRequiredCredits = meteredReservationCredits(analysisPolicy!);
+  } else if (analysisPolicy) {
+    backendCalculatedRequiredCredits = analysisPolicy.credits;
+  } else {
+    backendCalculatedRequiredCredits = treatAsIncludedAnalysis ? 0 : calculateBackendRequiredCredits(generationType, resolutionTier);
+  }
+
+  const clientRequiredCredits = isMeteredAnalysis
+    ? null
+    : normalizeClientRequiredCredits(
+        body.requiredCredits ??
+        payload.requiredCredits ??
+        options.requiredCredits,
+        backendCalculatedRequiredCredits === 0
+      );
 
   if (clientRequiredCredits !== null && clientRequiredCredits !== backendCalculatedRequiredCredits) {
     throw new HttpError(
@@ -555,18 +874,9 @@ const readHostedCreditMetadata = (
     );
   }
 
-  // Server-validated usage category. The manual "Reference DNA Analysis" label is only accepted when
-  // the server can independently confirm this is a paid text analysis on an approved model — an
-  // image generation (or any other call) cannot spoof the category, it is simply dropped.
-  const requestedUsageCategory = typeof options.usageCategory === 'string' ? options.usageCategory : undefined;
-  const usageCategory: HostedUsageCategory | undefined =
-    requestedUsageCategory === 'reference_dna_analysis' &&
-    operation === 'analyze' &&
-    expectedResponseType === 'text' &&
-    qualityGateBilling === 'paid' &&
-    ANALYSIS_OPERATION_MODELS.has(providerModel)
-      ? 'reference_dna_analysis'
-      : undefined;
+  // Server-derived usage category, taken only from the validated analysisKind policy. A client-supplied
+  // usageCategory display string is never trusted or persisted.
+  const usageCategory: string | undefined = analysisPolicy?.usageCategory;
 
   return {
     operation,
@@ -574,7 +884,9 @@ const readHostedCreditMetadata = (
     resolutionTier,
     requiredCredits: backendCalculatedRequiredCredits,
     creditPricingVersion: CREDIT_PRICING_VERSION,
-    usageCategory
+    usageCategory,
+    billingMode: isMeteredAnalysis ? 'metered' : 'fixed',
+    analysisKind: isMeteredAnalysis ? requestedAnalysisKind : undefined
   };
 };
 
@@ -602,6 +914,31 @@ const readHostedCreditBalance = async (
   }
 
   return currentCredits;
+};
+
+// Sums today's hosted (non-BYOK) spend for a user from completed generations, optionally restricted to a
+// billing operation (e.g. 'analyze'). Used for server-authoritative daily spend caps. Best-effort: on a
+// query error it returns 0 (the per-request cap + balance check still gate the call).
+const sumHostedSpendSince = async (
+  supabaseService: SupabaseClientAny,
+  userId: string,
+  sinceIso: string,
+  operation: 'analyze' | null
+): Promise<number> => {
+  try {
+    let query = supabaseService
+      .from('generations')
+      .select('cost')
+      .eq('user_id', userId)
+      .eq('is_byok', false)
+      .gte('created_at', sinceIso);
+    if (operation) query = query.filter('billing_metadata->>operation', 'eq', operation);
+    const { data, error } = await withTimeout(query, 8000, 'sum_hosted_spend');
+    if (error || !Array.isArray(data)) return 0;
+    return data.reduce((sum: number, row: { cost?: unknown }) => sum + (Number(row.cost) || 0), 0);
+  } catch {
+    return 0;
+  }
 };
 
 const extractTextFromGeminiResponse = (response: GeminiProviderResponse): string => {
@@ -915,6 +1252,7 @@ const executeSynchronousImageGeneration = async (
   r2StartedAt: number;
   r2FinishedAt: number;
   referenceCount: number;
+  settlement: MeteredSettlement;
 }> => {
   const geminiApiKey = Deno.env.get('GEMINI_API_KEY') ?? '';
   if (!geminiApiKey) {
@@ -923,6 +1261,20 @@ const executeSynchronousImageGeneration = async (
       'MISSING_GEMINI_API_KEY',
       'INTERNAL_ERROR',
       'Hosted image generation is not configured: GEMINI_API_KEY is missing from generate-image function secrets.'
+    );
+  }
+
+  // Grounding policy: Google Web/Image Search grounding is billed separately ($14 per 1,000 queries
+  // after a shared 5,000/mo free allowance; one request may issue multiple queries). Server-observed
+  // billed-query counts are not yet available, so we fail closed rather than under-charge — a grounded
+  // hosted image request is rejected until grounding pricing (Policy A) or invoice reconciliation
+  // (Policy B) is implemented. See docs/hosted-google-pricing-audit.md.
+  if (requestUsesGoogleGrounding(requestBody)) {
+    throw new GenerationExecutionError(
+      400,
+      'GROUNDING_NOT_PRICED',
+      'INTERNAL_ERROR',
+      'Grounding/search is not yet priced for metered hosted image generation. Disable grounding for this request.'
     );
   }
 
@@ -972,6 +1324,20 @@ const executeSynchronousImageGeneration = async (
 
     const upload = await uploadImageToR2(jobId, imageBase64, mimeType);
 
+    // Meter the image generation at published list cost × 2 (input tokens + image output by resolution).
+    // Fails closed on missing/invalid usage, unsupported tier, or unknown model/resolution pricing.
+    const usageMeta = result.usageMetadata as Record<string, unknown> | null | undefined;
+    const usage = normalizeProviderUsage(usageMeta);
+    const serviceTier = normalizeServiceTier(usageMeta?.serviceTier);
+    const settlement = buildImageMeteredSettlement({
+      providerModel,
+      serviceTier,
+      resolution: resolutionTier,
+      modelVersion: typeof result.modelVersion === 'string' ? result.modelVersion : null,
+      responseId: typeof result.responseId === 'string' ? result.responseId : null,
+      usage
+    });
+
     return {
       assetUrl: upload.publicUrl,
       fileKey: upload.fileKey,
@@ -979,7 +1345,8 @@ const executeSynchronousImageGeneration = async (
       providerFinishedAt,
       r2StartedAt: upload.r2StartedAt,
       r2FinishedAt: upload.r2FinishedAt,
-      referenceCount: materialized.referenceCount
+      referenceCount: materialized.referenceCount,
+      settlement
     };
   } finally {
     await cleanupHostedReferences(supabaseService, materialized.cleanupPaths);
@@ -993,6 +1360,7 @@ const executeSynchronousTextAnalysis = async (
   assetUrl: string;
   providerStartedAt: number;
   providerFinishedAt: number;
+  settlement: MeteredSettlement;
 }> => {
   const geminiApiKey = Deno.env.get('GEMINI_API_KEY') ?? '';
   if (!geminiApiKey) {
@@ -1037,10 +1405,24 @@ const executeSynchronousTextAnalysis = async (
     );
   }
 
+  // Meter the call from the provider's own usageMetadata (fails closed on missing/invalid usage, and
+  // on an unsupported service tier — Standard prices are never silently applied to Batch/Flex/etc.).
+  const usageMeta = result.usageMetadata as Record<string, unknown> | null | undefined;
+  const usage = normalizeProviderUsage(usageMeta);
+  const serviceTier = normalizeServiceTier(usageMeta?.serviceTier);
+  const settlement = buildMeteredSettlement({
+    providerModel,
+    modelVersion: typeof result.modelVersion === 'string' ? result.modelVersion : null,
+    serviceTier,
+    responseId: typeof result.responseId === 'string' ? result.responseId : null,
+    usage
+  });
+
   return {
     assetUrl: `data:application/json;charset=utf-8,${encodeURIComponent(text)}`,
     providerStartedAt,
-    providerFinishedAt
+    providerFinishedAt,
+    settlement
   };
 };
 
@@ -1118,6 +1500,49 @@ serve(async (req) => {
     expectedResponseTypeForFailure = expectedResponseType;
 
     const creditMetadata = readHostedCreditMetadata(requestBody, expectedResponseType, providerModel);
+
+    // ===== Server-authoritative spend controls (checked BEFORE provider invocation) =====
+    const killAll = (Deno.env.get('HOSTED_GOOGLE_KILL_SWITCH') ?? '').toLowerCase() === 'true';
+    const killAnalysis = (Deno.env.get('HOSTED_ANALYSIS_KILL_SWITCH') ?? '').toLowerCase() === 'true';
+    if (killAll) {
+      throw new HttpError(503, 'HOSTED_GOOGLE_DISABLED', 'Hosted Google operations are temporarily disabled by an administrator.');
+    }
+    if (creditMetadata.operation === 'analyze' && killAnalysis) {
+      throw new HttpError(503, 'HOSTED_GOOGLE_DISABLED', 'Hosted analysis is temporarily disabled by an administrator.');
+    }
+
+    const numericEnv = (name: string): number | null => {
+      const raw = Deno.env.get(name);
+      if (!raw || raw.trim() === '') return null;
+      const v = Number(raw);
+      return Number.isFinite(v) && v >= 0 ? v : null;
+    };
+
+    // Per-request reservation cap.
+    const requestCap = numericEnv('HOSTED_REQUEST_COST_CAP_CREDITS');
+    if (requestCap !== null && creditMetadata.requiredCredits > requestCap) {
+      throw new HttpError(429, 'REQUEST_COST_LIMIT', `This request reserves ${creditMetadata.requiredCredits} credits, above the per-request cap of ${requestCap}.`);
+    }
+
+    // Per-user daily total + analysis-only caps (server-summed from today's completed generations).
+    const userDailyCap = numericEnv('HOSTED_USER_DAILY_SPEND_CAP_CREDITS');
+    const analysisDailyCap = numericEnv('HOSTED_ANALYSIS_DAILY_SPEND_CAP_CREDITS');
+    if (userDailyCap !== null || analysisDailyCap !== null) {
+      const since = new Date(); since.setUTCHours(0, 0, 0, 0);
+      if (userDailyCap !== null) {
+        const spent = await sumHostedSpendSince(supabaseService, userId, since.toISOString(), null);
+        if (spent + creditMetadata.requiredCredits > userDailyCap) {
+          throw new HttpError(429, 'USER_DAILY_SPEND_LIMIT', `Daily hosted spend cap of ${userDailyCap} credits reached.`);
+        }
+      }
+      if (analysisDailyCap !== null && creditMetadata.operation === 'analyze') {
+        const spent = await sumHostedSpendSince(supabaseService, userId, since.toISOString(), 'analyze');
+        if (spent + creditMetadata.requiredCredits > analysisDailyCap) {
+          throw new HttpError(429, 'ANALYSIS_DAILY_SPEND_LIMIT', `Daily hosted-analysis cap of ${analysisDailyCap} credits reached.`);
+        }
+      }
+    }
+
     let currentCredits = await readHostedCreditBalance(supabaseService, userId);
 
     if (currentCredits < creditMetadata.requiredCredits) {
@@ -1273,6 +1698,50 @@ serve(async (req) => {
         console.warn(`[Synchronous Text Analysis] Could not persist metrics for generation ${job.id}: ${metricsErr.message}`);
       }
 
+      // Persist the server-derived metered ledger metadata (token counts, provider cost, markup,
+      // customer price, microcredits, pricing version). Client-supplied values are never used.
+      const settlement = analysisResult.settlement;
+      const meteredBillingMetadata = {
+        ...creditMetadata,
+        operation: 'analyze',
+        analysisKind: creditMetadata.analysisKind ?? null,
+        billingMode: 'metered',
+        provider: 'gemini',
+        ...settlement,
+        parentGenerationId: job.id,
+        executionFingerprint,
+        fundingSource: 'paid',
+        reservationCredits: creditMetadata.requiredCredits,
+        // Only mark SETTLED when metered billing is enabled AND settleable; otherwise leave the legacy
+        // reservation as the live charge and flag for reconciliation.
+        settlementStatus: (HOSTED_METERED_BILLING_ENABLED && settlement.creditMicroUnitsCharged !== null) ? 'SETTLED' : 'RECONCILE_PENDING'
+      };
+      const { error: billingMetaErr } = await supabaseService
+        .from('generations')
+        .update({ billing_metadata: meteredBillingMetadata })
+        .eq('id', job.id);
+      if (billingMetaErr) {
+        console.warn(`[Metered Analysis] Could not persist billing_metadata for ${job.id}: ${billingMetaErr.message}`);
+      }
+
+      // Apply the metered charge ONLY behind the feature flag (don't partially charge before local DB
+      // tests + UI + credit value are ready). Idempotent on providerResponseId.
+      if (HOSTED_METERED_BILLING_ENABLED && settlement.creditMicroUnitsCharged !== null) {
+        const actualCredits = Number(BigInt(settlement.creditMicroUnitsCharged)) / 1_000_000;
+        const { error: settleErr } = await supabaseService.rpc('settle_generation', {
+          p_generation_id: job.id,
+          p_actual_cost: actualCredits,
+          p_provider_response_id: settlement.providerResponseId
+        });
+        if (settleErr) {
+          console.warn(`[Metered Analysis] settle_generation unavailable for ${job.id} (RECONCILE_PENDING): ${settleErr.message}`);
+        }
+      } else if (!HOSTED_METERED_BILLING_ENABLED) {
+        console.info(`[Metered Analysis] Metered billing disabled (flag off); ${job.id} on legacy reservation, RECONCILE_PENDING.`);
+      } else {
+        console.warn(`[Metered Analysis] No HOSTED_CREDIT_USD_VALUE_NANO_USD configured; ${job.id} left RECONCILE_PENDING.`);
+      }
+
       const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
       const { error: completeErr } = await supabaseService.rpc('complete_generation', {
         p_generation_id: job.id,
@@ -1328,6 +1797,31 @@ serve(async (req) => {
 
       if (metricsErr) {
         console.warn(`[Synchronous Image Generation] Could not persist metrics for generation ${job.id}: ${metricsErr.message}`);
+      }
+
+      // Persist the metered image settlement (published list cost × 2) for reconciliation. The live
+      // charge for image generation remains the legacy reservation (creditMetadata.requiredCredits) until
+      // the image rates are verified and the settle flow is integration-tested; the row is therefore
+      // flagged RECONCILE_PENDING rather than auto-settled to the metered amount.
+      const imageSettlement = imageResult.settlement;
+      const imageBillingMetadata = {
+        ...creditMetadata,
+        operation: 'generate',
+        billingMode: 'metered',
+        provider: 'gemini',
+        ...imageSettlement,
+        parentGenerationId: job.id,
+        executionFingerprint,
+        fundingSource: 'paid',
+        reservationCredits: creditMetadata.requiredCredits,
+        settlementStatus: 'RECONCILE_PENDING'
+      };
+      const { error: imgBillingMetaErr } = await supabaseService
+        .from('generations')
+        .update({ billing_metadata: imageBillingMetadata })
+        .eq('id', job.id);
+      if (imgBillingMetaErr) {
+        console.warn(`[Metered Image] Could not persist billing_metadata for ${job.id}: ${imgBillingMetaErr.message}`);
       }
 
       const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
