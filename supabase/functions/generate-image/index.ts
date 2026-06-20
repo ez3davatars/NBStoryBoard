@@ -60,6 +60,7 @@ type GenerateImageRequestBody = {
     resolutionTier?: unknown;
     requiredCredits?: unknown;
     hostedQualityGateBilling?: unknown;
+    usageCategory?: unknown;
   } | unknown;
   generationType?: unknown;
   resolutionTier?: unknown;
@@ -480,6 +481,10 @@ type HostedOperation = 'generate' | 'analyze';
 const deriveHostedOperation = (expectedResponseType: ExpectedResponseType): HostedOperation =>
   expectedResponseType === 'text' || expectedResponseType === 'json' ? 'analyze' : 'generate';
 
+// Stable, server-approved usage categories persisted in billing_metadata for the Hosted Usage panel.
+// Only a category the server can independently verify is recorded; client display strings are ignored.
+type HostedUsageCategory = 'reference_dna_analysis';
+
 // Analysis (pose/style/wardrobe quality gates) is restricted to approved vision-text models so a
 // paid image generation cannot be relabeled as a free zero-credit analysis call.
 const ANALYSIS_OPERATION_MODELS = new Set<string>([
@@ -550,12 +555,26 @@ const readHostedCreditMetadata = (
     );
   }
 
+  // Server-validated usage category. The manual "Reference DNA Analysis" label is only accepted when
+  // the server can independently confirm this is a paid text analysis on an approved model — an
+  // image generation (or any other call) cannot spoof the category, it is simply dropped.
+  const requestedUsageCategory = typeof options.usageCategory === 'string' ? options.usageCategory : undefined;
+  const usageCategory: HostedUsageCategory | undefined =
+    requestedUsageCategory === 'reference_dna_analysis' &&
+    operation === 'analyze' &&
+    expectedResponseType === 'text' &&
+    qualityGateBilling === 'paid' &&
+    ANALYSIS_OPERATION_MODELS.has(providerModel)
+      ? 'reference_dna_analysis'
+      : undefined;
+
   return {
     operation,
     generationType,
     resolutionTier,
     requiredCredits: backendCalculatedRequiredCredits,
-    creditPricingVersion: CREDIT_PRICING_VERSION
+    creditPricingVersion: CREDIT_PRICING_VERSION,
+    usageCategory
   };
 };
 

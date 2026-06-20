@@ -40,6 +40,7 @@ import {
   type InsufficientCreditModalState
 } from './utils/billingProducts';
 import { createUniqueDownloadFilename } from './utils/downloadFilenames';
+import { getHostedUsageCredits, getHostedUsageLabel, type HostedUsageRow } from './utils/hostedUsageLabels';
 
 import {
   Settings,
@@ -77,34 +78,6 @@ type GenerationTimingMetrics = {
   error_message?: string;
 };
 
-type HostedUsageMetadata = {
-  requiredCredits?: number;
-  generationType?: string;
-  resolutionTier?: string;
-  creditPricingVersion?: string;
-};
-
-type HostedUsageRow = {
-  id: string;
-  created_at?: string | null;
-  status?: string | null;
-  provider_model?: string | null;
-  billing_metadata?: HostedUsageMetadata | null;
-};
-
-const getHostedUsageCredits = (row: HostedUsageRow): number => {
-  const requiredCredits = Number(row.billing_metadata?.requiredCredits);
-  return Number.isFinite(requiredCredits) && requiredCredits > 0 ? requiredCredits : 0;
-};
-
-const formatHostedUsageKind = (row: HostedUsageRow): string => {
-  const generationType = row.billing_metadata?.generationType;
-  const resolutionTier = row.billing_metadata?.resolutionTier;
-  if (generationType && resolutionTier) return `${generationType.replace(/_/g, ' ')} - ${resolutionTier.toUpperCase()}`;
-  if (resolutionTier) return resolutionTier.toUpperCase();
-  if (generationType) return generationType.replace(/_/g, ' ');
-  return row.provider_model?.includes('gemini') ? 'image generation' : 'generation';
-};
 
 const isMissingColumnError = (error: unknown, columnName: string): boolean => {
   const message = getErrorMessage(error).toLowerCase();
@@ -2327,7 +2300,7 @@ const App = () => {
                             <div key={row.id} className="rounded-lg bg-black/30 border border-white/5 px-3 py-2">
                               <div className="flex items-start justify-between gap-3">
                                 <div className="min-w-0">
-                                  <div className="text-xs font-bold text-gray-200 truncate">{formatHostedUsageKind(row)}</div>
+                                  <div className="text-xs font-bold text-gray-200 truncate">{getHostedUsageLabel(row)}</div>
                                   <div className="text-[10px] text-gray-500 mt-0.5">{formatHostedUsageDate(row.created_at)}</div>
                                 </div>
                                 <div className="text-right shrink-0">

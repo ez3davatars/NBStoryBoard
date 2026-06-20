@@ -3838,9 +3838,15 @@ Output: environment plate only.
         setInspectAnalysis('Analyzing DNA...');
         
         try {
+            // Manual Reference DNA AUTO-ANALYZE is a deliberate, separately-billed analysis (1 credit
+            // when hosted), distinct from the automatic post-generation quality gates that are
+            // included in the generation price. Mark it explicitly as paid text analysis.
             const text = await GeminiService.analyzeImage(refAnalysisPrompt, state.apiKey, state.model, slot.url, {
-                billingMode: state.billingEntitlements?.effectiveBillingMode as 'hosted' | 'byok', 
-                entitlements: state.billingEntitlements
+                billingMode: state.billingEntitlements?.effectiveBillingMode as 'hosted' | 'byok',
+                entitlements: state.billingEntitlements,
+                expectedResponseType: 'text',
+                hostedQualityGateBilling: 'paid',
+                usageCategory: 'reference_dna_analysis'
             });
             setInspectAnalysis(text);
             dispatch({ type: 'ADD_LOG', payload: { message: 'DNA analysis complete.', type: 'success' } });

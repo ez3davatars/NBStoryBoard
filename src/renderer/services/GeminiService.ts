@@ -156,6 +156,11 @@ type GeminiGenerateContentResult = {
   }>;
 };
 
+// Stable, server-validated usage category recorded in billing_metadata for the Hosted Usage panel.
+// Set only by deliberate paid actions (e.g. manual Reference DNA AUTO-ANALYZE); the edge function
+// re-validates it and ignores it for any non-matching request.
+type HostedUsageCategory = 'reference_dna_analysis';
+
 type HostedExecutionOptions = {
   imageSize?: HostedImageSize;
   creditRenderType?: HostedCreditRenderType;
@@ -164,6 +169,7 @@ type HostedExecutionOptions = {
   uiWaitWindowMs?: number;
   signal?: AbortSignal;
   hostedQualityGateBilling?: HostedQualityGateBilling;
+  usageCategory?: HostedUsageCategory;
 };
 
 type HostedBillingMetadata = {
@@ -194,6 +200,7 @@ type SharedGenerationOptions = PoseCoherenceGenerationOptions & HeadshotWardrobe
   uiWaitWindowMs?: number;
   signal?: AbortSignal;
   hostedQualityGateBilling?: HostedQualityGateBilling;
+  usageCategory?: HostedUsageCategory;
   sheetStyleLock?: boolean;
   characterAnatomyIntegrity?: boolean;
 };
@@ -484,7 +491,21 @@ const isIncludedHostedQualityGateBilling = (options: HostedExecutionOptions = {}
   options.hostedQualityGateBilling === 'included' &&
   (options.expectedResponseType === 'text' || options.expectedResponseType === 'json');
 
-const buildHostedBillingMetadata = (
+/**
+ * Normalizes options for a hosted analysis call (analyzeImage). Guarantees a text response type and
+ * preserves the caller's hostedQualityGateBilling intent so the billing signal flows unchanged into
+ * buildHostedBillingMetadata, _executeHostedRequest, and supabase.functions.invoke:
+ *  - 'paid'     => manual analysis (e.g. Reference DNA AUTO-ANALYZE), billed as a positive amount.
+ *  - 'included' => automatic post-generation quality gates, included in the generation price (0).
+ *  - undefined  => treated as included analysis by the edge function (server-derived).
+ */
+export const normalizeAnalyzeOptions = (options: SharedGenerationOptions = {}): SharedGenerationOptions => ({
+  ...options,
+  expectedResponseType: options.expectedResponseType ?? 'text',
+  hostedQualityGateBilling: options.hostedQualityGateBilling
+});
+
+export const buildHostedBillingMetadata = (
   requestBody: Record<string, unknown>,
   options: HostedExecutionOptions = {}
 ): HostedBillingMetadata => {
@@ -1778,7 +1799,7 @@ export const GeminiService = {
     };
 
     if (options.billingMode === 'hosted') {
-        const hostedDataUrl = await GeminiService._executeHostedRequest(useModel, requestBody, { ...options, expectedResponseType: options.expectedResponseType ?? 'text' });
+        const hostedDataUrl = await GeminiService._executeHostedRequest(useModel, requestBody, normalizeAnalyzeOptions(options));
         if (hostedDataUrl && hostedDataUrl.startsWith('data:application/json')) {
             return decodeURIComponent(hostedDataUrl.split(',')[1]);
         }
