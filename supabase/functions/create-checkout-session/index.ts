@@ -6,6 +6,18 @@ import {
   isPricingRolloutEnabled,
   resolveLaunchPriceId,
 } from "../_shared/launchPricing.ts";
+import {
+  checkKeyMode,
+  checkPrice,
+  checkSessionMode,
+  expectedPriceType,
+  parseExpectedMode,
+  resolveApprovedUnitAmountCents,
+  type StripePriceShape,
+} from "../_shared/stripeModeGuard.ts";
+
+// Static identifier surfaced ONLY in dev debug responses (never a secret).
+const FUNCTION_BUILD_ID = "create-checkout-session-mode-guard-001";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -346,6 +358,8 @@ serve(async (req) => {
       userEmail = userData.user.email ?? null;
     }
 
+    // Exactly ONE Stripe key source. No fallback to a separate live-key env var, embedded keys, another
+    // env var, or a database-stored key. The key body is never logged or returned.
     const stripeSecretKey = getEnv("STRIPE_SECRET_KEY");
     if (!stripeSecretKey || !productConfig.stripePriceId) {
       throw new HttpError(
@@ -353,6 +367,22 @@ serve(async (req) => {
         "CHECKOUT_NOT_CONFIGURED",
         `Checkout is not configured for ${productKey ?? productConfig.productKey}. Add STRIPE_SECRET_KEY plus the Stripe price secret for this product.`
       );
+    }
+
+    // Fail closed on mode: STRIPE_EXPECTED_MODE must be exactly "test" or "live", and the actual key mode
+    // (derived from the key prefix only) must match it before any Stripe API call is made.
+    const expectedMode = parseExpectedMode(getEnv("STRIPE_EXPECTED_MODE"));
+    if (!expectedMode) {
+      throw new HttpError(
+        500,
+        "STRIPE_EXPECTED_MODE_INVALID",
+        'STRIPE_EXPECTED_MODE must be set to exactly "test" or "live".'
+      );
+    }
+    const keyModeResult = checkKeyMode({ expectedMode, secretKey: stripeSecretKey });
+    if (!keyModeResult.ok) {
+      // Never include the key. Only the derived mode strings appear in the message.
+      throw new HttpError(500, keyModeResult.code, keyModeResult.message);
     }
 
     const requestedReturnUrl = normalizeUrl(body.return_url);
@@ -370,6 +400,41 @@ serve(async (req) => {
         "CHECKOUT_RETURN_URL_NOT_CONFIGURED",
         "Checkout success/cancel URLs are not configured. Set CHECKOUT_SUCCESS_URL and CHECKOUT_CANCEL_URL."
       );
+    }
+
+    // Retrieve the selected Price with the SAME Stripe client and verify it before creating Checkout.
+    const priceResponse = await fetch(
+      `https://api.stripe.com/v1/prices/${encodeURIComponent(productConfig.stripePriceId)}`,
+      { headers: { Authorization: `Bearer ${stripeSecretKey}` } }
+    );
+    const priceText = await priceResponse.text();
+    if (!priceResponse.ok) {
+      const priceErr = parseJsonObject(priceText);
+      const priceErrObj =
+        priceErr?.error && typeof priceErr.error === "object" && !Array.isArray(priceErr.error)
+          ? priceErr.error as Record<string, unknown>
+          : null;
+      throw new HttpError(
+        502,
+        "STRIPE_PRICE_RETRIEVE_FAILED",
+        typeof priceErrObj?.message === "string" ? priceErrObj.message : "Failed to retrieve the Stripe price.",
+        { productKey: productKey ?? productConfig.productKey }
+      );
+    }
+    const price = JSON.parse(priceText) as StripePriceShape;
+    const priceCheck = checkPrice({
+      price,
+      expectedMode,
+      expectedType: expectedPriceType(productConfig.mode),
+      approvedUnitAmountCents: resolveApprovedUnitAmountCents(
+        productKey ?? productConfig.productKey,
+        rolloutEnabled
+      ),
+    });
+    if (!priceCheck.ok) {
+      throw new HttpError(500, priceCheck.code, priceCheck.message, {
+        productKey: productKey ?? productConfig.productKey,
+      });
     }
 
     const metadata = createCheckoutMetadata(
@@ -443,16 +508,48 @@ serve(async (req) => {
       );
     }
 
-    const stripeSession = JSON.parse(stripeText) as { url?: string; id?: string };
+    const stripeSession = JSON.parse(stripeText) as { url?: string; id?: string; livemode?: boolean };
     if (!stripeSession.url) {
       throw new HttpError(502, "STRIPE_CHECKOUT_MISSING_URL", "Stripe did not return a checkout URL.");
     }
 
-    return jsonResponse({
+    // Final fail-closed gate: the created session's livemode must match the expected mode. On mismatch we
+    // expire the session (best effort) and never return its URL.
+    const sessionLivemode = stripeSession.livemode === true;
+    const sessionCheck = checkSessionMode({ sessionLivemode, expectedMode });
+    if (!sessionCheck.ok) {
+      if (stripeSession.id) {
+        await fetch(
+          `https://api.stripe.com/v1/checkout/sessions/${encodeURIComponent(stripeSession.id)}/expire`,
+          { method: "POST", headers: { Authorization: `Bearer ${stripeSecretKey}` } }
+        ).catch(() => undefined);
+      }
+      throw new HttpError(500, sessionCheck.code, sessionCheck.message, {
+        productKey: productKey ?? productConfig.productKey,
+      });
+    }
+
+    const responseBody: Record<string, unknown> = {
       url: stripeSession.url,
       checkout_url: stripeSession.url,
       session_id: stripeSession.id,
-    });
+    };
+
+    // Dev-only, secret-free diagnostics. Gated to test mode + an explicit dev/debug env so live responses
+    // never carry these fields. Only the derived mode + non-secret livemode booleans + price id are shown.
+    const devDebugEnabled =
+      expectedMode === "test" &&
+      ((getEnv("DENO_ENV") ?? getEnv("NODE_ENV")) === "development" ||
+        getEnv("STRIPE_CHECKOUT_DEBUG") === "true");
+    if (devDebugEnabled) {
+      responseBody.stripeMode = keyModeResult.keyMode;
+      responseBody.priceId = productConfig.stripePriceId;
+      responseBody.priceLivemode = price.livemode === true;
+      responseBody.sessionLivemode = sessionLivemode;
+      responseBody.functionBuildId = FUNCTION_BUILD_ID;
+    }
+
+    return jsonResponse(responseBody);
   } catch (error) {
     const status = error instanceof HttpError ? error.status : 500;
     const code = error instanceof HttpError ? error.code : "CHECKOUT_SESSION_ERROR";

@@ -15,7 +15,6 @@ import { LOGO_BASE64 } from './assets/logo';
 import { SupabaseAuth, supabase } from './services/SupabaseClient';
 import { DeviceFingerprint } from './services/DeviceFingerprint';
 import { SIGN_IN_REQUIRED_EVENT } from './services/AuthGenerationGate';
-import { dumpBrowserStorage } from './utils/resetVolatileWorkspaceState';
 
 import type {
   ViewMode,
@@ -1365,10 +1364,6 @@ const App = () => {
   const [authEmail, setAuthEmail] = useState('');
   const [authPass, setAuthPass] = useState('');
   const [isAuthLoading, setIsAuthLoading] = useState(false);
-
-  useEffect(() => {
-    dumpBrowserStorage('after React mount');
-  }, []);
 
   useEffect(() => {
     if (!showSettings) return;

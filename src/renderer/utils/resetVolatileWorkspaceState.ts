@@ -185,52 +185,6 @@ export function clearVolatileWorkspaceStorage(): void {
 
 export const clearVolatileStagingStorage = clearVolatileWorkspaceStorage;
 
-export function dumpBrowserStorage(label: string): void {
-  if (!import.meta.env.DEV) return;
-
-  const local = getLocalStorage();
-  const session = getSessionStorage();
-
-  console.group(`[STAGING STORAGE AUDIT] ${label}`);
-
-  console.group('localStorage');
-  if (local) {
-    Object.keys(local).sort().forEach((key) => {
-      const lower = key.toLowerCase();
-
-      if (
-        lower.includes('stage') ||
-        lower.includes('staging') ||
-        lower.includes('scene') ||
-        lower.includes('prompt') ||
-        lower.includes('result') ||
-        lower.includes('anchor') ||
-        lower.includes('reference') ||
-        lower.includes('director') ||
-        lower.includes('cast') ||
-        lower.includes('token') ||
-        lower.includes('style') ||
-        lower.includes('generation')
-      ) {
-        console.log(key, local.getItem(key));
-      }
-    });
-  }
-  console.groupEnd();
-
-  console.group('sessionStorage');
-  if (session) {
-    Object.keys(session).sort().forEach((key) => {
-      console.log(key, session.getItem(key));
-    });
-  }
-  console.groupEnd();
-
-  console.groupEnd();
-}
-
-export const debugDumpVolatileStorageKeys = dumpBrowserStorage;
-
 export async function clearVolatileWorkspaceDataStores(): Promise<void> {
   await Promise.all(
     VOLATILE_WORKSPACE_DATASTORE_KEYS.map(async (key) => {

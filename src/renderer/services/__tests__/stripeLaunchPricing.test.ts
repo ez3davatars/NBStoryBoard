@@ -130,19 +130,19 @@ describe('webhook recognizes launch + historical events safely', () => {
     expect(WEBHOOK).toContain('getPaidCreditGrant(productKey)'); // server-owned, price-agnostic
   });
   it('14. duplicate webhook delivery cannot grant credits twice', () => {
-    // packs: idempotent via apply_stripe_credit_topup (event-id unique). subscriptions: claim row first,
-    // duplicate (23505) on the unique stripe_processed_events constraints => already-granted no-op.
+    // Both paths go through the single deployed RPC apply_stripe_credit_topup, which is idempotent on
+    // p_stripe_event_id via public.stripe_processed_events(id). No unsafe direct read-then-update remains.
     expect(WEBHOOK).toContain('apply_stripe_credit_topup');
-    expect(WEBHOOK).toContain('"23505"');
-    expect(WEBHOOK).toMatch(/code === "23505"[\s\S]*applied: false/);
+    expect(WEBHOOK).toContain('p_stripe_event_id: grant.idempotencyKey');
+    expect(WEBHOOK).not.toContain('.update({ credit_balance');
   });
   it('15. subscription renewal grants once per eligible invoice cycle', () => {
     expect(WEBHOOK).toContain('invoice.paid');
     expect(WEBHOOK).toContain('invoice.payment_succeeded');
     expect(WEBHOOK).toContain('subscription_create');
     expect(WEBHOOK).toContain('subscription_cycle');
-    // invoice id is the idempotency key (unique stripe_session_id) => once per cycle
-    expect(WEBHOOK).toContain('stripe_session_id: grant.invoiceId');
+    // The invoice id is the RPC idempotency key, stable across invoice.paid + invoice.payment_succeeded.
+    expect(WEBHOOK).toContain('idempotencyKey: invoice.id');
   });
   it('16. failed/unpaid invoices grant zero credits', () => {
     expect(WEBHOOK).toMatch(/invoice\.status !== "paid"/);

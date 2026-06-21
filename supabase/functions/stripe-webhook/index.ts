@@ -35,15 +35,19 @@ type StripeEvent = {
   };
 };
 
-type CreditTopUp = {
-  eventId: string;
-  sessionId: string;
+type CreditPackProductKey = "credit_pack_100" | "credit_pack_500";
+
+// A credit grant ready for the deployed apply_stripe_credit_topup RPC. `idempotencyKey` becomes the RPC's
+// p_stripe_event_id (the dedupe key in public.stripe_processed_events). For packs it is the Stripe event id;
+// for subscription invoices it is the invoice id (stable across invoice.paid + invoice.payment_succeeded,
+// and in a different id namespace than checkout event ids, so the two paths never collide).
+type CreditGrant = {
+  idempotencyKey: string;
+  eventType: string;
   userId: string;
-  productKey: CreditPackProductKey;
+  productKey: string;
   credits: number;
 };
-
-type CreditPackProductKey = "credit_pack_100" | "credit_pack_500";
 
 const jsonResponse = (body: Record<string, unknown>, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -145,7 +149,47 @@ const readMetadataValue = (
 const isCreditPackProductKey = (value: string | null): value is CreditPackProductKey =>
   value === "credit_pack_100" || value === "credit_pack_500";
 
-const readCreditTopUp = (event: StripeEvent): CreditTopUp | null => {
+// ===== Safe error normalization =====
+// PostgREST / supabase-js errors are plain objects; throwing them raw stringifies to "[object Object]".
+// This extractor keeps only the non-secret diagnostic fields. NEVER place a Stripe secret/signing secret,
+// a Supabase token, or a full Checkout Session object into one of these.
+type SafeError = { message: string; code: string | null; details: string | null; hint: string | null };
+
+const extractRpcError = (error: unknown): SafeError => {
+  if (error && typeof error === "object") {
+    const e = error as Record<string, unknown>;
+    return {
+      message: typeof e.message === "string" ? e.message : String(error),
+      code: typeof e.code === "string" ? e.code : null,
+      details: typeof e.details === "string" ? e.details : null,
+      hint: typeof e.hint === "string" ? e.hint : null,
+    };
+  }
+  return { message: String(error), code: null, details: null, hint: null };
+};
+
+// The RPC (or its expected argument signature) is absent from the schema cache.
+const isRpcContractMismatch = (error: SafeError): boolean =>
+  error.code === "PGRST202" ||
+  /could not find the function|schema cache|function public\.apply_stripe_credit_topup.*does not exist|no function matches the given name/i.test(
+    error.message
+  );
+
+// A logged, status-bearing webhook error. logCode identifies the failure class without leaking secrets.
+class WebhookError extends Error {
+  status: number;
+  logCode: string;
+  safe: SafeError | null;
+  constructor(status: number, logCode: string, message: string, safe: SafeError | null = null) {
+    super(message);
+    this.name = "WebhookError";
+    this.status = status;
+    this.logCode = logCode;
+    this.safe = safe;
+  }
+}
+
+const readCreditTopUp = (event: StripeEvent): CreditGrant | null => {
   const session = event.data?.object;
   if (!session || session.object !== "checkout.session") return null;
 
@@ -171,116 +215,24 @@ const readCreditTopUp = (event: StripeEvent): CreditTopUp | null => {
   if (!event.id) {
     throw new Error("Missing Stripe event id.");
   }
-
   if (!session.id) {
     throw new Error("Missing Stripe checkout session id.");
   }
 
   return {
-    eventId: event.id,
-    sessionId: session.id,
+    idempotencyKey: event.id, // packs dedupe on the Stripe event id
+    eventType: event.type ?? "checkout.session.completed",
     userId,
     productKey,
     credits,
   };
 };
 
-const rpcFunctionNotFound = (message: string): boolean =>
-  /function .*apply_stripe_credit_topup|could not find the function|schema cache/i.test(message);
-
-const applyCreditTopUpWithRpc = async (
-  supabase: SupabaseClientAny,
-  topUp: CreditTopUp
-): Promise<{ applied: boolean; balance: number | null }> => {
-  const { data, error } = await supabase.rpc("apply_stripe_credit_topup", {
-    p_event_id: topUp.eventId,
-    p_session_id: topUp.sessionId,
-    p_user_id: topUp.userId,
-    p_product_key: topUp.productKey,
-    p_credits: topUp.credits,
-  });
-
-  if (error) {
-    if (rpcFunctionNotFound(error.message)) {
-      throw error;
-    }
-    throw new Error(`apply_stripe_credit_topup RPC failed: ${error.message}`);
-  }
-
-  const row = Array.isArray(data) ? data[0] : data;
-  const applied = Boolean((row as { applied?: unknown } | null)?.applied);
-  const balanceValue = Number((row as { credit_balance?: unknown } | null)?.credit_balance);
-
-  return {
-    applied,
-    balance: Number.isFinite(balanceValue) ? balanceValue : null,
-  };
-};
-
-const applyCreditTopUpDirectly = async (
-  supabase: SupabaseClientAny,
-  topUp: CreditTopUp
-): Promise<{ applied: boolean; balance: number | null }> => {
-  const { data: profileData, error: readError } = await supabase
-    .from("profiles")
-    .select("credit_balance")
-    .eq("id", topUp.userId)
-    .single();
-
-  if (readError) {
-    throw new Error(`Could not read profile credit balance: ${readError.message}`);
-  }
-
-  const currentBalance = Number((profileData as { credit_balance?: unknown } | null)?.credit_balance ?? 0);
-  if (!Number.isFinite(currentBalance)) {
-    throw new Error("Profile credit_balance is not numeric.");
-  }
-
-  const nextBalance = currentBalance + topUp.credits;
-  const { data: updatedProfile, error: updateError } = await supabase
-    .from("profiles")
-    .update({ credit_balance: nextBalance })
-    .eq("id", topUp.userId)
-    .select("credit_balance")
-    .single();
-
-  if (updateError) {
-    throw new Error(`Could not update profile credit balance: ${updateError.message}`);
-  }
-
-  const updatedBalance = Number((updatedProfile as { credit_balance?: unknown } | null)?.credit_balance);
-  return {
-    applied: true,
-    balance: Number.isFinite(updatedBalance) ? updatedBalance : nextBalance,
-  };
-};
-
-const applyCreditTopUp = async (
-  supabase: SupabaseClientAny,
-  topUp: CreditTopUp
-): Promise<{ applied: boolean; balance: number | null }> => {
-  try {
-    return await applyCreditTopUpWithRpc(supabase, topUp);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (!rpcFunctionNotFound(message)) throw error;
-    console.warn("apply_stripe_credit_topup RPC not found; falling back to direct credit update.");
-    return applyCreditTopUpDirectly(supabase, topUp);
-  }
-};
-
-type SubscriptionGrant = {
-  eventId: string;
-  invoiceId: string;
-  userId: string;
-  productKey: string;
-  credits: number;
-};
-
 // Reads a subscription credit grant from a paid invoice event. Grant amount + product validity come from
 // the SERVER-OWNED launch registry, never the Stripe amount/metadata credits. Only eligible (create/cycle)
-// successfully-paid subscription invoices grant credits.
-const readSubscriptionGrant = (event: StripeEvent): SubscriptionGrant | null => {
+// successfully-paid subscription invoices grant credits. Dedupe is on the invoice id, so invoice.paid and
+// invoice.payment_succeeded for the same invoice grant exactly once.
+const readSubscriptionGrant = (event: StripeEvent): CreditGrant | null => {
   const invoice = event.data?.object;
   if (!invoice || invoice.object !== "invoice") return null;
   if (invoice.status !== "paid") return null;
@@ -300,46 +252,59 @@ const readSubscriptionGrant = (event: StripeEvent): SubscriptionGrant | null => 
 
   const userId = readMetadataValue(md, "user_id");
   if (!userId) throw new Error("Missing subscription user_id metadata.");
-  if (!event.id) throw new Error("Missing Stripe event id.");
   if (!invoice.id) throw new Error("Missing Stripe invoice id.");
 
-  return { eventId: event.id, invoiceId: invoice.id, userId, productKey: productKey!, credits };
+  return {
+    idempotencyKey: invoice.id, // subscriptions dedupe on the invoice id (stable across both invoice events)
+    eventType: event.type ?? "invoice.paid",
+    userId,
+    productKey: productKey!,
+    credits,
+  };
 };
 
-// Grants subscription credits idempotently. The (stripe_event_id PK, stripe_session_id UNIQUE) constraints
-// on stripe_processed_events make duplicate event/invoice deliveries no-ops: we claim the row first and
-// only credit on a fresh insert. A duplicate (23505) is treated as already-processed.
-const applySubscriptionCreditGrant = async (
+/**
+ * Grants credits through the single deployed, idempotent RPC:
+ *   apply_stripe_credit_topup(p_user_id uuid, p_credits integer, p_stripe_event_id text, p_event_type text)
+ *   RETURNS void  — idempotent on p_stripe_event_id via public.stripe_processed_events(id).
+ *
+ * Because the RPC returns void, the resulting balance is read afterwards (informational only — a failed
+ * balance read does NOT undo a succeeded grant). A missing/mismatched RPC fails closed: it returns a
+ * descriptive 500 and NEVER touches credit_balance directly.
+ */
+const grantCreditsViaRpc = async (
   supabase: SupabaseClientAny,
-  grant: SubscriptionGrant
-): Promise<{ applied: boolean; balance: number | null }> => {
-  const claim = await supabase
-    .from("stripe_processed_events")
-    .insert({
-      stripe_event_id: grant.eventId,
-      stripe_session_id: grant.invoiceId,
-      user_id: grant.userId,
-      product_key: grant.productKey,
-      purchase_kind: "HOSTED_SUBSCRIPTION",
-      credits: grant.credits,
-    })
-    .select("stripe_event_id");
+  grant: CreditGrant
+): Promise<number | null> => {
+  const { error } = await supabase.rpc("apply_stripe_credit_topup", {
+    p_user_id: grant.userId,
+    p_credits: grant.credits,
+    p_stripe_event_id: grant.idempotencyKey,
+    p_event_type: grant.eventType,
+  });
 
-  if (claim.error) {
-    if ((claim.error as { code?: string }).code === "23505") {
-      return { applied: false, balance: null }; // duplicate event/invoice -> already granted
+  if (error) {
+    const safe = extractRpcError(error);
+    if (isRpcContractMismatch(safe)) {
+      throw new WebhookError(
+        500,
+        "STRIPE_TOPUP_RPC_CONTRACT_MISMATCH",
+        "apply_stripe_credit_topup is missing or its signature does not match; refusing to modify credit_balance.",
+        safe
+      );
     }
-    throw new Error(`Could not record subscription credit event: ${claim.error.message}`);
+    throw new WebhookError(500, "STRIPE_TOPUP_RPC_FAILED", "apply_stripe_credit_topup RPC failed.", safe);
   }
 
-  const credited = await applyCreditTopUpDirectly(supabase, {
-    eventId: grant.eventId,
-    sessionId: grant.invoiceId,
-    userId: grant.userId,
-    productKey: grant.productKey as CreditPackProductKey,
-    credits: grant.credits,
-  });
-  return { applied: true, balance: credited.balance };
+  // RPC succeeded => fulfillment success (idempotent). Read the resulting balance for the response only.
+  const { data, error: readError } = await supabase
+    .from("profiles")
+    .select("credit_balance")
+    .eq("id", grant.userId)
+    .single();
+  if (readError) return null; // grant already applied; balance is informational
+  const balance = Number((data as { credit_balance?: unknown } | null)?.credit_balance);
+  return Number.isFinite(balance) ? balance : null;
 };
 
 serve(async (req) => {
@@ -379,13 +344,13 @@ serve(async (req) => {
       if (!grant) {
         return jsonResponse({ received: true, ignored: true, reason: "not_eligible_subscription_invoice" });
       }
-      const subResult = await applySubscriptionCreditGrant(supabase, grant);
+      const balance = await grantCreditsViaRpc(supabase, grant);
       return jsonResponse({
         received: true,
-        applied: subResult.applied,
+        fulfilled: true,
         product_key: grant.productKey,
         credits: grant.credits,
-        credit_balance: subResult.balance,
+        credit_balance: balance,
       });
     }
 
@@ -399,18 +364,37 @@ serve(async (req) => {
       return jsonResponse({ received: true, ignored: true, reason: "not_topup_purchase" });
     }
 
-    const result = await applyCreditTopUp(supabase, topUp);
+    const balance = await grantCreditsViaRpc(supabase, topUp);
 
     return jsonResponse({
       received: true,
-      applied: result.applied,
+      fulfilled: true,
       product_key: topUp.productKey,
       credits: topUp.credits,
-      credit_balance: result.balance,
+      credit_balance: balance,
     });
   } catch (error) {
+    if (error instanceof WebhookError) {
+      // Safe, structured log — never secrets or full Stripe objects.
+      console.error(`[stripe-webhook] ${error.logCode}`, {
+        message: error.safe?.message ?? error.message,
+        code: error.safe?.code ?? null,
+        details: error.safe?.details ?? null,
+        hint: error.safe?.hint ?? null,
+      });
+      return jsonResponse(
+        {
+          error: error.message,
+          code: error.logCode,
+          rpc_code: error.safe?.code ?? null,
+          rpc_details: error.safe?.details ?? null,
+          rpc_hint: error.safe?.hint ?? null,
+        },
+        error.status
+      );
+    }
     const message = error instanceof Error ? error.message : String(error);
-    console.error("Stripe webhook error:", message);
-    return jsonResponse({ error: message }, 400);
+    console.error("[stripe-webhook] STRIPE_WEBHOOK_REJECTED", { message });
+    return jsonResponse({ error: message, code: "STRIPE_WEBHOOK_REJECTED" }, 400);
   }
 });

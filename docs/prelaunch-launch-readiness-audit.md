@@ -46,13 +46,13 @@ ORDER BY p.promotional_credit_balance DESC;
 ## 4. Purchases / grants linked to Stripe price IDs (old or new)
 
 ```sql
--- Every credit grant the webhook has recorded, by product_key. Mapping is by product_key, never price id.
-SELECT spe.product_key, spe.purchase_kind, COUNT(*) AS events, SUM(spe.credits) AS credits_granted,
-       MIN(spe.processed_at) AS first_seen, MAX(spe.processed_at) AS last_seen
+-- Every Stripe event the webhook has processed (the deployed table is (id, event_type, created_at) — it
+-- records the idempotency key, not product_key/credits; the credit amount lives in credit_transactions §5).
+SELECT spe.event_type, COUNT(*) AS events, MIN(spe.created_at) AS first_seen, MAX(spe.created_at) AS last_seen
 FROM public.stripe_processed_events spe
-GROUP BY spe.product_key, spe.purchase_kind
-ORDER BY credits_granted DESC;
--- Expected at launch: only test grants. Investigate any product_key you do not recognize.
+GROUP BY spe.event_type
+ORDER BY events DESC;
+-- Expected at launch: only test events. Correlate event ids with Stripe (test vs live) before trusting.
 ```
 
 ## 5. Successful payment / credit-issuance records

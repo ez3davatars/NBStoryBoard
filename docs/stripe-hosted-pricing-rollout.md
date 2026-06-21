@@ -20,7 +20,7 @@ if a real customer is found, the launch-readiness check fails (see that doc).
 | Server-owned launch registry | `supabase/functions/_shared/launchPricing.ts` | Typed registry: product key → V2 env var, purchase type, **paid-credit grant**, BYOK flag, availability, rollout version `hosted-launch-pricing-2026-06-v1`. Pure (env injected); unit-tested. |
 | Rollout flag | `HOSTED_PRICING_ROLLOUT_ENABLED` (server env) | Default **false**; only the literal `"true"` enables it. Read server-side only — the frontend cannot set it. |
 | Checkout | `create-checkout-session/index.ts` | Flag **off** → prelaunch behavior unchanged. Flag **on** → all four V2 ids required (fail closed), price **derived from the product key** (never a client-supplied price id → `CLIENT_PRICE_NOT_ALLOWED`), subscriptions supported. BYOK unchanged. |
-| Webhook | `stripe-webhook/index.ts` | Packs grant 100/500 by **product_key** (price-agnostic, so V2 works unchanged). Subscriptions: `invoice.paid`/`invoice.payment_succeeded` with `billing_reason` create/cycle grant 600/1200 **paid** credits, idempotent per invoice via `stripe_processed_events`. Failed/refund/unrelated → 0. |
+| Webhook | `stripe-webhook/index.ts` | Both paths call the **deployed** RPC `apply_stripe_credit_topup(p_user_id, p_credits, p_stripe_event_id, p_event_type) RETURNS void` (idempotent on `p_stripe_event_id` via `stripe_processed_events(id)`). Packs derive 100/500 by **product_key** and dedupe on the **event id**; subscriptions (`invoice.paid`/`invoice.payment_succeeded`, `billing_reason` create/cycle) grant 600/1200 and dedupe on the **invoice id**. No unsafe direct balance update. Failed/refund/unrelated → 0. |
 | Credit grants | launch registry only | Never inferred from Stripe amount, display text, browser metadata, nickname, or requiredCredits. |
 
 ## Launch products & server-owned grants
@@ -109,8 +109,8 @@ to each Google call.
 
 ## Webhook verification (post-rollout)
 
-1. `apply_stripe_credit_topup` grants 100/500 for the new pack price ids (mapping is by product_key).
-2. Replay protection intact (`stripe_processed_events` unique on event id **and** session/invoice id).
+1. `apply_stripe_credit_topup` (4-arg `void` RPC) grants 100/500 for the new pack price ids (mapping is by product_key; the deployed RPC takes no price/session/product argument).
+2. Replay protection intact (`stripe_processed_events.id` primary key; the RPC inserts `ON CONFLICT DO NOTHING` and credits only on a fresh insert).
 3. Subscription `invoice.paid`/`invoice.payment_succeeded` (create/cycle) grant 600/1200 once per invoice.
 4. Failed/unpaid/refunded/unrelated events grant **0**.
 5. A test-mode checkout for each price grants the expected credits and records the correct amount.

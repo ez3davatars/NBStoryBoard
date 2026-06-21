@@ -4,8 +4,7 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import {
   clearVolatileStagingStorage,
-  clearVolatileWorkspaceDataStores,
-  dumpBrowserStorage
+  clearVolatileWorkspaceDataStores
 } from './utils/resetVolatileWorkspaceState'
 
 let launchReadyNotificationSent = false
@@ -33,10 +32,8 @@ const bootstrap = async () => {
   console.warn('[CDS STARTUP RESET BUILD] staging-reset-audit-001')
   window.__CDS_RESET_AUDIT_BUILD__ = RESET_AUDIT_BUILD
 
-  dumpBrowserStorage('before clear')
   clearVolatileStagingStorage()
   await clearVolatileWorkspaceDataStores()
-  dumpBrowserStorage('after clear')
 
   const [{ default: App }, { AppProvider }] = await Promise.all([
     import('./App.tsx'),
