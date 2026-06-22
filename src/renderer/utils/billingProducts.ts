@@ -11,6 +11,37 @@ export type BillingProductKey =
 
 export type ByokTier = 'indie' | 'agency';
 
+/**
+ * Frontend DISPLAY catalog for the hosted add-on credit packs shown in the
+ * insufficient-credit modal. This is presentation-only:
+ *   - productKey is the canonical key sent to create-checkout-session.
+ *   - credits / launchPriceLabel are for rendering the button label ONLY.
+ *
+ * It is NOT billing authority. The server (launchPricing.ts + Stripe price)
+ * owns the real amount and the real credit grant. This catalog must never
+ * contain Stripe secret keys, Stripe price IDs, or server billing logic, and
+ * the browser must never send these values as checkout truth.
+ */
+export type AddOnCreditPackKey = Extract<BillingProductKey, 'credit_pack_100' | 'credit_pack_500'>;
+
+export type AddOnDisplayEntry = {
+  productKey: AddOnCreditPackKey;
+  credits: number;
+  /** Launch price shown to the user, e.g. "$12.99". Display only. */
+  launchPriceLabel: string;
+};
+
+export const ADD_ON_CREDIT_PACK_DISPLAY: Record<AddOnCreditPackKey, AddOnDisplayEntry> = {
+  credit_pack_100: { productKey: 'credit_pack_100', credits: 100, launchPriceLabel: '$12.99' },
+  credit_pack_500: { productKey: 'credit_pack_500', credits: 500, launchPriceLabel: '$54.99' }
+};
+
+/** Button label for an add-on pack, e.g. "Add 100 Credits - $12.99". Display only. */
+export const getAddOnCreditPackLabel = (key: AddOnCreditPackKey): string => {
+  const entry = ADD_ON_CREDIT_PACK_DISPLAY[key];
+  return `Add ${entry.credits} Credits - ${entry.launchPriceLabel}`;
+};
+
 export type InsufficientCreditModalState = {
   requiredCredits: number;
   currentCredits: number;

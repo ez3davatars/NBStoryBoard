@@ -17,6 +17,8 @@ import {
   SAFE_LEGACY_POOLED_CREDIT_VALUE_NANO_USD,
   selectSafePooledCreditValue
 } from '../hostedCreditEconomics';
+import { ADD_ON_CREDIT_PACK_DISPLAY } from '../../utils/billingProducts';
+import { APPROVED_UNIT_AMOUNT_CENTS_LAUNCH } from '../../../../supabase/functions/_shared/stripeModeGuard';
 
 const CHECKOUT = readFileSync('supabase/functions/create-checkout-session/index.ts', 'utf8');
 const WEBHOOK = readFileSync('supabase/functions/stripe-webhook/index.ts', 'utf8');
@@ -146,13 +148,24 @@ describe('webhook recognizes launch + historical events safely', () => {
   });
   it('16. failed/unpaid invoices grant zero credits', () => {
     expect(WEBHOOK).toMatch(/invoice\.status !== "paid"/);
-    // only paid + payment-succeeded events are routed; payment_failed is not handled
-    expect(WEBHOOK).not.toContain('invoice.payment_failed');
+    // invoice.payment_failed is now handled for subscription STATUS sync only — it
+    // records a non-active status and must never grant credits. Verify the branch
+    // returns credits: 0 and never invokes the credit RPC.
+    const failedBranch = WEBHOOK.slice(
+      WEBHOOK.indexOf('if (isPaymentFailed)'),
+      WEBHOOK.indexOf('if (isSubscriptionInvoice)')
+    );
+    expect(failedBranch.length).toBeGreaterThan(0);
+    expect(failedBranch).toContain('credits: 0');
+    expect(failedBranch).not.toContain('grantCreditsViaRpc');
   });
   it('17. refund/void/unrelated events do not issue credits', () => {
-    expect(WEBHOOK).toMatch(/Failed\/voided\/refunded\/unrelated events grant nothing/);
+    // The webhook acts only on checkout / invoice / subscription events. No
+    // charge.* (refund / dispute / chargeback) route exists, so those events
+    // grant nothing.
     expect(WEBHOOK).not.toContain('charge.refunded');
     expect(WEBHOOK).not.toContain('charge.dispute');
+    expect(WEBHOOK).not.toContain('charge.');
   });
   it('18. test-mode and live-mode price ids cannot be confused (no committed ids; grants by product_key)', () => {
     // The webhook never keys credits off a price id — only the server-set product_key + registry grant.
@@ -208,14 +221,29 @@ describe('frontend price display alignment + unchanged behavior', () => {
     }
     return out;
   };
-  it('25. frontend-displayed price and checkout price stay aligned (no hardcoded launch prices on the client)', () => {
-    // Stripe Checkout is the displayed source of truth; no static launch-price literals exist to drift.
-    // hostedCreditEconomics.ts is the documented single source of *planning* values (server-side
-    // calculation), not a user-facing display surface — it is excluded from the display-literal scan.
+  it('25. frontend-displayed price and checkout price stay aligned (single source, no drift)', () => {
+    // The ONLY sanctioned places launch-price literals may appear on the client are
+    // the documented single sources: hostedCreditEconomics.ts (planning values) and
+    // billingProducts.ts (the add-on display catalog). No other component may hardcode
+    // a launch price, so display values can never silently drift.
     const offenders = walk('src/renderer')
-      .filter((f) => !f.includes('__tests__') && !f.includes('hostedCreditEconomics'))
+      .filter(
+        (f) =>
+          !f.includes('__tests__') &&
+          !f.includes('hostedCreditEconomics') &&
+          !f.includes('billingProducts')
+      )
       .filter((f) => /\b12\.99\b|\b54\.99\b/.test(readFileSync(f, 'utf8')));
     expect(offenders).toEqual([]);
+
+    // Anti-drift: the add-on display catalog must equal the server-approved launch
+    // checkout amounts (cents) — so what the user sees is what Stripe charges.
+    expect(ADD_ON_CREDIT_PACK_DISPLAY.credit_pack_100.launchPriceLabel).toBe(
+      `$${(APPROVED_UNIT_AMOUNT_CENTS_LAUNCH.credit_pack_100 / 100).toFixed(2)}`
+    );
+    expect(ADD_ON_CREDIT_PACK_DISPLAY.credit_pack_500.launchPriceLabel).toBe(
+      `$${(APPROVED_UNIT_AMOUNT_CENTS_LAUNCH.credit_pack_500 / 100).toFixed(2)}`
+    );
   });
   it('26. analyzer/image/BYOK/identity contracts are unchanged (BYOK stays creditless + outside the wallet)', () => {
     expect(getPaidCreditGrant('indie_desktop_byok')).toBe(0);

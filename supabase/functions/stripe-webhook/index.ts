@@ -1,6 +1,10 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import { getLaunchProduct, getPaidCreditGrant } from "../_shared/launchPricing.ts";
+import {
+  mapStripeEventToSubscriptionSync,
+  type SubscriptionSyncRecord,
+} from "../_shared/subscriptionSync.ts";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SupabaseClientAny = ReturnType<typeof createClient<any, "public", any>>;
@@ -307,6 +311,82 @@ const grantCreditsViaRpc = async (
   return Number.isFinite(balance) ? balance : null;
 };
 
+// ════════════════════════════════════════════════════════════════════════════
+// SUBSCRIPTION ROW SYNC (public.subscriptions)
+//
+// The pure event→record mapping lives in _shared/subscriptionSync.ts (importable
+// + unit-testable). This file owns only the DB write. Credits are NOT touched
+// here — they remain owned by the invoice-driven RPC path so a subscription
+// event never double-grants.
+// ════════════════════════════════════════════════════════════════════════════
+
+// Upserts the subscription row by its unique stripe_subscription_id (idempotent,
+// no duplicate rows on replay). Never reactivates a canceled subscription from a
+// stale invoice event. product_id is best-effort (nullable): launch identity
+// lives in metadata.product_key, so an empty products catalog never blocks sync.
+const applySubscriptionSync = async (
+  supabase: SupabaseClientAny,
+  rec: SubscriptionSyncRecord
+): Promise<void> => {
+  const { data: existing, error: readError } = await supabase
+    .from("subscriptions")
+    .select("id, status, product_id, canceled_at")
+    .eq("stripe_subscription_id", rec.stripeSubscriptionId)
+    .maybeSingle();
+
+  if (readError) {
+    throw new WebhookError(
+      500,
+      "SUBSCRIPTION_SYNC_READ_FAILED",
+      "Failed to read existing subscription row.",
+      extractRpcError(readError)
+    );
+  }
+
+  const existingRow = existing as
+    | { id?: string; status?: string; product_id?: string | null; canceled_at?: string | null }
+    | null;
+
+  // Defensive: a replayed/stale invoice event must not resurrect a cancellation.
+  let status = rec.status;
+  let canceledAt = rec.canceledAt;
+  if (existingRow?.status === "canceled" && rec.status === "active") {
+    status = "canceled";
+    canceledAt = existingRow.canceled_at ?? rec.canceledAt;
+  }
+
+  const row: Record<string, unknown> = {
+    user_id: rec.userId,
+    product_id: existingRow?.product_id ?? null,
+    stripe_subscription_id: rec.stripeSubscriptionId,
+    stripe_customer_id: rec.stripeCustomerId,
+    status,
+    current_period_start: rec.currentPeriodStart,
+    current_period_end: rec.currentPeriodEnd,
+    cancel_at_period_end: rec.cancelAtPeriodEnd,
+    canceled_at: canceledAt,
+    metadata: {
+      product_key: rec.productKey,
+      product_name: rec.productName,
+      stripe_price_id: rec.stripePriceId,
+    },
+    updated_at: new Date().toISOString(),
+  };
+
+  const { error } = await supabase
+    .from("subscriptions")
+    .upsert(row, { onConflict: "stripe_subscription_id" });
+
+  if (error) {
+    throw new WebhookError(
+      500,
+      "SUBSCRIPTION_SYNC_FAILED",
+      "Failed to upsert subscription row.",
+      extractRpcError(error)
+    );
+  }
+};
+
 serve(async (req) => {
   if (req.method !== "POST") {
     return jsonResponse({ error: "Method not allowed" }, 405);
@@ -326,9 +406,14 @@ serve(async (req) => {
       event.type === "checkout.session.completed" || event.type === "checkout.session.async_payment_succeeded";
     const isSubscriptionInvoice =
       event.type === "invoice.paid" || event.type === "invoice.payment_succeeded";
+    const isPaymentFailed = event.type === "invoice.payment_failed";
+    const isSubscriptionLifecycle =
+      event.type === "customer.subscription.created" ||
+      event.type === "customer.subscription.updated" ||
+      event.type === "customer.subscription.deleted";
 
-    // Failed/voided/refunded/unrelated events grant nothing.
-    if (!isCheckout && !isSubscriptionInvoice) {
+    // Unrelated events grant nothing and sync nothing.
+    if (!isCheckout && !isSubscriptionInvoice && !isPaymentFailed && !isSubscriptionLifecycle) {
       return jsonResponse({ received: true, ignored: true });
     }
 
@@ -339,18 +424,61 @@ serve(async (req) => {
     }
     const supabase = createClient(supabaseUrl, serviceRoleKey);
 
-    if (isSubscriptionInvoice) {
-      const grant = readSubscriptionGrant(event);
-      if (!grant) {
-        return jsonResponse({ received: true, ignored: true, reason: "not_eligible_subscription_invoice" });
+    // Subscription lifecycle events sync the row only (no credits). Cancellation
+    // (customer.subscription.deleted) marks the row canceled and grants nothing.
+    if (isSubscriptionLifecycle) {
+      const rec = mapStripeEventToSubscriptionSync(event);
+      if (!rec) {
+        return jsonResponse({ received: true, ignored: true, reason: "not_eligible_subscription_event" });
       }
-      const balance = await grantCreditsViaRpc(supabase, grant);
+      await applySubscriptionSync(supabase, rec);
+      return jsonResponse({
+        received: true,
+        subscription_synced: true,
+        product_key: rec.productKey,
+        status: rec.status,
+      });
+    }
+
+    // Failed payment: record a non-active status. Never grants credits.
+    if (isPaymentFailed) {
+      const rec = mapStripeEventToSubscriptionSync(event);
+      if (rec) await applySubscriptionSync(supabase, rec);
+      return jsonResponse({
+        received: true,
+        subscription_synced: Boolean(rec),
+        credits: 0,
+        status: rec?.status ?? null,
+      });
+    }
+
+    if (isSubscriptionInvoice) {
+      // Credits first (the money path; idempotent on invoice id), then subscription
+      // row sync (idempotent on stripe_subscription_id). Both safe to retry.
+      const grant = readSubscriptionGrant(event);
+      let balance: number | null = null;
+      if (grant) balance = await grantCreditsViaRpc(supabase, grant);
+
+      const rec = mapStripeEventToSubscriptionSync(event);
+      if (rec) await applySubscriptionSync(supabase, rec);
+
+      if (!grant) {
+        return jsonResponse({
+          received: true,
+          subscription_synced: Boolean(rec),
+          ignored: true,
+          reason: "not_eligible_subscription_invoice",
+          status: rec?.status ?? null,
+        });
+      }
       return jsonResponse({
         received: true,
         fulfilled: true,
+        subscription_synced: Boolean(rec),
         product_key: grant.productKey,
         credits: grant.credits,
         credit_balance: balance,
+        status: rec?.status ?? null,
       });
     }
 

@@ -3,6 +3,7 @@ import { AlertTriangle, CreditCard, KeyRound, SlidersHorizontal, X, Zap } from '
 import { useAppContext } from '../../context/AppContext';
 import { CheckoutSessionError, SupabaseAuth } from '../../services/SupabaseClient';
 import {
+  getAddOnCreditPackLabel,
   getByokOwnership,
   type BillingProductKey
 } from '../../utils/billingProducts';
@@ -266,13 +267,13 @@ export const InsufficientCreditModal = () => {
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               <CheckoutButton
                 productKey="credit_pack_100"
-                label="Add 100 Credits - $10"
+                label={getAddOnCreditPackLabel('credit_pack_100')}
                 busyKey={busyKey}
                 onCheckout={launchCheckout}
               />
               <CheckoutButton
                 productKey="credit_pack_500"
-                label="Add 500 Credits - $45"
+                label={getAddOnCreditPackLabel('credit_pack_500')}
                 busyKey={busyKey}
                 onCheckout={launchCheckout}
               />
