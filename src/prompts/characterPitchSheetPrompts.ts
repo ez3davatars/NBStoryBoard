@@ -878,7 +878,17 @@ const inferPerformance = (input: CharacterPitchSheetInput): string => {
     const supplied = normalize(input.performanceDirection);
     if (supplied) return supplied;
 
-    return "Neutral, controlled, readable presence matching the supplied biometric references.";
+    const personality = normalize(input.corePersonality);
+    const conflict = normalize(input.internalConflict);
+
+    if (!personality && !conflict) {
+        return "Neutral, controlled, readable presence matching the supplied biometric references.";
+    }
+
+    const personalityText = personality || "the character's core personality";
+    const conflictText = conflict || "the character's internal conflict";
+
+    return `Body language communicates ${personalityText}; expression carries ${conflictText}. Keep the performance cinematic, specific, and identity-faithful to the supplied references.`;
 };
 
 const inferWardrobe = (input: CharacterPitchSheetInput): string => {

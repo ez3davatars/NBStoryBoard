@@ -814,12 +814,40 @@ describe('Character Pitch Sheet visible-language sanitation', () => {
     }));
 
     expect(prompt).toContain('PROMPT PRIORITY ORDER');
-    expect(prompt.indexOf('1. Biometric / actor identity.')).toBeLessThan(prompt.indexOf('7. Premium cinematic board quality and presentation polish.'));
+    expect(prompt).toContain('3. Premium cinematic board quality and presentation polish.');
+    expect(prompt.indexOf('1. Biometric / actor identity.')).toBeGreaterThan(-1);
+    expect(prompt.indexOf('1. Biometric / actor identity.')).toBeLessThan(prompt.indexOf('3. Premium cinematic board quality and presentation polish.'));
     expect(prompt).toContain('AUTHORITATIVE IDENTITY CONTRACT');
     expect(prompt).toContain('the original multi-view biometric source image set');
     expect(prompt).toContain('Do not substitute a similar-looking person.');
     expect(prompt).toContain('Preserve facial proportions, brow shape, eye spacing, nose bridge and tip shape');
     expect(prompt).toContain('Render style may change the presentation only, not the identity.');
+  });
+
+  it('derives expressive performance direction from personality and conflict when performance direction is blank', () => {
+    const prompt = buildCharacterPitchSheetPrompt(buildInput({
+      identitySource: 'biometric_multiview',
+      referenceImages: [
+        { angle: 'center', imageUrl: 'data:image/png;base64,center' },
+      ],
+      corePersonality: 'roguish, swaggering confidence',
+      internalConflict: 'hidden grief',
+    }));
+
+    expect(prompt).toContain('Body language communicates roguish, swaggering confidence; expression carries hidden grief.');
+    expect(prompt).toContain('Keep the performance cinematic, specific, and identity-faithful to the supplied references.');
+    expect(prompt).not.toContain('Neutral, controlled, readable presence matching the supplied biometric references.');
+  });
+
+  it('falls back to the neutral performance default when personality and conflict are blank', () => {
+    const prompt = buildCharacterPitchSheetPrompt(buildInput({
+      identitySource: 'biometric_multiview',
+      referenceImages: [
+        { angle: 'center', imageUrl: 'data:image/png;base64,center' },
+      ],
+    }));
+
+    expect(prompt).toContain('Neutral, controlled, readable presence matching the supplied biometric references.');
   });
 
   it('treats 200 lb as board metadata instead of recasting biometric plus character pitch sheets', () => {

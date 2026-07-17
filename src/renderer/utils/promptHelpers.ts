@@ -743,7 +743,7 @@ export const buildStrictPrompt = (
             : "",
         "",
         dnaBlock ? `### SCENE LOCK (BACKGROUND / LAYOUT / LIGHTING ONLY)\n${dnaBlock}\nScene DNA may describe background, layout, lighting, and camera only. Scene DNA is never an identity source.\n` : "",
-        notes ? `### ACTION / EDIT DIRECTION (NOT IDENTITY)\nApply this action/pose/direction to the locked reference actor only: ${notes}\nDo not infer or generate a new subject from this text. Do not change the actor's face, identity, age, body type, skin tone, hairline, facial hair, expression baseline, or likeness.\n` : "",
+        notes ? `### OVERALL SCENE & STYLE / CREATIVE INTENT (MANDATORY)\n${notes}\nHonor the scene, environment, mood, lighting, style, and action content of this direction fully.\n\n### IDENTITY GUARD\nApply this direction to the locked reference actor(s) only. Do not infer or generate a new subject from this text. Do not change the actor's face, identity, age, body type, skin tone, hairline, facial hair, expression baseline, or likeness.\n` : "",
         spatialControlBlock ? `${spatialControlBlock}\n` : "",
         heightRelationshipBlock ? `### HEIGHT RELATIONSHIP INSTRUCTIONS\n${heightRelationshipBlock}\n` : "",
         "",
@@ -1188,7 +1188,7 @@ CRITICAL DIRECTIVES:
     }
 
     prompt += p.replaceAnchorSubjects
-        ? `\n\n=== ACTION / EDIT DIRECTION (NOT IDENTITY) ===\n${p.bgPrompt || "No additional action direction."}\nApply this action/pose to the locked selected-cast reference actor only. Do not infer or generate a new subject from this text. Do not change the actor's face, identity, age, body type, skin tone, hairline, facial hair, expression baseline, or likeness.\n\n=== SCENE LOCK ===\nPreserve the existing background composition, typography, logo placement, colors, props, camera, layout, and environment from CLEAN_BG_PLATE. Scene DNA may describe background/layout only and is never an identity source.\n\n=== NEGATIVE IDENTITY DRIFT RULES ===\nDo not create a different person. Do not average the actor with the background image. Do not reinterpret the actor from text or Scene DNA. No random similar face. No partial likeness only.`
+        ? `\n\n=== OVERALL SCENE & STYLE / CREATIVE INTENT (MANDATORY) ===\n${p.bgPrompt || "No additional scene, style, or action direction."}\nHonor the scene, environment, mood, lighting, style, and action content of this direction fully.\n\n=== IDENTITY GUARD ===\nApply this direction to the locked selected-cast reference actor(s) only. Do not infer or generate a new subject from this text. Do not change the actor's face, identity, age, body type, skin tone, hairline, facial hair, expression baseline, or likeness.\n\n=== SCENE LOCK ===\nPreserve the existing background composition, typography, logo placement, colors, props, camera, layout, and environment from CLEAN_BG_PLATE. Scene DNA may describe background/layout only and is never an identity source.\n\n=== NEGATIVE IDENTITY DRIFT RULES ===\nDo not create a different person. Do not average the actor with the background image. Do not reinterpret the actor from text or Scene DNA. No random similar face. No partial likeness only.`
         : `\n\n=== OVERALL SCENE & STYLE ===\n${p.bgPrompt || "A generic scene."}`;
 
     return prompt;

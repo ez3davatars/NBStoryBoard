@@ -1,15 +1,15 @@
 import type { ProductionActorProfile } from "../renderer/types/ProductionActorProfile";
 
-export const PROMPT_PRIORITY_ORDER_LABEL = "biometric identity > style lock > costume/world > views > callouts > metadata/body > presentation polish";
+export const PROMPT_PRIORITY_ORDER_LABEL = "biometric identity > style lock > premium board quality > costume/world > views > callouts > metadata/body";
 
 export const PROMPT_PRIORITY_ORDER_BLOCK = `PROMPT PRIORITY ORDER:
 1. Biometric / actor identity.
 2. Style lock.
-3. Costume / world presentation.
-4. Turnaround and head-study consistency.
-5. Accurate restrained callouts.
-6. Metadata / body consistency.
-7. Premium cinematic board quality and presentation polish.
+3. Premium cinematic board quality and presentation polish.
+4. Costume / world presentation.
+5. Turnaround and head-study consistency.
+6. Accurate restrained callouts.
+7. Metadata / body consistency.
 
 Preserve the same actor identity first. Style, costume, body metadata, board layout, labels, and presentation polish must adapt around that identity; they must never recast, redesign, beautify, age-shift, or genericize the subject.`;
 

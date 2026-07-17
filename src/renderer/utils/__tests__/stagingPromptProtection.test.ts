@@ -86,9 +86,16 @@ describe('staging prompt protection', () => {
 
   it('sanitizes contaminated reference analyses while preserving clothing and material details', () => {
     expect(sanitizeReferenceAnalysisForPrompt('Middle-aged man in black polo, shown via high-resolution biometric scan, revealing realistic detailed skin texture.'))
-      .toBe('Middle-aged man in black polo with detailed skin texture.');
+      .toBe('Middle-aged man in black polo with realistic detailed skin texture.');
     expect(sanitizeReferenceAnalysisForPrompt('White linen shirt with gray stylized floral embroidery and visible fabric texture.'))
       .toBe('White linen shirt with gray floral embroidery and visible fabric texture.');
+  });
+
+  it('preserves photographic quality descriptors while still stripping medium contamination', () => {
+    expect(sanitizeReferenceAnalysisForPrompt('Photorealistic cinematic portrait, 85mm lens, realistic detailed skin texture.'))
+      .toBe('Photorealistic cinematic portrait, 85mm lens, realistic detailed skin texture.');
+    expect(sanitizeReferenceAnalysisForPrompt('Cinematic photographic portrait of a stylized cartoon man.'))
+      .toBe('Cinematic photographic portrait of a man.');
   });
 
   it('captures the exact submitted prompt and final reference order for Prompt Engine display', () => {

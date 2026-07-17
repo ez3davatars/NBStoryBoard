@@ -44,8 +44,7 @@ const ANALYSIS_MEDIUM_PATTERNS: Array<[RegExp, string]> = [
   [/\b(?:high[- ]resolution\s+)?biometric\s+scan\b/gi, ''],
   [/\b(?:rendered|render|cgi|3d render|3d-rendered|digitally rendered)\b/gi, ''],
   [/\b(?:stylized|illustrated|illustration|cartoon|anime|cel[- ]?shaded|comic(?: book)?|graphic novel|painted|painterly)\b/gi, ''],
-  [/\b(?:image[- ]making medium|aesthetic treatment|rendering process|scan process|camera treatment)\b/gi, ''],
-  [/\b(?:photographic|photo[- ]real|photorealistic|cinematic|lens|camera)\b/gi, '']
+  [/\b(?:image[- ]making medium|aesthetic treatment|rendering process|scan process|camera treatment)\b/gi, '']
 ];
 
 export const sanitizeReferenceAnalysisForPrompt = (analysis?: string | null): string => {
@@ -58,7 +57,6 @@ export const sanitizeReferenceAnalysisForPrompt = (analysis?: string | null): st
 
   return sanitized
     .replace(/,\s*revealing\s+/gi, ' with ')
-    .replace(/\brealistic\s+(?=detailed skin texture\b)/gi, '')
     .replace(/,\s+with\b/gi, ' with')
     .replace(/\s+,/g, ',')
     .replace(/,\s*,+/g, ',')

@@ -229,11 +229,17 @@ const buildReplaceModeIdentityActionSceneLock = (args: {
         'Do not average the actor with the background image.',
         'Do not reinterpret the actor from text, Scene DNA, or Scene Director wording.',
         '',
-        '### ACTION / EDIT DIRECTION',
+        '### OVERALL SCENE & STYLE / CREATIVE INTENT (MANDATORY)',
         action
-            ? `Apply this action/pose to the locked reference actor only: ${action}`
-            : 'No new identity-bearing action text was provided.',
-        'Do not infer or generate a new subject from this sentence.',
+            ? action
+            : 'No new scene, style, or action direction was provided.',
+        action
+            ? 'Honor the scene, environment, mood, lighting, style, and action content of this direction fully.'
+            : 'Preserve the current scene intent.',
+        '',
+        '### IDENTITY GUARD',
+        'Apply this direction to the locked reference actor(s) only.',
+        'Do not infer or generate a new subject from this text.',
         "Do not change the actor's face, identity, age, body type, skin tone, hairline, facial hair, expression baseline, or likeness.",
         '',
         '### SCENE LOCK',
@@ -252,10 +258,95 @@ const toFiniteNumber = (value: unknown, fallback: number): number => {
     return Number.isFinite(numeric) ? numeric : fallback;
 };
 
-const REGION_EDIT_MAX_EDGE = 2048;
-const REGION_EDIT_MAX_PIXELS = 2048 * 2048;
+const REGION_EDIT_MAX_EDGE = 4096;
+const REGION_EDIT_MAX_PIXELS = 4096 * 4096;
 
 type RegionEditTargetDimensions = { width: number; height: number };
+
+type SceneCanvasRenderOptions = {
+    targetDimensions?: RegionEditTargetDimensions;
+    includeTokens?: boolean;
+    backgroundUrlOverride?: string | null;
+};
+
+const parseAspectRatioValue = (value: unknown, fallback = 16 / 9): number => {
+    const raw = String(value || '').trim();
+    const parts = raw.split(':').map((p) => Number(p));
+    if (parts.length === 2 && Number.isFinite(parts[0]) && Number.isFinite(parts[1]) && parts[0] > 0 && parts[1] > 0) {
+        return parts[0] / parts[1];
+    }
+
+    const numeric = Number(raw);
+    return Number.isFinite(numeric) && numeric > 0 ? numeric : fallback;
+};
+
+const roundDimensionToMultiple = (value: number, multiple = 8): number => (
+    Math.max(multiple, Math.round(value / multiple) * multiple)
+);
+
+const resolveSceneOutputDimensions = (
+    imageResolution: unknown,
+    aspectRatioValue: unknown
+): RegionEditTargetDimensions => {
+    const ratio = parseAspectRatioValue(aspectRatioValue);
+    const normalizedResolution = String(imageResolution || '').trim().toUpperCase();
+    const longEdge = normalizedResolution === '4K'
+        ? 4096
+        : normalizedResolution === '2K'
+            ? 2048
+            : 1024;
+
+    // Match the app's displayed 4K/2K 16:9 delivery frames (4096x2160 / 2048x1080).
+    if (Math.abs(ratio - (16 / 9)) < 0.02) {
+        return {
+            width: longEdge,
+            height: longEdge === 4096 ? 2160 : longEdge === 2048 ? 1080 : 576
+        };
+    }
+
+    if (Math.abs(ratio - (9 / 16)) < 0.02) {
+        return {
+            width: longEdge === 4096 ? 2160 : longEdge === 2048 ? 1080 : 576,
+            height: longEdge
+        };
+    }
+
+    if (ratio >= 1) {
+        return {
+            width: longEdge,
+            height: roundDimensionToMultiple(longEdge / ratio)
+        };
+    }
+
+    return {
+        width: roundDimensionToMultiple(longEdge * ratio),
+        height: longEdge
+    };
+};
+
+const getImageSizeLabelForDimensions = (dimensions: RegionEditTargetDimensions): '1K' | '2K' | '4K' => {
+    const longEdge = Math.max(dimensions.width, dimensions.height);
+    if (longEdge > 2048) return '4K';
+    if (longEdge > 1024) return '2K';
+    return '1K';
+};
+
+const buildCanvasGeometryLockPromptBlock = (dimensions: RegionEditTargetDimensions): string => [
+    '### CANVAS GEOMETRY LOCK - HARD',
+    `Output frame must remain ${dimensions.width}x${dimensions.height}.`,
+    'The supplied CLEAN_BG_PLATE / Image A is already framed in the Scene Canvas output rectangle.',
+    'Preserve the exact outer canvas, aspect ratio, source image scale, x/y placement, margins, padding, and visible boundaries from Image A.',
+    'Do not zoom in, crop, trim, re-center, enlarge, shrink, rotate, stretch, or recompose the source image unless the user explicitly instructs that change.',
+    'If the source art does not fill the frame, keep the same black/empty padding around it. Keep all logos, badges, typography, and edges fully inside the frame.'
+].join('\n');
+
+const buildRegionEditGeometryLockPrompt = (dimensions: RegionEditTargetDimensions): string => [
+    '### REGION EDIT CANVAS LOCK - HARD',
+    `Return the edited image at ${dimensions.width}x${dimensions.height}.`,
+    'Image A and the mask are already aligned to the final Scene Canvas frame.',
+    'Edit only white mask pixels. Preserve every unmasked pixel, the outer canvas, aspect ratio, image scale, x/y placement, margins, padding, and crop exactly.',
+    'Do not zoom, crop, square-format, reframe, recenter, stretch, or resize the image.'
+].join('\n');
 
 type ObjectContainRect = {
     x: number;
@@ -285,12 +376,6 @@ const getObjectContainRect = (
     };
 };
 
-const getRegionEditImageSize = (dimensions: RegionEditTargetDimensions): '1K' | '2K' | '4K' => {
-    const longEdge = Math.max(dimensions.width, dimensions.height);
-    if (longEdge > 2048) return '4K';
-    if (longEdge > 1024) return '2K';
-    return '1K';
-};
 
 const normalizeRefName = (value: string): string =>
     value
@@ -386,6 +471,7 @@ Replace only the masked region in Image A using the subject/content from Image B
 Match perspective, scale, lighting, local realism, and scene context.
 Do not stretch or distort the inserted asset.
 Preserve all unmasked areas of Image A exactly.
+Preserve Image A canvas size, object scale, x/y placement, margins, padding, and crop exactly. Do not square-format, zoom, crop, recenter, or resize.
 
 Layer instruction: ${instruction}
 `;
@@ -428,14 +514,9 @@ const SceneCanvas = () => {
     // Camera Gate: an inner viewport that always matches the selected aspect ratio.
     const [centerPaneWidth, setCenterPaneWidth] = useState(0);
 
-    const selectedAspectRatio = useMemo(() => {
-        const raw = String(state.director.aspectRatio || '16:9');
-        const parts = raw.split(':').map((p) => Number(p));
-        if (parts.length === 2 && Number.isFinite(parts[0]) && Number.isFinite(parts[1]) && parts[1] !== 0) {
-            return parts[0] / parts[1];
-        }
-        return 16 / 9;
-    }, [state.director.aspectRatio]);
+    const selectedAspectRatio = useMemo(() => (
+        parseAspectRatioValue(state.director.aspectRatio)
+    ), [state.director.aspectRatio]);
 
     const previewSize = useMemo(() => {
         return fitToAspect(
@@ -455,6 +536,10 @@ const SceneCanvas = () => {
         const y = Math.floor((ch - h) / 2);
         return { x, y, w, h };
     }, [stageViewportSize.width, stageViewportSize.height, previewSize]);
+
+    const selectedOutputDimensions = useMemo(() => (
+        resolveSceneOutputDimensions(state.imageResolution, state.director.aspectRatio)
+    ), [state.imageResolution, state.director.aspectRatio]);
 
     useEffect(() => {
         if (!import.meta.env.DEV) return;
@@ -1702,26 +1787,15 @@ Output: environment plate only.
         ctx.fillStyle = '#000000';
         ctx.fillRect(0, 0, STAGE_W, STAGE_H);
 
-        // Background
+        // Background: mirror the Stage Canvas object-contain behavior.
+        // Never crop/cover a source plate unless the user explicitly asks for reframing.
         const bgSourceUrl = backgroundUrlOverride || state.backgroundUrl;
         if (bgSourceUrl) {
             const bg = await loadDataUrlImage(bgSourceUrl);
-            const imgRatio = bg.width / bg.height;
-            const boxRatio = STAGE_W / STAGE_H;
-            let dw = STAGE_W;
-            let dh = STAGE_H;
-            let dx = 0;
-            let dy = 0;
-            if (imgRatio > boxRatio) {
-                dh = STAGE_H;
-                dw = STAGE_H * imgRatio;
-                dx = 0 - (dw - STAGE_W) / 2;
-            } else {
-                dw = STAGE_W;
-                dh = STAGE_W / imgRatio;
-                dy = 0 - (dh - STAGE_H) / 2;
-            }
-            ctx.drawImage(bg, dx, dy, dw, dh);
+            const bgW = Math.max(1, toFiniteNumber(bg.naturalWidth || bg.width, 1));
+            const bgH = Math.max(1, toFiniteNumber(bg.naturalHeight || bg.height, 1));
+            const rect = getObjectContainRect(bgW, bgH, STAGE_W, STAGE_H);
+            ctx.drawImage(bg, rect.x, rect.y, rect.width, rect.height);
         }
 
         if (!state.director.replaceAnchorSubjects) {
@@ -2173,6 +2247,26 @@ Output: environment plate only.
                 if (fresh) dnaForRender = fresh;
             }
 
+            const generationTargetDimensions = selectedOutputDimensions;
+            const activeGenerationBgUrl = activeBgUrl
+                ? ((await captureSceneImage({
+                    targetDimensions: generationTargetDimensions,
+                    includeTokens: false,
+                    backgroundUrlOverride: activeBgUrl
+                })) || activeBgUrl)
+                : undefined;
+            const canvasGeometryLockBlock = buildCanvasGeometryLockPromptBlock(generationTargetDimensions);
+
+            if (activeBgUrl && activeGenerationBgUrl && activeGenerationBgUrl !== activeBgUrl) {
+                dispatch({
+                    type: 'ADD_LOG',
+                    payload: {
+                        message: `Canvas frame lock active: source plate normalized to ${generationTargetDimensions.width}x${generationTargetDimensions.height} without cropping.`,
+                        type: 'info'
+                    }
+                });
+            }
+
             const tokenOverrides = await ensureTokenProfiles(state.tokens, { force: autoTokenProfiles });
 
             const identitySets = getActorIdentityReferenceSetsForScene(state, state.activeShotId || 'default');
@@ -2181,13 +2275,13 @@ Output: environment plate only.
             const renderPromptText = (bgPrompt || state.director.subject || '').trim();
             const renderSourceIntent = resolveStagingIntent({
                 prompt: renderPromptText,
-                hasUploadedSourceImage: !!activeBgUrl
+                hasUploadedSourceImage: !!activeGenerationBgUrl
             });
             const renderSourcePreservationBlock = buildStagingSourcePreservationPromptBlock(renderSourceIntent, {
                 selectedAspectRatio: state.director.aspectRatio
             });
             const shouldUseSourcePreservingTransform =
-                renderSourceIntent.mode === 'source_preserving_layout_transform' && !!activeBgUrl;
+                renderSourceIntent.mode === 'source_preserving_layout_transform' && !!activeGenerationBgUrl;
 
             let safeExtractedStyle: ExtractedStyle | null = null;
             if (hasExplicitStyleOverride && extractedStyle) {
@@ -2227,7 +2321,7 @@ Output: environment plate only.
             if (import.meta.env.DEV) {
                 console.log('[STAGING PROMPT SOURCES]', {
                     scenePrompt: bgPrompt || state.director.subject,
-                    sceneReferenceImage: Boolean(activeBgUrl),
+                    sceneReferenceImage: Boolean(activeGenerationBgUrl),
                     sceneGeneratedImage: Boolean(state.backgroundUrl),
                     sceneResultImage: Boolean(state.resultImage),
                     replaceAnchorSubjects: state.director.replaceAnchorSubjects,
@@ -2313,7 +2407,7 @@ Output: environment plate only.
                 }
 
                 if (isReplaceMode && plan.length > 0) {
-                    let runningBgUrl = activeBgUrl || '';
+                    let runningBgUrl = activeGenerationBgUrl || '';
                     if (!runningBgUrl) {
                         dispatch({
                             type: 'ADD_LOG',
@@ -2427,6 +2521,7 @@ Output: environment plate only.
                         const allowedIdentityLabels = [passRefLabel, ...passSupportLabels];
                         const passPrompt = protectStagingPromptStyle([
                             replaceIdentityContractBlock,
+                            canvasGeometryLockBlock,
                             passPromptBase,
                             passLightingBlock,
                             `### SINGLE-REGION REPLACEMENT LOCK (HARD)\n- This pass may edit ONLY REGION ${pass.regionEntry.region}.\n- REGION ${pass.regionEntry.region} may use ONLY identity references labeled ${allowedIdentityLabels.join(', ')}.\n- Treat ${passRefLabel} as the primary identity anchor for this region.\n- Do NOT alter identity or pose of people outside REGION ${pass.regionEntry.region} in CLEAN_BG_PLATE.\n- Preserve all non-target pixels exactly.\n- GAZE/HEAD POSE LOCK: Match the target subject head yaw/pitch/roll and eye gaze direction from CLEAN_BG_PLATE in this region. If the anchor subject is not looking at camera, the replacement must also NOT look at camera.\n- LIGHTING LOCK: Match the ANCHOR LIGHTING TRANSFER block above. Do not use portrait/studio lighting from identity references.\n- NO LOOKALIKE SUBSTITUTION: If uncertain, preserve mapped identity references over aesthetic similarity.`
@@ -2471,10 +2566,10 @@ Output: environment plate only.
                     return;
                 }
 
-                const anchorPlate = await buildAnchorPlate(plan);
+                const anchorPlate = await buildAnchorPlate(plan, activeGenerationBgUrl);
                 const controlOverlay = await buildSpatialControlOverlay(plan);
                 const anchorLightingBlock = await buildAnchorLightingTransferBlock(
-                    activeBgUrl,
+                    activeGenerationBgUrl,
                     plan,
                     dnaForRender.lighting || state.director.lighting
                 );
@@ -2495,7 +2590,7 @@ Output: environment plate only.
 
                 const refs: { url: string; label: string }[] = [];
                 refs.push({ url: anchorPlate, label: "ANCHOR_GUIDE" });
-                if (activeBgUrl) refs.push({ url: activeBgUrl, label: "CLEAN_BG_PLATE" });
+                if (activeGenerationBgUrl) refs.push({ url: activeGenerationBgUrl, label: "CLEAN_BG_PLATE" });
                 
                 const urls = new Set(refs.map(r => r.url));
 
@@ -2611,7 +2706,7 @@ Output: environment plate only.
                 }
 
                 const finalizedStrictRefs = finalizeStagingReferences({
-                    cleanBgPlate: activeBgUrl,
+                    cleanBgPlate: activeGenerationBgUrl,
                     anchorGuide: anchorPlate,
                     contentReferences: refs,
                     controlOverlay
@@ -2684,6 +2779,7 @@ Output: environment plate only.
 
                 const strictPromptText = protectStagingPromptStyle([
                     isReplaceMode ? replaceIdentityContractBlock : '',
+                    canvasGeometryLockBlock,
                     strictPromptBase,
                     anchorLightingBlock,
                     routingLines.length > 0
@@ -2763,29 +2859,29 @@ Output: environment plate only.
                     });
                 }
 
-                if (shouldUseSourcePreservingTransform && activeBgUrl) {
+                if (shouldUseSourcePreservingTransform && activeGenerationBgUrl) {
                     const sourceFirstReferences = buildSourcePreservingReferenceImages(
-                        activeBgUrl,
+                        activeGenerationBgUrl,
                         references,
                         14
                     );
                     references.splice(0, references.length, ...sourceFirstReferences);
                     urls.clear();
                     sourceFirstReferences.forEach((reference) => urls.add(reference.url));
-                } else if (activeBgUrl && !references.some(r => r.url === activeBgUrl)) {
-                    references.push({ url: activeBgUrl, label: "CLEAN_BG_PLATE" });
+                } else if (activeGenerationBgUrl && !references.some(r => r.url === activeGenerationBgUrl)) {
+                    references.push({ url: activeGenerationBgUrl, label: "CLEAN_BG_PLATE" });
                 }
 
                 const loosePlan = buildRegionPlan({ token: tokenOverrides });
                 const looseControlOverlay = await buildSpatialControlOverlay(loosePlan);
                 const looseLightingBlock = await buildAnchorLightingTransferBlock(
-                    activeBgUrl,
+                    activeGenerationBgUrl,
                     loosePlan,
                     dnaForRender.lighting || state.director.lighting
                 );
 
                 const finalizedLooseRefs = finalizeStagingReferences({
-                    cleanBgPlate: activeBgUrl,
+                    cleanBgPlate: activeGenerationBgUrl,
                     contentReferences: references,
                     controlOverlay: looseControlOverlay
                 });
@@ -2814,6 +2910,7 @@ Output: environment plate only.
                 const looseGenerationRefs = buildFinalizedReferenceInputs(finalizedLooseRefs);
                 const loosePromptText = protectStagingPromptStyle([
                     generationContract.replaceAnchorSubjects ? replaceIdentityContractBlock : '',
+                    canvasGeometryLockBlock,
                     renderSourcePreservationBlock,
                     buildLoosePrompt(
                         dnaForRender,
@@ -3135,26 +3232,29 @@ Output: environment plate only.
     const prepareRegionEditInputs = useCallback(async (
         baseUrl: string,
         editMaskUrl: string,
-        sourceAuto?: { sourceImageMeta: RegionSourceImageMeta }
+        options?: { sourceImageMeta?: RegionSourceImageMeta; targetDimensions?: RegionEditTargetDimensions }
     ): Promise<{ baseDataUrl: string; maskDataUrl: string; wasDownscaled: boolean; width: number; height: number; editedPixels: number }> => {
         const baseImg = await loadDataUrlImage(baseUrl);
         const maskImg = await loadDataUrlImage(editMaskUrl);
 
         const baseW = Math.max(1, toFiniteNumber(baseImg.naturalWidth || baseImg.width, 1));
         const baseH = Math.max(1, toFiniteNumber(baseImg.naturalHeight || baseImg.height, 1));
-        const sourceMeta = sourceAuto?.sourceImageMeta;
-        const targetW = sourceMeta
-            ? Math.max(1, Math.round(sourceMeta.derivedRenderWidth))
-            : Math.max(1, Math.round(baseW * Math.min(
-                Math.min(1, REGION_EDIT_MAX_EDGE / Math.max(baseW, baseH)),
-                Math.min(1, Math.sqrt(REGION_EDIT_MAX_PIXELS / Math.max(1, baseW * baseH)))
-            )));
-        const targetH = sourceMeta
-            ? Math.max(1, Math.round(sourceMeta.derivedRenderHeight))
-            : Math.max(1, Math.round(baseH * Math.min(
-                Math.min(1, REGION_EDIT_MAX_EDGE / Math.max(baseW, baseH)),
-                Math.min(1, Math.sqrt(REGION_EDIT_MAX_PIXELS / Math.max(1, baseW * baseH)))
-            )));
+        const sourceMeta = options?.sourceImageMeta;
+        const requestedTarget = options?.targetDimensions;
+        const capScale = Math.min(
+            Math.min(1, REGION_EDIT_MAX_EDGE / Math.max(baseW, baseH)),
+            Math.min(1, Math.sqrt(REGION_EDIT_MAX_PIXELS / Math.max(1, baseW * baseH)))
+        );
+        const targetW = requestedTarget
+            ? Math.max(1, Math.round(requestedTarget.width))
+            : sourceMeta
+                ? Math.max(1, Math.round(sourceMeta.derivedRenderWidth))
+                : Math.max(1, Math.round(baseW * capScale));
+        const targetH = requestedTarget
+            ? Math.max(1, Math.round(requestedTarget.height))
+            : sourceMeta
+                ? Math.max(1, Math.round(sourceMeta.derivedRenderHeight))
+                : Math.max(1, Math.round(baseH * capScale));
 
         const baseCanvas = document.createElement('canvas');
         const maskCanvas = document.createElement('canvas');
@@ -3168,7 +3268,8 @@ Output: environment plate only.
             baseCtx.fillRect(0, 0, targetW, targetH);
             baseCtx.imageSmoothingEnabled = true;
             baseCtx.imageSmoothingQuality = 'high';
-            baseCtx.drawImage(baseImg, 0, 0, targetW, targetH);
+            const baseRect = getObjectContainRect(baseW, baseH, targetW, targetH);
+            baseCtx.drawImage(baseImg, baseRect.x, baseRect.y, baseRect.width, baseRect.height);
 
             maskCanvas.width = targetW;
             maskCanvas.height = targetH;
@@ -3218,9 +3319,7 @@ Output: environment plate only.
             return {
                 baseDataUrl: baseCanvas.toDataURL('image/jpeg', 0.92),
                 maskDataUrl: maskCanvas.toDataURL('image/png'),
-                wasDownscaled: sourceMeta
-                    ? sourceMeta.width !== targetW || sourceMeta.height !== targetH
-                    : targetW !== baseW || targetH !== baseH,
+                wasDownscaled: targetW < baseW || targetH < baseH,
                 width: targetW,
                 height: targetH,
                 editedPixels
@@ -3231,6 +3330,36 @@ Output: environment plate only.
             maskCanvas.width = 1;
             maskCanvas.height = 1;
         }
+    }, [loadDataUrlImage]);
+
+    const enforceImageDimensions = useCallback(async (
+        imageUrl: string,
+        dimensions: RegionEditTargetDimensions
+    ): Promise<string> => {
+        const img = await loadDataUrlImage(imageUrl);
+        const imageW = Math.max(1, toFiniteNumber(img.naturalWidth || img.width, 1));
+        const imageH = Math.max(1, toFiniteNumber(img.naturalHeight || img.height, 1));
+        const targetW = Math.max(1, Math.round(dimensions.width));
+        const targetH = Math.max(1, Math.round(dimensions.height));
+
+        if (imageW === targetW && imageH === targetH) {
+            return imageUrl;
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = targetW;
+        canvas.height = targetH;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return imageUrl;
+
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, 0, targetW, targetH);
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+
+        const rect = getObjectContainRect(imageW, imageH, targetW, targetH);
+        ctx.drawImage(img, rect.x, rect.y, rect.width, rect.height);
+        return canvas.toDataURL('image/png');
     }, [loadDataUrlImage]);
 
     // Erode (shrink) a white mask by radius pixels
@@ -3292,8 +3421,10 @@ Output: environment plate only.
         const editImg = await loadDataUrlImage(editMask);
         const protImg = await loadDataUrlImage(protectionMask);
 
-        const w = Math.max(editImg.width, protImg.width) || 1;
-        const h = Math.max(editImg.height, protImg.height) || 1;
+        // Keep the edit mask as the geometry authority. Protection masks may be lower-res
+        // or square, but must be scaled into the edit mask frame, never the other way around.
+        const w = Math.max(1, toFiniteNumber(editImg.naturalWidth || editImg.width, 1));
+        const h = Math.max(1, toFiniteNumber(editImg.naturalHeight || editImg.height, 1));
 
         const canvas = document.createElement('canvas');
         canvas.width = w;
@@ -3330,9 +3461,10 @@ Output: environment plate only.
         if (!(await ensureStagingAiAccess('Protection Mask'))) return;
         setProtectStatus('generating');
         try {
-            const captured = (viewMode === 'result' && displayedResultImage)
-                ? displayedResultImage 
-                : await captureSceneImage();
+            const captured = await captureSceneImage({
+                targetDimensions: selectedOutputDimensions,
+                includeTokens: viewMode === 'stage'
+            });
 
             if (!captured) throw new Error('Stage capture returned empty.');
 
@@ -3347,7 +3479,7 @@ Output: environment plate only.
                 state.apiKey,
                 maskModel,
                 [{ url: captured, label: 'Base Frame' }],
-                { aspectRatio: state.director.aspectRatio, billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements }
+                { aspectRatio: state.director.aspectRatio, imageSize: getImageSizeLabelForDimensions(selectedOutputDimensions), billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', entitlements: state.billingEntitlements }
             );
 
             const maskUrl = await normalizeGeneratedImageUrl(res);
@@ -3526,56 +3658,28 @@ Output: environment plate only.
         dispatch({ type: 'SET_GLOBAL_PROGRESS', payload: { percent: 5, text: 'Region Edit: Preparing composite state...' } });
         try {
             const editModel = NANO_BANANA_2_IMAGE_MODEL;
-            const sourceAutoMeta =
-                viewMode === 'stage' &&
-                state.backgroundUrl &&
-                regionEdit.contextSizingMode === 'source-auto' &&
-                regionEdit.sourceImageMeta
-                    ? regionEdit.sourceImageMeta
-                    : null;
-
-            const captured = sourceAutoMeta ? null : await captureSceneImage();
-            const startingBase = sourceAutoMeta && state.backgroundUrl
-                ? state.backgroundUrl
-                : (viewMode === 'result' && displayedResultImage)
-                    ? displayedResultImage
-                    : captured;
+            const regionEditTargetDimensions = selectedOutputDimensions;
+            const captured = await captureSceneImage({
+                targetDimensions: regionEditTargetDimensions,
+                includeTokens: viewMode === 'stage'
+            });
+            const startingBase = captured || (viewMode === 'result' && displayedResultImage ? displayedResultImage : state.backgroundUrl);
 
             if (!startingBase) {
                 throw new Error('No base image available for region edit.');
             }
 
             let base: string = startingBase;
-            const sourceAutoTargetDimensions = sourceAutoMeta
-                ? {
-                    width: sourceAutoMeta.derivedRenderWidth,
-                    height: sourceAutoMeta.derivedRenderHeight
-                }
-                : null;
-            const regionEditImageSize: '1K' | '2K' | '4K' | undefined = sourceAutoTargetDimensions
-                ? getRegionEditImageSize(sourceAutoTargetDimensions)
-                : state.imageResolution === '4K'
-                    ? '2K'
-                    : state.imageResolution;
+            const regionEditImageSize = getImageSizeLabelForDimensions(regionEditTargetDimensions);
             let loggedRegionEditDownscale = false;
 
-            if (sourceAutoMeta) {
-                dispatch({
-                    type: 'ADD_LOG',
-                    payload: {
-                        message: `Region Edit source-auto sizing: ${sourceAutoMeta.derivedRenderWidth}x${sourceAutoMeta.derivedRenderHeight}.`,
-                        type: 'info'
-                    }
-                });
-            } else if (state.imageResolution === '4K') {
-                dispatch({
-                    type: 'ADD_LOG',
-                    payload: {
-                        message: 'Region Edit stability mode active: using a 2K working frame for masked edits to prevent renderer memory crashes.',
-                        type: 'info'
-                    }
-                });
-            }
+            dispatch({
+                type: 'ADD_LOG',
+                payload: {
+                    message: `Region Edit frame lock active: ${regionEditTargetDimensions.width}x${regionEditTargetDimensions.height} ${regionEditImageSize} working frame.`,
+                    type: 'info'
+                }
+            });
 
             // 1. Process standard regions
             const layers = regionEdit.layers.filter(
@@ -3596,7 +3700,7 @@ Output: environment plate only.
                 // Build literal mask
                 const anchorSurface = buildAnchorSurfaceFromZone(anchor);
                 const allowance = buildAllowanceMaskFromAnchor(anchorSurface);
-                const generatedMask = captureBinaryMask([{ type: 'rect', ...allowance }]);
+                const generatedMask = captureBinaryMask([{ type: 'rect', ...allowance }], { targetDimensions: regionEditTargetDimensions });
 
                 let finalMask = generatedMask;
 
@@ -3699,7 +3803,7 @@ Output: environment plate only.
                 const preparedEdit = await prepareRegionEditInputs(
                     base,
                     maskToSend,
-                    sourceAutoMeta ? { sourceImageMeta: sourceAutoMeta } : undefined
+                    { targetDimensions: regionEditTargetDimensions }
                 );
                 if (preparedEdit.wasDownscaled && !loggedRegionEditDownscale) {
                     loggedRegionEditDownscale = true;
@@ -3735,22 +3839,33 @@ Output: environment plate only.
                     });
                 }
 
-                base = await GeminiService.editImageWithMask(
+                const regionEditPrompt = [
+                    buildRegionEditGeometryLockPrompt({ width: preparedEdit.width, height: preparedEdit.height }),
+                    effectivePromptText
+                ].filter(Boolean).join('\n\n');
+
+                const editedLayerResult = await GeminiService.editImageWithMask(
                     preparedEdit.baseDataUrl,
                     preparedEdit.maskDataUrl,
-                    effectivePromptText,
+                    regionEditPrompt,
                     state.apiKey,
                     editModel,
                     referenceImages,
                     { 
-                        aspectRatio: sourceAutoTargetDimensions ? undefined : state.director.aspectRatio,
+                        aspectRatio: state.director.aspectRatio,
                         imageSize: regionEditImageSize,
-                        targetDimensions: sourceAutoTargetDimensions || undefined,
+                        targetDimensions: { width: preparedEdit.width, height: preparedEdit.height },
                         billingMode: state.billingEntitlements.effectiveBillingMode as 'hosted' | 'byok', 
                         entitlements: state.billingEntitlements,
                         expectedResponseType: 'image'
                     }
                 );
+
+                const normalizedLayerResult = await normalizeGeneratedImageUrl(editedLayerResult);
+                base = await enforceImageDimensions(normalizedLayerResult, {
+                    width: preparedEdit.width,
+                    height: preparedEdit.height
+                });
 
                 if (!layer.id.startsWith('intent-')) {
                     dispatch({ type: 'UPDATE_REGION_LAYER', payload: { id: layer.id as RegionEditLayer['id'], updates: { status: 'success', lastError: null } } });
@@ -4027,13 +4142,17 @@ Output: environment plate only.
         });
     };
 
-    const captureSceneImage = async (): Promise<string | null> => {
+    const captureSceneImage = async (options?: SceneCanvasRenderOptions): Promise<string | null> => {
         if (!viewportRef.current) return null;
         try {
             // Manual Canvas Composition (Authority #5) - Decoupled from HTML-TO-IMAGE
             const canvas = document.createElement('canvas');
-            const TARGET_W = Math.max(1, Math.round(toFiniteNumber(viewportBox.w, 960)));
-            const TARGET_H = Math.max(1, Math.round(toFiniteNumber(viewportBox.h, 540)));
+            const frameW = Math.max(1, Math.round(toFiniteNumber(viewportBox.w, 960)));
+            const frameH = Math.max(1, Math.round(toFiniteNumber(viewportBox.h, 540)));
+            const TARGET_W = Math.max(1, Math.round(toFiniteNumber(options?.targetDimensions?.width, frameW)));
+            const TARGET_H = Math.max(1, Math.round(toFiniteNumber(options?.targetDimensions?.height, frameH)));
+            const scaleX = TARGET_W / frameW;
+            const scaleY = TARGET_H / frameH;
             canvas.width = TARGET_W;
             canvas.height = TARGET_H;
             const ctx = canvas.getContext('2d');
@@ -4043,14 +4162,25 @@ Output: environment plate only.
             ctx.fillStyle = '#000000';
             ctx.fillRect(0, 0, TARGET_W, TARGET_H);
 
-            // 2. Draw Stage Background Image
-            if (state.backgroundUrl) {
+            // 2. Draw the current canvas image with object-contain, matching the DOM Stage Canvas.
+            const baseImageUrl = options?.backgroundUrlOverride !== undefined
+                ? options.backgroundUrlOverride
+                : (viewMode === 'result' && displayedResultImage ? displayedResultImage : state.backgroundUrl);
+            if (baseImageUrl) {
                 try {
-                    const bgImg = await loadImage(state.backgroundUrl);
-                    ctx.drawImage(bgImg, 0, 0, TARGET_W, TARGET_H);
+                    const bgImg = await loadImage(baseImageUrl);
+                    const bgW = Math.max(1, toFiniteNumber(bgImg.naturalWidth || bgImg.width, 1));
+                    const bgH = Math.max(1, toFiniteNumber(bgImg.naturalHeight || bgImg.height, 1));
+                    const rect = getObjectContainRect(bgW, bgH, TARGET_W, TARGET_H);
+                    ctx.drawImage(bgImg, rect.x, rect.y, rect.width, rect.height);
                 } catch (e) {
                     console.error("BG load failed", e);
                 }
+            }
+
+            const shouldDrawTokens = options?.includeTokens ?? viewMode === 'stage';
+            if (!shouldDrawTokens) {
+                return canvas.toDataURL('image/png');
             }
 
             // 3. Draw Tokens (Actors)
@@ -4067,10 +4197,10 @@ Output: environment plate only.
                     ctx.save();
                     didSaveContext = true;
 
-                    const tokenX = toFiniteNumber(t.x, 0);
-                    const tokenY = toFiniteNumber(t.y, 0);
-                    const tokenWidth = Math.max(1, toFiniteNumber(t.width, 200));
-                    const tokenHeight = Math.max(1, toFiniteNumber(t.height, 300));
+                    const tokenX = toFiniteNumber(t.x, 0) * scaleX;
+                    const tokenY = toFiniteNumber(t.y, 0) * scaleY;
+                    const tokenWidth = Math.max(1, toFiniteNumber(t.width, 200) * scaleX);
+                    const tokenHeight = Math.max(1, toFiniteNumber(t.height, 300) * scaleY);
                     const ax = Math.min(1, Math.max(0, toFiniteNumber(t.anchorX, 0.5)));
                     const ay = Math.min(1, Math.max(0, toFiniteNumber(t.anchorY, 0.8)));
 
@@ -4121,12 +4251,17 @@ Output: environment plate only.
      * Generates a strict binary mask for Region Edits, passing in a render callback or rectangle
      */
     const captureBinaryMask = (
-        renders: Array<{ x: number; y: number; w: number; h: number; type: 'rect' }>
+        renders: Array<{ x: number; y: number; w: number; h: number; type: 'rect' }>,
+        options?: { targetDimensions?: RegionEditTargetDimensions }
     ): string | null => {
         if (!viewportRef.current) return null;
         try {
-            const TARGET_W = Math.max(1, Math.round(toFiniteNumber(viewportBox.w, 960)));
-            const TARGET_H = Math.max(1, Math.round(toFiniteNumber(viewportBox.h, 540)));
+            const frameW = Math.max(1, Math.round(toFiniteNumber(viewportBox.w, 960)));
+            const frameH = Math.max(1, Math.round(toFiniteNumber(viewportBox.h, 540)));
+            const TARGET_W = Math.max(1, Math.round(toFiniteNumber(options?.targetDimensions?.width, frameW)));
+            const TARGET_H = Math.max(1, Math.round(toFiniteNumber(options?.targetDimensions?.height, frameH)));
+            const scaleX = TARGET_W / frameW;
+            const scaleY = TARGET_H / frameH;
             const canvas = document.createElement('canvas');
             canvas.width = TARGET_W;
             canvas.height = TARGET_H;
@@ -4141,10 +4276,10 @@ Output: environment plate only.
             ctx.fillStyle = '#FFFFFF';
             for (const r of renders) {
                 if (r.type === 'rect') {
-                    const x = toFiniteNumber(r.x, 0);
-                    const y = toFiniteNumber(r.y, 0);
-                    const w = Math.max(0, toFiniteNumber(r.w, 0));
-                    const h = Math.max(0, toFiniteNumber(r.h, 0));
+                    const x = toFiniteNumber(r.x, 0) * scaleX;
+                    const y = toFiniteNumber(r.y, 0) * scaleY;
+                    const w = Math.max(0, toFiniteNumber(r.w, 0) * scaleX);
+                    const h = Math.max(0, toFiniteNumber(r.h, 0) * scaleY);
                     if (w > 0 && h > 0) ctx.fillRect(x, y, w, h);
                 }
             }
